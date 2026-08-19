@@ -9,7 +9,11 @@ This repo (`AJPicoCar`, the C6 car) is unaffected and keeps running.
 
 Run the existing car — same drive electronics, same protocol, same features — on the P4 board, and land it
 in a repository whose layout draws a hard line between the firmware and the phone pult. Feature parity is
-the finish line: the middle car must do exactly what the pico car does, no more.
+the finish line: the middle car drives exactly like the pico car.
+
+Parity is about behaviour, not byte-identical APIs. This spec knowingly adds three things the pico car does not
+have — a distinct device identifier, a radio-version field, and its own network name — because two cars sharing a
+bench must be distinguishable. Nothing else is added.
 
 The P4's real payload (camera/FPV, on-board display, lidar) is explicitly **not** part of this migration.
 This spec exists so those can be built later on a board that already drives.
@@ -49,6 +53,11 @@ keeps the AJPico-family README style, matching AJPicoCar.
 This spec is committed to **AJPicoCar** deliberately: since the new repo starts as a clone, the document travels with
 it and lands there as the fork-point record.
 
+The clone also carries ~30 inherited specs and plans describing the C6 car. They stay, moved wholesale under
+`docs/superpowers/` in the restructure commit: they are the design record of the code being ported, and the new
+repo's own specs start alongside them from this one. Nothing is pruned — deleting the reasoning behind code you
+have just inherited is how constants become mysterious.
+
 ## Repository layout
 
 ```
@@ -62,6 +71,7 @@ AJMiddleCar/
 │   │   ├── CMakeLists.txt
 │   │   ├── sdkconfig.defaults
 │   │   ├── partitions.csv
+│   │   ├── version.txt            semver; must sit beside CMakeLists.txt
 │   │   ├── main/
 │   │   │   ├── board.h            the only file that knows the board
 │   │   │   └── idf_component.yml  pinned esp_wifi_remote / esp_hosted
@@ -82,6 +92,10 @@ about the car at all — not the motors, not the protocol.
 
 The ESP-IDF project moves into `firmware/p4/`, so `idf.py` runs from there. This is the cost of the boundary:
 build commands and script paths gain one level.
+
+`version.txt` moves with `CMakeLists.txt`, which reads it as `${CMAKE_CURRENT_LIST_DIR}/version.txt`. Left behind at
+the repo root it would not fail loudly — CMake would simply produce an empty semver and `PROJECT_VER` would become
+garbage that only shows up as a wrong version string on the car.
 
 ## Port inventory
 
@@ -105,12 +119,31 @@ The firmware turned out to be almost entirely chip-independent. The total C6-spe
 **Changes:**
 
 1. I2C pins move from `main.c` into a new `firmware/p4/main/board.h`
-2. `sdkconfig.defaults`: target `esp32p4`, 16 MB flash, custom `partitions.csv`, SDIO transport for hosted
+2. `sdkconfig.defaults`: target `esp32p4`, 16 MB flash, custom `partitions.csv`, SDIO transport for hosted, plus two
+   board settings the C6 build never needed:
+   - **Console** — `main.c`'s `mix <t> <y>` REPL reads USB Serial JTAG directly. The P4 has that peripheral, but the
+     board exposes two Type-C ports and the console default may differ from the C6's; the routing is set explicitly
+     and which physical port carries it is confirmed at bring-up.
+   - **PSRAM** — the module stacks 32 MB. Parity needs none of it, but leaving the setting to whatever the target
+     defaults to is not a decision. It is configured deliberately, and the choice is recorded here rather than
+     inherited silently.
 3. New `idf_component.yml` pinning `esp_wifi_remote` / `esp_hosted`
 4. IDF 5.4 → 6.0.2: a major upgrade. Expect deprecated-API fixes (`esp_vfs_dev.h` was already deprecated in 5.4)
    and Picolibc-related `printf` formatting differences.
 
-**New:** `firmware/c6/`, the radio-version field in `/status`, `board.h`, `docs/bringup.md`.
+**New — and each of these is work, not a line in a tree diagram:**
+
+- `firmware/c6/` — the radio's build project
+- `board.h` — the board-assumption quarantine
+- The `device` identifier and the radio-version field in `/status` (see *Telling the two cars apart*)
+- `docs/bringup.md` — the bench checklist that closes the open assumptions
+- `docs/protocol.md` — **written from scratch.** It is named as the seam between `app/` and `firmware/p4/`, but no
+  such document exists today: the wire contract currently lives scattered through `CLAUDE.md`. Without it the
+  boundary is a folder convention rather than an agreement. It documents the `/ws` control frame and telemetry, all
+  REST endpoints with their JSON bodies and ranges, `/ota`, and the device identity handshake.
+- `CLAUDE.md` — **rewritten, not copied.** The inherited one is 200+ lines about the C6: XIAO pin mapping, the old
+  flat layout, the python 3.13 workaround. Carried over unedited it would mislead on roughly every second
+  paragraph.
 
 ## Radio integration
 
@@ -159,7 +192,7 @@ otadata,  data, ota,      0xf000,   0x2000
 phy_init, data, phy,      0x11000,  0x1000
 ota_0,    app,  ota_0,    0x20000,  0x400000   # 4 MB
 ota_1,    app,  ota_1,    0x420000, 0x400000   # 4 MB
-storage,  data, littlefs, 0x820000, 0x7E0000   # ~7.9 MB, empty for now
+storage,  data, fat,      0x820000, 0x7E0000   # ~7.9 MB, reserved, no filesystem written
 ```
 
 4 MB slots are a fourfold headroom over today's image. That is not padding for its own sake: the camera with
@@ -167,6 +200,10 @@ H.264, LVGL for an on-board display, and lidar all live in the same image, and h
 would mean a wired reflash. `storage` is allocated now and left empty — unallocated flash cannot be claimed later
 without changing the table, while an empty partition costs nothing at runtime. It is also where a slave image
 would go if radio OTA is ever wanted, so that door stays open.
+
+The subtype is a reservation, not a choice of filesystem: nothing is mounted or formatted, and whichever future
+feature claims the space picks its own format then. The declared subtype only has to be one the partition-table
+generator accepts.
 
 **Versioning** keeps the current scheme: `v<semver>+<git rev-list --count HEAD>`, `PROJECT_VER` set before
 `project()`. Cloning with history continues the count from ~461. Build numbers are only ever compared within one
@@ -203,6 +240,24 @@ password unchanged (`drive1234`). The app never reads the SSID — it has no suc
 address directly — so this only affects the human joining the network. It is the one place where "two parallel
 cars" leaks into the code.
 
+## Telling the two cars apart
+
+Both cars are a softAP serving the same API at `192.168.4.1`. A different SSID is necessary but not sufficient:
+join the wrong network — trivially easy when two are in range — and the pico app will find a car exactly where it
+expects one. Today `/status` answers `"device":"esp32-car"` on both, and `CarStatus.bootstrap()` accepts any board
+that returns that string. The wrong app would drive the wrong car with the wrong calibration, dimensions and
+tricks, and nothing would warn anyone.
+
+Three pieces close it:
+
+1. The middle car's `/status` returns **`"device":"ajmiddlecar"`**
+2. Each app checks for **its own** identifier and treats a mismatch as "not my car" — not as "offline"
+3. On mismatch the app says so explicitly: a screen naming which car was found and which was expected, rather than
+   a silent failure to connect that reads like a broken car
+
+The app already fetches `/status` as its identity probe, so this costs one comparison and one screen. It must land
+in the pico app too — a one-line change there, and without it the protection only works in one direction.
+
 ## Testing strategy
 
 Four independent gates, only the last of which needs the board:
@@ -214,19 +269,28 @@ Four independent gates, only the last of which needs the board:
 | `xcodebuild` + simulator against the mock | The whole app flow: gate → connect → drive → settings → calibration | No |
 | `docs/bringup.md` | Pins, a live SDIO link, motors actually turning | Yes |
 
-This is what makes "verify the hardware last" affordable: three of the five open assumptions below are settled by
-**compiling**, with no board present. An unwrapped `esp_wifi` call fails to link; a wrong transport-init symbol
-fails to compile; IDF 6.0 breakage surfaces in the same build.
+This is what makes "verify the hardware last" affordable: several of the open assumptions below are settled by
+**compiling**, with no board present. A wrong transport-init symbol fails to compile, and IDF 6.0 breakage surfaces
+in the same build.
+
+One caveat, stated precisely because it is tempting to overclaim: an `esp_wifi` call that `esp_wifi_remote` does not
+support may fail at link time — or the component may provide a stub returning `ESP_ERR_NOT_SUPPORTED`, in which case
+it builds and links cleanly and only misbehaves on the bench. Which of the two happens is itself unverified, so that
+assumption is carried to bring-up rather than counted as closed.
 
 ## Open assumptions → `docs/bringup.md`
 
 1. Which GPIOs are free for I2C, and which the SDIO link to the C6 occupies — *needs the board*
 2. Whether the C6 arrives from the factory already flashed with the slave image; if so the flashing step collapses
    into a version check — *needs the board*
-3. Whether `esp_wifi_remote` proxies `esp_wifi_ap_get_sta_list` — if not, the app's signal bars degrade to the ping
-   fallback that is already written; driving is unaffected — *settled by linking*
+3. Whether `esp_wifi_remote` proxies `esp_wifi_ap_get_sta_list`, and whether an unsupported call fails loudly at
+   link time or silently at runtime. If unsupported, the app's signal bars fall back to ping — already written —
+   and driving is unaffected — *may surface at link time, otherwise needs the board*
 4. The exact hosted transport-init function and its position in `app_main` — *settled by compiling*
 5. Whether 5.4-era code builds on IDF 6.0.2 unchanged — *settled by compiling*
+6. Whether the `esp_hosted` slave builds as a standalone project we own in `firmware/c6/`, or ships only as an
+   example meant to be copied wholesale. This one is structural, not cosmetic: if it cannot be a thin project
+   pinning the component, `firmware/c6/` takes a different shape — *settled by trying to build it*
 
 ## Out of scope
 
