@@ -1,20 +1,17 @@
-build/
+firmware/p4/build/
+firmware/c6/build/
+sdkconfig
 sdkconfig.old
-test/test_mixer
-test/test_motors
-test/test_control_proto
-test/test_watchdog
-test/test_calibration
 *.o
 .DS_Store
 .cache/
 .superpowers/
-ios/build/
-ios/ESP32Car.xcodeproj/
-ios/DerivedData/
+app/build/
+app/AJMiddleCar.xcodeproj/
+app/DerivedData/
 *.xcuserstate
 tools/mock_car/.venv/
 
 # compiled host-test binaries (sources stay tracked)
-test/test_*
-!test/test_*.c
+firmware/p4/test/test_*
+!firmware/p4/test/test_*.c
