@@ -17,7 +17,10 @@ final class UpdateClient: NSObject, ObservableObject {
         if remaining > 0 { try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000)) }
     }
 
-    private let repo = "ajohnson-smarthome/AJPicoCar"
+    private let repo = "ajohnson-smarthome/AJMiddleCar"
+    /// Exact asset name. Matching "first file ending in .bin" worked while a release held a
+    /// single file, but it silently picks the wrong image the day a release carries two.
+    static let assetName = "ajmiddlecar.bin"
 
     /// Normalize a version like "v1.2" / "v1.2-3-gabc" → "1.2" for comparison.
     static func normalize(_ v: String?) -> String {
@@ -93,7 +96,7 @@ final class UpdateClient: NSObject, ObservableObject {
             guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tag = j["tag_name"] as? String,
                   let assets = j["assets"] as? [[String: Any]] else { return nil }
-            let bin = assets.first { ($0["name"] as? String)?.hasSuffix(".bin") == true }
+            let bin = assets.first { ($0["name"] as? String) == UpdateClient.assetName }
             guard let s = bin?["browser_download_url"] as? String, let u = URL(string: s) else { return nil }
             return Release(tag: tag, assetURL: u)
         } catch { return nil }

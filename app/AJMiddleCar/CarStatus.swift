@@ -19,6 +19,10 @@ final class CarStatus: ObservableObject {
     @Published var rssi: Int?
     @Published var wdtTrips: Int?
     @Published var wsFps: Int?
+    /// Co-processor (radio) firmware, from /status. Not part of the app image and not carried by
+    /// OTA — it is wire-flashed once and pinned — so a mismatch is invisible unless surfaced.
+    @Published var radioFw: String?
+    @Published var radioOK: Bool?
 
     private let url = URL(string: CarHost.statusURL)!
     private var freshTimer: Timer?
@@ -60,11 +64,15 @@ final class CarStatus: ObservableObject {
         URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
             var ok = false; var cal: Bool?; var fwv: String?; var up: Int?
             var foreign: String?
+            var radio: (fw: String?, ok: Bool?) = (nil, nil)
             if let data,
                let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let dev = j["device"] as? String {
                 if dev == CarStatus.expectedDevice {
                     ok = true; cal = j["calibrated"] as? Bool; fwv = j["fw"] as? String; up = j["uptime_s"] as? Int
+                    if let r = j["radio"] as? [String: Any] {
+                        radio = (r["fw"] as? String, r["ok"] as? Bool)
+                    }
                 } else {
                     foreign = dev   // reachable, but not our car
                 }
@@ -72,6 +80,7 @@ final class CarStatus: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.foreignDevice = foreign
+                self.radioFw = radio.fw; self.radioOK = radio.ok
                 if ok { self.online = true; self.calibrated = cal; self.fw = fwv; self.uptimeS = up; self.lastFrame = Date() }
             }
         }.resume()

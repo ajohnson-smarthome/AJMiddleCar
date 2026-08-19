@@ -7,11 +7,11 @@ cd "$(dirname "$0")/.."   # repo root
 DRY_RUN=0
 if [ "${1:-}" = "--dry-run" ]; then DRY_RUN=1; shift; fi
 
-SEMVER=$(tr -d '[:space:]' < version.txt)
+SEMVER=$(tr -d '[:space:]' < firmware/p4/version.txt)
 BUILD_NUM=$(git rev-list --count HEAD)
 VER="v${SEMVER}+${BUILD_NUM}"
 TITLE="v${SEMVER} (build ${BUILD_NUM})"
-BIN="build/esp32-c6-car.bin"
+BIN="firmware/p4/build/ajmiddlecar.bin"
 NOTES="${1:-Release ${VER}}"
 
 # Only tracked changes matter — the build number comes from committed history; untracked
@@ -32,11 +32,8 @@ if [ "$DRY_RUN" = 1 ]; then
     exit 0
 fi
 
-mkdir -p /tmp/py313bin && ln -sf /opt/homebrew/bin/python3.13 /tmp/py313bin/python3
-export PATH=/tmp/py313bin:$PATH
-source ~/esp/esp-idf/export.sh >/dev/null 2>&1
-idf.py fullclean >/dev/null
-idf.py build
+source tools/env-p4.sh >/dev/null 2>&1
+(cd firmware/p4 && idf.py fullclean >/dev/null && idf.py build)
 [ -f "$BIN" ] || { echo "ERROR: $BIN not built"; exit 1; }
 
 gh release create "$VER" "$BIN" --title "$TITLE" --notes "$NOTES"

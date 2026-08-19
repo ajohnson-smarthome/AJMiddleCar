@@ -8,6 +8,8 @@ enum L {
     }
     static var connectTitle: String { s("connect.title") }
     static var wrongCarTitle: String { s("wrongCar.title") }
+    static func fwRadio(_ v: String) -> String { s("fw.radio", v) }
+    static func fwRadioMismatch(_ v: String) -> String { s("fw.radioMismatch", v) }
     static func wrongCarSub(_ found: String) -> String { s("wrongCar.sub", found) }
     static func wrongCarHint(_ ssid: String) -> String { s("wrongCar.hint", ssid) }
     static var connectBody: String { s("connect.body") }

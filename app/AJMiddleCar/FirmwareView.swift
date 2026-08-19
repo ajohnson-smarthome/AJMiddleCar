@@ -62,6 +62,20 @@ struct FirmwareView: View {
                 title(L.fwFailTitle); sub(L.fwFailSub)
                 fwButton(L.fwRetry, prominent: true) { Task { await check() } }
             }
+            radioLine
+        }
+    }
+
+    /// The radio co-processor's firmware. Shown on every phase because it is the only place a
+    /// pinned-version mismatch can be noticed: nothing else in the app reports it.
+    @ViewBuilder private var radioLine: some View {
+        if let fw = status.radioFw {
+            if status.radioOK == false {
+                Text(L.fwRadioMismatch(fw)).font(.system(size: 12)).foregroundStyle(p.warn)
+                    .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 260, alignment: .leading)
+            } else {
+                Text(L.fwRadio(fw)).font(.system(size: 12)).foregroundStyle(p.muted)
+            }
         }
     }
 
