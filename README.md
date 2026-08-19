@@ -1,168 +1,93 @@
-# AJPicoCar
+# AJMiddleCar
 
-### Seeed XIAO ESP32-C6 · 4WD RC car · tank-turn, realtime joystick control, native iOS pult
+### Waveshare ESP32-P4-Module-DEV-KIT · 4WD RC car · tank-turn, realtime joystick control, native iOS pult
 
-![ESP-IDF](https://img.shields.io/badge/ESP--IDF-5.4-E7352C?logo=espressif&logoColor=white)
-![MCU](https://img.shields.io/badge/MCU-ESP32--C6-0A7BBB)
+![ESP-IDF](https://img.shields.io/badge/ESP--IDF-6.0.2-E7352C?logo=espressif&logoColor=white)
+![MCU](https://img.shields.io/badge/MCU-ESP32--P4%20%2B%20C6-0A7BBB)
 ![iOS](https://img.shields.io/badge/iOS-SwiftUI-FA7343?logo=swift&logoColor=white)
-![Release](https://img.shields.io/badge/release-v1.0%2B311-success)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-A WiFi-controlled four-wheel-drive RC car. The board hosts its own WiFi access point and a REST/WebSocket API
-that a native SwiftUI iOS app drives — tank-turn mixing, on-wheels motor calibration, a control-link watchdog,
-link-loss auto-return, one-tap trick macros, and in-app over-the-air firmware updates from GitHub Releases.
+A WiFi-controlled four-wheel-drive RC car. The board hosts its own access point and a
+REST/WebSocket API that a native SwiftUI app drives — tank-turn mixing, on-wheels motor
+calibration, a control-link watchdog, link-loss auto-return, one-tap trick macros with
+trajectory simulation, and in-app over-the-air firmware updates from GitHub Releases.
 
-<table>
-  <tr>
-    <td align="center"><img src="docs/img/drive.png" width="420"><br/><sub><b>Drive</b> — joysticks · predicted-trajectory diagram · tricks ✦</sub></td>
-    <td align="center"><img src="docs/img/tricks-settings.png" width="420"><br/><sub><b>Trick editor</b> — per-action duration</sub></td>
-  </tr>
-</table>
+The middle sibling of **[AJPicoCar](https://github.com/ajohnson-smarthome/AJPicoCar)**, which
+runs the same design on a XIAO ESP32-C6. Same protocol, same feel, more room to grow.
 
-> Russian-localized UI · warm light/dark themes · landscape-locked. The whole flow iterates hardware-free
-> against a localhost mock car in the iOS Simulator.
+## The interesting part: the P4 has no radio
 
-## Features
+ESP32-P4 ships without WiFi or Bluetooth. This board pairs it with an **ESP32-C6 over SDIO**,
+and `esp_wifi_remote` makes that invisible: the firmware calls the ordinary `esp_wifi` API and
+the calls travel to the co-processor. The C6 stops being a brain — on the pico car it *is* the
+brain — and becomes a modem running a vendor image we pin but never author.
 
-- **4WD tank-turn mixing** — `mix <throttle> <yaw>` blends into left/right side speeds (`left=t+y, right=t-y`, normalized), shoot-through-safe by construction
-- **Realtime control** — WebSocket `/ws` streaming JSON `{"t":..,"y":..}` frames at 10 Hz (parsed by a pure zero-alloc hot-path parser); thread-safe `car_drive` (I2C mutex)
-- **JSON everywhere** — all app↔car communication and on-car NVS persistence are JSON: config POST bodies via cJSON (cold path), the realtime `/ws` frame via a zero-alloc hand parser (hot path), and each config domain stored as one JSON string in NVS
-- **Control-link watchdog** — 50 Hz timer; no control frame for >300 ms → `car_stop()` (console `mix` is exempt)
-- **Link-loss auto-return** — `recovery.{c,h}` keeps a breadcrumb buffer of recent commands; on link loss the watchdog replays it in reverse to retrace the car back into range (configurable 1–10 s window + on/off via `GET/POST /recover`; iOS «Авто-возврат» screen)
-- **On-wheels calibration** — spin each motor pair, tap the wheel that turned, pick direction, save to NVS; loads-or-defaults on boot
-- **Tricks** — one-tap maneuver macros (spin / figure-8 / wiggle / donut) streamed from the app over `/ws` (no firmware change); joystick touch interrupts; ⏹ + a trick-time progress ring; an editor to tune the duration of each distinct movement (0.1–10 s); the Drive diagram + power bars visualize the running maneuver
-- **Adjustable donut + trajectory sim** — the donut trick exposes a **circle-diameter** slider and an integer **circle-count** stepper; a pure inverse solver maps them to the streamed `(t, y, ms)`, and an animated top-down trajectory simulation (`TrickSim`) previews the swept path / revolutions / area in the editor
-- **Car dimensions** — set the car's **track** (колея) + **wheelbase** (база) between wheel centres on an animated top-down diagram, stored on the car via `GET/POST /dims`; a mandatory setup-wizard step. The measured track feeds the donut/turn geometry and the simulation
-- **Launch gate + OTA** — the app checks the internet, fetches the latest firmware from GitHub Releases, connects to the car, and force-updates it over `POST /ota` if the on-board build is older — then drives
-- **Firmware versioning** — `v<semver>+<build>` (build = git commit count), set in CMake `PROJECT_VER`; `tools/release.sh` cuts a GitHub release; the app compares the numeric build
-- **`GET /status` + WS telemetry** — signed identity (`{"device":"esp32-car","fw":..,"uptime_s":..,"calibrated":..,"heap":..}`) for the app's "am I on the car?" check, plus 5 Hz telemetry pushed over `/ws`
-- **WiFi softAP** — `ESP32-Car` (WPA2), `http://192.168.4.1`; no internet/captive portal — join and open the app
-- **Pure, host-tested modules** — `mixer` / `motors` / `control_proto` / `watchdog` / `calibration` / `recovery` compile with plain `cc` and run on the host (`cd test && make run`)
-- **Hardware-free iOS dev loop** — run the app in the iOS Simulator against a localhost mock car (`tools/mock_car`); `CarHost` auto-targets localhost in the simulator and `192.168.4.1` on device
-
-## How it works
+What that buys: 32 MB of PSRAM, 16 MB of flash, a hardware H.264 encoder and MIPI-CSI/DSI, all
+of which the pico car has no room for.
 
 ```mermaid
 flowchart LR
-    A["iPhone app<br/>(SwiftUI)"] -->|"WiFi · WS /ws + REST"| B["XIAO ESP32-C6<br/>softAP + firmware"]
+    A["iPhone app<br/>(SwiftUI)"] -->|"WiFi · WS /ws + REST"| R["ESP32-C6<br/>radio (esp_hosted slave)"]
+    R -->|"SDIO"| B["ESP32-P4<br/>firmware · all logic"]
     B -->|"I2C @ 0x40"| C["PCA9685<br/>16-ch 12-bit PWM"]
     C -->|"8 PWM channels"| D["4× BTS7960<br/>H-bridge ~43 A"]
-    D --> E["4× JGA25-370<br/>geared DC motors"]
+    D --> E["4× geared DC motors"]
 ```
 
-The phone holds the control link: it streams the held `t,y` command at 10 Hz over the WebSocket. The firmware
-mixes it into per-side speeds, plans per-channel PWM (shoot-through-safe), and writes the PCA9685. If frames
-stop, the watchdog steps in (stop, or replay-in-reverse auto-return).
+## Features
 
-## Screenshots
+- **4WD tank-turn mixing** — throttle and yaw blend into left/right side speeds
+  (`left = t+y`, `right = t−y`, normalised), shoot-through-safe by construction
+- **Realtime control** — WebSocket `/ws` streaming `{"t":..,"y":..}` at 10 Hz, parsed by a pure
+  zero-alloc hot-path parser; no JSON library on the control path
+- **Control-link watchdog** — 50 Hz check; 300 ms without a frame and the car reacts
+- **Link-loss auto-return** — a breadcrumb buffer of recent commands is replayed reversed and
+  negated, retracing the car back into range and aborting the instant the link returns
+- **On-wheels calibration** — spin each motor pair, tap the wheel that turned, pick a direction
+- **Tricks** — spin, figure-8, wiggle, donut; each with editable geometry and an animated
+  top-down trajectory simulation that previews exactly what will be streamed
+- **Launch gate + OTA** — the app checks the internet, fetches the latest release, connects,
+  force-updates a lagging board over `POST /ota`, then drives
+- **Two cars, one bench** — both cars serve the same API at the same address, so each pult
+  checks the car's device identifier and refuses to drive the other one
+- **JSON everywhere** — every wire format and every stored setting, one JSON string per domain
+  in NVS with a dirty check so unchanged saves do not touch flash
+- **Pure, host-tested modules** — mixing, PWM planning, frame parsing, watchdog, recovery,
+  calibration and geometry compile with plain `cc` and run on the host
+- **Hardware-free dev loop** — the simulator drives a localhost mock car
 
-<table>
-  <tr>
-    <td align="center"><img src="docs/img/calibration.png" width="380"><br/><sub>On-wheels calibration wizard</sub></td>
-    <td align="center"><img src="docs/img/auto-return.png" width="380"><br/><sub>Link-loss auto-return</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><img src="docs/img/firmware-ota.png" width="380"><br/><sub>In-app OTA update</sub></td>
-    <td align="center"><img src="docs/img/settings.png" width="380"><br/><sub>Settings</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><img src="docs/img/no-internet.png" width="380"><br/><sub>Launch gate — no internet</sub></td>
-    <td align="center"><img src="docs/img/connect.png" width="380"><br/><sub>Connecting (radar search)</sub></td>
-  </tr>
-</table>
-
-## Hardware
-
-| Component | Details |
-|-----------|---------|
-| MCU | [Seeed Studio XIAO ESP32-C6](https://wiki.seeedstudio.com/xiao_esp32c6_getting_started/) (RISC-V, WiFi 6, native USB — no UART bridge) |
-| PWM driver | PCA9685 16-ch 12-bit (I2C `0x40`, Osoyoo board) |
-| Motor driver | 4× BTS7960 full H-bridge (~43 A) |
-| Motors | 4× JGA25-370 geared DC motors |
-| Battery | 3S3P 18650 pack (9.0–12.6 V) |
-| Framework | ESP-IDF 5.4 |
-
-### Pin mapping (XIAO ESP32-C6 → PCA9685)
-
-| Pin | Function |
-|-----|----------|
-| D4 (GPIO22) | I2C SDA |
-| D5 (GPIO23) | I2C SCL |
-| 3V3 | PCA9685 VCC (logic) |
-| VBUS (5V) | PCA9685 V+ (feeds BTS7960 R_EN/L_EN) |
-| GND | common with battery & BTS7960 |
-
-### Motor channel mapping (2 channels per motor, stride 2)
-
-| Motor | CH_A (forward) | CH_B (reverse) |
-|-------|----------------|----------------|
-| 1 | CH0 | CH1 |
-| 2 | CH2 | CH3 |
-| 3 | CH4 | CH5 |
-| 4 | CH6 | CH7 |
-
-Forward = CH_A high / CH_B low; reverse = swap. **Never both high** (BTS7960 shoot-through) — `motors_plan` makes this structurally impossible.
-
-## Build & flash (firmware)
-
-System Python is 3.14 but the IDF 5.4 venv is 3.13 → shadow it before sourcing:
+## Build
 
 ```bash
-mkdir -p /tmp/py313bin && ln -sf /opt/homebrew/bin/python3.13 /tmp/py313bin/python3
-export PATH=/tmp/py313bin:$PATH
-source ~/esp/esp-idf/export.sh
-idf.py build
-idf.py -p /dev/cu.usbmodem* flash      # USB port number changes after each reset
+source tools/env-p4.sh
+cd firmware/p4 && idf.py build && idf.py -p /dev/cu.usbmodem* flash monitor
 ```
 
-Console (USB Serial JTAG): `mix <throttle> <yaw>`, both floats in `[-1, 1]` (e.g. `mix 1 0` forward, `mix 0 1` spin).
+Host tests: `cd firmware/p4/test && make run`
+iOS app: `cd app && xcodegen generate && open AJMiddleCar.xcodeproj`
+Mock car: `cd tools/mock_car && .venv/bin/python mock_car.py`
+The radio's image is flashed once by wire — `tools/flash-radio.sh`, and `firmware/c6/README.md`.
 
-## Host tests
+## Layout
 
-```bash
-cd test && make run     # pure modules with plain cc: mixer, motors, control_proto, watchdog, calibration, ramp, trim, telemetry, recovery
+```
+app/            iOS pult
+firmware/p4/    the car's firmware — all logic
+firmware/c6/    the radio's slave image build
+tools/          mock car, release and flashing scripts
+docs/           protocol.md · bringup.md · specs · plans · research
 ```
 
-## iOS app
+`app/` and `firmware/p4/` never reference each other. The contract between them is
+[`docs/protocol.md`](docs/protocol.md), and `tools/mock_car` is that contract made executable.
 
-XcodeGen project in `ios/` (landscape-locked, warm themes, Russian-localized). Talks to the same firmware
-over WiFi/WS/REST.
+## Status
 
-- **On iPhone:** `open ios/ESP32Car.xcodeproj` → set a Team in Signing → Run; join WiFi `ESP32-Car`.
-- **In the Simulator (no hardware):** start the mock car, then run for the simulator —
-  ```bash
-  cd tools/mock_car && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-  .venv/bin/python mock_car.py            # serves /status, /ws, /calib* on 127.0.0.1:8080
-  ```
-  Build/launch with `xcodegen generate` + `xcodebuild` + `xcrun simctl` (see `CLAUDE.md`). Launch with
-  `--args -gallery` to open the debug screen gallery (every screen/state in one swipeable list).
-
-On launch the app runs a gate — internet check → fetch/cache the latest firmware → connect to the car →
-force-update over `POST /ota` if the on-board build is older → drive. All split screens share one `SplitScreen`
-layout (consistent centring, custom headers).
-
-## Code structure
-
-`main/` (firmware) — `pca9685` (I2C driver), `mixer` (pure tank-turn math), `motors` (pure PWM planner +
-calibration table), `car` (orchestration), `wifi_ap`, `http_server`, `ws_control`, `control_proto`, `watchdog`,
-`recovery` (breadcrumb auto-return), `calibration`, `ramp`, `trim`, `telemetry`, and the REST layers
-(`calib_api`, `status_api`, `ota_api`, `ramp_api`, `trim_api`, `recovery_api`), plus `main.c` (orchestrator +
-console REPL). Pure modules have zero ESP-IDF deps and are host-tested.
-
-`ios/ESP32Car/` (app) — `ControlModel` (pure scheme math), `CarConnection`/`CarStatus`/`CarHost` (link),
-`DriveView` + `DriveDiagram`, the launch-gate screens (`AppFlow`, `NoInternetView`, `UpdateCheckView`,
-`FirmwareView`), `SplitScreen` (shared layout), calibration, `RecoverView` (auto-return), and tricks
-(`Tricks`, `TricksControl`, `TrickSettings`, `TricksSettingsView`).
-
-Design docs, specs, and plans live under `docs/superpowers/`. Full architecture notes + gotchas are in `CLAUDE.md`.
-
-## Roadmap
-
-Firmware + the native iOS pult are done and hardware-verified, including in-app OTA updates from GitHub Releases
-(launch gate force-updates a stale board). Next: a battery monitor (INA260 + 3S BMS → in-app SoC indicator), and
-a migration to **ESP32-P4** (MIPI-CSI camera + hardware H.264) for low-latency FPV video to the pult (WiFi via a
-companion ESP32-C6).
+Ported from AJPicoCar with feature parity and **not yet run on hardware** — the board was on
+order while this was written, so every hardware assumption is quarantined in
+`firmware/p4/main/board.h` and listed in [`docs/bringup.md`](docs/bringup.md). Everything
+provable at a desk is proven; screenshots follow once it drives.
 
 ## License
 
-[MIT](LICENSE) © 2026 Adam Johnson
+MIT — see [LICENSE](LICENSE).
