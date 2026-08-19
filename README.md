@@ -29,7 +29,7 @@ of which the pico car has no room for.
 flowchart LR
     A["iPhone app<br/>(SwiftUI)"] -->|"WiFi · WS /ws + REST"| R["ESP32-C6<br/>radio (esp_hosted slave)"]
     R -->|"SDIO"| B["ESP32-P4<br/>firmware · all logic"]
-    B -->|"I2C @ 0x40"| C["PCA9685<br/>16-ch 12-bit PWM"]
+    B -->|"I2C 0x40 / 0x41"| C["2× PCA9685<br/>one per axle"]
     C -->|"8 PWM channels"| D["4× BTS7960<br/>H-bridge ~43 A"]
     D --> E["4× geared DC motors"]
 ```

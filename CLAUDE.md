@@ -11,7 +11,7 @@ Both are alive; they share a protocol and a design language, and their code dive
 |---|---|
 | Board | Waveshare **ESP32-P4-Module-DEV-KIT** — ESP32-P4NRW32, 32 MB PSRAM, 16 MB flash |
 | Radio | **ESP32-C6 on the same board**, over SDIO. The P4 has no radio of its own. |
-| PWM driver | PCA9685 (I2C addr `0x40`) |
+| PWM driver | **2× PCA9685**, one per axle — I2C `0x40` front, `0x41` rear |
 | Motor driver | 4× BTS7960 full H-bridge |
 | Framework | ESP-IDF **6.0.2** at `~/esp/esp-idf-v6.0.2` |
 
@@ -23,12 +23,18 @@ mismatch is visible rather than mysterious.
 
 ### Motor channel mapping (sequential, stride 2)
 
-| Motor | CH_A (forward) | CH_B (reverse) |
-|---|---|---|
-| 1 | CH0 | CH1 |
-| 2 | CH2 | CH3 |
-| 3 | CH4 | CH5 |
-| 4 | CH6 | CH7 |
+Channel numbers here are **logical**: the firmware speaks 0..7 throughout, and `pca9685.c` is
+the only file that knows they live on two boards (0..3 on the front board, 4..7 on the rear).
+
+| Motor | CH_A (forward) | CH_B (reverse) | Board |
+|---|---|---|---|
+| 1 | CH0 | CH1 | front (`0x40`) |
+| 2 | CH2 | CH3 | front (`0x40`) |
+| 3 | CH4 | CH5 | rear (`0x41`) |
+| 4 | CH6 | CH7 | rear (`0x41`) |
+
+Which pair drives which *corner* is not fixed here — the calibration wizard discovers it by
+spinning each pair and asking which wheel turned, so a swapped cable costs nothing.
 
 Never both HIGH — that is shoot-through on a BTS7960. `motors_plan` makes it structurally
 impossible: per wheel it sets exactly one of the pair nonzero, or neither.

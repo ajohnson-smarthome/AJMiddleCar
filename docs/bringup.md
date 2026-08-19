@@ -64,7 +64,9 @@ Two things to check against the actual pinout:
       also let the slave drop into SPI mode at startup.
 - [ ] **Network.** SSID `AJMiddleCar` appears; the phone joins it and gets an address on `192.168.4.x`.
 - [ ] **Identity.** `curl http://192.168.4.1/status` returns `"device":"ajmiddlecar"`.
-- [ ] **I2C.** The PCA9685 answers at `0x40`. If not, assumption 1.
+- [ ] **I2C.** **Both** PCA9685 boards answer — `0x40` (front axle) and `0x41` (rear). If only
+      one does, check the rear board's A0 jumper before suspecting anything else; boot fails
+      loudly either way, naming which board did not answer. If neither answers, assumption 1.
 - [ ] **One wheel.** Console `mix 0.5 0` — at least one motor turns. If nothing turns, this is
       almost always command delivery rather than firmware: opening the serial port resets the
       board, so a command sent in the first second or two is swallowed during boot.
