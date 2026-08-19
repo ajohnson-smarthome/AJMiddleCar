@@ -2,7 +2,7 @@
 import SwiftUI
 
 /// Debug-only screen gallery: every screen/state, tap left/right to navigate. Enabled via the
-/// `-gallery` launch argument (see ESP32CarApp). Not compiled into release builds.
+/// `-gallery` launch argument (see AJMiddleCarApp). Not compiled into release builds.
 struct GalleryView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var index = 0

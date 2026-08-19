@@ -1,5 +1,5 @@
 import XCTest
-@testable import ESP32Car
+@testable import AJMiddleCar
 
 final class TrickSimTests: XCTestCase {
     func testStraightLine() {

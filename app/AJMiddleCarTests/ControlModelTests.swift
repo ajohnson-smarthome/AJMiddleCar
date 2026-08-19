@@ -1,5 +1,5 @@
 import XCTest
-@testable import ESP32Car
+@testable import AJMiddleCar
 
 final class ControlModelTests: XCTestCase {
     private func close(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-6 }

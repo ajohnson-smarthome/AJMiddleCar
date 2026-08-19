@@ -1,4 +1,4 @@
-name: ESP32Car
+name: AJMiddleCar
 options:
   bundleIdPrefix: com.adamjohnson
   deploymentTarget:
@@ -9,21 +9,21 @@ settings:
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"
 targets:
-  ESP32Car:
+  AJMiddleCar:
     type: application
     platform: iOS
     sources:
-      - ESP32Car
+      - AJMiddleCar
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.adamjohnson.esp32car
+        PRODUCT_BUNDLE_IDENTIFIER: com.adamjohnson.ajmiddlecar
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: "NO"
-        INFOPLIST_FILE: ESP32Car/Info.plist
+        INFOPLIST_FILE: AJMiddleCar/Info.plist
     info:
-      path: ESP32Car/Info.plist
+      path: AJMiddleCar/Info.plist
       properties:
-        CFBundleDisplayName: ESP32-Car
+        CFBundleDisplayName: AJ Middle
         CFBundleDevelopmentRegion: ru
         CFBundleLocalizations: [ru]
         UILaunchScreen: {}
@@ -32,25 +32,25 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        NSLocalNetworkUsageDescription: "Connects to the ESP32-Car over local Wi-Fi to drive it."
+        NSLocalNetworkUsageDescription: "Connects to the AJMiddleCar over local Wi-Fi to drive it."
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
-  ESP32CarTests:
+  AJMiddleCarTests:
     type: bundle.unit-test
     platform: iOS
     sources:
-      - ESP32CarTests
+      - AJMiddleCarTests
     settings:
       base:
         GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
-      - target: ESP32Car
+      - target: AJMiddleCar
 schemes:
-  ESP32Car:
+  AJMiddleCar:
     build:
       targets:
-        ESP32Car: all
-        ESP32CarTests: [test]
+        AJMiddleCar: all
+        AJMiddleCarTests: [test]
     test:
       targets:
-        - ESP32CarTests
+        - AJMiddleCarTests

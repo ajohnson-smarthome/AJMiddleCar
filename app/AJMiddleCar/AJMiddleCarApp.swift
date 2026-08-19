@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct ESP32CarApp: App {
+struct AJMiddleCarApp: App {
     @StateObject private var conn = CarConnection()
     @StateObject private var status = CarStatus()
     @StateObject private var flow = AppFlow()
