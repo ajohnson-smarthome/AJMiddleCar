@@ -18,3 +18,18 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # the target defaults to is not a decision — it is enabled deliberately, with nothing
 # allocated there yet.
 CONFIG_SPIRAM=y
+
+# --- Radio: WiFi lives on the on-board ESP32-C6, reached over SDIO -------------------------
+# esp_hosted picks these by default for a P4 host with a C6 co-processor, but they are pinned
+# here because they are wiring, not preference: a component update that moved them would break
+# the radio silently. They also reserve GPIOs — see board.h before assigning any new pin.
+CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_SDIO=y
+CONFIG_ESP_HOSTED_HOST_SDIO_BUS_WIDTH_4=y
+CONFIG_ESP_HOSTED_HOST_SDIO_CLK_KHZ=40000
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_CLK=18
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_CMD=19
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D0=14
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D1=15
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D2=16
+CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D3=17
+CONFIG_ESP_HOSTED_HOST_RESET_GPIO=54

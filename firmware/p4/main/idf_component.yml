@@ -1,0 +1,16 @@
+## Managed dependencies. Versions are pinned exactly, not floated: a transport component that
+## silently moves underneath a working radio link is a debugging session nobody wants.
+dependencies:
+  idf:
+    version: '>=6.0.0'
+  # cJSON. Bundled inside ESP-IDF until 6.0, where it moved out to the component manager —
+  # the one breaking change this port hit on the 5.4 -> 6.0 upgrade.
+  espressif/cjson: '1.7.19~2'
+  # WiFi for a chip with no radio: the same esp_wifi API, marshalled over SDIO to the on-board
+  # ESP32-C6. Pulls in espressif/esp_hosted (3.0.6), which carries the transport and the
+  # co-processor's slave image.
+  espressif/esp_wifi_remote: '1.6.4'
+  # Pulled in transitively by esp_wifi_remote, but declared directly because status_api.c calls
+  # esp_hosted_get_coprocessor_fwversion() — a transitive dependency's headers are not on our
+  # include path, and relying on one would break the day the chain changes.
+  espressif/esp_hosted: '3.0.6'
