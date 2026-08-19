@@ -227,7 +227,10 @@ parameters, auto-return, the launch gate — moves untouched. Seven changes:
 
 1. `project.yml`: product `AJMiddleCar`, bundle id `com.adamjohnson.ajmiddlecar` — a distinct id, otherwise the new
    app replaces the old one on the phone
-2. **Different icon and accent colour** — two identical icons on the home screen guarantee driving the wrong car eventually
+2. **A different in-app accent colour.** Note what this does *not* buy: neither app has a custom app icon today —
+   there is no asset catalog and no `AppIcon` — so on the home screen the two are told apart by their name alone.
+   Adding an icon is a feature the pico car does not have and is therefore outside parity; it is recorded here as a
+   known weakness rather than silently assumed away. The real protection is the identity check below, not the visuals
 3. `UpdateClient`: releases point at AJMiddleCar; asset chosen by exact name instead of "first `.bin`"
 4. The Firmware screen shows the radio version from the new `/status` field
 5. App name in `L.swift`
