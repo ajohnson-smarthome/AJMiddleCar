@@ -1,4 +1,4 @@
-# ESP32-P4-Car
+# ESP32-C6-Car
 
 4-wheel RC car: XIAO ESP32-C6 → PCA9685 (I2C PWM) → 4× BTS7960 H-bridge → motors.
 

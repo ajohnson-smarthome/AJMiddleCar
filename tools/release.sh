@@ -11,7 +11,7 @@ SEMVER=$(tr -d '[:space:]' < version.txt)
 BUILD_NUM=$(git rev-list --count HEAD)
 VER="v${SEMVER}+${BUILD_NUM}"
 TITLE="v${SEMVER} (build ${BUILD_NUM})"
-BIN="build/esp32-p4-car.bin"
+BIN="build/esp32-c6-car.bin"
 NOTES="${1:-Release ${VER}}"
 
 # Only tracked changes matter — the build number comes from committed history; untracked

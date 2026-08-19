@@ -17,4 +17,4 @@ endif()
 set(PROJECT_VER "v${SEMVER}+${BUILD_NUM}")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(esp32-p4-car)
+project(esp32-c6-car)
