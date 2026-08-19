@@ -18,7 +18,7 @@ Both are alive; they share a protocol and a design language, and their code dive
 **The C6 is a modem, not a brain.** It runs Espressif's `esp_hosted` slave image — a vendor
 artifact we pin, never author. Application code calls the ordinary `esp_wifi` API and
 `esp_wifi_remote` marshals it over SDIO, so `wifi_ap.c` is chip-agnostic. The radio's image is
-flashed by wire once (`tools/flash-radio.sh`); `/status` reports its version so a pinned-version
+flashed by wire once (`firmware/c6/flash-radio.sh`); `/status` reports its version so a pinned-version
 mismatch is visible rather than mysterious.
 
 ### Motor channel mapping (sequential, stride 2)
@@ -39,7 +39,7 @@ impossible: per wheel it sets exactly one of the pair nonzero, or neither.
 app/            iOS pult (XcodeGen; the .xcodeproj is generated and gitignored)
 firmware/p4/    the car's firmware — all logic
 firmware/c6/    the radio's slave image build
-tools/          mock_car, release.sh, flash-radio.sh, env-p4.sh
+tools/          mock_car, release.sh, env-p4.sh
 docs/           protocol.md, bringup.md, specs/, plans/, research/
 ```
 
@@ -92,7 +92,7 @@ The USB port number changes after every reset — re-check with `ls /dev/cu.usbm
 cd firmware/p4/test && make run
 ```
 
-**Radio image** (rare, wired): `tools/flash-radio.sh`, then `firmware/c6/README.md`.
+**Radio image** (rare, wired): `firmware/c6/flash-radio.sh`, then `firmware/c6/README.md`.
 
 ## iOS app
 

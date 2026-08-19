@@ -66,7 +66,7 @@ cd firmware/p4 && idf.py build && idf.py -p /dev/cu.usbmodem* flash monitor
 Host tests: `cd firmware/p4/test && make run`
 iOS app: `cd app && xcodegen generate && open AJMiddleCar.xcodeproj`
 Mock car: `cd tools/mock_car && .venv/bin/python mock_car.py`
-The radio's image is flashed once by wire — `tools/flash-radio.sh`, and `firmware/c6/README.md`.
+The radio's image is flashed once by wire — `firmware/c6/flash-radio.sh`, and `firmware/c6/README.md`.
 
 ## Layout
 
@@ -74,7 +74,7 @@ The radio's image is flashed once by wire — `tools/flash-radio.sh`, and `firmw
 app/            iOS pult
 firmware/p4/    the car's firmware — all logic
 firmware/c6/    the radio's slave image build
-tools/          mock car, release and flashing scripts
+tools/          mock car, release script, IDF environment
 docs/           protocol.md · bringup.md · specs · plans · research
 ```
 

@@ -9,22 +9,36 @@ next to it.
 
 ## Open assumptions
 
-| # | Assumption | How it is settled | Answer |
-|---|---|---|---|
-| 1 | The I2C pins in `board.h` are free, and do not collide with the SDIO link to the C6 | Board pinout + `i2cdetect`-style scan for the PCA9685 at `0x40` | |
-| 2 | The ESP32-C6 arrives with the `esp_hosted` slave image already flashed | Boot and read `/status` → `radio.fw`. If absent or wrong, `tools/flash-radio.sh` | |
-| 3 | `esp_wifi_remote` proxies `esp_wifi_ap_get_sta_list`, and an unsupported call fails loudly | Build (link error) — otherwise it is a runtime stub and `rssi` reads 0 | |
-| 4 | The hosted transport-init call and its position in `app_main` | Build | |
-| 5 | 5.4-era code builds unchanged on IDF 6.0.2 | Build | |
-| 6 | The `esp_hosted` slave builds as a standalone project under `firmware/c6/` | Build | |
+Four of the six were settled at the desk, exactly as the spec predicted — by building, with no
+board present. Two remain, and both are cheap to fix.
+
+| # | Assumption | Status |
+|---|---|---|
+| 3 | `esp_wifi_remote` proxies `esp_wifi_ap_get_sta_list` | **Resolved — it links.** RSSI telemetry survives the port |
+| 4 | An explicit hosted transport-init call in `app_main` | **Resolved — none needed.** `ESP_HOSTED_AUTO_CALL_INIT_BEFORE_APP_MAIN` brings the transport up before `app_main` |
+| 5 | 5.4-era code builds unchanged on IDF 6.0.2 | **Resolved — one break.** cJSON left ESP-IDF for the component manager; declared in `idf_component.yml`. Nothing else needed changing |
+| 6 | The `esp_hosted` slave builds as a project we own | **Resolved — it is theirs, and it builds.** A standard IDF project inside the pinned component; `firmware/c6/` holds only the procedure. Needs a vendor patch to ESP-IDF (`eh.py patch-idf`), applied automatically |
+| 1 | The I2C pins in `board.h` are free and clear of the SDIO link | **Open — needs the board** |
+| 2 | The C6 arrives already flashed with the slave image | **Open — needs the board** |
+
+**What is now known about the pins.** SDIO reserves **GPIO 14–19** on the P4 (D0–D3, CLK, CMD)
+plus **GPIO 54** for co-processor reset, pinned in `firmware/p4/sdkconfig.defaults`. `board.h`
+currently puts I2C on **GPIO 20 and 21**, which does not collide — but those numbers were chosen
+to compile, not from the board's silkscreen.
+
+Two things to check against the actual pinout:
+
+1. Whether GPIO 20/21 are brought out on the 2×20 header and free. If not, change
+   `BOARD_I2C_SDA` / `BOARD_I2C_SCL` — one line each, and nothing else in the firmware knows.
+2. Whether Waveshare wires the C6 to the same GPIOs the component defaults to. If not, the
+   `CONFIG_ESP_HOSTED_HOST_SDIO_PIN_*` lines in `sdkconfig.defaults` must change too — the
+   firmware would otherwise talk to the radio over the wrong wires and simply find nothing.
 
 **Fixes if an answer is no:**
 
-1. Change `BOARD_I2C_SDA` / `BOARD_I2C_SCL` in `firmware/p4/main/board.h`. One line each; nothing
-   else in the firmware knows the pin numbers.
-2. Run `tools/flash-radio.sh`, then set `BOARD_RADIO_SLAVE_FW` to the version actually flashed.
-3. Guard `ap_client_rssi()` in `telemetry.c` to return 0. The app already falls back to a
-   latency-based signal indicator, so nothing breaks — the bars simply lose precision.
+1. See above.
+2. Run `firmware/c6/flash-radio.sh`, then set `BOARD_RADIO_SLAVE_FW` to the version flashed.
+3. Already resolved; no action.
 
 ## Bench sequence
 
@@ -32,6 +46,9 @@ next to it.
       The board has two Type-C ports; note which one carries the USB-Serial-JTAG console and
       record it here, because `sdkconfig.defaults` assumes it exists.
 - [ ] **Radio.** `/status` → `radio.ok` is true. If false, assumption 2 above.
+- [ ] **SDIO pull-ups.** Espressif requires external 51 kΩ pull-ups on `CMD` and `D0`–`D3`. On an
+      integrated board they should be on the PCB — confirm, because missing pull-ups on `D2`/`D3`
+      also let the slave drop into SPI mode at startup.
 - [ ] **Network.** SSID `AJMiddleCar` appears; the phone joins it and gets an address on `192.168.4.x`.
 - [ ] **Identity.** `curl http://192.168.4.1/status` returns `"device":"ajmiddlecar"`.
 - [ ] **I2C.** The PCA9685 answers at `0x40`. If not, assumption 1.
