@@ -42,9 +42,22 @@ Two things to check against the actual pinout:
 
 ## Bench sequence
 
+- [ ] **Work out the two Type-C ports.** They are not interchangeable: the board carries a
+      **CH343P USB-UART bridge** and an **FSUSB42UMX mux** that switches the data path between the
+      P4's native USB and that bridge. Our firmware puts the console on **USB-Serial-JTAG**
+      (native USB) because `read_line()` in `main.c` reads that peripheral directly — so if
+      flashing lands on the bridge port, the console is on the other one and you need both
+      cables. Plug in, run `ls /dev/cu.*`, and record which port does what:
+
+      | Port | Enumerates as | Flash? | Console? |
+      |---|---|---|---|
+      | Type-C #1 | | | |
+      | Type-C #2 | | | |
+
+      If one cable can do both, nothing needs changing. If not, the fix is to make console input
+      independent of the peripheral rather than to move the console — `read_line()` is the only
+      thing tying it to USB-Serial-JTAG.
 - [ ] **Flash.** `cd firmware/p4 && source ../../tools/env-p4.sh && idf.py -p /dev/cu.usbmodem* flash monitor`
-      The board has two Type-C ports; note which one carries the USB-Serial-JTAG console and
-      record it here, because `sdkconfig.defaults` assumes it exists.
 - [ ] **Radio.** `/status` → `radio.ok` is true. If false, assumption 2 above.
 - [ ] **SDIO pull-ups.** Espressif requires external 51 kΩ pull-ups on `CMD` and `D0`–`D3`. On an
       integrated board they should be on the PCB — confirm, because missing pull-ups on `D2`/`D3`
