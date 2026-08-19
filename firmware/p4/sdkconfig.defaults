@@ -1,13 +1,20 @@
-CONFIG_IDF_TARGET="esp32c6"
+CONFIG_IDF_TARGET="esp32p4"
 
-# Route console to USB Serial JTAG (native USB on XIAO ESP32-C6).
+# Console: main.c's `mix <t> <y>` REPL reads USB Serial JTAG directly (no UART VFS).
+# The board exposes two Type-C ports; which one carries the JTAG console is confirmed at
+# bring-up (docs/bringup.md).
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_ESP_CONSOLE_UART_DEFAULT=n
+
 CONFIG_HTTPD_WS_SUPPORT=y
-# OTA: two-OTA slots are 1 MB each; app ~0.94 MB (~10% free). If the app grows past ~1 MB,
-# switch to a custom partitions.csv with bigger slots (OTA fails at esp_ota_begin/write on overflow).
-# NVS stays at its standard offset (0x9000) in both the single-app and two-OTA tables, so the
-# stored calibration survives the wired flash to this layout and all OTA updates.
-CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
-CONFIG_PARTITION_TABLE_TWO_OTA=y
+
+# 16 MB flash with a custom table: two 4 MB OTA slots plus a reserved data partition.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# The module stacks 32 MB PSRAM. Feature parity needs none of it, but inheriting whatever
+# the target defaults to is not a decision — it is enabled deliberately, with nothing
+# allocated there yet.
+CONFIG_SPIRAM=y

@@ -5,6 +5,8 @@
 #include "driver/usb_serial_jtag.h"
 #include "esp_log.h"
 
+#include "board.h"
+#include "identity.h"
 #include "pca9685.h"
 #include "car.h"
 #include "nvs_flash.h"
@@ -30,13 +32,7 @@
 
 static const char *TAG = "main";
 
-#define I2C_SDA_PIN  22
-#define I2C_SCL_PIN  23
-#define I2C_FREQ_HZ  400000
-#define PWM_FREQ_HZ  1000
-#define AP_SSID      "ESP32-Car"
-#define AP_PASSWORD  "drive1234"   // >= 8 chars for WPA2; "" for open
-#define WDT_TIMEOUT_MS 300
+#define WDT_TIMEOUT_MS 300   // behaviour, not a board fact — stays here
 
 static void console_init(void) {
     usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
@@ -70,8 +66,8 @@ static int parse_mix(const char *line, float *t, float *y) {
 }
 
 void app_main(void) {
-    ESP_ERROR_CHECK(pca9685_bus_init(I2C_SDA_PIN, I2C_SCL_PIN, I2C_FREQ_HZ));
-    ESP_ERROR_CHECK(pca9685_init(PWM_FREQ_HZ));
+    ESP_ERROR_CHECK(pca9685_bus_init(BOARD_I2C_SDA, BOARD_I2C_SCL, BOARD_I2C_HZ));
+    ESP_ERROR_CHECK(pca9685_init(BOARD_PWM_HZ));
 
     esp_err_t nvs = nvs_flash_init();
     if (nvs == ESP_ERR_NVS_NO_FREE_PAGES || nvs == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -84,7 +80,7 @@ void app_main(void) {
     car_init();
     wheel_init();                          // load wheel/encoder params (NVS or defaults)
     dims_init();                           // load car dimensions (NVS or defaults)
-    ESP_ERROR_CHECK(wifi_ap_start(AP_SSID, AP_PASSWORD));
+    ESP_ERROR_CHECK(wifi_ap_start(CAR_AP_SSID, CAR_AP_PASS));
     ESP_ERROR_CHECK(http_server_start());
     ESP_ERROR_CHECK(ws_control_start());
     ESP_ERROR_CHECK(calib_api_start());

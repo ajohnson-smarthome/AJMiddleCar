@@ -6,6 +6,7 @@
 #include "esp_app_desc.h"
 #include "http_server.h"
 #include "telemetry.h"
+#include "identity.h"
 
 static const char *TAG = "status_api";
 
@@ -18,7 +19,7 @@ static esp_err_t status_get(httpd_req_t *req) {
     }
     const char *fw = esp_app_get_description()->version;
     char buf[224];
-    int n = snprintf(buf, sizeof(buf), "{\"device\":\"esp32-car\",\"fw\":\"%s\",%s}", fw, fields);
+    int n = snprintf(buf, sizeof(buf), "{\"device\":\"" CAR_DEVICE_ID "\",\"fw\":\"%s\",%s}", fw, fields);
     if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, n);
