@@ -4,6 +4,7 @@ in the simulator without hardware. Serves /status, /ws, /calib*, /ramp, /trim, /
 and /ota on 127.0.0.1:8080."""
 import asyncio
 import json
+import os
 import time
 from aiohttp import web, WSMsgType
 
@@ -16,7 +17,10 @@ STATE = {"calibrated": False, "ramp_ms": 300, "trim_pct": 0, "wdt_trips": 0,
 
 async def status(request):
     return web.json_response({
-        "device": "esp32-car",
+        # The mock exists to be indistinguishable from the car at the protocol level, so it
+        # carries the same identity the firmware reports — otherwise the app's wrong-car check
+        # would reject it. Override via MOCK_DEVICE to exercise that path.
+        "device": os.environ.get("MOCK_DEVICE", "ajmiddlecar"),
         "fw": "v1.0+9000",
         "uptime_s": int(time.monotonic() - START),
         "calibrated": STATE["calibrated"],
@@ -24,6 +28,7 @@ async def status(request):
         "rssi": -58,
         "ws_fps": 10,
         "wdt_trips": STATE["wdt_trips"],
+        "radio": {"fw": "mock", "expected": "mock", "ok": True},
     })
 
 

@@ -50,6 +50,13 @@ struct AJMiddleCarApp: App {
             .onAppear { conn.start(); status.start(); tryCarConnected() }  // fw may already be known
             .onChange(of: status.online) { _ in tryCarConnected() }
             .onChange(of: status.fw) { _ in tryCarConnected() }
+            .onChange(of: status.foreignDevice) { dev in if dev != nil { flow.foreignCarDetected() } }
+        case .wrongCar:
+            // Stop streaming to a car that is not ours: the WS control frames would drive it.
+            WrongCarView(palette: p, found: status.foreignDevice ?? "?") {
+                flow.retryConnect(); status.start()
+            }
+            .onAppear { conn.pause() }
         case .updateRequired:
             FirmwareView(palette: p, forced: true, onDone: { flow.updateFinished() }, status: status)
                 .onAppear { conn.start(); status.start() }

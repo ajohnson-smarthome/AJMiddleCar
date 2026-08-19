@@ -55,6 +55,7 @@ struct GalleryView: View {
         return [
             ("Connect (radar)",         AnyView(ConnectView())),
             ("NoInternet",              AnyView(NoInternetView(palette: p, onRetry: {}))),
+            ("WrongCar",                AnyView(WrongCarView(palette: p, found: "esp32-car", onRetry: {}))),
             ("UpdateCheck checking",    AnyView(UpdateCheckView(palette: p, phase: .checkUpdate, client: UpdateClient(), onRetry: {}))),
             ("UpdateCheck downloading", AnyView(UpdateCheckView(palette: p, phase: .downloading, client: { let c = UpdateClient(); c.downloadProgress = 0.45; return c }(), onRetry: {}))),
             ("UpdateCheck failed",      AnyView(UpdateCheckView(palette: p, phase: .checkFailed, client: UpdateClient(), onRetry: {}))),

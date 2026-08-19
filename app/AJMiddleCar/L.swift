@@ -7,6 +7,9 @@ enum L {
         return args.isEmpty ? f : String(format: f, arguments: args)
     }
     static var connectTitle: String { s("connect.title") }
+    static var wrongCarTitle: String { s("wrongCar.title") }
+    static func wrongCarSub(_ found: String) -> String { s("wrongCar.sub", found) }
+    static func wrongCarHint(_ ssid: String) -> String { s("wrongCar.hint", ssid) }
     static var connectBody: String { s("connect.body") }
     static var openSettings: String { s("common.openSettings") }
     static var close: String { s("common.close") }

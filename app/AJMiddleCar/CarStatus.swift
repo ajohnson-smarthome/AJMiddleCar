@@ -2,7 +2,17 @@ import Foundation
 
 @MainActor
 final class CarStatus: ObservableObject {
+    /// The device identifier this app is willing to drive. Both cars are a softAP serving the
+    /// same API at 192.168.4.1, so a different SSID is necessary but not sufficient — join the
+    /// wrong network and the app finds a car exactly where it expects one. Without this check
+    /// it would drive the other car with the wrong calibration, dimensions and tricks.
+    static let expectedDevice = "ajmiddlecar"
+    static let expectedSSID   = "AJMiddleCar"
+
     @Published var online = false
+    /// Non-nil when a board answered /status but reported someone else's identifier.
+    /// A wrong car is not an offline car and must not be presented as one.
+    @Published var foreignDevice: String?
     @Published var uptimeS: Int?
     @Published var calibrated: Bool?
     @Published var fw: String?
@@ -49,13 +59,19 @@ final class CarStatus: ObservableObject {
         req.cachePolicy = .reloadIgnoringLocalCacheData
         URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
             var ok = false; var cal: Bool?; var fwv: String?; var up: Int?
+            var foreign: String?
             if let data,
                let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               (j["device"] as? String) == "esp32-car" {
-                ok = true; cal = j["calibrated"] as? Bool; fwv = j["fw"] as? String; up = j["uptime_s"] as? Int
+               let dev = j["device"] as? String {
+                if dev == CarStatus.expectedDevice {
+                    ok = true; cal = j["calibrated"] as? Bool; fwv = j["fw"] as? String; up = j["uptime_s"] as? Int
+                } else {
+                    foreign = dev   // reachable, but not our car
+                }
             }
             Task { @MainActor in
                 guard let self else { return }
+                self.foreignDevice = foreign
                 if ok { self.online = true; self.calibrated = cal; self.fw = fwv; self.uptimeS = up; self.lastFrame = Date() }
             }
         }.resume()

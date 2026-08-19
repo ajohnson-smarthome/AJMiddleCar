@@ -4,7 +4,8 @@ import Foundation
 @MainActor
 final class AppFlow: ObservableObject {
     enum Phase: Equatable {
-        case checkInternet, noInternet, checkUpdate, checkFailed, downloading, connectToCar, updateRequired, drive
+        case checkInternet, noInternet, checkUpdate, checkFailed, downloading, connectToCar, wrongCar,
+             updateRequired, drive
     }
     @Published var phase: Phase = .checkInternet
     @Published var latestTag: String?
@@ -35,6 +36,13 @@ final class AppFlow: ObservableObject {
         guard phase == .connectToCar else { return }
         phase = UpdateClient.mustUpdate(carFw: carFw, latestTag: latestTag) ? .updateRequired : .drive
     }
+
+    /// A board answered, but it is a different car. Distinct from "not connected": the user has
+    /// to change networks, not wait.
+    func foreignCarDetected() { if phase == .connectToCar { phase = .wrongCar } }
+
+    /// Leave the wrong-car screen and probe again.
+    func retryConnect() { if phase == .wrongCar { phase = .connectToCar } }
 
     /// Forced FirmwareView signals completion.
     func updateFinished() { if phase == .updateRequired { phase = .drive } }
