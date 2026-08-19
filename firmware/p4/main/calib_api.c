@@ -31,7 +31,7 @@ static esp_err_t calib_get(httpd_req_t *req) {
     return httpd_resp_sendstr(req, cal ? "{\"calibrated\":true}" : "{\"calibrated\":false}");
 }
 
-// POST /calib/spin  body "<pair>,<dir>" (dir 1=forward, 0=reverse). Pulses ~0.6s.
+// POST /calib/spin  body {"pair":0..3,"dir":1|0} (1=forward, 0=reverse). Pulses ~0.6s.
 static esp_err_t calib_spin(httpd_req_t *req) {
     char b[32];
     if (read_body(req, b, sizeof(b)) != 0) {
