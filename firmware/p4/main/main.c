@@ -3,6 +3,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/usb_serial_jtag.h"
+#include "driver/uart.h"
 #include "esp_log.h"
 
 #include "board.h"
@@ -34,16 +35,38 @@ static const char *TAG = "main";
 
 #define WDT_TIMEOUT_MS 300   // behaviour, not a board fact — stays here
 
+// The console follows whichever peripheral ESP-IDF was told to put it on, rather than being
+// nailed to USB-Serial-JTAG. That mattered the moment it mattered: on the bench the board's
+// native USB stopped enumerating, logs were moved to UART0 through the on-board bridge, and
+// input would otherwise have kept waiting on a peripheral nothing was attached to.
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
 static void console_init(void) {
     usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&cfg));
 }
 
+static int console_read_byte(uint8_t *c) {
+    return usb_serial_jtag_read_bytes(c, 1, portMAX_DELAY);
+}
+#elif CONFIG_ESP_CONSOLE_UART_DEFAULT
+static void console_init(void) {
+    // Driver-level reads, for the same reason USB-Serial-JTAG uses them: fgets through the VFS
+    // returns immediately and spins the prompt.
+    ESP_ERROR_CHECK(uart_driver_install(CONFIG_ESP_CONSOLE_UART_NUM, 256, 0, 0, NULL, 0));
+}
+
+static int console_read_byte(uint8_t *c) {
+    return uart_read_bytes(CONFIG_ESP_CONSOLE_UART_NUM, c, 1, portMAX_DELAY);
+}
+#else
+#error "No supported console peripheral selected — the mix REPL needs USB-Serial-JTAG or UART"
+#endif
+
 static int read_line(char *buf, size_t maxlen) {
     size_t pos = 0;
     while (pos < maxlen - 1) {
         uint8_t c;
-        int n = usb_serial_jtag_read_bytes(&c, 1, portMAX_DELAY);
+        int n = console_read_byte(&c);
         if (n <= 0) continue;
         if (c == '\r' || c == '\n') {
             buf[pos] = '\0';

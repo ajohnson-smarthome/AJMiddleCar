@@ -131,10 +131,13 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=n
 
 Logs and console then ride UART0 out through the CH343P bridge. This was kept out of the committed
 defaults, as a bench-local override, because it is a workaround for one board's state and not a
-property of the design. Note `read_line()` still reads USB-Serial-JTAG directly, so console *input*
-does not work in this configuration — it was not needed, because the diagnostics were made to run
-unattended at boot instead. Making input peripheral-independent is still the real fix if console
-input is ever needed on the bridge.
+property of the design.
+
+Console *input* was broken by the same move at first, since `read_line()` read USB-Serial-JTAG
+directly. That is now fixed properly rather than worked around: `console_init()` and
+`console_read_byte()` are selected by `CONFIG_ESP_CONSOLE_*`, so the REPL follows the console
+wherever ESP-IDF puts it, and a build with neither peripheral fails at compile time instead of
+hanging on a silent read. Flashing, logs and typing all go through the one bridge port now.
 
 One practical bonus: the CH343P does **not** re-enumerate when the chip resets, so its port name
 stays stable across flashes — unlike the native USB, whose `usbmodemNNNN` number changes every time.
