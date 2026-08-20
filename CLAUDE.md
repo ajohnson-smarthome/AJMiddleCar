@@ -10,6 +10,7 @@ Both are alive; they share a protocol and a design language, and their code dive
 | Component | Details |
 |---|---|
 | Board | Waveshare **ESP32-P4-Module-DEV-KIT** — ESP32-P4NRW32, 32 MB PSRAM, 16 MB flash |
+| Silicon | ESP32-P4 **revision v1.3** — early, and IDF 6.0 rejects it unless the build selects the `<3.0` family (see `sdkconfig.defaults`) |
 | Radio | **ESP32-C6 on the same board**, over SDIO. The P4 has no radio of its own. |
 | PWM driver | **2× PCA9685**, one per axle — I2C `0x40` front, `0x41` rear |
 | Motor driver | 4× BTS7960 full H-bridge |
@@ -18,8 +19,9 @@ Both are alive; they share a protocol and a design language, and their code dive
 **The C6 is a modem, not a brain.** It runs Espressif's `esp_hosted` slave image — a vendor
 artifact we pin, never author. Application code calls the ordinary `esp_wifi` API and
 `esp_wifi_remote` marshals it over SDIO, so `wifi_ap.c` is chip-agnostic. The radio's image is
-flashed by wire once (`firmware/c6/flash-radio.sh`); `/status` reports its version so a pinned-version
-mismatch is visible rather than mysterious.
+built by `firmware/c6/flash-radio.sh` and can be delivered either over the C6's UART header or —
+as was actually done — over the SDIO link itself, from the host; `/status` reports its version so
+a pinned-version mismatch is visible rather than mysterious.
 
 ### Motor channel mapping (sequential, stride 2)
 
@@ -98,7 +100,8 @@ The USB port number changes after every reset — re-check with `ls /dev/cu.usbm
 cd firmware/p4/test && make run
 ```
 
-**Radio image** (rare, wired): `firmware/c6/flash-radio.sh`, then `firmware/c6/README.md`.
+**Radio image** (rare): `firmware/c6/flash-radio.sh` builds it; `firmware/c6/README.md` covers both
+ways to get it onto the C6 — over SDIO from the host, or over its UART header.
 
 ## iOS app
 
@@ -141,10 +144,19 @@ Pure Swift modules are host-tested with `swiftc` directly — no XCTest runtime 
    cannot tap from the CLI — drive the debug gallery (`--args -gallery`) via a temporary
    `@State index` seed instead.
 8. **Free Apple-ID signing expires every 7 days.** Re-run from Xcode. There is no web pult.
+9. **Both Type-C ports go to the P4, not to the C6.** esptool reports the same MAC on each; one is
+   the native USB (`usbmodem*`), the other the CH343P bridge on UART0 (`wchusbserial*`). The C6 has
+   its own UART header — but it can also be reflashed over SDIO with no wire at all
+   (`firmware/c6/README.md`).
+10. **The radio's version is load-bearing, not cosmetic.** A mismatch costs five seconds of every
+    boot (a timed-out RPC), disables SDIO aggregation, and leaves `radio.ok` false.
 
 ## Status
 
-Ported from AJPicoCar, feature parity, **not yet run on hardware** — the board was on order when
-this was built, which is why `board.h` and `docs/bringup.md` exist. Everything provable at a desk
-is proven: host tests, a P4 build, and the app driving the mock. What remains is in
-`docs/bringup.md`.
+Ported from AJPicoCar with feature parity, and **first run on hardware 2026-08-20**: the board
+boots, the softAP comes up, and the radio was updated from its shipped image to the pinned 3.0.6.
+Two things are known and unfinished — the motors are not wired yet, so `board.h`'s I2C pins are
+still unverified and a stock build aborts in `pca9685_init` with nothing on the bus; and the
+native USB port stopped enumerating, so bench work runs with a local override putting the console
+on UART0. Both are written up in `docs/bringup.md`, which is the live record of what the board
+has and has not answered.

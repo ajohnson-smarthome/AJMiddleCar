@@ -1,5 +1,14 @@
 CONFIG_IDF_TARGET="esp32p4"
 
+# This module carries an EARLY ESP32-P4: silicon revision v1.3, not the v3.x that IDF 6.0
+# defaults to. ESP-IDF treats the two families as mutually exclusive — selecting <3.0 caps the
+# supported range at v1.99 and rules out every v3.x chip, and vice versa. Without these two
+# lines the image is built for [v3.1..v3.99] and flashing stops with
+# "requires chip revision in range [v3.1 - v3.99] (this chip is revision v1.3)".
+# If this project ever moves to a v3.x board, both lines come out again.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y
+
 # Console: main.c's `mix <t> <y>` REPL reads USB Serial JTAG directly (no UART VFS).
 # The board exposes two Type-C ports; which one carries the JTAG console is confirmed at
 # bring-up (docs/bringup.md).

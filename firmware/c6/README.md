@@ -20,15 +20,46 @@ There is no `CMakeLists.txt` here because there is nothing of ours to build. The
 `firmware/p4/managed_components/espressif__esp_hosted/examples/wifi/sta/cp`, which arrives with
 the host build and is not in git — `dependencies.lock` pins it, which is the actual guarantee.
 
-## Building and flashing
+## Building
 
 ```bash
 firmware/c6/flash-radio.sh                        # build only
-firmware/c6/flash-radio.sh /dev/cu.usbserial-XXX  # build and flash
+firmware/c6/flash-radio.sh /dev/cu.usbserial-XXX  # build and flash over the C6 UART header
 ```
 
-Flashing goes through the board's **ESP32-C6 UART header**, not through the P4's USB port. If the
-flash fails because the host is holding the bus, put the P4 into bootloader mode first:
+Either route below flashes the same artifact, `eh_cp_wifi_sta.bin` (~1.15 MB), and the script is
+what builds it.
+
+## Flashing over SDIO, from the host
+
+**This is the route that was actually used** (2026-08-20), and it needs no adapter, no connector
+and nothing physical — the image travels over the SDIO link that already exists. The host API is
+`esp_hosted_cp_ota_begin()` → `_write()` in chunks of at most 1536 bytes → `_end()` →
+`_activate()`, and the host must be built with `CONFIG_ESP_HOSTED_HOST_FEAT_OTA=y` (it is).
+
+It works even against a co-processor far older than the host, because the OTA calls are RPC
+`266`/`272`/`273`/`274` — the original ESP-Hosted set. Getting the image to the P4 in the first
+place is the only real question; embedding it in a throwaway host build (`EMBED_FILES`) avoids
+needing a network, which matters because the car is its own access point.
+
+Two behaviours to expect against a pre-3.x co-processor:
+
+- **`activate()` returns `ESP_FAIL`** — RPC 266 times out, as the vendor changelog warns for slave
+  firmware below v2.6.0. Harmless: the old image applies the update itself on `end()`.
+- **The link drops right after `end()`** — `Unrecoverable host sdio state`, then
+  `TRANSPORT_FAILURE: restarting host`. That is the radio rebooting into its new firmware, not a
+  fault. Reset the host and the two come back matched.
+
+A failed or interrupted write is safe: OTA lands in the inactive slot, leaving the running image
+alone.
+
+## Flashing over the wire
+
+Still the fallback, and the only recovery path if the radio is ever left unbootable. Flashing goes
+through the board's **ESP32-C6 UART header** — a separate SH1.0 connector, independent of the P4 —
+not through either of the P4's Type-C ports. Both of those lead to the P4 itself: esptool reports
+the same MAC on each. If the flash fails because the host is holding the bus, put the P4 into
+bootloader mode first:
 
 ```bash
 esptool.py -p <P4_PORT> --before default_reset --after no_reset run
@@ -78,4 +109,15 @@ bring-up, because pull-ups missing on `D2`/`D3` also let the slave fall into SPI
 "radio": {"fw": "3.0.6", "expected": "3.0.6", "ok": true}
 ```
 
-The app shows the same line on its Firmware screen.
+The app shows the same line on its Firmware screen. The boot log says the same thing earlier and
+without a client:
+
+```
+eh_init_evt: esp-hosted fw versions: host=3.0.6 coprocessor=3.0.6 (match)
+eh_init_evt: SDIO SW_AGGR negotiated (e2h=15872B h2e=15872B)
+status_api: radio firmware 3.0.6
+```
+
+A mismatch is visible in the same three places, inverted: the versions differ, aggregation falls
+back to `compatible streaming mode`, and `status_api` logs `could not read radio firmware version`
+after a five-second timeout — which is also five seconds added to every boot.
