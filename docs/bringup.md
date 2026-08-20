@@ -10,8 +10,9 @@ next to it.
 ## Open assumptions
 
 Four of the six were settled at the desk, exactly as the spec predicted — by building, with no
-board present. The board arrived on 2026-08-20; assumption 2 was answered that evening, and only
-assumption 1 is still open, because the PCA9685 boards are not wired yet.
+board present. The board arrived on 2026-08-20 and both remaining assumptions were answered within
+a day — the radio that evening, the I2C pins once the PCA9685 boards were wired. **All six are now
+closed.**
 
 | # | Assumption | Status |
 |---|---|---|
@@ -20,20 +21,20 @@ assumption 1 is still open, because the PCA9685 boards are not wired yet.
 | 5 | 5.4-era code builds unchanged on IDF 6.0.2 | **Resolved — one break.** cJSON left ESP-IDF for the component manager; declared in `idf_component.yml`. Nothing else needed changing |
 | 6 | The `esp_hosted` slave builds as a project we own | **Resolved — it is theirs, and it builds.** A standard IDF project inside the pinned component; `firmware/c6/` holds only the procedure. Needs a vendor patch to ESP-IDF (`eh.py patch-idf`), applied automatically |
 | 2 | The C6 arrives already flashed with the slave image | **Resolved — flashed, but not with our version.** It shipped an image reporting `0.0.0`, four major versions behind the pinned 3.0.6. WiFi worked anyway; see the bench notes for how it was updated |
-| 1 | The I2C pins in `board.h` are free and clear of the SDIO link | **Still open — the PCA9685 boards are not wired yet.** With nothing on the bus, `0x40` is silent and boot aborts in `pca9685_init`, which is the designed behaviour and tells us nothing about the pins |
+| 1 | The I2C pins in `board.h` are free and clear of the SDIO link | **Resolved — but not at the pins the code first guessed.** The header's I2C is SDA `GPIO7` / SCL `GPIO8`; both boards answer and initialise there |
 
 **What is now known about the pins.** SDIO reserves **GPIO 14–19** on the P4 (D0–D3, CLK, CMD)
-plus **GPIO 54** for co-processor reset, pinned in `firmware/p4/sdkconfig.defaults`. `board.h`
-currently puts I2C on **GPIO 20 and 21**, which does not collide — but those numbers were chosen
-to compile, not from the board's silkscreen.
+plus **GPIO 54** for co-processor reset, pinned in `firmware/p4/sdkconfig.defaults`. Neither
+appears on the 2×20 header except GPIO 54, which sits on physical pin 32 — leave that one alone or
+the radio resets.
 
-Two things to check against the actual pinout:
+`board.h` now puts I2C on **GPIO 7 and 8**, which is the header's own I2C pair: physical pins 3 and
+5, silkscreened `SDA`/`SCL` rather than by number, in the Raspberry Pi positions. The numbers that
+stood here before, GPIO 20 and 21, are also on the header (pins 13 and 11) and would have worked —
+but they were a guess, and the labelled pair is the one to use.
 
-1. Whether GPIO 20/21 are brought out on the 2×20 header and free. If not, change
-   `BOARD_I2C_SDA` / `BOARD_I2C_SCL` — one line each, and nothing else in the firmware knows.
-2. Whether Waveshare wires the C6 to the same GPIOs the component defaults to. If not, the
-   `CONFIG_ESP_HOSTED_HOST_SDIO_PIN_*` lines in `sdkconfig.defaults` must change too — the
-   firmware would otherwise talk to the radio over the wrong wires and simply find nothing.
+The second question this section used to ask — whether Waveshare wires the C6 to the GPIOs the
+component defaults to — answered itself: the radio comes up, so they do.
 
 **Fixes if an answer is no:**
 
@@ -68,9 +69,11 @@ Two things to check against the actual pinout:
       Half-answered: the AP starts and the DHCP server binds `192.168.4.1`, but no client has
       associated yet.
 - [ ] **Identity.** `curl http://192.168.4.1/status` returns `"device":"ajmiddlecar"`.
-- [ ] **I2C.** **Both** PCA9685 boards answer — `0x40` (front axle) and `0x41` (rear). If only
-      one does, check the rear board's A0 jumper before suspecting anything else; boot fails
-      loudly either way, naming which board did not answer. If neither answers, assumption 1.
+- [x] **I2C.** Both boards answer and initialise — `0x40` front, `0x60` rear. The rear address
+      is not the `0x41` this file originally assumed; see the bench notes. A bus scan is the
+      quickest way to check, and it is self-verifying because the on-board ES8311 codec sits at
+      `0x18`: if `0x18` answers and the PCA9685s do not, the pins are right and the fault is in
+      their wiring or power.
 - [ ] **One wheel.** Console `mix 0.5 0` — at least one motor turns. If nothing turns, this is
       almost always command delivery rather than firmware: opening the serial port resets the
       board, so a command sent in the first second or two is swallowed during boot.
@@ -135,6 +138,62 @@ input is ever needed on the bridge.
 
 One practical bonus: the CH343P does **not** re-enumerate when the chip resets, so its port name
 stays stable across flashes — unlike the native USB, whose `usbmodemNNNN` number changes every time.
+
+### The header's I2C is labelled by function, not by GPIO number (2026-08-21)
+
+Waveshare publishes the 40-pin header only as an image, which is why no amount of reading the wiki
+text finds it. Read the picture and the layout is the Raspberry Pi one, pin for pin:
+
+| # | Left | # | Right |
+|---|---|---|---|
+| 1 | 3V3 | 2 | 5V |
+| 3 | **SDA (GPIO7)** | 4 | 5V |
+| 5 | **SCL (GPIO8)** | 6 | GND |
+| 7 | GPIO23 | 8 | TXD (GPIO37) |
+| 9 | GND | 10 | RXD (GPIO38) |
+| 11 | GPIO21 | 12 | GPIO22 |
+| 13 | GPIO20 | 14 | GND |
+| 15 | GPIO6 | 16 | GPIO5 |
+| 17 | 3V3 | 18 | GPIO4 |
+| 19 | GPIO3 | 20 | GND |
+| 21 | GPIO2 | 22 | GPIO1 |
+| 23 | GPIO0 | 24 | GPIO36 |
+| 25 | GND | 26 | GPIO32 |
+| 27 | GPIO24 | 28 | GPIO25 |
+| 29 | GPIO33 | 30 | GND |
+| 31 | GPIO26 | 32 | **GPIO54 — C6 reset, leave alone** |
+| 33 | GPIO48 | 34 | GND |
+| 35 | GPIO53 | 36 | GPIO46 |
+| 37 | GPIO47 | 38 | GPIO27 |
+| 39 | GND | 40 | GPIO45 |
+
+The trap is that pins 3 and 5 are silkscreened `SDA` and `SCL`, not `GPIO7` and `GPIO8`, so looking
+for the numbers on the board finds nothing and the obvious conclusion — "those pins aren't brought
+out" — is wrong.
+
+Note what else is on that bus: the on-board **ES8311 audio codec at `0x18`**. That is a gift for
+bring-up, because it makes a bus scan self-verifying. `0x18` present and the PCA9685s absent means
+the pins and the bus are fine and the fault is in the boards' own wiring or power.
+
+### The rear PCA9685's address is whatever its pads say (2026-08-21)
+
+This file assumed `0x41`, from bridging **A0**. The board on the bench came back as **`0x60`** —
+`0x40 | 0x20`, which is **A5** bridged. The pads sit in a row A5…A0 and bridging the wrong end of it
+is easy.
+
+Nothing was re-soldered. A PCA9685's address is data, `board.h` is the file that holds data about
+this board, and `BOARD_PCA_ADDR_REAR` took the real value in one line. Worth remembering as a
+general shape: when the hardware disagrees with the code about an arbitrary value, change the code.
+
+A full scan of the working bus, for reference — note `0x70`, which is the PCA9685 **All Call**
+address and is enabled by default, so it is one response from both boards rather than a third device:
+
+```
+SCAN: device answers at 0x18   (ES8311 codec, on-board)
+SCAN: device answers at 0x40   (front axle)
+SCAN: device answers at 0x60   (rear axle)
+SCAN: device answers at 0x70   (PCA9685 All Call)
+```
 
 ### The radio was updated over SDIO, with no wire at all (2026-08-20)
 

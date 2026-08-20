@@ -10,24 +10,32 @@
 // The radio's SDIO link reserves GPIO 14..19 (D0..D3, CLK, CMD) and GPIO 54 (co-processor
 // reset) — pinned in sdkconfig.defaults. Anything assigned here must avoid those.
 //
-// UNVERIFIED until bring-up — see docs/bringup.md. These two compile and do not collide with
-// the radio, but they are not claimed to match the board's silkscreen. Check the pinout before
-// wiring the PCA9685.
-#define BOARD_I2C_SDA        20
-#define BOARD_I2C_SCL        21
+// These are the board's own default I2C pins, per Waveshare's documentation for the
+// ESP32-P4-Module-DEV-KIT (the same pair its Qwiic connectors carry). They are clear of the
+// radio's SDIO block, and unlike the numbers that stood here before — which were chosen only to
+// compile — they are brought out on the 2x20 header as physical pins 3 and 5, silkscreened
+// `SDA`/`SCL` rather than by GPIO number, in the Raspberry Pi positions.
+//
+// Confirmed on the bench 2026-08-21: both PCA9685 boards answer here and initialise. The
+// on-board ES8311 audio codec shares this bus at 0x18, which makes a scan self-checking — if
+// 0x18 answers and 0x40 does not, the bus is fine and the fault is in the PCA wiring.
+#define BOARD_I2C_SDA        7
+#define BOARD_I2C_SCL        8
 
 #define BOARD_I2C_HZ         400000
 #define BOARD_PWM_HZ         1000
 
 // Two PCA9685 boards on the same bus, one per axle: the front axle's two motors on 0x40, the
-// rear's on 0x41 (its A0 jumper set). Logical channels 0..7 split four per board — 0..3 front,
+// rear's on 0x60. The rear address is whatever its address pads happen to say — ours came back
+// as 0x60 (A5 bridged) rather than the 0x41 an A0 bridge would give, and there is no reason to
+// unsolder it: the address is data, and this is the file that holds it. Logical channels 0..7 split four per board — 0..3 front,
 // 4..7 rear — which is the only place that split is written down.
 //
 // Note this does not fix which corner is which: the calibration wizard discovers that by
 // spinning each pair and asking which wheel turned. The split only has to match how the motors
 // are physically cabled to the boards, not any particular corner assignment.
 #define BOARD_PCA_ADDR_FRONT  0x40
-#define BOARD_PCA_ADDR_REAR   0x41
+#define BOARD_PCA_ADDR_REAR   0x60
 #define BOARD_PCA_CH_PER_CHIP 4
 
 // Expected esp_hosted slave version on the C6. The radio is wire-flashed once and pinned,

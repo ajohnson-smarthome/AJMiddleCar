@@ -12,7 +12,7 @@ Both are alive; they share a protocol and a design language, and their code dive
 | Board | Waveshare **ESP32-P4-Module-DEV-KIT** — ESP32-P4NRW32, 32 MB PSRAM, 16 MB flash |
 | Silicon | ESP32-P4 **revision v1.3** — early, and IDF 6.0 rejects it unless the build selects the `<3.0` family (see `sdkconfig.defaults`) |
 | Radio | **ESP32-C6 on the same board**, over SDIO. The P4 has no radio of its own. |
-| PWM driver | **2× PCA9685**, one per axle — I2C `0x40` front, `0x41` rear |
+| PWM driver | **2× PCA9685** on the header's I2C (SDA `GPIO7` pin 3, SCL `GPIO8` pin 5) — `0x40` front axle, `0x60` rear |
 | Motor driver | 4× BTS7960 full H-bridge |
 | Framework | ESP-IDF **6.0.2** at `~/esp/esp-idf-v6.0.2` |
 
@@ -32,8 +32,8 @@ the only file that knows they live on two boards (0..3 on the front board, 4..7 
 |---|---|---|---|
 | 1 | CH0 | CH1 | front (`0x40`) |
 | 2 | CH2 | CH3 | front (`0x40`) |
-| 3 | CH4 | CH5 | rear (`0x41`) |
-| 4 | CH6 | CH7 | rear (`0x41`) |
+| 3 | CH4 | CH5 | rear (`0x60`) |
+| 4 | CH6 | CH7 | rear (`0x60`) |
 
 Which pair drives which *corner* is not fixed here — the calibration wizard discovers it by
 spinning each pair and asking which wheel turned, so a swapped cable costs nothing.
