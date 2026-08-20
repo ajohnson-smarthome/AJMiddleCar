@@ -74,9 +74,11 @@ component defaults to — answered itself: the radio comes up, so they do.
       quickest way to check, and it is self-verifying because the on-board ES8311 codec sits at
       `0x18`: if `0x18` answers and the PCA9685s do not, the pins are right and the fault is in
       their wiring or power.
-- [ ] **One wheel.** Console `mix 0.5 0` — at least one motor turns. If nothing turns, this is
-      almost always command delivery rather than firmware: opening the serial port resets the
-      board, so a command sent in the first second or two is swallowed during boot.
+- [x] **One wheel.** Better than one: `mix 0.3 0` turned the motors on the first try, and
+      `mix 1 0` held full duty (4095) for ten seconds without complaint. Note the console is not
+      watchdog-backed, so a console `mix` runs until `mix 0 0` — send the stop from the same script
+      that sends the drive, and make it insistent, because a lost link would otherwise leave the
+      motors at full until a power cycle.
 - [ ] **Calibration.** Run the app's wizard end to end; `/status` reports `calibrated: true`,
       and it survives a power cycle.
 - [ ] **Driving.** Both schemes, forward, reverse, tank turn.
@@ -197,6 +199,17 @@ SCAN: device answers at 0x40   (front axle)
 SCAN: device answers at 0x60   (rear axle)
 SCAN: device answers at 0x70   (PCA9685 All Call)
 ```
+
+### The serial link survives full throttle (2026-08-21)
+
+The pico car's standing warning is that its USB CDC port drops under motor load as VBUS sags, which
+is why flashing-while-driving needs a separate 5 V supply. This board did not reproduce it: ten
+seconds at duty 4095 on all four motors, and the CH343P bridge kept the console alive throughout —
+the stop command went out over the same link that had just carried the drive command. Logic here is
+powered over USB while the motors run from the battery, which is presumably why.
+
+Worth not over-reading: one run, wheels off the ground. Under real load on the floor the answer may
+differ.
 
 ### The radio was updated over SDIO, with no wire at all (2026-08-20)
 
