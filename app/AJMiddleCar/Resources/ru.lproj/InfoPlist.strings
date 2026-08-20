@@ -1,2 +1,2 @@
 /* System permission dialogs — localized counterparts of Info.plist usage descriptions. */
-"NSLocalNetworkUsageDescription" = "Подключается к машинке ESP32-Car по локальному Wi-Fi для управления.";
+"NSLocalNetworkUsageDescription" = "Подключается к машинке AJMiddleCar по локальному Wi-Fi для управления.";

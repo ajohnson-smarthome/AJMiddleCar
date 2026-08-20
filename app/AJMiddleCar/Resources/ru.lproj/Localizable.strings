@@ -1,5 +1,5 @@
 "connect.title"      = "Поиск машинки…";
-"connect.body"       = "Подключись к Wi-Fi «ESP32-Car» (пароль drive1234), затем вернись в приложение.";
+"connect.body"       = "Подключись к Wi-Fi «AJMiddleCar» (пароль drive1234), затем вернись в приложение.";
 "common.openSettings"= "Открыть настройки";
 "common.close"       = "Закрыть";
 "settings.title"     = "Настройки";
@@ -42,7 +42,7 @@
 "fw.update"         = "Обновить";
 "fw.downloadTitle"  = "Скачивание";
 "fw.connectTitle"   = "Подключись к машинке";
-"fw.connectSub"     = "Wi-Fi «ESP32-Car»";
+"fw.connectSub"     = "Wi-Fi «AJMiddleCar»";
 "fw.flash"          = "Залить";
 "fw.uploadTitle"    = "Заливка";
 "fw.rebootTitle"    = "Перезагрузка…";
@@ -126,7 +126,7 @@
 "trick.wiggleCount"   = "Вильков";
 
 "wrongCar.title"     = "Это другая машинка";
-"wrongCar.sub"       = "Сеть принадлежит машинке «%@». Этот пульт управляет только средней машинкой — её настройки и калибровка чужой не подойдут.";
+"wrongCar.sub"       = "Сеть принадлежит машинке «%@». Этот пульт управляет только машинкой «AJMiddleCar» — её настройки и калибровка чужой не подойдут.";
 "wrongCar.hint"      = "Подключись к сети «%@» и повтори.";
 "fw.radio"           = "Радиомодуль: %@";
 "fw.radioMismatch"   = "⚠ Радиомодуль: %@ — не та версия, которую ждёт эта прошивка. Перешей C6, см. firmware/c6/README.md";

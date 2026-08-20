@@ -23,7 +23,7 @@ targets:
     info:
       path: AJMiddleCar/Info.plist
       properties:
-        CFBundleDisplayName: AJ Middle
+        CFBundleDisplayName: AJMiddleCar
         CFBundleDevelopmentRegion: ru
         CFBundleLocalizations: [ru]
         UILaunchScreen: {}
