@@ -1,0 +1,135 @@
+{
+  "proto": 1,
+  "device": "ajmiddlecar",
+  "network": {
+    "ssid": "AJMiddleCar",
+    "password": "drive1234",
+    "host": "192.168.4.1"
+  },
+  "rt": {
+    "port": 4210,
+    "max_datagram": 96,
+    "command_hz": 10,
+    "telemetry_hz": 5,
+    "watchdog_ms": 300
+  },
+  "domains": [
+    {
+      "path": "/ramp",
+      "nvs_key": "ramp",
+      "swift": "Ramp",
+      "doc": "Slew-rate limit on acceleration. Rise is bounded, fall is instant, so stopping is never delayed.",
+      "fields": [
+        {
+          "name": "ramp_ms",
+          "type": "int",
+          "min": 0,
+          "max": 2000,
+          "default": 300,
+          "doc": "time from zero to full scale in ms; 0 disables the ramp"
+        }
+      ]
+    },
+    {
+      "path": "/trim",
+      "nvs_key": "trim",
+      "swift": "Trim",
+      "doc": "Straight-line correction. Positive slows the left side, negative slows the right; it only ever attenuates.",
+      "fields": [
+        {
+          "name": "trim_pct",
+          "type": "int",
+          "min": -30,
+          "max": 30,
+          "default": 0,
+          "doc": "percentage by which the faster side is slowed"
+        }
+      ]
+    },
+    {
+      "path": "/recover",
+      "nvs_key": "recover",
+      "swift": "Recover",
+      "doc": "Reverse-replay retreat on unexpected link loss. A deliberate goodbye suppresses it.",
+      "fields": [
+        {
+          "name": "enabled",
+          "type": "bool",
+          "default": true,
+          "doc": "retrace on unexpected silence; when false the car stops instead"
+        },
+        {
+          "name": "window_ms",
+          "type": "int",
+          "min": 1000,
+          "max": 10000,
+          "default": 5000,
+          "doc": "how far back the breadcrumb history reaches"
+        }
+      ]
+    },
+    {
+      "path": "/wheel",
+      "nvs_key": "wheel",
+      "swift": "Wheel",
+      "doc": "Wheel and encoder geometry. Stored on the car; speed is not yet computed from it.",
+      "fields": [
+        {
+          "name": "diameter_mm",
+          "type": "int",
+          "min": 20,
+          "max": 150,
+          "default": 65,
+          "doc": "wheel diameter in mm"
+        },
+        {
+          "name": "ppr",
+          "type": "int",
+          "min": 1,
+          "max": 1000,
+          "default": 11,
+          "doc": "encoder pulses per motor-shaft revolution, one channel"
+        },
+        {
+          "name": "gear_x100",
+          "type": "int",
+          "min": 100,
+          "max": 30000,
+          "default": 2100,
+          "doc": "gear ratio times 100; 1:21 is 2100"
+        },
+        {
+          "name": "quad",
+          "type": "enum",
+          "values": [1, 2, 4],
+          "default": 4,
+          "doc": "quadrature edge multiplier"
+        }
+      ]
+    },
+    {
+      "path": "/dims",
+      "nvs_key": "dims",
+      "swift": "Dims",
+      "doc": "Distances between wheel centres. The track feeds the app's manoeuvre geometry.",
+      "fields": [
+        {
+          "name": "track_mm",
+          "type": "int",
+          "min": 60,
+          "max": 300,
+          "default": 130,
+          "doc": "lateral distance between left and right wheel centres"
+        },
+        {
+          "name": "wheelbase_mm",
+          "type": "int",
+          "min": 90,
+          "max": 360,
+          "default": 210,
+          "doc": "longitudinal distance between front and rear wheel centres"
+        }
+      ]
+    }
+  ]
+}
