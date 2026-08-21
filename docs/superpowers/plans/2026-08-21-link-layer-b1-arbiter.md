@@ -1133,3 +1133,40 @@ git commit -m "docs: ctl and bus_ok in the telemetry frame"
 **Type consistency.** `link_src_t`, `link_arb_t`, `link_arb_lapsed/grant/release`, `link_src_name`, `link_init/set/release/owner/bus_ok`, `LINK_HOLD_RT_MS`, `LINK_HOLD_CALIB_MS`, `ramp_max_up_per_tick`, `car_drive(src,...)`, `car_stop(src)`, `car_spin_pair` returning `bool` — each is spelled identically in the task that defines it and every task that uses it.
 
 **Known risk.** Task 4 deliberately leaves the tree unbuildable between commits 4 and 5. That is a bisect hazard, and it is worth it: the compiler's error list is the authoritative set of actuator producers, and discovering it by grep instead would risk missing one.
+
+---
+
+## Review outcomes
+
+An adversarial review of the finished branch found seven defects. Five were introduced by this
+plan; two were overstatements in its own commit messages.
+
+| | Finding | Outcome |
+|---|---|---|
+| S1 | Putting CALIB above RT made every calibration spin refuse 6 control frames, so the watchdog tripped mid-spin and launched a retreat that ignored its own refusals and fired the moment CALIB lapsed | **Fixed.** The watchdog feeds on a parsed frame (link liveness); the breadcrumb stays gated on the grant; a refused retreat step aborts the retreat |
+| S2 | `pca9685_init` ends with MODE1\|RESTART, which restores the pre-reset duty, and the zeroing sat behind an `nvs_flash_init` that can erase flash | **Fixed.** Zero immediately after init. `pca9685_zero_all` also covered 4 channels per chip instead of 16 |
+| S3 | A NULL device handle made IDF log per call: ~1200 lines/s into a 115200 console, defeating the point of booting with a dead bus | **Fixed.** Refuse a NULL handle; rate-limit the remaining failures |
+| S4 | `car_stop` and `link_release` returned void, so every emergency stop discarded whether it happened | **Fixed.** Both return a result; the watchdog and OTA act on it |
+| S5 | `link_owner` took a 20 ms mutex from an esp_timer callback and reported `none` on timeout | **Fixed.** The owner is published under the lock and read without it |
+| S6 | `bus_ok` flipped true on a tick that attempted no write, so a dead bus on a stationary car read healthy | **Fixed.** Only a tick that wrote may clear it |
+| S7 | `LINK_SRC_CONSOLE` was the only sticky source with no release path | **Fixed.** `mix 0 0` releases |
+
+**Deliberately not fixed here, and why:**
+
+- **No bus-fault escalation.** Bounding the I2C wait stops the *task* hanging; it does not stop the
+  *motors*, which hold their last duty on a wedged bus while `link_task` retries forever. An
+  `i2c_master_bus_reset()` after N consecutive failures is the standard recovery and is worth
+  doing — but it is new behaviour with its own failure modes, and inventing it at review time is
+  how unreviewed code ships. The commit message for the timeout fix was corrected not to claim
+  more than it delivers. **Carry to B2.**
+- **The watchdog still runs on `Tmr Svc` at priority 1** and takes a 20 ms mutex there. B3 moves the
+  watchdog into the `rt_link` loop, which removes the callback context entirely; fixing it twice
+  would be churn.
+- **The calibration double-buffer can be reused under a live reader.** Bounded at roughly 1e-4 per
+  double-save, and provably not shoot-through: `motors_plan` writes both channels of a pair on
+  every branch, so a torn table costs one wheel one 20 ms tick. Documented in place rather than
+  traded for a permanent allocation.
+
+**Pre-existing, confirmed by the review, already scheduled:** the `ws_fps` statics are
+read-modify-written from two tasks; `calibration_load` does an NVS read from a 5 Hz timer callback;
+`/calib/spin` blocks the single httpd task for 600 ms. All three are B2/B3 work.
