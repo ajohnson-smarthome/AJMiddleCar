@@ -113,16 +113,21 @@ static void link_task(void *arg) {
         if (failed)      s_bus_ok = false;
         else if (wrote)  s_bus_ok = true;
 
+        /* A wedged bus fails eight channels fifty times a second. Logging every one
+           saturates a 115200 console so completely that the "boot into the network so
+           it is diagnosable" trade buys nothing — so speak once a second, and use that
+           same beat to try clocking the bus free. Retrying forever without escalating
+           leaves the motors at their last duty until the battery comes off. */
+        static uint32_t s_fail_ticks;
         if (failed) {
-            /* Rate-limited: a wedged bus fails eight channels fifty times a second, and
-               an unthrottled log saturates a 115200 console so completely that the
-               "boot into the network so it is diagnosable" trade buys nothing. */
-            static uint32_t last_err_log;
-            uint32_t t = now_ms();
-            if ((uint32_t)(t - last_err_log) > 1000) {
-                last_err_log = t;
-                ESP_LOGE(TAG, "PCA9685 write failing: %s", esp_err_to_name(last_err));
+            s_fail_ticks++;
+            if (s_fail_ticks % 50 == 0) {
+                ESP_LOGE(TAG, "PCA9685 write failing (%s) — resetting the I2C bus",
+                         esp_err_to_name(last_err));
+                pca9685_bus_recover();
             }
+        } else {
+            s_fail_ticks = 0;
         }
     }
 }

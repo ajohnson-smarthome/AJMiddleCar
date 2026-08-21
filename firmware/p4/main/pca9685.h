@@ -21,4 +21,8 @@ esp_err_t pca9685_set_pwm(uint8_t channel, uint16_t duty);
 // registers survive a P4 reset and the firmware's idea of "stopped" does not.
 esp_err_t pca9685_zero_all(void);
 
+// Clock a wedged bus free. The only lever the firmware has when a slave holds SDA low:
+// until it lets go the motors keep whatever duty they had.
+esp_err_t pca9685_bus_recover(void);
+
 #endif // PCA9685_H
