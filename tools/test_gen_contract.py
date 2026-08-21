@@ -59,9 +59,12 @@ class TestSchema(unittest.TestCase):
     def test_ranges_match_the_firmware_today(self):
         """The schema must describe the firmware that exists, not one we imagined."""
         main = ROOT / "firmware" / "p4" / "main"
+        # The five *_api.c files are gone: cfg_api.c drives all of them from the
+        # generated table, so a range literal no longer appears in any handler. What
+        # remains are the setters' own clamps, which are the C-side constants this
+        # test exists to keep the schema honest against.
         src = "\n".join((main / n).read_text()
-                        for n in ("wheel.h", "dims.h", "recovery.h", "ramp.c",
-                                  "ramp_api.c", "trim_api.c"))
+                        for n in ("wheel.h", "dims.h", "recovery.h", "ramp.c", "car.c"))
         expected = {
             ("/wheel", "diameter_mm"): (20, 150), ("/wheel", "ppr"): (1, 1000),
             ("/wheel", "gear_x100"): (100, 30000),
