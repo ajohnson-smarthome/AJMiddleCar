@@ -140,6 +140,7 @@ class TestCEmitter(unittest.TestCase):
         self.assertIn("static const int32_t CFG_WHEEL_QUAD_ALLOWED[] = { 1, 2, 4 };", out)
         self.assertIn('{ "quad", CFG_ENUM, 1, 4, 4, CFG_WHEEL_QUAD_ALLOWED, 3 }', out)
         self.assertIn("#define CFG_DOMAIN_COUNT 5", out)
+        self.assertIn("#define CFG_MAX_FIELDS 4", out)   # /wheel is the widest
 
     def test_every_domain_appears_once(self):
         import gen_contract

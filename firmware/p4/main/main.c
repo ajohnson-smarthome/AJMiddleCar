@@ -20,14 +20,10 @@
 #include "calib_api.h"
 #include "status_api.h"
 #include "ota_api.h"
+#include "cfg_api.h"
 #include "ramp.h"
-#include "ramp_api.h"
-#include "trim_api.h"
-#include "recovery_api.h"
 #include "wheel.h"
 #include "dims.h"
-#include "wheel_api.h"
-#include "dims_api.h"
 #include "telemetry.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -125,11 +121,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(calib_api_start());
     ESP_ERROR_CHECK(status_api_start());
     ESP_ERROR_CHECK(ota_api_start());
-    ESP_ERROR_CHECK(ramp_api_start());
-    ESP_ERROR_CHECK(trim_api_start());
-    ESP_ERROR_CHECK(recovery_api_start());
-    ESP_ERROR_CHECK(wheel_api_start());
-    ESP_ERROR_CHECK(dims_api_start());
+    ESP_ERROR_CHECK(cfg_api_start());   // all five config domains, from the generated table
     ESP_ERROR_CHECK(telemetry_start());
     recovery_init();                       // breadcrumb buffer; must precede the watchdog
     watchdog_init(WDT_TIMEOUT_MS);

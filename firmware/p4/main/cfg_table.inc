@@ -34,3 +34,4 @@ static const cfg_domain_t CFG_DOMAINS[] = {
 };
 
 #define CFG_DOMAIN_COUNT 5
+#define CFG_MAX_FIELDS 4

@@ -19,6 +19,10 @@ static const cfg_field_t *find(const char *path, const char *name) {
 
 int main(void) {
     assert(CFG_DOMAIN_COUNT == 5);
+    /* The generic handler sizes a stack array from this; a sixth field in the
+       schema must break the build, not the runtime. */
+    assert(CFG_MAX_FIELDS == 4);
+    for (int i = 0; i < CFG_DOMAIN_COUNT; i++) assert(CFG_DOMAINS[i].n_fields <= CFG_MAX_FIELDS);
 
     const cfg_field_t *d = find("/wheel", "diameter_mm");
     assert(d && d->type == CFG_INT && d->min == 20 && d->max == 150 && d->def == 65);
