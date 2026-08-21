@@ -53,11 +53,14 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     float t, y;
     if (control_parse_json((const char *)buf, &t, &y) == 0) {
         s_frames++;
-        /* Feed the watchdog only when the command actually reached the actuator.
-           Feeding first meant the one mechanism that could notice the actuator had
-           stopped responding was fed by the frames that failed to reach it. */
+        /* A parsed frame proves the link is alive, which is the only thing this
+           watchdog measures. Actuator health is a separate question, answered
+           separately by bus_ok — conflating them made every calibration spin look
+           like a dropped link, because a refused frame is not a silent one.
+           The breadcrumb IS gated on the grant: a refused command never moved the
+           car, so recording it would corrupt the path the retreat retraces. */
+        watchdog_feed();
         if (car_drive(LINK_SRC_RT, t, y)) {
-            watchdog_feed();
             recovery_note_command(t, y);
         }
     } else {

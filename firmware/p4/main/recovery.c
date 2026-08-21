@@ -102,7 +102,15 @@ static void retreat_task(void *arg) {
                 ? (uint32_t)(t_loss - snap[0].ts)            // newest held until link loss
                 : (uint32_t)(snap[i - 1].ts - snap[i].ts);   // until the next-newer frame
             if (i == 0 && dur > TAIL_MS) dur = TAIL_MS;       // cap the open segment
-            car_drive(LINK_SRC_RECOVER, rt, ry);
+            if (!car_drive(LINK_SRC_RECOVER, rt, ry)) {
+                /* Something outranks us — calibration, OTA, or the driver coming
+                   back. Stop retreating rather than marching through the timeline
+                   refused, which would leave the remaining steps to fire the moment
+                   the holder let go. */
+                ESP_LOGI(TAG, "retrace refused — someone else holds the actuator");
+                aborted = true;
+                break;
+            }
             for (uint32_t waited = 0; waited < dur; ) {
                 if (s_seq != snap_seq) { aborted = true; break; }  // a frame arrived → link back
                 uint32_t step = (dur - waited < TICK_MS) ? (dur - waited) : TICK_MS;
