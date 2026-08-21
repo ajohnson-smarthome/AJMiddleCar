@@ -17,6 +17,10 @@ static link_arb_t        s_arb = { .owner = LINK_SRC_NONE, .until_ms = 0, .stick
 static uint16_t          s_target[8];
 static uint16_t          s_current[8];
 static volatile bool     s_bus_ok = true;
+/* Published under the lock, read without it. Telemetry runs in an esp_timer callback
+   at priority 22 and must not block on a mutex for a value it only prints; blocking
+   there also meant a timeout reported "none" while someone was actively holding. */
+static volatile link_src_t s_owner_pub = LINK_SRC_NONE;
 
 static uint32_t now_ms(void) {
     return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
@@ -24,12 +28,7 @@ static uint32_t now_ms(void) {
 
 bool link_bus_ok(void) { return s_bus_ok; }
 
-link_src_t link_owner(void) {
-    if (!s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(20)) != pdTRUE) return LINK_SRC_NONE;
-    link_src_t o = link_arb_lapsed(&s_arb, now_ms()) ? LINK_SRC_NONE : s_arb.owner;
-    xSemaphoreGive(s_lock);
-    return o;
-}
+link_src_t link_owner(void) { return s_owner_pub; }
 
 bool link_set(link_src_t src, const uint16_t duty[8], uint32_t hold_ms, bool sticky) {
     if (!s_lock) return false;
@@ -45,6 +44,7 @@ bool link_set(link_src_t src, const uint16_t duty[8], uint32_t hold_ms, bool sti
         memcpy(s_target, duty, sizeof(s_target));
     }
     link_src_t owner = s_arb.owner;
+    s_owner_pub = owner;
     xSemaphoreGive(s_lock);
 
     if (!granted) {
@@ -65,6 +65,7 @@ void link_release(link_src_t src) {
     if (s_arb.owner == src) {
         link_arb_release(&s_arb, src);
         memset(s_target, 0, sizeof(s_target));   /* nobody owns it -> the safe target */
+        s_owner_pub = LINK_SRC_NONE;
     }
     xSemaphoreGive(s_lock);
 }
@@ -82,15 +83,18 @@ static void link_task(void *arg) {
         if (link_arb_lapsed(&s_arb, now_ms())) {
             s_arb.owner = LINK_SRC_NONE;
             memset(s_target, 0, sizeof(s_target));
+            s_owner_pub = LINK_SRC_NONE;
         }
         memcpy(tgt, s_target, sizeof(tgt));
         xSemaphoreGive(s_lock);
 
         uint16_t up = ramp_max_up_per_tick(ramp_get_ms(), TICK_MS);
-        bool all_ok = true;
+        bool wrote = false, failed = false;
+        esp_err_t last_err = ESP_OK;
         for (uint8_t ch = 0; ch < 8; ch++) {
             uint16_t next = ramp_step(s_current[ch], tgt[ch], up);
             if (next == s_current[ch]) continue;
+            wrote = true;
             esp_err_t e = pca9685_set_pwm(ch, next);
             if (e == ESP_OK) {
                 s_current[ch] = next;          /* shadow follows the chip, not our intent */
@@ -98,11 +102,27 @@ static void link_task(void *arg) {
                 /* Deliberately leave s_current alone. It still differs from the target,
                    so the next tick retries — where updating it first would have left the
                    firmware believing a spinning motor was stopped, forever. */
-                all_ok = false;
-                ESP_LOGE(TAG, "ch%u write failed: %s", ch, esp_err_to_name(e));
+                failed = true;
+                last_err = e;
             }
         }
-        s_bus_ok = all_ok;
+        /* Only a tick that actually wrote may call the bus healthy. A tick where every
+           channel already sat at its target attempts nothing, and clearing the flag on
+           that evidence would report a dead bus as fine the moment the car stood still. */
+        if (failed)      s_bus_ok = false;
+        else if (wrote)  s_bus_ok = true;
+
+        if (failed) {
+            /* Rate-limited: a wedged bus fails eight channels fifty times a second, and
+               an unthrottled log saturates a 115200 console so completely that the
+               "boot into the network so it is diagnosable" trade buys nothing. */
+            static uint32_t last_err_log;
+            uint32_t t = now_ms();
+            if ((uint32_t)(t - last_err_log) > 1000) {
+                last_err_log = t;
+                ESP_LOGE(TAG, "PCA9685 write failing: %s", esp_err_to_name(last_err));
+            }
+        }
     }
 }
 

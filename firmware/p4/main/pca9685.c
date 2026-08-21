@@ -114,6 +114,11 @@ esp_err_t pca9685_set_pwm(uint8_t channel, uint16_t duty) {
         on & 0xFF, (on >> 8) & 0x1F,
         off & 0xFF, (off >> 8) & 0x1F,
     };
+    /* The bus is allowed to fail at boot now, which leaves these handles NULL. IDF
+       logs an error of its own for a NULL handle, and at 8 channels x 50 Hz x 2 calls
+       that alone saturates the console — so refuse before the driver sees it. */
+    if (s_dev[idx] == NULL) return ESP_ERR_INVALID_STATE;
+
     esp_err_t e = i2c_master_transmit(s_dev[idx], buf, sizeof(buf), PCA_I2C_TIMEOUT_MS);
     if (e != ESP_OK) {
         /* One retry: a single NACK on a shared bus is worth another try, and the
@@ -130,6 +135,7 @@ esp_err_t pca9685_zero_all(void) {
        reboot or an OTA restart the outputs are whatever they were mid-drive. */
     esp_err_t first_err = ESP_OK;
     for (int i = 0; i < PCA_COUNT; i++) {
+        if (s_dev[i] == NULL) { first_err = ESP_ERR_INVALID_STATE; continue; }
         for (uint8_t ch = 0; ch < PCA9685_CH_TOTAL; ch++) {
             uint8_t base_reg = PCA9685_LED0_ON_L + 4 * ch;
             uint8_t buf[5] = { base_reg, 0x00, 0x00, 0x00, 0x10 };  /* OFF bit 12 set */
