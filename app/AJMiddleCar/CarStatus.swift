@@ -24,16 +24,29 @@ final class CarStatus: ObservableObject {
     @Published var radioFw: String?
     @Published var radioOK: Bool?
 
-    private let url = URL(string: CarHost.statusURL)!
     private var freshTimer: Timer?
+    private var probeTimer: Timer?
     private var lastFrame = Date.distantPast
     private let staleAfter: TimeInterval = 1.0
 
-    /// One-shot bootstrap probe (identity + fw + initial calibrated); then liveness comes from WS.
+    /// Bootstrap probe (identity + fw + initial calibrated); then liveness comes from WS.
+    ///
+    /// The probe repeats until it lands. It used to run exactly once, which quietly stranded the
+    /// app: the connect gate advances on `fw`, and only this probe ever sets it — so a single
+    /// timed-out request (the phone still joining the car's Wi-Fi, the car still booting) left
+    /// the app on "searching" forever, even with telemetry already arriving over the WS.
     func start() {
         bootstrap()
+        if probeTimer == nil {
+            probeTimer = Self.commonModeTimer(every: 1.5) { [weak self] in
+                Task { @MainActor in
+                    guard let self else { return }
+                    if self.fw == nil && self.foreignDevice == nil { self.bootstrap() } else { self.stopProbe() }
+                }
+            }
+        }
         guard freshTimer == nil else { return }
-        freshTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        freshTimer = Self.commonModeTimer(every: 0.5) { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
                 if self.online && Date().timeIntervalSince(self.lastFrame) > self.staleAfter {
@@ -43,8 +56,19 @@ final class CarStatus: ObservableObject {
         }
     }
 
-    func stop() { freshTimer?.invalidate(); freshTimer = nil }
-    deinit { freshTimer?.invalidate() }
+    /// Scheduled in `.common` modes on purpose. A plain `Timer.scheduledTimer` lands in the run
+    /// loop's default mode only, so it stops firing while a finger is dragging the joystick —
+    /// which is precisely when the car's liveness matters most.
+    private static func commonModeTimer(every seconds: TimeInterval,
+                                        _ body: @escaping () -> Void) -> Timer {
+        let t = Timer(timeInterval: seconds, repeats: true) { _ in body() }
+        RunLoop.main.add(t, forMode: .common)
+        return t
+    }
+
+    func stop() { freshTimer?.invalidate(); freshTimer = nil; stopProbe() }
+    private func stopProbe() { probeTimer?.invalidate(); probeTimer = nil }
+    deinit { freshTimer?.invalidate(); probeTimer?.invalidate() }
 
     /// Apply a telemetry frame pushed over WS.
     func apply(_ t: Telemetry) {
@@ -58,31 +82,25 @@ final class CarStatus: ObservableObject {
     }
 
     private func bootstrap() {
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 2
-        req.cachePolicy = .reloadIgnoringLocalCacheData
-        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
-            var ok = false; var cal: Bool?; var fwv: String?; var up: Int?
-            var foreign: String?
-            var radio: (fw: String?, ok: Bool?) = (nil, nil)
-            if let data,
-               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let dev = j["device"] as? String {
-                if dev == CarStatus.expectedDevice {
-                    ok = true; cal = j["calibrated"] as? Bool; fwv = j["fw"] as? String; up = j["uptime_s"] as? Int
-                    if let r = j["radio"] as? [String: Any] {
-                        radio = (r["fw"] as? String, r["ok"] as? Bool)
-                    }
-                } else {
-                    foreign = dev   // reachable, but not our car
-                }
+        Task { @MainActor in
+            guard let r = await CarHTTP.get("/status", timeout: 2), r.status == 200,
+                  let j = try? JSONSerialization.jsonObject(with: r.body) as? [String: Any],
+                  let dev = j["device"] as? String else { return }
+
+            guard dev == CarStatus.expectedDevice else {
+                self.foreignDevice = dev          // reachable, but not our car
+                return
             }
-            Task { @MainActor in
-                guard let self else { return }
-                self.foreignDevice = foreign
-                self.radioFw = radio.fw; self.radioOK = radio.ok
-                if ok { self.online = true; self.calibrated = cal; self.fw = fwv; self.uptimeS = up; self.lastFrame = Date() }
+            self.foreignDevice = nil
+            self.calibrated = j["calibrated"] as? Bool
+            self.fw = j["fw"] as? String
+            self.uptimeS = j["uptime_s"] as? Int
+            if let radio = j["radio"] as? [String: Any] {
+                self.radioFw = radio["fw"] as? String
+                self.radioOK = radio["ok"] as? Bool
             }
-        }.resume()
+            self.online = true
+            self.lastFrame = Date()
+        }
     }
 }

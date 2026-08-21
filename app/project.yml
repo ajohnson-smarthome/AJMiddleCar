@@ -2,7 +2,7 @@ name: AJMiddleCar
 options:
   bundleIdPrefix: com.adamjohnson
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "26.0"
   createIntermediateGroups: true
 settings:
   base:

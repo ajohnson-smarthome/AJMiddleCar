@@ -57,6 +57,19 @@ car). If a change makes one need to know about the other, the change is wrong.
 
 `firmware/c6/` knows nothing about the car at all — not the motors, not the protocol.
 
+## The contract
+
+`contract/car-api.json` is the source of truth for everything both sides agree on: the
+protocol version, the real-time channel's constants, and the five config domains with
+their ranges and defaults. `tools/gen_contract.py` emits all four expressions of it —
+the firmware's descriptor table (`main/cfg_table.inc`), the app's Swift structs
+(`app/AJMiddleCar/Generated/CarAPI.swift`), the mock's table and validator
+(`tools/mock_car/generated.py`), and the endpoint table inside `docs/protocol.md`.
+
+Never hand-edit a generated file. Change the schema and re-run the generator;
+`tools/check_contract.sh` fails a tree where the two disagree, and `tools/test-all.sh`
+runs it alongside the tests.
+
 ## Firmware architecture
 
 The pure modules have **zero ESP-IDF dependencies** and are host-tested with plain `cc`.
@@ -94,11 +107,14 @@ idf.py -p /dev/cu.usbmodem* flash monitor
 
 The USB port number changes after every reset — re-check with `ls /dev/cu.usbmodem*`.
 
-**Host tests** (pure modules, no ESP-IDF):
+**Host tests** — everything that runs without hardware, a simulator or ESP-IDF:
 
 ```bash
-cd firmware/p4/test && make run
+tools/test-all.sh
 ```
+
+That covers the contract (schema, generator, drift), the firmware's pure modules and the
+app's pure Swift. `make -C firmware/p4/test run` still works on its own for the C half.
 
 **Radio image** (rare): `firmware/c6/flash-radio.sh` builds it; `firmware/c6/README.md` covers both
 ways to get it onto the C6 — over SDIO from the host, or over its UART header.
