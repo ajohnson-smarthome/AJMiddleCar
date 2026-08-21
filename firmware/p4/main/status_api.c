@@ -8,6 +8,7 @@
 #include "telemetry.h"
 #include "identity.h"
 #include "board.h"
+#include "cfg_table.inc"
 #include <string.h>
 #include "esp_hosted.h"
 
@@ -47,9 +48,9 @@ static esp_err_t status_get(httpd_req_t *req) {
     const char *fw = esp_app_get_description()->version;
     char buf[416];
     int n = snprintf(buf, sizeof(buf),
-                     "{\"device\":\"" CAR_DEVICE_ID "\",\"fw\":\"%s\",%s,"
+                     "{\"device\":\"" CAR_DEVICE_ID "\",\"fw\":\"%s\",\"proto\":%d,%s,"
                      "\"radio\":{\"fw\":\"%s\",\"expected\":\"" BOARD_RADIO_SLAVE_FW "\",\"ok\":%s}}",
-                     fw, fields, s_radio_fw, s_radio_ok ? "true" : "false");
+                     fw, RT_PROTO, fields, s_radio_fw, s_radio_ok ? "true" : "false");
     if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, n);

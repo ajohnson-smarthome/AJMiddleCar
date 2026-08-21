@@ -2,7 +2,7 @@ import SwiftUI
 
 struct CalibrationView: View {
     let palette: Palette
-    enum CalDebug { case spin, direction, done, saving, failed }   // gallery preview seed
+    enum CalDebug { case spin, spinning, spinFailed, direction, done, saving, failed }   // gallery seed
     var debugState: CalDebug? = nil
     var dismissible: Bool = true   // Settings push = back chevron; mandatory auto-prompt = none
     @Environment(\.dismiss) private var dismiss
@@ -12,19 +12,27 @@ struct CalibrationView: View {
     @State private var pending: Corner?
     @State private var saving = false
     @State private var failed = false
+    /// The wizard blocks until a spin is known to have happened. A failed POST used to look
+    /// exactly like a wheel that turned, so four taps on an unreachable car produced a table
+    /// `calibration_valid` cannot reject and the car drove with swapped wheels.
+    @State private var spinning = false
+    @State private var spinOK = false
+    @State private var spinFailed = false
     private let client = CalibClient()
 
     private var metal: Color { palette.metal }
 
-    private enum CalState { case spin, direction, done, saving, failed }
+    private enum CalState { case spin, spinning, spinFailed, direction, done, saving, failed }
     private var state: CalState {
         if saving { return .saving }
         if failed { return .failed }
+        if spinning { return .spinning }
+        if spinFailed { return .spinFailed }
         if pending != nil { return .direction }
         if step >= 4 { return .done }
         return .spin
     }
-    private var ringsActive: Bool { state == .spin || state == .saving }
+    private var ringsActive: Bool { state == .spin || state == .spinning || state == .saving }
     private var p: Palette { palette }
 
     var body: some View {
@@ -37,6 +45,8 @@ struct CalibrationView: View {
             guard let d = debugState else { return }
             switch d {
             case .spin:      step = 0; pending = nil; saving = false; failed = false
+            case .spinning:  spinning = true
+            case .spinFailed: spinFailed = true
             case .direction: pending = Corner.allCases.first
             case .done:      step = 4
             case .saving:    saving = true
@@ -87,13 +97,13 @@ struct CalibrationView: View {
     }
 
     private func wheelFill(_ c: Corner) -> Color {
-        if state == .failed { return p.warn }
+        if state == .failed || state == .spinFailed { return p.warn }
         if assign[c] != nil { return p.accent }
         if pending == c { return p.warn }
         return metal
     }
     private func wheelGlyph(_ c: Corner) -> String {
-        if state == .failed { return "✕" }
+        if state == .failed || state == .spinFailed { return "✕" }
         if assign[c] != nil { return "✓" }
         return ""
     }
@@ -108,7 +118,9 @@ struct CalibrationView: View {
                         radius: pending == c ? 2 + 4 * glow : 0)
         }
         .buttonStyle(.plain)
-        .disabled(assign[c] != nil || state == .saving || state == .failed)
+        // Untappable until a spin actually reached the car: guessing which wheel moved when
+        // none of them did is exactly the failure this wizard has to refuse.
+        .disabled(assign[c] != nil || !spinOK || state != .spin)
         .offset(x: c.dx, y: c.dy)
     }
 
@@ -120,6 +132,12 @@ struct CalibrationView: View {
             case .spin:
                 title(L.calibStep(min(step + 1, 4))); sub(L.calibSpinSub)
                 pill(L.calibSpin, p.accent) { spin() }
+            case .spinning:
+                title(L.calibStep(min(step + 1, 4))); sub(L.calibSpinSub)
+                pill(L.calibSpin, p.muted) { }
+            case .spinFailed:
+                title(L.calibSpinFailTitle); sub(L.calibSpinFailSub)
+                pill(L.calibRetry, p.accent) { spin() }
             case .direction:
                 if let c = pending {
                     title(L.calibWheel(c.label)); sub(L.calibWhichDir2)
@@ -169,20 +187,37 @@ struct CalibrationView: View {
     }
 
     // MARK: logic (unchanged behavior)
-    private func spin() { Task { await client.spin(pair: step, dir: 1) } }
-    private func tap(_ c: Corner) { guard assign[c] == nil else { return }; pending = c }
+    private func spin() {
+        spinning = true; spinFailed = false; spinOK = false
+        Task {
+            do {
+                try await client.spin(pair: step, dir: 1)
+                spinOK = true
+            } catch {
+                spinFailed = true
+            }
+            spinning = false
+        }
+    }
+    private func tap(_ c: Corner) { guard assign[c] == nil, spinOK else { return }; pending = c }
     private func assignDir(_ sign: Int) {
         guard let c = pending else { return }
         assign[c] = (pair: step, sign: sign)
         pending = nil
         step += 1
+        spinOK = false            // the next pair has to prove itself too
     }
     private func save() {
         saving = true; failed = false
         Task {
-            let ok = await client.save(body: ControlModel.calibSaveBody(assign))
-            saving = false
-            if ok { dismiss() } else { failed = true }
+            do {
+                try await client.save(body: ControlModel.calibSaveBody(assign))
+                saving = false
+                dismiss()
+            } catch {
+                saving = false
+                failed = true
+            }
         }
     }
 }

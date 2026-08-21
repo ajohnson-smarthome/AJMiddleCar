@@ -4,16 +4,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// Start the control-link watchdog: a periodic check that stops the car if no
-// watchdog_feed() has happened within timeout_ms. Call once after the WS server.
-void watchdog_init(uint32_t timeout_ms);
-
-// Record a fresh control frame (call from the WS handler on each valid frame).
-// Also "arms" the watchdog so it only acts once traffic has started.
-void watchdog_feed(void);
-
-// How many times the watchdog auto-stopped the car since boot.
-uint32_t watchdog_trips(void);
+// All that is left of the control watchdog: the one line of arithmetic that decides
+// whether the driver has gone quiet. The state and the decision live in rt_link.c,
+// because the task that notices silence should be the task that owns the channel — the
+// old software timer ran at priority 1 and held the car's safety from there.
 
 // Pure: has more than timeout_ms elapsed between last_ms and now_ms?
 // Uses unsigned subtraction so 32-bit millisecond-counter rollover is handled.

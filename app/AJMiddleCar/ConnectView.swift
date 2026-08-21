@@ -1,7 +1,18 @@
 import SwiftUI
 import UIKit
+import Network
 
+/// "The car is not answering" — and, since the link layer can now tell them apart, the three
+/// other reasons a car is not answering: Wi-Fi is off, local-network access was denied, or we are
+/// simply still looking. One radar for all of them is what this screen used to be.
 struct ConnectView: View {
+    enum Situation: Equatable {
+        case searching
+        case noWiFi(NWPath.UnsatisfiedReason)
+        case localNetworkDenied
+    }
+
+    var situation: Situation = .searching
     @Environment(\.colorScheme) private var colorScheme
     private var p: Palette { Theme.current(colorScheme) }
 
@@ -13,24 +24,45 @@ struct ConnectView: View {
         }
     }
 
+    private var title: String {
+        switch situation {
+        case .searching: return L.connectTitle
+        case .noWiFi: return L.linkNoWifiTitle
+        case .localNetworkDenied: return L.linkDeniedTitle
+        }
+    }
+
+    private var message: String {
+        switch situation {
+        case .searching: return L.connectBody
+        case .noWiFi: return L.linkNoWifiSub
+        case .localNetworkDenied: return L.linkDeniedSub
+        }
+    }
+
     private var rightPanel: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text(L.connectTitle).font(.system(size: 22, weight: .semibold)).foregroundStyle(p.text)
-            Text(L.connectBody).font(.system(size: 13)).foregroundStyle(p.muted)
+            Text(title).font(.system(size: 22, weight: .semibold)).foregroundStyle(p.text)
+            Text(message).font(.system(size: 13)).foregroundStyle(p.muted)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 260, alignment: .leading)
-            Button {
-                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
-            } label: {
-                Text(L.openSettings)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(p.accent)
-                    .padding(.horizontal, 16).padding(.vertical, 8)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(p.accent.opacity(0.15)))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(p.accent.opacity(0.55), lineWidth: 1))
+            // `openSettingsURLString` opens *this app's* pane by definition — which is precisely
+            // where the Local Network switch lives, so it is offered where it helps and not
+            // where it would only look like a button.
+            if situation == .localNetworkDenied {
+                Button {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                } label: {
+                    Text(L.openSettings)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(p.accent)
+                        .padding(.horizontal, 16).padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(p.accent.opacity(0.15)))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(p.accent.opacity(0.55), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 3)
             }
-            .buttonStyle(.plain)
-            .padding(.top, 3)
         }
     }
 }

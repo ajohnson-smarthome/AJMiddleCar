@@ -1,30 +1,37 @@
 import Foundation
 
-/// REST client for the car's calibration endpoints.
-///
-/// Runs over `CarHTTP` — a connection bound to the Wi-Fi interface — because `URLSession` stops
-/// reaching the car once iOS decides its network has no internet. See `CarNet`.
+/// The car's calibration endpoints. Not a config domain — the wizard's protocol is three calls,
+/// not one record — so it stays hand-written while the five domains are generic.
 @MainActor
 final class CalibClient {
-    func fetchCalibrated() async -> Bool {
-        guard let r = await CarHTTP.get("/calib"), r.status == 200,
-              let j = try? JSONSerialization.jsonObject(with: r.body) as? [String: Any] else {
-            return false
+    private let transport: CarTransport
+
+    init(transport: CarTransport = .shared) { self.transport = transport }
+
+    func fetchCalibrated() async throws -> Bool {
+        let data = try await transport.get("/calib")
+        guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let calibrated = j["calibrated"] as? Bool else {
+            throw CarError.malformed("/calib without a calibrated flag")
         }
-        return (j["calibrated"] as? Bool) ?? false
+        return calibrated
     }
 
-    func spin(pair: Int, dir: Int) async {
-        await post("/calib/spin", body: #"{"pair":\#(pair),"dir":\#(dir)}"#)
+    /// Spin one motor pair, and **say so when it did not happen**.
+    ///
+    /// This returned `Void` before, so a POST that never reached the car looked exactly like a
+    /// wheel that turned. Four taps on a car that answered nothing produced a table
+    /// `calibration_valid` cannot reject, and the car then drove with swapped wheels while
+    /// reporting `calibrated: true`.
+    func spin(pair: Int, dir: Int) async throws {
+        try await post("/calib/spin", body: #"{"pair":\#(pair),"dir":\#(dir)}"#)
     }
 
-    @discardableResult
-    func save(body: String) async -> Bool {
-        await post("/calib/save", body: body)
+    func save(body: String) async throws {
+        try await post("/calib/save", body: body)
     }
 
-    @discardableResult
-    private func post(_ path: String, body: String) async -> Bool {
-        await CarHTTP.post(path, body: Data(body.utf8))?.status == 200
+    private func post(_ path: String, body: String) async throws {
+        _ = try await transport.post(path, body: Data(body.utf8))
     }
 }

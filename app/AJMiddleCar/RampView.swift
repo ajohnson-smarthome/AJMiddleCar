@@ -1,10 +1,15 @@
 import SwiftUI
 
 /// Dedicated ramp screen: demo car on the left, slider on the right (calib/firmware layout).
+/// The slider appears only once the car's own value has been read — an unread domain renders as
+/// "not read", never as a number the app made up.
 struct RampView: View {
     let palette: Palette
-    @State private var rampMs = 300        // live slider value (label)
-    @State private var demoMs = 300        // applied on release — keeps the demo from jumping mid-drag
+    @ObservedObject private var store = ConfigStore.shared.ramp
+    @State private var rampMs = Ramp.default.ramp_ms   // live slider value (label)
+    /// Applied on release — keeps the illustration from jumping mid-drag. It drives the
+    /// animation only, never a write.
+    @State private var demoMs = Ramp.default.ramp_ms
     @Environment(\.dismiss) private var dismiss
     private var p: Palette { palette }
 
@@ -14,7 +19,13 @@ struct RampView: View {
         } right: {
             rightPanel
         }
-        .task { if let v = await RampClient().get() { rampMs = v; demoMs = v } }
+        .task { await store.loadIfNeeded(); adopt() }
+    }
+
+    private func adopt() {
+        guard let v = store.value else { return }
+        rampMs = v.ramp_ms
+        demoMs = v.ramp_ms
     }
 
     private var rightPanel: some View {
@@ -22,19 +33,25 @@ struct RampView: View {
             Text(L.rampHeadline).font(.system(size: 22, weight: .semibold)).foregroundStyle(p.text)
             Text(L.rampSub).font(.system(size: 13)).foregroundStyle(p.muted)
                 .fixedSize(horizontal: false, vertical: true)
-            Slider(value: Binding(
-                get: { Double(rampMs) },
-                set: { rampMs = Int($0 / 50) * 50 }
-            ), in: 0...1000) { editing in
-                if !editing {
-                    demoMs = rampMs
-                    Task { await RampClient().set(rampMs) }
+            if store.value != nil {
+                Slider(value: Binding(
+                    get: { Double(rampMs) },
+                    set: { rampMs = Int($0 / 50) * 50 }
+                ), in: Double(Ramp.ramp_msRange.lowerBound)...Double(Ramp.ramp_msRange.upperBound)) { editing in
+                    if !editing {
+                        demoMs = rampMs
+                        Task { await store.save(Ramp(ramp_ms: rampMs)) }
+                    }
+                }
+                .tint(p.accent)
+                .frame(width: 220)
+                Text(rampMs > 0 ? L.rampValue(rampMs) : L.rampValueOff)
+                    .font(.system(size: 14)).foregroundStyle(p.muted).monospacedDigit()
+            } else {
+                ConfigNotice(palette: p, error: store.error) {
+                    Task { await store.reload(); adopt() }
                 }
             }
-            .tint(p.accent)
-            .frame(width: 220)
-            Text(rampMs > 0 ? L.rampValue(rampMs) : L.rampValueOff)
-                .font(.system(size: 14)).foregroundStyle(p.muted).monospacedDigit()
         }
     }
 }

@@ -4,6 +4,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 #include "pca9685.h"
 #include "ramp.h"
 
@@ -73,9 +74,16 @@ bool link_release(link_src_t src) {
 
 static void link_task(void *arg) {
     (void)arg;
+    /* The only writer to the PCA9685: if this task stops running, the motors keep
+       whatever duty they were last given, forever. Let the task watchdog reboot the
+       board instead — boot zeroes the chip before anything else can command it. */
+    bool twdt = esp_task_wdt_add(NULL) == ESP_OK;
+    if (!twdt) ESP_LOGW(TAG, "task watchdog not available");
+
     TickType_t last = xTaskGetTickCount();
     for (;;) {
         vTaskDelayUntil(&last, pdMS_TO_TICKS(TICK_MS));
+        if (twdt) esp_task_wdt_reset();
 
         uint16_t tgt[8];
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(TICK_MS)) != pdTRUE) continue;

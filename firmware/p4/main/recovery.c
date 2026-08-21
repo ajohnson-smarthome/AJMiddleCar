@@ -5,14 +5,16 @@
 #include "esp_log.h"
 #include "cJSON.h"
 #include "cfg_json.h"
+#include "cfg_table.inc"
 #include "car.h"
 #include "link.h"
 
 static const char *TAG = "recovery";
 
-#define FRAME_HZ      10                              // WS stream rate (phone streams held cmd at 10 Hz)
-#define WINDOW_MAX_S  (RECOVER_WIN_MAX_MS / 1000)     // 10
-#define MAX_SAMPLES   (WINDOW_MAX_S * FRAME_HZ * 3 / 2) // 150: 10 s @10 Hz + 50% jitter headroom
+#define WINDOW_MAX_S  (RECOVER_WIN_MAX_MS / 1000)          // 10
+// The app streams the held command at the contract's rate, so the buffer is sized from
+// it rather than from a number that would have to be remembered twice.
+#define MAX_SAMPLES   (WINDOW_MAX_S * RT_COMMAND_HZ * 3 / 2) // 150: 10 s @10 Hz + 50% headroom
 #define TICK_MS       30                              // replay granularity / reconnect-abort latency
 #define TAIL_MS       400                             // cap for the newest segment's reverse duration
 #define MOVE_EPS      0.02f                           // below this a sample counts as "stationary"

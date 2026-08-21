@@ -22,7 +22,15 @@ CONFIG_ESP32P4_REV_MIN_100=y
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=n
 
-CONFIG_HTTPD_WS_SUPPORT=y
+# No WebSocket: control and telemetry are UDP datagrams on their own socket, and the
+# HTTP server carries only the cold path. Leaving the support compiled in would keep
+# frame handling in the image for an endpoint nothing registers.
+CONFIG_HTTPD_WS_SUPPORT=n
+
+# A hung rt_link or actuator task is a car that cannot be stopped, so the task watchdog
+# panics rather than logging: a reboot re-zeroes the PCA9685 on the way up (link_init),
+# which is what makes rebooting the safer of the two failures.
+CONFIG_ESP_TASK_WDT_PANIC=y
 
 # 16 MB flash with a custom table: two 4 MB OTA slots plus a reserved data partition.
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y

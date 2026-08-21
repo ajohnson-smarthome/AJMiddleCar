@@ -13,6 +13,14 @@ enum L {
     static func wrongCarSub(_ found: String) -> String { s("wrongCar.sub", found) }
     static func wrongCarHint(_ ssid: String) -> String { s("wrongCar.hint", ssid) }
     static var connectBody: String { s("connect.body") }
+    static var linkNoWifiTitle: String { s("link.noWifiTitle") }
+    static var linkNoWifiSub: String { s("link.noWifiSub") }
+    static var linkDeniedTitle: String { s("link.deniedTitle") }
+    static var linkDeniedSub: String { s("link.deniedSub") }
+    static var configNotRead: String { s("config.notRead") }
+    static var configRetry: String { s("config.retry") }
+    static var calibSpinFailTitle: String { s("calib.spinFailTitle") }
+    static var calibSpinFailSub: String { s("calib.spinFailSub") }
     static var openSettings: String { s("common.openSettings") }
     static var close: String { s("common.close") }
     static var settingsTitle: String { s("settings.title") }

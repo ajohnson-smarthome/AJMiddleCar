@@ -27,7 +27,7 @@ struct TricksControl: View {
             fab
         }
         .animation(.easeOut(duration: 0.15), value: open)
-        .onChange(of: running?.id) { _ in if running != nil { open = false } }
+        .onChange(of: running?.id) { _, _ in if running != nil { open = false } }
     }
 
     private var fabTint: Color { isRunning ? p.warn : p.accent }

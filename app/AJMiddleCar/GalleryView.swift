@@ -35,25 +35,34 @@ struct GalleryView: View {
         .statusBarHidden(true)
     }
 
-    @MainActor private func mockStatus(online: Bool = true, calibrated: Bool? = true,
-                                       fw: String? = "v1.0+264", rssi: Int? = -55,
-                                       wdtTrips: Int? = nil) -> CarStatus {
-        let s = CarStatus()
-        s.online = online; s.calibrated = calibrated; s.fw = fw
-        s.rssi = rssi; s.wdtTrips = wdtTrips; s.uptimeS = 3847
-        return s
+    /// A link frozen in `.live` with plausible numbers — the gallery has no transport behind it.
+    @MainActor private func mockLink(calibrated: Bool? = true, fw: String? = "v1.0+264",
+                                     rssi: Int? = -55, wdtTrips: Int? = nil) -> CarLink {
+        var t = Telemetry()
+        t.calibrated = calibrated; t.rssi = rssi; t.wdtTrips = wdtTrips
+        t.uptimeS = 3847; t.rxFps = 10; t.busOk = true; t.ctl = "rt"
+        return CarLink.preview(.live(t), fw: fw, radio: CarLink.Radio(fw: "3.0.6", ok: true))
     }
 
     @MainActor private func makeFrames(_ p: Palette) -> [(label: String, view: AnyView)] {
-        let conn = CarConnection()
+        let intent = ControlIntent()
+        // The gallery has no car, and an unread domain honestly renders as "not read" — seed the
+        // stores so the settings screens show their controls (one frame keeps the notice).
+        ConfigStore.shared.ramp.seed(.default)
+        ConfigStore.shared.trim.seed(.default)
+        ConfigStore.shared.recover.seed(.default)
+        ConfigStore.shared.wheel.seed(.default)
+        ConfigStore.shared.dims.seed(.default)
         func fw(_ phase: FwPhase, forced: Bool = false) -> AnyView {
-            AnyView(NavigationStack { FirmwareView(palette: p, forced: forced, debugPhase: phase, status: mockStatus()) })
+            AnyView(NavigationStack { FirmwareView(palette: p, forced: forced, debugPhase: phase, link: mockLink()) })
         }
         func calib(_ d: CalibrationView.CalDebug) -> AnyView {
             AnyView(NavigationStack { CalibrationView(palette: p, debugState: d) })
         }
         return [
             ("Connect (radar)",         AnyView(ConnectView())),
+            ("No Wi-Fi",                AnyView(ConnectView(situation: .noWiFi(.notAvailable)))),
+            ("Local network denied",    AnyView(ConnectView(situation: .localNetworkDenied))),
             ("NoInternet",              AnyView(NoInternetView(palette: p, onRetry: {}))),
             ("WrongCar",                AnyView(WrongCarView(palette: p, found: "esp32-car", onRetry: {}))),
             ("UpdateCheck checking",    AnyView(UpdateCheckView(palette: p, phase: .checkUpdate, client: UpdateClient(), onRetry: {}))),
@@ -69,11 +78,13 @@ struct GalleryView: View {
             ("Firmware done",           fw(.done)),
             ("Firmware failed",         fw(.failed)),
             ("Firmware forced",         fw(.available, forced: true)),
-            ("Drive arcade",            AnyView(DriveView(conn: conn, status: mockStatus(), preview: true).onAppear { UserDefaults.standard.set(Scheme.arcade.rawValue, forKey: "scheme") })),
-            ("Drive tank",              AnyView(DriveView(conn: conn, status: mockStatus(), preview: true).onAppear { UserDefaults.standard.set(Scheme.tank.rawValue, forKey: "scheme") })),
-            ("Drive warning",           AnyView(DriveView(conn: conn, status: mockStatus(wdtTrips: 3), preview: true))),
-            ("Settings",                AnyView(NavigationStack { SettingsView(palette: p, status: mockStatus()) })),
+            ("Drive arcade",            AnyView(DriveView(link: mockLink(), intent: intent, preview: true).onAppear { UserDefaults.standard.set(Scheme.arcade.rawValue, forKey: "scheme") })),
+            ("Drive tank",              AnyView(DriveView(link: mockLink(), intent: intent, preview: true).onAppear { UserDefaults.standard.set(Scheme.tank.rawValue, forKey: "scheme") })),
+            ("Drive warning",           AnyView(DriveView(link: mockLink(wdtTrips: 3), intent: intent, preview: true))),
+            ("Settings",                AnyView(NavigationStack { SettingsView(palette: p, link: mockLink()) })),
             ("Calibration spin",        calib(.spin)),
+            ("Calibration spinning",    calib(.spinning)),
+            ("Calibration spin failed", calib(.spinFailed)),
             ("Calibration direction",   calib(.direction)),
             ("Calibration done",        calib(.done)),
             ("Calibration saving",      calib(.saving)),
@@ -82,6 +93,9 @@ struct GalleryView: View {
             ("Trim",                    AnyView(NavigationStack { TrimView(palette: p) })),
             ("Recover",                 AnyView(NavigationStack { RecoverView(palette: p) })),
             ("Car dimensions",          AnyView(NavigationStack { CarDimensionsView(palette: p, wizard: true) })),
+            ("Wheel & motors",          AnyView(NavigationStack { WheelParamsView(palette: p) })),
+            ("Config not read",         AnyView(NavigationStack { RampView(palette: p) }
+                                            .onAppear { ConfigStore.shared.ramp.seedUnknown() })),
         ]
     }
 }

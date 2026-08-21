@@ -25,8 +25,10 @@ final class ControlModelTests: XCTestCase {
         XCTAssertEqual(ControlModel.clamp(-2.5), -1)
         XCTAssertEqual(ControlModel.clamp(0.3), 0.3)
     }
+    // The frame itself is host-tested in app/tests/rtframe; this only guards the wiring.
     func testFrame() {
-        XCTAssertEqual(ControlModel.frame(t: 0.5, y: -1), "{\"t\":0.50,\"y\":-1.00}")
+        XCTAssertEqual(RTFrame.command(seq: 7, t: 0.5, y: -1),
+                       "{\"seq\":7,\"t\":0.50,\"y\":-1.00}")
     }
     func testSidesForward() {
         let s = ControlModel.sides(t: 1, y: 0)
@@ -80,9 +82,10 @@ final class ControlModelTests: XCTestCase {
         XCTAssertEqual(ControlModel.signalLevel(online: false, rssi: -45, pingMs: 10), 0)
     }
     func testTelemetryParse() {
-        let ok = Telemetry.parse("{\"rssi\":-55,\"ws_fps\":10,\"wdt_trips\":2,\"uptime_s\":123,\"heap\":198000,\"calibrated\":true}")!
+        let ok = Telemetry.parse("{\"rssi\":-55,\"rx_fps\":10,\"wdt_trips\":2,\"uptime_s\":123,\"heap\":198000,\"calibrated\":true,\"bus_ok\":true,\"ctl\":\"rt\"}")!
         XCTAssertEqual(ok.rssi, -55); XCTAssertEqual(ok.uptimeS, 123); XCTAssertEqual(ok.calibrated, true)
-        XCTAssertNil(Telemetry.parse("{\"rssi\":0}")!.rssi)
+        XCTAssertEqual(ok.rxFps, 10); XCTAssertEqual(ok.busOk, true); XCTAssertEqual(ok.ctl, "rt")
+        XCTAssertNil(Telemetry.parse("{\"uptime_s\":1,\"rssi\":0}")!.rssi)
         XCTAssertNil(Telemetry.parse("nope"))
         XCTAssertNil(Telemetry.parse("{\"foo\":1}"))
     }

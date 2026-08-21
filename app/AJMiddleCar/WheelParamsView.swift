@@ -4,18 +4,22 @@ import SwiftUI
 /// via /wheel. Two uses: a Settings menu item (wizard == false, back chevron) and step 2 of
 /// the mandatory calibration wizard (wizard == true, "Далее" → CalibrationView). No system
 /// nav bar (matches SplitScreen siblings) — draws its own header.
+///
+/// The cards appear only once the car's own values have been read. They used to be drawn from
+/// the app's fallback whether or not the GET landed, so a single stepper tap POSTed 65/11/2100/4
+/// over whatever the car actually had.
 struct WheelParamsView: View {
     let palette: Palette
     var wizard: Bool = false
     @Environment(\.dismiss) private var dismiss
     private var p: Palette { palette }
 
-    @State private var diameterMm = 65
-    @State private var ppr = 11
-    @State private var gearX100 = 2100
-    @State private var quad = 4
-    @State private var gearText = "21"
-    @State private var lastSaved: WheelClient.Params?
+    @ObservedObject private var store = ConfigStore.shared.wheel
+    @State private var diameterMm = Wheel.default.diameter_mm
+    @State private var ppr = Wheel.default.ppr
+    @State private var gearX100 = Wheel.default.gear_x100
+    @State private var quad = Wheel.default.quad
+    @State private var gearText = WheelParamsView.gearString(Wheel.default.gear_x100)
 
     private var preset: MotorPreset? { MotorPresets.match(ppr: ppr, gearX100: gearX100, quad: quad) }
     private var cpr: Double { MotorPresets.cpr(ppr: ppr, gearX100: gearX100, quad: quad) }
@@ -28,8 +32,16 @@ struct WheelParamsView: View {
                 header
                 ScrollView {
                     VStack(spacing: 18) {
-                        wheelsCard
-                        motorsCard
+                        if store.value != nil {
+                            wheelsCard
+                            motorsCard
+                        } else {
+                            ConfigNotice(palette: p, error: store.error) {
+                                Task { await store.reload(); adopt() }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 20)
+                        }
                     }
                     .frame(maxWidth: 560)
                     .frame(maxWidth: .infinity)
@@ -38,13 +50,16 @@ struct WheelParamsView: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
-        .task {
-            if let c = await WheelClient().get() {
-                diameterMm = c.diameterMm; ppr = c.ppr; gearX100 = c.gearX100; quad = c.quad
-                gearText = Self.gearString(c.gearX100)
-                lastSaved = c
-            }
-        }
+        .task { await store.loadIfNeeded(); adopt() }
+    }
+
+    private func adopt() {
+        guard let w = store.value else { return }
+        diameterMm = w.diameter_mm
+        ppr = w.ppr
+        gearX100 = w.gear_x100
+        quad = w.quad
+        gearText = Self.gearString(w.gear_x100)
     }
 
     // MARK: header
@@ -82,9 +97,9 @@ struct WheelParamsView: View {
     private var wheelsCard: some View {
         card(L.wheelSectionWheels) {
             row(L.wheelDiameter) {
-                Stepper("\(diameterMm) \(L.mmUnit)", value: $diameterMm, in: 20...150)
+                Stepper("\(diameterMm) \(L.mmUnit)", value: $diameterMm, in: Wheel.diameter_mmRange)
                     .fixedSize().foregroundStyle(p.text)
-                    .onChange(of: diameterMm) { _ in save() }
+                    .onChange(of: diameterMm) { _, _ in save() }
             }
             divider
             infoRow(L.wheelCirc, String(format: "%.0f %@", circMm, L.mmUnit))
@@ -108,24 +123,24 @@ struct WheelParamsView: View {
             }
             divider
             row(L.wheelPpr) {
-                Stepper("\(ppr)", value: $ppr, in: 1...1000)
+                Stepper("\(ppr)", value: $ppr, in: Wheel.pprRange)
                     .fixedSize().foregroundStyle(p.text)
-                    .onChange(of: ppr) { _ in save() }
+                    .onChange(of: ppr) { _, _ in save() }
             }
             divider
             row(L.wheelGear) {
                 TextField("", text: $gearText)
                     .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
                     .frame(width: 70).foregroundStyle(p.text)
-                    .onChange(of: gearText) { _ in commitGear() }
+                    .onChange(of: gearText) { _, _ in commitGear() }
             }
             divider
             row(L.wheelQuad) {
                 Picker("", selection: $quad) {
-                    Text("×1").tag(1); Text("×2").tag(2); Text("×4").tag(4)
+                    ForEach(Wheel.quadAllowed, id: \.self) { q in Text("×\(q)").tag(q) }
                 }
                 .pickerStyle(.segmented).frame(width: 150)
-                .onChange(of: quad) { _ in save() }
+                .onChange(of: quad) { _, _ in save() }
             }
             divider
             infoRow("CPR", String(format: "%.0f", cpr))
@@ -141,18 +156,19 @@ struct WheelParamsView: View {
 
     private func commitGear() {
         let norm = gearText.replacingOccurrences(of: ",", with: ".")
-        if let g = Double(norm), g >= 1, g <= 300 {
-            gearX100 = Int((g * 100).rounded())
-            save()
-        }
+        guard let g = Double(norm) else { return }
+        let x100 = Int((g * 100).rounded())
+        guard Wheel.gear_x100Range.contains(x100) else { return }   // the car rejects, so don't ask
+        gearX100 = x100
+        save()
     }
 
+    /// Save-dedup and the "never write what we did not read" rule both live in the store.
     private func save() {
-        let cur = WheelClient.Params(diameterMm: diameterMm, ppr: ppr,
-                                     gearX100: gearX100, quad: quad)
-        guard cur != lastSaved else { return }
-        lastSaved = cur
-        Task { await WheelClient().set(cur) }
+        Task {
+            await store.save(Wheel(diameter_mm: diameterMm, ppr: ppr,
+                                   gear_x100: gearX100, quad: quad))
+        }
     }
 
     static func gearString(_ x100: Int) -> String {

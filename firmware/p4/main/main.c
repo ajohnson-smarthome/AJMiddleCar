@@ -14,8 +14,7 @@
 #include "nvs_flash.h"
 #include "wifi_ap.h"
 #include "http_server.h"
-#include "ws_control.h"
-#include "watchdog.h"
+#include "rt_link.h"
 #include "recovery.h"
 #include "calib_api.h"
 #include "status_api.h"
@@ -24,13 +23,10 @@
 #include "ramp.h"
 #include "wheel.h"
 #include "dims.h"
-#include "telemetry.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 
 static const char *TAG = "main";
-
-#define WDT_TIMEOUT_MS 300   // behaviour, not a board fact — stays here
 
 // The console follows whichever peripheral ESP-IDF was told to put it on, rather than being
 // nailed to USB-Serial-JTAG. That mattered the moment it mattered: on the bench the board's
@@ -116,15 +112,15 @@ void app_main(void) {
     wheel_init();                          // load wheel/encoder params (NVS or defaults)
     dims_init();                           // load car dimensions (NVS or defaults)
     ESP_ERROR_CHECK(wifi_ap_start(CAR_AP_SSID, CAR_AP_PASS));
+    recovery_init();                       // breadcrumb buffer; the watchdog trips into it
+    /* Driving comes up before the API: rt_link carries control, the watchdog and
+       telemetry, and none of it depends on the HTTP server being there. */
+    ESP_ERROR_CHECK(rt_link_start());
     ESP_ERROR_CHECK(http_server_start());
-    ESP_ERROR_CHECK(ws_control_start());
     ESP_ERROR_CHECK(calib_api_start());
     ESP_ERROR_CHECK(status_api_start());
     ESP_ERROR_CHECK(ota_api_start());
     ESP_ERROR_CHECK(cfg_api_start());   // all five config domains, from the generated table
-    ESP_ERROR_CHECK(telemetry_start());
-    recovery_init();                       // breadcrumb buffer; must precede the watchdog
-    watchdog_init(WDT_TIMEOUT_MS);
 
     // OTA rollback: mark this freshly-flashed image valid so the bootloader won't roll back.
     const esp_partition_t *running = esp_ota_get_running_partition();

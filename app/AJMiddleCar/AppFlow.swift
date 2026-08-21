@@ -1,12 +1,23 @@
 import Foundation
 
-/// Drives the launch gate: internet → fetch/cache firmware → connect to car → force-update if stale → drive.
+/// The launch gate: internet → fetch/cache the firmware → wait for the car → force the update if
+/// the car is behind → hand over.
+///
+/// It no longer has a `.drive` state. Driving is not a phase the gate can enter and latch; it is
+/// what `CarLink` says is true right now, so a car that goes away mid-session is handled by the
+/// screen rather than by a state machine that has already decided.
 @MainActor
 final class AppFlow: ObservableObject {
     enum Phase: Equatable {
-        case checkInternet, noInternet, checkUpdate, checkFailed, downloading, connectToCar, wrongCar,
-             updateRequired, drive
+        case checkInternet, noInternet, checkUpdate, checkFailed, downloading
+        /// The gate has passed; the car has not identified itself yet. What is on screen while
+        /// this lasts comes from `CarLink` — searching, wrong car, no Wi-Fi, denied.
+        case awaitingCar
+        case updateRequired
+        /// The gate is satisfied. `CarLink` decides whether that means the drive screen.
+        case ready
     }
+
     @Published var phase: Phase = .checkInternet
     @Published var latestTag: String?
     let client = UpdateClient()
@@ -28,24 +39,23 @@ final class AppFlow: ObservableObject {
             await UpdateClient.holdAtLeast(UpdateClient.downloadMinDisplay, since: t0)
             if let b = latestBuild { UpdateClient.recordCache(build: b, tag: rel.tag) }
         }
-        phase = .connectToCar
+        phase = .awaitingCar
     }
 
-    /// Called once the car is reachable and its fw is known (on the connectToCar phase).
-    func carConnected(carFw: String?) {
-        guard phase == .connectToCar else { return }
-        phase = UpdateClient.mustUpdate(carFw: carFw, latestTag: latestTag) ? .updateRequired : .drive
+    /// The car said who it is, in its hello reply. Re-evaluated every time, not once: a car that
+    /// reboots into a different build after an OTA is the same question asked again.
+    ///
+    /// A nil `fw` is "we have not met the car yet", which is not the same as "the car is behind"
+    /// — forcing an update against a car that never answered would be a screen with nothing to
+    /// flash.
+    func carIdentified(fw: String?) {
+        guard let fw else { return }
+        guard phase == .awaitingCar || phase == .ready else { return }
+        phase = UpdateClient.mustUpdate(carFw: fw, latestTag: latestTag) ? .updateRequired : .ready
     }
-
-    /// A board answered, but it is a different car. Distinct from "not connected": the user has
-    /// to change networks, not wait.
-    func foreignCarDetected() { if phase == .connectToCar { phase = .wrongCar } }
-
-    /// Leave the wrong-car screen and probe again.
-    func retryConnect() { if phase == .wrongCar { phase = .connectToCar } }
 
     /// Forced FirmwareView signals completion.
-    func updateFinished() { if phase == .updateRequired { phase = .drive } }
+    func updateFinished() { if phase == .updateRequired { phase = .ready } }
 
     func retry() { Task { await startupCheck() } }
 }

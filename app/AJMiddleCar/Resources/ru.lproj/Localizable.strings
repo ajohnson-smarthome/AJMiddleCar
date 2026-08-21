@@ -1,6 +1,14 @@
 "connect.title"      = "Поиск машинки…";
 "connect.body"       = "Подключись к Wi-Fi «AJMiddleCar» (пароль drive1234), затем вернись в приложение.";
 "common.openSettings"= "Открыть настройки";
+"link.noWifiTitle"   = "Нет Wi-Fi";
+"link.noWifiSub"     = "Включи Wi-Fi и подключись к сети «AJMiddleCar» (пароль drive1234).";
+"link.deniedTitle"   = "Нет доступа к локальной сети";
+"link.deniedSub"     = "Разреши доступ к локальной сети — без него приложение не может достучаться до машинки.";
+"config.notRead"     = "Не прочитано";
+"config.retry"       = "Прочитать снова";
+"calib.spinFailTitle"= "Машинка не ответила";
+"calib.spinFailSub"  = "Колесо не крутилось. Проверь связь и нажми «Крутить» ещё раз.";
 "common.close"       = "Закрыть";
 "settings.title"     = "Настройки";
 "settings.calibration"= "Калибровка";

@@ -9,14 +9,14 @@
 #define RECOVER_WIN_MAX_MS 10000
 
 // Load NVS config (enabled + window, defaults: ON, 5000 ms) and start the retreat
-// task. Call once, BEFORE watchdog_init().
+// task. Call once, BEFORE rt_link_start() — the control watchdog trips into it.
 void recovery_init(void);
 
-// Record one control frame into the breadcrumb buffer (call from the WS handler on
-// each valid frame, alongside watchdog_feed). Also bumps the liveness sequence.
+// Record one control frame into the breadcrumb buffer (call from rt_link on each frame
+// the actuator actually took). Also bumps the liveness sequence.
 void recovery_note_command(float t, float y);
 
-// Called by the watchdog when the link goes stale, INSTEAD of car_stop(). Decides:
+// Called by rt_link's control watchdog when the link goes stale, INSTEAD of car_stop(). Decides:
 // disabled / empty / stationary history → car_stop(); else → trigger the reverse replay.
 void recovery_on_link_lost(void);
 
