@@ -65,8 +65,23 @@ final class UpdateClient: NSObject, ObservableObject {
     /// Lightweight reachability probe to GitHub (distinguishes "no internet" from "API failed").
     static func internetReachable() async -> Bool {
         guard let url = URL(string: "https://api.github.com") else { return false }
-        var req = URLRequest(url: url); req.httpMethod = "HEAD"; req.timeoutInterval = 4
-        if let (_, resp) = try? await URLSession.shared.data(for: req) {
+        // Waits for a usable path rather than failing on the first one it is handed.
+        //
+        // Joined to the car's access point, iOS keeps Wi-Fi in the general path for about
+        // forty seconds before deciding it has no internet and demoting it — measured on
+        // the bench, see docs/superpowers/specs/2026-08-21-wifi-pinned-networking.md. A
+        // four-second one-shot lands inside that window, goes out over the car's Wi-Fi,
+        // times out, and the launch gate dead-ends on a phone whose cellular data was
+        // working the whole time.
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.waitsForConnectivity = true
+        cfg.timeoutIntervalForRequest = 10
+        cfg.timeoutIntervalForResource = 25
+        let session = URLSession(configuration: cfg)
+        defer { session.finishTasksAndInvalidate() }
+
+        var req = URLRequest(url: url); req.httpMethod = "HEAD"
+        if let (_, resp) = try? await session.data(for: req) {
             return (resp as? HTTPURLResponse) != nil
         }
         return false
