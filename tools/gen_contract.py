@@ -57,6 +57,46 @@ def write(path, text):
     path.write_text(text if text.endswith("\n") else text + "\n")
 
 
+def _allowed_symbol(domain, f):
+    return f"CFG_{domain['nvs_key'].upper()}_{f['name'].upper()}_ALLOWED"
+
+
+def _c_field(domain, f):
+    if f["type"] == "int":
+        return f'{{ "{f["name"]}", CFG_INT, {f["min"]}, {f["max"]}, {f["default"]}, NULL, 0 }}'
+    if f["type"] == "bool":
+        return f'{{ "{f["name"]}", CFG_BOOL, 0, 1, {1 if f["default"] else 0}, NULL, 0 }}'
+    sym = _allowed_symbol(domain, f)
+    return (f'{{ "{f["name"]}", CFG_ENUM, {min(f["values"])}, {max(f["values"])}, '
+            f'{f["default"]}, {sym}, {len(f["values"])} }}')
+
+
+def emit_c(schema):
+    out = [f"/* {BANNER} */", "", '#include "cfg_contract.h"', ""]
+    for d in schema["domains"]:
+        for f in d["fields"]:
+            if f["type"] == "enum":
+                vals = ", ".join(str(v) for v in f["values"])
+                out.append(f"static const int32_t {_allowed_symbol(d, f)}[] = {{ {vals} }};")
+    out.append("")
+    for d in schema["domains"]:
+        name = f"CFG_{d['nvs_key'].upper()}_FIELDS"
+        out.append(f"static const cfg_field_t {name}[] = {{")
+        for f in d["fields"]:
+            out.append("    " + _c_field(d, f) + ",")
+        out.append("};")
+    out.append("")
+    out.append("static const cfg_domain_t CFG_DOMAINS[] = {")
+    for d in schema["domains"]:
+        name = f"CFG_{d['nvs_key'].upper()}_FIELDS"
+        out.append(f'    {{ "{d["path"]}", "{d["nvs_key"]}", {name}, '
+                   f'{len(d["fields"])} }},')
+    out.append("};")
+    out.append("")
+    out.append(f"#define CFG_DOMAIN_COUNT {len(schema['domains'])}")
+    return "\n".join(out)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--schema", default=str(SCHEMA))
@@ -72,6 +112,8 @@ def main(argv=None):
         write(doc_path, MARK_BEGIN + "\n" + emit_doc(schema) + "\n" + MARK_END)
     else:
         write(doc_path, splice(doc_path.read_text(), emit_doc(schema)))
+
+    write(root / "firmware" / "p4" / "main" / "cfg_table.inc", emit_c(schema))
 
     return 0
 

@@ -129,5 +129,24 @@ class TestDeterminism(unittest.TestCase):
             self.assertTrue(same, "the generator wrote nothing")
 
 
+class TestCEmitter(unittest.TestCase):
+    def test_table_carries_names_ranges_and_defaults(self):
+        import gen_contract
+        out = gen_contract.emit_c(load())
+        self.assertIn(gen_contract.BANNER, out)
+        self.assertIn('{ "diameter_mm", CFG_INT, 20, 150, 65, NULL, 0 }', out)
+        self.assertIn('{ "trim_pct", CFG_INT, -30, 30, 0, NULL, 0 }', out)
+        self.assertIn('{ "enabled", CFG_BOOL, 0, 1, 1, NULL, 0 }', out)
+        self.assertIn("static const int32_t CFG_WHEEL_QUAD_ALLOWED[] = { 1, 2, 4 };", out)
+        self.assertIn('{ "quad", CFG_ENUM, 1, 4, 4, CFG_WHEEL_QUAD_ALLOWED, 3 }', out)
+        self.assertIn("#define CFG_DOMAIN_COUNT 5", out)
+
+    def test_every_domain_appears_once(self):
+        import gen_contract
+        out = gen_contract.emit_c(load())
+        for d in load()["domains"]:
+            self.assertEqual(out.count(f'"{d["nvs_key"]}"'), 1, d["path"])
+
+
 if __name__ == "__main__":
     unittest.main()

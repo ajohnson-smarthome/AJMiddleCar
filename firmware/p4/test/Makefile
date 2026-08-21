@@ -2,7 +2,7 @@ CC = cc
 CFLAGS = -I../main -Wall -Wextra -Werror -std=c11
 LDLIBS = -lm
 
-all: test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel
+all: test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel test_cfg_table
 
 test_mixer: test_mixer.c ../main/mixer.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
@@ -34,8 +34,11 @@ test_recovery: test_recovery.c
 test_wheel: test_wheel.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
+test_cfg_table: test_cfg_table.c ../main/cfg_table.inc ../main/cfg_contract.h
+	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
+
 run: all
-	./test_mixer && ./test_motors && ./test_control_proto && ./test_watchdog && ./test_calibration && ./test_ramp && ./test_trim && ./test_telemetry && ./test_recovery && ./test_wheel
+	./test_mixer && ./test_motors && ./test_control_proto && ./test_watchdog && ./test_calibration && ./test_ramp && ./test_trim && ./test_telemetry && ./test_recovery && ./test_wheel && ./test_cfg_table
 
 clean:
-	rm -f test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel
+	rm -f test_cfg_table test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel
