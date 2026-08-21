@@ -1,5 +1,7 @@
 #define TELEMETRY_HOST_TEST
 #include "../main/telemetry.h"
+/* The push is a datagram, so the caps that bound it are the schema's. */
+#include "cfg_table.inc"
 #include <assert.h>
 #include <string.h>
 #include <stdio.h>
@@ -23,7 +25,14 @@ int main(void) {
                          .bus_ok = false };
     int w = telemetry_fields(buf, sizeof(buf), &wide);
     assert(w > 0);
-    printf("test_telemetry: widest push frame is %d bytes\n", w + 2);  /* + the braces */
+    /* The frame the car pushes must fit the receive buffer both sides size from the
+       schema. This is why max_datagram is not the command cap: a telemetry frame is
+       far wider than anything the car accepts, and sizing one cap for both would
+       either truncate every push or invite a 320-byte command. */
+    assert(w + 2 <= RT_MAX_DATAGRAM);
+    assert(w + 2 > RT_MAX_COMMAND);   /* ...and would not fit the command cap */
+    printf("test_telemetry: widest push frame is %d bytes of %d\n",
+           w + 2, RT_MAX_DATAGRAM);
 
     // A NULL owner name is reported as "none" rather than crashing snprintf.
     t.ctl = NULL; t.bus_ok = false;

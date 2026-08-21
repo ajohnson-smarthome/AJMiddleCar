@@ -28,7 +28,8 @@ them are most of what breaks on a device — so drive it from a real phone when 
 | `--loss-pct` | drop this percentage of datagrams, each way |
 | `--rtt-ms` | add this round-trip latency |
 | `--stall-ms` | every 5 s, stop servicing the socket for this long |
-| `--seed` | impairment seed; the same seed replays the same run |
+| `--seed` | impairment seed; the same seed replays the same *inbound* loss pattern for a client that behaves the same way. Outbound loss depends on how many telemetry pushes preceded the session, so it repeats only for a run driven identically |
+| `--rssi` | signal to report, default −58; `0` is the contract's "unavailable", which the app renders differently from a very weak signal |
 | `-v` | log every frame instead of one line a second |
 
 ## What is where
@@ -36,16 +37,32 @@ them are most of what breaks on a device — so drive it from a real phone when 
 - `state.py` — all the behaviour, with no server attached and no clock of its own: the
   caller passes `now`. Ranges, defaults and deadlines come from `generated.py`, which the
   generator writes from `contract/car-api.json`. A literal in here is a bug.
-- `test_state.py` — `python3 test_state.py`. Stdlib only, no aiohttp, no sockets, no
-  sleeping.
-- `mock_car.py` — plumbing: the UDP endpoint (hello / seq / bye, 5 Hz telemetry to the
-  session's owner) and the aiohttp REST server, whose five config domains are one handler
-  pair registered in a loop over the schema.
+- `rt_link.py` — the real-time channel: hello / seq / bye, ownership, the 5 Hz push and
+  the impairment model. It touches its event loop through `time()` and `call_later()` and
+  the network through `transport.sendto()`, so a test supplies all three and drives
+  `datagram_received` directly. Stdlib only, like `state.py`, and for the same reason.
+- `test_state.py`, `test_rtlink.py` — `python3 test_state.py && python3 test_rtlink.py`.
+  Stdlib only: no aiohttp, no sockets, no sleeping.
+- `mock_car.py` — plumbing only: it binds the UDP endpoint and the aiohttp REST server,
+  whose five config domains are one handler pair registered in a loop over the schema.
 - `generated.py` — **generated**. Never hand-edit it; change `contract/car-api.json` and
   run `tools/gen_contract.py`.
 
 `tools/conformance.py http://<host>:<port>` runs the REST request matrix against this mock
-or against a real car, and `tools/test-all.sh` runs it against a mock it starts itself.
+or against a real car, and `tools/test-all.sh` runs it against a mock it starts itself
+(skipped when `.venv` is missing, unless `CONFORMANCE=required`). It asserts the
+`{"error","field"}` / `{"ok":true}` envelope only for the five config domains, which are
+the endpoints the schema describes; `/calib*` and `/ota` are checked by status code,
+because the firmware answers those with `ok` and `httpd_resp_send_err` text while this
+mock answers JSON, and the contract picks neither.
+
+## The two caps
+
+`max_command` (96 bytes) is the largest datagram the car will **act on**; anything longer
+is dropped by the parser without touching ownership, the sequence window or the watchdog.
+`max_datagram` (320 bytes) is the receive-buffer size at both ends, and the ceiling on
+what the car **sends** — a telemetry frame does not fit in 96 bytes. Inbound is capped by
+the first, outbound by the second.
 
 ## Talking to it by hand
 

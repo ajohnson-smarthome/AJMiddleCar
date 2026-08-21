@@ -7,7 +7,7 @@
 #include "esp_check.h"
 #include "http_server.h"
 #include "cfg_contract.h"
-#include "cfg_table.inc"
+#include "contract.h"
 #include "ramp.h"
 #include "car.h"
 #include "recovery.h"

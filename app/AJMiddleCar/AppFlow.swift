@@ -51,7 +51,11 @@ final class AppFlow: ObservableObject {
     func carIdentified(fw: String?) {
         guard let fw else { return }
         guard phase == .awaitingCar || phase == .ready else { return }
-        phase = UpdateClient.mustUpdate(carFw: fw, latestTag: latestTag) ? .updateRequired : .ready
+        let next: Phase = UpdateClient.mustUpdate(carFw: fw, latestTag: latestTag) ? .updateRequired : .ready
+        // Only on a real change: this is re-asked on every telemetry frame, and `@Published`
+        // emits on assignment whether or not the value moved — five root-tree invalidations a
+        // second for a phase that has not changed since launch.
+        if phase != next { phase = next }
     }
 
     /// Forced FirmwareView signals completion.

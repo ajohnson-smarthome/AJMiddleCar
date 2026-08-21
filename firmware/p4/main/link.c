@@ -18,9 +18,10 @@ static link_arb_t        s_arb = { .owner = LINK_SRC_NONE, .until_ms = 0, .stick
 static uint16_t          s_target[8];
 static uint16_t          s_current[8];
 static volatile bool     s_bus_ok = true;
-/* Published under the lock, read without it. Telemetry runs in an esp_timer callback
-   at priority 22 and must not block on a mutex for a value it only prints; blocking
-   there also meant a timeout reported "none" while someone was actively holding. */
+/* Published under the lock, read without it. Telemetry is gathered on the rt_link task,
+   which holds the car's safety and must not block on a mutex for a value it only
+   prints; blocking there also meant a timeout reported "none" while someone was
+   actively holding. */
 static volatile link_src_t s_owner_pub = LINK_SRC_NONE;
 
 static uint32_t now_ms(void) {

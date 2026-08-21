@@ -15,6 +15,7 @@
 #include "wifi_ap.h"
 #include "http_server.h"
 #include "rt_link.h"
+#include "telemetry.h"
 #include "recovery.h"
 #include "calib_api.h"
 #include "status_api.h"
@@ -112,6 +113,7 @@ void app_main(void) {
     wheel_init();                          // load wheel/encoder params (NVS or defaults)
     dims_init();                           // load car dimensions (NVS or defaults)
     ESP_ERROR_CHECK(wifi_ap_start(CAR_AP_SSID, CAR_AP_PASS));
+    telemetry_start();                     // 1 Hz RSSI sampler, off the control task
     recovery_init();                       // breadcrumb buffer; the watchdog trips into it
     /* Driving comes up before the API: rt_link carries control, the watchdog and
        telemetry, and none of it depends on the HTTP server being there. */

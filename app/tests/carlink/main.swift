@@ -31,6 +31,16 @@ check(compose(.localNetworkDenied, .foreign(device: "esp32-car"), nil, nil) == .
 check(compose(.wifiUp, .foreign(device: "esp32-car"), fresh, 0.1) == .wrongCar(device: "esp32-car"),
       "wrong car, however fresh")
 
+// Nor is one that answers in a protocol version this build does not speak — and it gets a screen
+// that says so rather than the radar it would otherwise sweep forever.
+check(compose(.wifiUp, .protoMismatch(theirs: CarContract.proto + 1), fresh, 0.1)
+        == .wrongProto(theirs: CarContract.proto + 1), "a protocol mismatch is its own state")
+check(compose(.wifiUp, .protoMismatch(theirs: 2), nil, nil) == .wrongProto(theirs: 2),
+      "reported before any telemetry, which is when it happens")
+check(compose(.localNetworkDenied, .protoMismatch(theirs: 2), nil, nil) == .localNetworkDenied,
+      "the path still outranks it")
+check(!compose(.wifiUp, .protoMismatch(theirs: 2), fresh, 0.1).isLive, "and it is never live")
+
 // The staleness threshold is the contract's telemetry rate, not a number picked here.
 check(LinkRule.staleAfter == 5 / Double(CarContract.telemetryHz), "staleness from the contract")
 check(compose(.wifiUp, adopted, fresh, LinkRule.staleAfter - 0.01).isLive, "just inside the window")

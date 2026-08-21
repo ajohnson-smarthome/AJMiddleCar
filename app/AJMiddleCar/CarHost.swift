@@ -14,8 +14,15 @@ enum CarHost {
     static let port: UInt16 = 80
     #endif
 
-    /// The real-time channel is on the contract's port on both builds — only REST moves.
+    #if targetEnvironment(simulator)
+    /// The real-time channel is on the contract's port unless a mock says otherwise: a second
+    /// mock on a spare RT port (which is how `tools/test-all.sh` runs one) is only reachable if
+    /// this can be pointed at it.
+    static let rtPort: UInt16 = launchArgument("-carRtPort").flatMap(UInt16.init) ?? CarContract.rtPort
+    #else
+    /// The real car answers on the contract's port. Nothing may move it.
     static let rtPort: UInt16 = CarContract.rtPort
+    #endif
 
     static var httpBase: String { "http://\(host):\(port)" }
 

@@ -1,4 +1,7 @@
 #include "telemetry.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "esp_wifi.h"
@@ -7,25 +10,43 @@
 #include "rt_link.h"
 #include "link.h"
 
+static const char *TAG = "telemetry";
+
 /* Gathering only. The 5 Hz push itself lives in the rt_link loop, which is the task
    that knows where the owner is and already wakes on that beat. */
 
 /* The AP-side RSSI costs an esp_wifi_ap_get_sta_list, which on this board is an RPC
    across SDIO to the C6 — the same class of call whose timeout used to cost five
-   seconds of every boot. It is a display value that changes slowly, so it is sampled
-   at 1 Hz rather than on every frame. */
-static int      s_rssi_cached = 0;
-static int64_t  s_rssi_at_us  = 0;
+   seconds of every boot.
+   That is why it is sampled on a task of its own rather than wherever telemetry is
+   gathered. Gathering happens on rt_link, the task that applies control frames and is
+   the only thing that notices silence: a blocked RPC there means commands are not
+   applied and a lost link is not declared, and one long enough to trip the task
+   watchdog reboots the board mid-drive. Here the same stall costs one stale reading of
+   a display value that changes slowly. Published as a plain int and read without a
+   lock: an aligned 32-bit load is atomic, and a reader a second behind reports a
+   signal level, not a fact. */
+static volatile int s_rssi = 0;
 
-static int ap_client_rssi_cached(void) {
-    int64_t now = esp_timer_get_time();
-    if (s_rssi_at_us == 0 || now - s_rssi_at_us > 1000000) {
-        s_rssi_at_us = now;
+static void rssi_task(void *arg) {
+    (void)arg;
+    for (;;) {
         wifi_sta_list_t sta;
-        s_rssi_cached = (esp_wifi_ap_get_sta_list(&sta) == ESP_OK && sta.num > 0)
-                      ? sta.sta[0].rssi : 0;
+        s_rssi = (esp_wifi_ap_get_sta_list(&sta) == ESP_OK && sta.num > 0)
+               ? sta.sta[0].rssi : 0;
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
-    return s_rssi_cached;
+}
+
+esp_err_t telemetry_start(void) {
+    /* Below everything that drives: this task exists to keep a slow, blocking radio
+       call away from the ones that do. Not on the task watchdog either — it is allowed
+       to be stuck in an RPC, which is the whole point of it being here. */
+    if (xTaskCreate(rssi_task, "rssi", 3072, NULL, 2, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "no RSSI sampler — telemetry will report 0");
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }
 
 /* One accumulator per consumer — see telem_consumer_t. */
@@ -54,7 +75,7 @@ void telemetry_gather(telemetry_t *out, telem_consumer_t who) {
     if (who == TELEM_PUSH) s_push_seq++;
 
     out->seq        = s_push_seq;
-    out->rssi       = ap_client_rssi_cached();
+    out->rssi       = s_rssi;
     out->rx_fps     = fps_now(who);
     out->wdt_trips  = rt_link_wdt_trips();
     out->uptime_s   = (long)(esp_timer_get_time() / 1000000);

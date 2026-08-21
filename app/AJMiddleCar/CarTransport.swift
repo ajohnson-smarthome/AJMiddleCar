@@ -18,6 +18,9 @@ actor CarTransport {
     enum Event: Sendable {
         /// The car answered our hello. `device` may be someone else's — the caller decides.
         case sessionOpened(device: String, fw: String)
+        /// A car answered in a protocol version this app does not speak. Reported by name: the
+        /// car replies to a mismatched hello precisely so this is sayable.
+        case protoMismatch(theirs: Int)
         case telemetry(Telemetry)
         case sessionClosed
     }
@@ -31,6 +34,14 @@ actor CarTransport {
     private static let stallTimeout: TimeInterval = 3
     private static let backoffBase = 0.1
     private static let backoffCap = 5.0
+    /// While no car has ever answered and the path itself is fine, the backoff does not grow past
+    /// this: a car switched on a minute after the app must not wait out a five-second sleep that
+    /// was earned by its own absence. A path that cannot carry anything gets the full cap.
+    private static let discoveryCap = 1.0
+    /// A goodbye is one datagram on a link with no acknowledgement, and the cost of losing it is
+    /// the car deciding it lost us and retreating along its own path. Say it three times; the car
+    /// drops ownership on the first, so the repeats cost nothing.
+    private static let byeRepeats = 3
     private static let queue = DispatchQueue(label: "car.transport")
 
     // MARK: - the driving command
@@ -52,6 +63,9 @@ actor CarTransport {
     /// Whether the car adopted the session that is running now. A session only ever ends by
     /// failing, so this — not the return of `session()` — is what says the car was reachable.
     private var sessionAdopted = false
+    /// Whether any session has ever been adopted, which is what separates "searching for a car
+    /// that is not switched on yet" from "the link we had went away".
+    private var everAdopted = false
 
     /// The event stream feeding `CarLink`. One consumer by design; a second call replaces it.
     func events() -> AsyncStream<Event> {
@@ -75,15 +89,35 @@ actor CarTransport {
     /// cancelled transmitter. The car stops where it stands instead of spending five seconds
     /// retracing its path with the controls off-screen.
     func stop(graceful: Bool) async {
-        if graceful, let conn {
-            seq = RTFrame.nextSeq(seq)
-            // Awaited on purpose: the datagram has to be on the wire before the socket goes.
-            try? await send(RTFrame.bye(seq: seq), on: conn)
-        }
-        runTask?.cancel()
+        // Everything that makes this instance "stopped" happens before the first await. A
+        // `start()` arriving during the goodbye must find no run task and no connection —
+        // otherwise it returns having done nothing and the link stays dead with nobody left to
+        // revive it, which is one Control Center pull away on the ordinary path.
+        let task = runTask
         runTask = nil
-        outbox.set(t: 0, y: 0)
-        tearDown()
+        task?.cancel()
+        outbox.set(t: 0, y: 0)      // before the send, so no stale axes can follow the goodbye
+        let socket = conn
+        conn = nil
+        emit(.sessionClosed)
+
+        // Awaited on purpose: the datagrams have to be on the wire before the socket goes.
+        if graceful, let socket { await sayGoodbye(on: socket) }
+        socket?.cancel()
+    }
+
+    /// A goodbye, said `byeRepeats` times.
+    ///
+    /// One datagram on a link with no acknowledgement is a coin flip, and the cost of losing it is
+    /// not a missed message: the car concludes it lost us, and `/recover` — on by default, five
+    /// seconds by default — reverses along its own breadcrumbs with the controls off-screen. The
+    /// repeats are free, because the car drops ownership on the first one and every later one
+    /// fails the ownership check.
+    private func sayGoodbye(on socket: NWConnection) async {
+        for _ in 0..<Self.byeRepeats {
+            seq = RTFrame.nextSeq(seq)
+            try? await send(RTFrame.bye(seq: seq), on: socket)
+        }
     }
 
     private func tearDown() {
@@ -95,23 +129,37 @@ actor CarTransport {
     private func run() async {
         var attempt = 0
         while !Task.isCancelled {
+            // Two failures worth telling apart, and only two: a path that cannot carry anything,
+            // where waiting costs nothing, and everything else, which is a car that has not
+            // answered yet and should be asked again soon.
+            var pathBlocked = false
             do {
                 try await session()
+            } catch let e as CarError {
+                if case .noWiFi = e { pathBlocked = true }
+                if case .denied = e { pathBlocked = true }
             } catch {
-                // Any failure ends the session; the difference between them is only in the log.
+                // Any other failure ends the session; the difference is only in the log.
             }
             let reached = sessionAdopted
-            tearDown()
+            // Before the teardown, not after: a cancelled run task still has to resume on this
+            // actor to get here, and by then `stop()` may have handed `conn` to a successor.
             if Task.isCancelled { break }
+            tearDown()
             attempt = reached ? 0 : attempt + 1
-            try? await Task.sleep(for: backoff(attempt))
+            try? await Task.sleep(for: backoff(attempt, pathBlocked: pathBlocked))
         }
     }
 
     /// Exponential with jitter, capped. The jitter matters when the car reboots under OTA: every
     /// retry from a fixed schedule lands in the same window it did last time.
-    private func backoff(_ attempt: Int) -> Duration {
-        let raw = min(Self.backoffCap, Self.backoffBase * pow(2, Double(max(0, attempt - 1))))
+    ///
+    /// The cap is lower while no car has ever answered and the path is fine: the contract asks
+    /// for hello "repeated at ~5 Hz until answered", and a five-second sleep earned by a car that
+    /// was not switched on yet is a car found five seconds after it was ready.
+    private func backoff(_ attempt: Int, pathBlocked: Bool) -> Duration {
+        let cap = (everAdopted || pathBlocked) ? Self.backoffCap : Self.discoveryCap
+        let raw = min(cap, Self.backoffBase * pow(2, Double(max(0, attempt - 1))))
         return .seconds(raw * Double.random(in: 0.75...1.25))
     }
 
@@ -121,23 +169,41 @@ actor CarTransport {
         sessionAdopted = false
         let sid = RTFrame.sessionID()
         let socket = try await connect()
+        // The check and the assignment are one synchronous step on the actor: a run task
+        // cancelled while connecting must not leave its socket behind as `conn` for the next one.
+        if Task.isCancelled {
+            socket.cancel()
+            throw CancellationError()
+        }
         conn = socket
         lastRx = ContinuousClock.now
 
-        let identity = try await handshake(sid: sid)
+        let identity: Identity
+        switch try await handshake(sid: sid) {
+        case .identity(let found):
+            identity = found
+        case .protoMismatch(let theirs):
+            // A car we cannot speak to is still a car: say goodbye so it drops ownership and
+            // stops, then hold the session long enough that the screen naming the mismatch is
+            // not a flicker between radar sweeps.
+            emit(.protoMismatch(theirs: theirs))
+            await sayGoodbye(on: socket)
+            try await Task.sleep(for: .seconds(10))
+            throw CarError.malformed("protocol \(theirs), not \(CarContract.proto)")
+        }
         emit(.sessionOpened(device: identity.device, fw: identity.fw))
 
         guard identity.device == CarContract.device else {
             // Not our car. A single command frame here would drive it, so instead of streaming
             // we say goodbye — the other car drops ownership and stops — and hold the session
             // long enough that the wrong-car screen is not a flicker.
-            seq = RTFrame.nextSeq(seq)
-            try? await send(RTFrame.bye(seq: seq), on: socket)
+            await sayGoodbye(on: socket)
             try await Task.sleep(for: .seconds(10))
             throw CarError.malformed("foreign device \(identity.device)")
         }
 
         sessionAdopted = true
+        everAdopted = true
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask { try await self.sendLoop() }
             group.addTask { try await self.receiveLoop() }
@@ -151,18 +217,25 @@ actor CarTransport {
 
     private struct Identity { let device: String; let fw: String }
 
+    /// What a hello exchange produced. A protocol mismatch is an answer, not a failure — the car
+    /// deliberately replies to a hello it cannot serve so that the app can name the problem.
+    private enum Handshake {
+        case identity(Identity)
+        case protoMismatch(theirs: Int)
+    }
+
     /// Hello at ~5 Hz until the car answers. The reply carries the car's identity, so identity
     /// arrives on the first exchange over the channel that then carries telemetry — rather than
     /// from a separate `/status` probe that cancelled itself after one success.
-    private func handshake(sid: String) async throws -> Identity {
-        try await withThrowingTaskGroup(of: Identity?.self) { group in
+    private func handshake(sid: String) async throws -> Handshake {
+        try await withThrowingTaskGroup(of: Handshake?.self) { group in
             group.addTask { try await self.helloLoop(sid: sid); return nil }
             group.addTask { try await self.awaitHello(sid: sid) }
             group.addTask { try await self.stallGuard(); return nil }
             while let result = try await group.next() {
-                if let identity = result {
+                if let outcome = result {
                     group.cancelAll()
-                    return identity
+                    return outcome
                 }
             }
             throw CarError.timeout(Self.stallTimeout)
@@ -177,13 +250,18 @@ actor CarTransport {
         }
     }
 
-    private func awaitHello(sid: String) async throws -> Identity? {
+    private func awaitHello(sid: String) async throws -> Handshake? {
         while !Task.isCancelled {
             guard let text = try await receiveOne() else { continue }
             // A reply for another session id is a leftover from the previous socket; ignoring it
             // is what makes ownership non-resumable rather than accidentally inherited.
-            if case .helloReply(let replySid, let device, let fw) = RTFrame.parse(text), replySid == sid {
-                return Identity(device: device, fw: fw)
+            switch RTFrame.parse(text) {
+            case .helloReply(let replySid, let device, let fw) where replySid == sid:
+                return .identity(Identity(device: device, fw: fw))
+            case .protoMismatch(let replySid, let theirs) where replySid == sid:
+                return .protoMismatch(theirs: theirs)
+            default:
+                continue
             }
         }
         return nil
@@ -258,8 +336,10 @@ actor CarTransport {
 
     private func send(_ text: String, on socket: NWConnection) async throws {
         let data = Data(text.utf8)
-        guard data.count <= CarContract.maxDatagram else {
-            throw CarError.malformed("datagram \(data.count) B over the \(CarContract.maxDatagram) B cap")
+        // The cap that applies to what we send is what the *car* accepts: `max_command`, which is
+        // smaller than the `max_datagram` receive buffer that sizes the other direction.
+        guard data.count <= CarContract.maxCommand else {
+            throw CarError.malformed("datagram \(data.count) B over the \(CarContract.maxCommand) B cap")
         }
         let once = OneShot<Void>()
         try await withTaskCancellationHandler {

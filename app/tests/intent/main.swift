@@ -48,4 +48,19 @@ var wrapped = IntentCore()
 for _ in 0..<3 { _ = wrapped.beginTrick() }
 check(wrapped.epoch == 3, "epoch counts")
 
+// The signal bars. A car that cannot read its AP station list reports rssi 0 — ordinary on this
+// board, where it is an RPC over SDIO to the radio — and a live link must never render as the
+// empty red bars that say "no link".
+let fps = CarContract.commandHz
+check(ControlModel.signalLevel(online: true, rssi: -45, rxFps: 0, expectedFps: fps) == 4, "strong rssi")
+check(ControlModel.signalLevel(online: true, rssi: -65, rxFps: 0, expectedFps: fps) == 2, "weak rssi")
+check(ControlModel.signalLevel(online: true, rssi: 0, rxFps: 10, expectedFps: fps) == 4,
+      "rssi 0 falls back to the frame rate")
+check(ControlModel.signalLevel(online: true, rssi: nil, rxFps: 5, expectedFps: fps) == 2,
+      "half the frames is half the bars")
+check(ControlModel.signalLevel(online: true, rssi: nil, rxFps: nil, expectedFps: fps) == 1,
+      "live but unmeasurable is one bar, never zero")
+check(ControlModel.signalLevel(online: false, rssi: -45, rxFps: 10, expectedFps: fps) == 0,
+      "zero is reserved for no link")
+
 if failures == 0 { print("test_intent: OK") } else { exit(1) }

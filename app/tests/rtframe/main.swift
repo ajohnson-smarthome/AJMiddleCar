@@ -19,12 +19,15 @@ check(RTFrame.bye(seq: 1235) == #"{"seq":1235,"t":0.00,"y":0.00,"bye":1}"#, "bye
 check(RTFrame.command(seq: 1, t: 0.5, y: 0.25).contains(#""t":0.50"#), "decimal point, not comma")
 check(RTFrame.command(seq: 1, t: 0.5, y: 0.25).contains(#""y":0.25"#), "two decimals")
 
-// Every frame fits the contract's datagram cap.
+// Every frame the app sends fits the cap the CAR enforces on what it accepts — `max_command`,
+// which is smaller than the `max_datagram` receive buffer that sizes the other direction.
+check(CarContract.maxCommand <= CarContract.maxDatagram, "the command cap is the tighter one")
 for seq in [UInt32(0), 1234, .max] {
-    check(RTFrame.command(seq: seq, t: -1, y: -1).utf8.count <= CarContract.maxDatagram,
-          "command within the datagram cap")
-    check(RTFrame.bye(seq: seq).utf8.count <= CarContract.maxDatagram, "bye within the cap")
+    check(RTFrame.command(seq: seq, t: -1, y: -1).utf8.count <= CarContract.maxCommand,
+          "command within the command cap")
+    check(RTFrame.bye(seq: seq).utf8.count <= CarContract.maxCommand, "bye within the command cap")
 }
+check(RTFrame.hello(sid: "7f3a91c2").utf8.count <= CarContract.maxCommand, "hello within the cap")
 
 // seq is a uint32 the car compares as (int32_t)(seq - last) > 0, so wrapping is correct and
 // needs no reset on either side.
@@ -45,8 +48,24 @@ if case .helloReply(let sid, let device, let fw)? =
 } else {
     check(false, "hello reply parses")
 }
-check(RTFrame.parse(#"{"proto":2,"hello":"7f3a91c2","device":"ajmiddlecar"}"#) == nil,
-      "unknown proto refused")
+// A protocol mismatch is REPORTED, not swallowed: the car and the mock both answer a hello they
+// cannot serve so the app can say "this car speaks a protocol I do not" instead of searching
+// forever. Returning nil here is what turns a flashed-but-not-updated pair into an endless radar.
+check(RTFrame.parse(#"{"proto":2,"hello":"7f3a91c2","device":"ajmiddlecar"}"#)
+        == .protoMismatch(sid: "7f3a91c2", theirs: 2),
+      "unknown proto is reported by name")
+// A hello reply with no proto at all is equally unusable, and equally reportable.
+check(RTFrame.parse(#"{"hello":"7f3a91c2","device":"ajmiddlecar"}"#)
+        == .protoMismatch(sid: "7f3a91c2", theirs: 0),
+      "a missing proto is a mismatch, not a hello")
+
+// Telemetry ordering uses the car's own rule, so a reordered datagram cannot walk uptime, the
+// trip count or the calibration flag backwards.
+check(RTFrame.seqNewer(89, than: 88), "the next frame is newer")
+check(!RTFrame.seqNewer(88, than: 88), "the same frame is not newer")
+check(!RTFrame.seqNewer(87, than: 88), "a reordered frame is not newer")
+check(RTFrame.seqNewer(0, than: 4294967295), "wraparound reads as newer")
+check(!RTFrame.seqNewer(4294967295, than: 0), "and not backwards")
 
 // Telemetry, by the generated field names.
 if case .telemetry(let t)? = RTFrame.parse(

@@ -34,8 +34,8 @@ struct ConnectView: View {
 
     private var message: String {
         switch situation {
-        case .searching: return L.connectBody
-        case .noWiFi: return L.linkNoWifiSub
+        case .searching: return L.connectBody(CarContract.ssid, CarContract.password)
+        case .noWiFi: return L.linkNoWifiSub(CarContract.ssid, CarContract.password)
         case .localNetworkDenied: return L.linkDeniedSub
         }
     }

@@ -13,9 +13,10 @@ It binds `0.0.0.0` by default, not loopback, because loopback exercises none of 
 actually breaks on a phone: App Transport Security, local-network privacy, and interface
 pinning. Point a real device at the address printed at startup.
 
-Impairment flags produce a deterministic run: the loss RNG is seeded from `--seed`, never
-from the clock, so a session that misbehaved is reproducible by starting the mock the
-same way.
+Impairment flags are seeded from `--seed`, never from the clock, so the *inbound* loss
+pattern replays exactly for a client that behaves the same way. Outbound loss rides a
+second stream whose position depends on how many telemetry pushes preceded the session,
+so it is repeatable only for a run driven the same way from the same moment.
 
     python3 mock_car.py                       # LAN, contract ports
     python3 mock_car.py --loss-pct 10         # verify a dropped datagram costs one tick
@@ -23,27 +24,15 @@ same way.
 """
 import argparse
 import asyncio
-import json
 import os
-import random
 import socket
 import sys
-from collections import deque
 
 from aiohttp import web
 
 from generated import DEVICE, DOMAINS, PROTO, RT
-from state import CarState, seq_is_newer, valid_seq
-
-# The command frame's two axes. Unlike the port, the deadline and hello/seq/bye, these
-# names are not in contract/car-api.json — all three implementations spell them out.
-AXIS_T = "t"
-AXIS_Y = "y"
-
-# The service tick. The firmware's rt_link uses a 20 ms SO_RCVTIMEO as its clock, so the
-# watchdog is checked at the same granularity here and telemetry rides a counter on it.
-TICK_S = 0.020
-PUSH_EVERY = round((1.0 / RT["telemetry_hz"]) / TICK_S)
+from rt_link import Impairment, RTLink, service_loop
+from state import CarState
 
 # A flash is the one REST call that takes real time; the mock spends it so a client's
 # progress UI has something to show.
@@ -88,198 +77,6 @@ def lan_address():
         if is_private(addr):
             return addr
     return candidates[0] if candidates else "127.0.0.1"
-
-
-class Impairment:
-    """Packet loss, latency and stalls, deterministic for the whole run."""
-
-    STALL_PERIOD_S = 5.0    # a stall arrives this often, so a session shows several
-
-    def __init__(self, loss_pct=0.0, rtt_ms=0.0, stall_ms=0.0, seed=1):
-        self.loss_pct = loss_pct
-        self.delay_s = rtt_ms / 2000.0     # one way is half the round trip
-        self.stall_s = stall_ms / 1000.0
-        # One stream per direction. Sharing a single RNG would make the loss pattern
-        # depend on how the timer-driven telemetry pushes interleave with the incoming
-        # frames, and the point of a seed is that the tenth datagram of a session is
-        # dropped in every run that starts the same way.
-        self._rx_rng = random.Random(seed)
-        self._tx_rng = random.Random(seed + 1)
-        self._epoch = None
-
-    def drops_rx(self):
-        return self.loss_pct > 0 and self._rx_rng.random() * 100.0 < self.loss_pct
-
-    def drops_tx(self):
-        return self.loss_pct > 0 and self._tx_rng.random() * 100.0 < self.loss_pct
-
-    def stalled(self, now):
-        """True while the mock is pretending to be too busy to service its socket."""
-        if self.stall_s <= 0:
-            return False
-        if self._epoch is None:
-            self._epoch = now
-        return (now - self._epoch) % self.STALL_PERIOD_S < self.stall_s
-
-    def describe(self):
-        if not (self.loss_pct or self.delay_s or self.stall_s):
-            return "clean"
-        return (f"loss {self.loss_pct:g}%, rtt {self.delay_s * 2000:g} ms, "
-                f"stall {self.stall_s * 1000:g} ms every {self.STALL_PERIOD_S:g} s")
-
-
-class RTLink(asyncio.DatagramProtocol):
-    """The real-time channel: one owner, learned from `recvfrom` and evicted by `hello`."""
-
-    def __init__(self, car, impair, verbose=False):
-        self.car = car
-        self.impair = impair
-        self.verbose = verbose
-        self.transport = None
-        self.loop = asyncio.get_running_loop()
-        self.owner = None          # (host, port) of the adopted session
-        self.session = None        # its hello id
-        self.last_seq = None
-        self._rx = deque()         # timestamps of accepted commands, for rx_fps
-        self._dropped = 0
-        self._last_log = 0.0
-
-    # ---- receive ---------------------------------------------------------------
-
-    def connection_made(self, transport):
-        self.transport = transport
-
-    def datagram_received(self, data, addr):
-        now = self.loop.time()
-        if self.impair.stalled(now):
-            return                                  # a stalled car services nothing
-        if self.impair.drops_rx():
-            return
-        if self.impair.delay_s:
-            self.loop.call_later(self.impair.delay_s, self._handle, data, addr)
-        else:
-            self._handle(data, addr)
-
-    def _handle(self, data, addr):
-        now = self.loop.time()
-        if len(data) > RT["max_datagram"]:
-            self._drop(now, f"{len(data)} bytes over the cap")
-            return
-        try:
-            frame = json.loads(data)
-        except (ValueError, UnicodeDecodeError):
-            self._drop(now, "malformed JSON")
-            return
-        if not isinstance(frame, dict):
-            self._drop(now, "not an object")
-            return
-
-        hello = frame.get(RT["hello_field"])
-        if hello is not None:
-            self._adopt(hello, frame, addr, now)
-            return
-
-        # Everything else is owned traffic. A datagram from anyone else is dropped
-        # without touching ownership or the watchdog — eviction happens by `hello` only.
-        if self.owner is None or addr != self.owner:
-            self._drop(now, f"not the owner ({addr[0]}:{addr[1]})")
-            return
-
-        seq = frame.get(RT["seq_field"])
-        if not valid_seq(seq):
-            self._drop(now, "seq missing or not a uint32")
-            return
-        if self.last_seq is not None and not seq_is_newer(seq, self.last_seq):
-            self._drop(now, f"seq {seq} not newer than {self.last_seq}")
-            return
-        self.last_seq = seq
-
-        if frame.get(RT["bye_field"]):
-            print(f"rt: bye from session {self.session} — stopped, retreat suppressed")
-            self.car.note_bye(now)
-            self.owner, self.session, self.last_seq = None, None, None
-            return
-
-        if not self.car.note_command(frame.get(AXIS_T), frame.get(AXIS_Y), now):
-            self._drop(now, "t/y missing or not finite")
-            return
-        self._rx.append(now)
-        self._log_command(now, seq)
-
-    def _adopt(self, hello, frame, addr, now):
-        reply = {"proto": PROTO, RT["hello_field"]: hello,
-                 "device": self.car.device, "fw": self.car.fw}
-        if frame.get("proto") != PROTO:
-            # Answer anyway — the reply names our version, so a client can say "this car
-            # speaks a protocol I do not" instead of searching forever — but do not
-            # adopt. A session neither side can parse is worse than no session.
-            print(f"rt: hello with proto {frame.get('proto')!r}, this car speaks {PROTO}")
-            self._send(reply, addr)
-            return
-        if self.owner != addr or self.session != hello:
-            evicted = self.owner if self.owner and self.owner != addr else None
-            self.owner, self.session, self.last_seq = addr, hello, None
-            self.car.adopt_session(now)
-            self._rx.clear()
-            print(f"rt: adopted session {hello} from {addr[0]}:{addr[1]}"
-                  + (f" (evicting {evicted[0]}:{evicted[1]})" if evicted else ""))
-        # Reply to every hello, not only to the one that adopted: the app repeats it
-        # until answered, so a lost reply must be answerable by the next repeat.
-        self._send(reply, addr)
-
-    # ---- send ------------------------------------------------------------------
-
-    def _send(self, obj, addr):
-        if self.impair.drops_tx():
-            return
-        data = json.dumps(obj, separators=(",", ":")).encode()
-        if self.impair.delay_s:
-            self.loop.call_later(self.impair.delay_s, self.transport.sendto, data, addr)
-        else:
-            self.transport.sendto(data, addr)
-
-    def push_telemetry(self, now):
-        if self.owner is None or self.impair.stalled(now):
-            return
-        self._send(self.car.telemetry(self.rx_fps(now)), self.owner)
-
-    # ---- measurement and logging -----------------------------------------------
-
-    def rx_fps(self, now):
-        while self._rx and now - self._rx[0] > 1.0:
-            self._rx.popleft()
-        return len(self._rx)
-
-    def _drop(self, now, why):
-        self._dropped += 1
-        if self.verbose or now - self._last_log > 1.0:
-            self._last_log = now
-            print(f"rt: dropped ({why}); {self._dropped} so far")
-
-    def _log_command(self, now, seq):
-        """One line a second: at 10 Hz a line per frame buries everything else."""
-        if self.verbose or now - self._last_log > 1.0:
-            self._last_log = now
-            t, y = self.car.command
-            print(f"rt: seq={seq} t={t:.2f} y={y:.2f} rx={self.rx_fps(now)}/s "
-                  f"ctl={self.car.ctl}")
-
-
-async def service_loop(car, link):
-    """The car's own clock: the watchdog every tick, telemetry every fifth."""
-    loop = asyncio.get_running_loop()
-    next_at = loop.time()
-    ticks = 0
-    while True:
-        next_at += TICK_S
-        await asyncio.sleep(max(0.0, next_at - loop.time()))
-        now = loop.time()
-        line = car.tick(now)
-        if line:
-            print(line)
-        ticks += 1
-        if ticks % PUSH_EVERY == 0:
-            link.push_telemetry(now)
 
 
 # ---- REST ----------------------------------------------------------------------
@@ -330,12 +127,14 @@ async def status(request):
     car, link = request.app["car"], request.app["link"]
     now = asyncio.get_running_loop().time()
     return web.json_response({
-        "device": car.device,
-        "fw": car.fw,
+        RT["device_field"]: car.device,
+        RT["fw_field"]: car.fw,
         # The version gate: a client that cannot read this must refuse the car by name
         # rather than mis-parse it.
-        "proto": PROTO,
-        **car.telemetry(link.rx_fps(now)),
+        RT["proto_field"]: PROTO,
+        # A poll is not a push: `bump=False` keeps the real-time stream's `seq`
+        # continuous however often something reads /status.
+        **car.telemetry(link.rx_fps(now), bump=False),
         "radio": {"fw": "mock", "expected": "mock", "ok": True},
     })
 
@@ -416,6 +215,7 @@ def build_app(car, link):
 async def serve(args):
     loop = asyncio.get_running_loop()
     car = CarState(device=args.device, now=loop.time())
+    car.rssi = args.rssi
     impair = Impairment(args.loss_pct, args.rtt_ms, args.stall_ms, args.seed)
 
     _, link = await loop.create_datagram_endpoint(
@@ -452,7 +252,10 @@ def main():
     p.add_argument("--stall-ms", type=float, default=0.0,
                    help="every 5 s, stop servicing the socket for this long")
     p.add_argument("--seed", type=int, default=1,
-                   help="impairment seed; the same seed replays the same run")
+                   help="impairment seed; the same rx loss pattern for the same client")
+    p.add_argument("--rssi", type=int, default=-58,
+                   help="signal to report; 0 is the contract's 'unavailable', which the "
+                        "app renders differently from a very weak signal")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="log every frame instead of one line a second")
     args = p.parse_args()

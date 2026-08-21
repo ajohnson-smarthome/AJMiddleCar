@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "contract.h"   /* RT_WATCHDOG_MS, RT_COMMAND_HZ, the CTL_* vocabulary */
 
 /* Who may command the actuator.
  *
@@ -13,11 +14,12 @@
  *                        wheels back immediately. If the retreat outranked it, control
  *                        would be refused while a frame was arriving.
  *   CONSOLE above RECOVER — a bench command is not silently killed by a retreat. The
- *                        retreat can only run after real /ws traffic armed the watchdog,
- *                        so this costs nothing in a console-only session.
+ *                        retreat can only run after real traffic on the real-time
+ *                        channel armed the watchdog, so this costs nothing in a
+ *                        console-only session.
  *   RT above CONSOLE   — a live pilot outranks a command typed minutes ago.
- *   CALIB above RT     — the wizard's spin pulse must not be overwritten ~100 ms later
- *                        by the app's own 10 Hz zero-stream.
+ *   CALIB above RT     — the wizard's spin pulse must not be overwritten one
+ *                        RT_COMMAND_HZ period later by the app's own zero-stream.
  *   OTA, SAFE on top   — flashing and an explicit stop answer to nobody.
  */
 typedef enum {
@@ -66,25 +68,34 @@ static inline void link_arb_release(link_arb_t *a, link_src_t src) {
     a->sticky   = false;
 }
 
-/* Pure: the name telemetry reports in "ctl", and logs use. */
+/* Pure: the name telemetry reports in "ctl", and logs use. The spellings are the
+ * schema's ctl_values, so the app and the mock read the same words this returns. */
 static inline const char *link_src_name(link_src_t s) {
     switch (s) {
-        case LINK_SRC_NONE:    return "none";
-        case LINK_SRC_RECOVER: return "recover";
-        case LINK_SRC_CONSOLE: return "console";
-        case LINK_SRC_RT:      return "rt";
-        case LINK_SRC_CALIB:   return "calib";
-        case LINK_SRC_OTA:     return "ota";
-        case LINK_SRC_SAFE:    return "safe";
+        case LINK_SRC_NONE:    return CTL_NONE;
+        case LINK_SRC_RECOVER: return CTL_RECOVER;
+        case LINK_SRC_CONSOLE: return CTL_CONSOLE;
+        case LINK_SRC_RT:      return CTL_RT;
+        case LINK_SRC_CALIB:   return CTL_CALIB;
+        case LINK_SRC_OTA:     return CTL_OTA;
+        case LINK_SRC_SAFE:    return CTL_SAFE;
         default:               return "?";
     }
 }
+
+/* One enumerator per word in the schema's ctl_values (LINK_SRC_NONE included): a value
+ * added to the contract must break this build rather than surface as "?" on the wire. */
+_Static_assert(LINK_SRC_SAFE + 2 == CTL_COUNT, "link_src_t and ctl_values disagree");
 
 #ifndef LINK_HOST_TEST
 #include "esp_err.h"
 
 /* How long each source's grant holds without being refreshed. */
-#define LINK_HOLD_RT_MS     300u   /* the watchdog deadline; the 10 Hz stream refreshes it */
+/* The same deadline the control watchdog measures, and necessarily so: if the grant
+ * lapsed first the car would coast to a stop before the loss was declared, and the
+ * retreat would then start from rest instead of retracing the path it was on. The
+ * RT_COMMAND_HZ stream refreshes it. */
+#define LINK_HOLD_RT_MS     ((uint32_t)RT_WATCHDOG_MS)
 #define LINK_HOLD_CALIB_MS  600u   /* one identification pulse */
 
 /* Start the 50 Hz actuator task. The sole writer to the PCA9685 after this call. */

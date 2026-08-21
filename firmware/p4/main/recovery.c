@@ -5,7 +5,7 @@
 #include "esp_log.h"
 #include "cJSON.h"
 #include "cfg_json.h"
-#include "cfg_table.inc"
+#include "contract.h"
 #include "car.h"
 #include "link.h"
 

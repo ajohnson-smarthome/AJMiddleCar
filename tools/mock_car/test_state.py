@@ -12,8 +12,9 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from generated import DOMAINS, RT, TELEMETRY_FIELDS   # noqa: E402
-from state import CarState, clamp_axis, seq_is_newer, valid_seq   # noqa: E402
+from generated import CTL_VALUES, DOMAINS, RT, TELEMETRY_FIELDS   # noqa: E402
+from state import (CarState, clamp_axis, number, parse_frame,      # noqa: E402
+                   seq_is_newer, valid_seq, valid_sid)
 
 DEADLINE_S = RT["watchdog_ms"] / 1000.0
 
@@ -45,6 +46,68 @@ class TestSequence(unittest.TestCase):
         self.assertTrue(valid_seq(0xFFFFFFFF))
         for bad in (True, -1, 0x100000000, 1.5, "7", None):
             self.assertFalse(valid_seq(bad), bad)
+
+
+class TestWireShapes(unittest.TestCase):
+    """The rules control_proto.c applies, which are stricter than JSON's."""
+
+    def test_a_number_is_not_a_boolean_or_a_string(self):
+        # float(True) is 1.0 and float("0.5") is 0.5, which is how a mock drives on
+        # frames the car drops. The car's tokeniser never sees past the first quote.
+        for bad in (True, False, "0.5", "1", None, [], {}):
+            self.assertIsNone(number(bad), bad)
+            self.assertIsNone(clamp_axis(bad), bad)
+        self.assertEqual(number(0.5), 0.5)
+        self.assertEqual(number(1), 1.0)
+
+    def test_sid_matches_parse_sid(self):
+        for good in ("7f3a91c2", "a", "0" * 15):
+            self.assertTrue(valid_sid(good), good)
+        for bad in ("", "0" * 16, "7f3a-91c2", 'a"b', "sid é", 1234, True, None,
+                    {"a": 1}, ["a"]):
+            self.assertFalse(valid_sid(bad), bad)
+
+    def test_a_hello_the_car_would_reject_is_not_a_session(self):
+        for bad in (b'{"proto":1,"hello":{"a":1}}', b'{"proto":1,"hello":1}',
+                    b'{"proto":1,"hello":""}', b'{"proto":1,"hello":"' + b"x" * 70 + b'"}'):
+            self.assertIsNone(parse_frame(bad), bad)
+        good = parse_frame(b'{"proto":1,"hello":"7f3a91c2"}')
+        self.assertEqual(good, {"proto": 1, "hello": "7f3a91c2"})
+
+    def test_a_command_needs_both_axes_and_real_numbers(self):
+        self.assertEqual(parse_frame(b'{"seq":3,"t":0.5,"y":-0.25}'),
+                         {"seq": 3, "t": 0.5, "y": -0.25})
+        for bad in (b'{"seq":3,"t":0.5}', b'{"seq":3,"y":0.5}',
+                    b'{"seq":3,"t":true,"y":false}', b'{"seq":3,"t":"0.5","y":"0"}',
+                    b'{"seq":3,"t":0.5,"y":null}'):
+            self.assertIsNone(parse_frame(bad), bad)
+
+    def test_a_broken_key_drops_the_whole_datagram(self):
+        for bad in (b'{"seq":-1,"t":0,"y":0}', b'{"seq":1.5,"t":0,"y":0}',
+                    b'{"seq":true,"t":0,"y":0}', b'{"proto":"1","hello":"abc"}',
+                    b'{"seq":1,"t":0,"y":0,"bye":"yes"}'):
+            self.assertIsNone(parse_frame(bad), bad)
+
+    def test_nothing_to_act_on_is_dropped(self):
+        # A bare goodbye included: the app sends t/y with its bye, and the car's parser
+        # rejects a frame carrying neither a hello nor both axes.
+        for bad in (b'{"seq":1}', b'{"seq":1,"bye":1}', b'{}', b'[]', b'not json',
+                    b'"a string"', b''):
+            self.assertIsNone(parse_frame(bad), bad)
+
+    def test_bye_is_a_goodbye_however_json_spells_yes(self):
+        self.assertIs(parse_frame(b'{"seq":1,"t":0,"y":0,"bye":1}')["bye"], True)
+        self.assertIs(parse_frame(b'{"seq":1,"t":0,"y":0,"bye":true}')["bye"], True)
+        self.assertIs(parse_frame(b'{"seq":1,"t":0,"y":0,"bye":0}')["bye"], False)
+        self.assertIs(parse_frame(b'{"seq":1,"t":0,"y":0,"bye":false}')["bye"], False)
+
+    def test_the_command_cap_is_what_bounds_an_inbound_datagram(self):
+        # max_datagram sizes a receive buffer; max_command is what the car agrees to
+        # act on, and telemetry needs the difference on the way out.
+        self.assertLess(RT["max_command"], RT["max_datagram"])
+        pad = RT["max_command"] - len('{"seq":1,"t":0,"y":0,"z":""}')
+        self.assertIsNotNone(parse_frame(b'{"seq":1,"t":0,"y":0,"z":"%s"}' % (b"x" * pad)))
+        self.assertIsNone(parse_frame(b'{"seq":1,"t":0,"y":0,"z":"%s"}' % (b"x" * (pad + 1))))
 
 
 class TestConfig(unittest.TestCase):
@@ -232,7 +295,10 @@ class TestGoodbye(unittest.TestCase):
         last = stream(car, 0.9, 0.0, 0.0, 20)
         car.note_bye(last + 0.05)
         self.assertEqual(car.command, (0.0, 0.0))
-        self.assertEqual(car.ctl, "safe")
+        # `car_stop(SAFE)` then `link_release(SAFE)`: stopped, and handed back. Parking
+        # in a sticky `safe` would 409 every /calib/spin until a new hello — a refusal
+        # the car never sends, and one that stalls the wizard in the simulator.
+        self.assertEqual(car.ctl, "none")
         for k in range(50):
             self.assertIsNone(car.tick(last + 0.05 + k * 0.05))
         self.assertEqual(car.wdt_trips, 0)
@@ -277,7 +343,7 @@ class TestActuatorOwnership(unittest.TestCase):
         car.tick(CarState.CALIB_HOLD_MS / 1000.0 + 0.01)
         self.assertEqual(car.ctl, "none")
 
-    def test_ota_and_safe_refuse_a_spin(self):
+    def test_ota_refuses_a_spin(self):
         car = CarState(now=0.0)
         car.begin_ota(0.0)
         self.assertEqual(car.ctl, "ota")
@@ -285,15 +351,99 @@ class TestActuatorOwnership(unittest.TestCase):
         car.end_ota()
         self.assertTrue(car.begin_spin(0.2, 0, 1))
 
+    def test_a_goodbye_leaves_the_wizard_free_to_spin(self):
+        """rt_link.c releases SAFE with the same call that stops the wheels."""
         car = CarState(now=0.0)
         car.note_bye(0.0)
-        self.assertFalse(car.begin_spin(0.1, 0, 1))
+        self.assertTrue(car.begin_spin(0.1, 0, 1))
+        self.assertEqual(car.ctl, "calib")
+
+    def test_a_goodbye_during_an_ota_does_not_wedge_the_mock(self):
+        car = CarState(now=0.0)
+        car.begin_ota(0.0)
+        car.note_bye(0.1)            # SAFE outranks OTA on the car too
+        car.end_ota()
+        self.assertEqual(car.ctl, "none")
+        self.assertTrue(car.begin_spin(0.2, 0, 1))
 
     def test_ota_bumps_the_build(self):
         car = CarState(fw="v1.0+9000", now=0.0)
         car.begin_ota(0.0)
         car.end_ota()
         self.assertEqual(car.fw, "v1.0+9001")
+
+    def test_a_lapsed_grant_zeroes_the_command(self):
+        """`ctl` and "the wheels are stopped" are one fact on the car; make them one here.
+
+        link.c says it twice — link_release memsets the target, and the actuator task
+        zeroes on a lapsed grant. Without it a calibration pulse that lapses leaves the
+        mock at full throttle with `ctl` reporting nobody.
+        """
+        car = CarState(now=0.0)
+        car.begin_spin(0.0, 1, 1)
+        self.assertEqual(car.command, (1.0, 0.0))
+        car.tick(5.0)
+        self.assertEqual(car.ctl, "none")
+        self.assertEqual(car.command, (0.0, 0.0))
+
+    def test_a_new_session_during_a_retreat_leaves_the_wheels_stopped(self):
+        car = CarState(now=0.0)
+        last = stream(car, 0.8, 0.0, 0.0, 20)
+        car.tick(last + DEADLINE_S + 0.01)
+        self.assertTrue(car.retreating)
+        car.adopt_session(last + 1.0)
+        self.assertEqual(car.ctl, "none")
+        self.assertEqual(car.command, (0.0, 0.0))
+
+    def test_a_retrace_refused_by_the_actuator_does_not_drive(self):
+        """recovery.c aborts the replay the first time car_drive is refused.
+
+        Driving anyway is the "motors moving while this side reports they are held"
+        case: an OTA owns the actuator, and the mock reverses the car under it.
+        """
+        car = CarState(now=0.0)
+        last = stream(car, 0.8, 0.0, 0.0, 20)
+        car.begin_ota(last + 0.01)
+        line = car.tick(last + DEADLINE_S + 0.5)
+        self.assertIsNone(line, "an OTA silences the watchdog entirely")
+
+        # The real sequence: the app's send loop does not stop for an OTA, so the
+        # stream keeps arriving (refused, but re-arming the watchdog) and then stops.
+        car = CarState(now=0.0)
+        last = stream(car, 0.8, 0.0, 0.0, 20)
+        car.begin_ota(last + 0.01)
+        now = stream(car, 0.8, 0.0, last + 0.1, 5)
+        self.assertEqual(car.ctl, "ota")
+        line = car.tick(now + DEADLINE_S + 0.01)
+        self.assertIn("refused", line)
+        self.assertFalse(car.retreating)
+        self.assertEqual(car.ctl, "ota")
+        self.assertEqual(car.command, (0.0, 0.0), "the flash holds the wheels at zero")
+
+    def test_a_trip_with_auto_return_off_still_goes_through_the_arbiter(self):
+        """recovery.c's disabled path is `car_stop(RECOVER)`, which OTA refuses."""
+        car = CarState(now=0.0)
+        car.apply_config("/recover", {"enabled": False, "window_ms": 5000})
+        last = stream(car, 0.8, 0.0, 0.0, 20)
+        car.begin_spin(last + 0.01, 0, 1)        # a pulse starts as the link dies
+        now = stream(car, 0.8, 0.0, last + 0.05, 2)
+        line = car.tick(now + DEADLINE_S + 0.01)
+        self.assertIn("auto-return off", line)
+        self.assertEqual(car.ctl, "calib")
+        self.assertEqual(car.command, (1.0, 0.0), "the pulse is not flattened by the trip")
+
+    def test_a_spin_during_a_retreat_ends_it(self):
+        car = CarState(now=0.0)
+        last = stream(car, 0.8, 0.0, 0.0, 20)
+        car.tick(last + DEADLINE_S + 0.01)
+        self.assertTrue(car.retreating)
+        self.assertTrue(car.begin_spin(last + DEADLINE_S + 0.02, 2, 1))
+        self.assertFalse(car.retreating, "the retreat was outranked, so it is over")
+        self.assertEqual(car.command, (1.0, 0.0))
+        # The retreat's own deadline must not zero the pulse halfway through.
+        car.tick(last + DEADLINE_S + 0.03)
+        self.assertEqual(car.ctl, "calib")
+        self.assertEqual(car.command, (1.0, 0.0))
 
     def test_ota_silences_the_watchdog(self):
         car = CarState(now=0.0)
@@ -322,6 +472,29 @@ class TestCalibration(unittest.TestCase):
         self.assertFalse(car.calibrated)
 
 
+class TestOwnershipVocabulary(unittest.TestCase):
+    def test_ctl_names_come_from_the_schema(self):
+        from state import PRIORITY
+        self.assertEqual(list(PRIORITY), CTL_VALUES)
+
+    def test_every_reported_owner_is_in_the_vocabulary(self):
+        car = CarState(now=0.0)
+        seen = {car.ctl}
+        car.note_command(0.5, 0.0, 0.0)
+        seen.add(car.ctl)
+        car.begin_spin(0.1, 0, 1)
+        seen.add(car.ctl)
+        car.begin_ota(1.0)
+        seen.add(car.ctl)
+        car.end_ota()
+        seen.add(car.ctl)
+        last = stream(car, 0.8, 0.0, 2.0, 20)
+        car.tick(last + DEADLINE_S + 0.01)
+        seen.add(car.ctl)
+        self.assertTrue(seen <= set(CTL_VALUES), seen)
+        self.assertIn("recover", seen)
+
+
 class TestTelemetry(unittest.TestCase):
     def test_it_carries_exactly_the_schema_fields(self):
         car = CarState(now=0.0)
@@ -335,6 +508,19 @@ class TestTelemetry(unittest.TestCase):
         car = CarState(now=0.0)
         seqs = [car.telemetry(10)["seq"] for _ in range(5)]
         self.assertEqual(seqs, sorted(set(seqs)))
+
+    def test_only_a_push_advances_the_pushed_seq(self):
+        """A /status poll must not make the 5 Hz stream skip a number.
+
+        telemetry.c keeps a counter per consumer for exactly this reason: the app
+        measures loss by the gaps in `seq`, and a second reader perturbing the count
+        turns a 1 Hz poll into one dropped frame a second.
+        """
+        car = CarState(now=0.0)
+        self.assertEqual(car.telemetry(10)["seq"], 1)
+        for _ in range(3):
+            self.assertEqual(car.telemetry(10, bump=False)["seq"], 1)
+        self.assertEqual(car.telemetry(10)["seq"], 2)
 
     def test_it_reports_the_live_state(self):
         car = CarState(now=0.0)

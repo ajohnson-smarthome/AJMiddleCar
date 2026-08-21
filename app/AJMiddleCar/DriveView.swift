@@ -31,7 +31,8 @@ struct DriveView: View {
     private var telemetry: Telemetry? { link.lastTelemetry }
     private var linkUp: Bool { link.isLive }
     private var signalLevel: Int {
-        ControlModel.signalLevel(online: linkUp, rssi: telemetry?.rssi, pingMs: nil)
+        ControlModel.signalLevel(online: linkUp, rssi: telemetry?.rssi,
+                                 rxFps: telemetry?.rxFps, expectedFps: CarContract.commandHz)
     }
     private var signalColor: Color { signalLevel == 0 ? .red : (signalLevel == 1 ? p.warn : p.accent) }
 
@@ -173,6 +174,18 @@ struct DriveView: View {
         HStack(spacing: 16) {
             if let trips = telemetry?.wdtTrips, trips > 0 {
                 statusItem("exclamationmark.triangle", L.driveWdtTrips(trips), p.warn)
+            }
+            // A PCA9685 that stopped answering is the one failure that looks exactly like a
+            // working car from up here: green pill, green bars, moving diagram, still wheels.
+            // The car reports it five times a second, so it gets said.
+            if telemetry?.busOk == false {
+                statusItem("bolt.trianglebadge.exclamationmark", L.driveBusFail, p.warn)
+            }
+            // The app can be streaming and *not* be the source the car is obeying — a retreat, a
+            // calibration pulse or an OTA outranks the pult. Naming the owner is the difference
+            // between "the joystick is broken" and "the car is busy doing something else".
+            if let owner = telemetry?.ctl, owner != CtlOwner.rt, owner != CtlOwner.none {
+                statusItem("hand.raised", L.driveCtlOther(L.ctlOwner(owner)), p.warn)
             }
         }
         .font(.system(size: 10))

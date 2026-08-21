@@ -34,7 +34,24 @@ static const cfg_domain_t CFG_DOMAINS[] = {
 };
 
 #define RT_PORT 4210
-#define RT_MAX_DATAGRAM 96
+#define RT_MAX_DATAGRAM 320
+#define RT_MAX_COMMAND 96
+#define RT_KEY_HELLO "hello"
+#define RT_KEY_SEQ "seq"
+#define RT_KEY_BYE "bye"
+#define RT_KEY_PROTO "proto"
+#define RT_KEY_DEVICE "device"
+#define RT_KEY_FW "fw"
+#define RT_KEY_THROTTLE "t"
+#define RT_KEY_YAW "y"
+#define CTL_NONE "none"
+#define CTL_RECOVER "recover"
+#define CTL_CONSOLE "console"
+#define CTL_RT "rt"
+#define CTL_CALIB "calib"
+#define CTL_OTA "ota"
+#define CTL_SAFE "safe"
+#define CTL_COUNT 7
 #define RT_COMMAND_HZ 10
 #define RT_TELEMETRY_HZ 5
 #define RT_WATCHDOG_MS 300

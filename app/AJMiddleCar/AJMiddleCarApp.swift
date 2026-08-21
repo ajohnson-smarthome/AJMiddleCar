@@ -36,8 +36,10 @@ struct AJMiddleCarApp: App {
             }
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase == .active {
+                    // The config prefetch is not here: nothing can be read from a car the app has
+                    // not met yet, and both GETs would time out into `.failed` with nothing to
+                    // retrigger them. `CarLink` warms them the moment the session is adopted.
                     link.start()
-                    ConfigStore.shared.prefetchDriveGeometry()
                 } else {
                     // Leaving `.active` is a goodbye said in words. The car stops in under
                     // 150 ms instead of noticing silence 300 ms later and retreating along its
@@ -66,10 +68,7 @@ struct AJMiddleCarApp: App {
         case .awaitingCar, .ready:
             // The link opens when the gate hands over, not at launch: until then there is
             // nothing to say to the car, and the gate is talking to GitHub.
-            carRoot.onAppear {
-                link.start()
-                ConfigStore.shared.prefetchDriveGeometry()
-            }
+            carRoot.onAppear { link.start() }
         }
     }
 
@@ -81,7 +80,9 @@ struct AJMiddleCarApp: App {
         case .localNetworkDenied:
             ConnectView(situation: .localNetworkDenied)
         case .wrongCar(let device):
-            WrongCarView(palette: p, found: device) { link.retryAfterWrongCar() }
+            WrongCarView(palette: p, kind: .foreignDevice(device)) { link.retryAfterWrongCar() }
+        case .wrongProto(let theirs):
+            WrongCarView(palette: p, kind: .protoMismatch(theirs: theirs)) { link.retryAfterWrongCar() }
         case .searching:
             ZStack { p.bg.ignoresSafeArea(); ConnectView() }
         case .live:

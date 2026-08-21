@@ -4,7 +4,30 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Telemetry's "ctl" is a closed vocabulary the app switches on. The names come from
+   the schema through link.h; this is the check that every source has one and that no
+   two share it — a duplicate would report the wrong owner, and a missing one would
+   send "?" to a phone that has no case for it. */
+static void ctl_vocabulary(void) {
+    const link_src_t all[] = { LINK_SRC_NONE, LINK_SRC_RECOVER, LINK_SRC_CONSOLE,
+                               LINK_SRC_RT, LINK_SRC_CALIB, LINK_SRC_OTA, LINK_SRC_SAFE };
+    const int n = (int)(sizeof(all) / sizeof(all[0]));
+    assert(n == CTL_COUNT);
+    for (int i = 0; i < n; i++) {
+        assert(strcmp(link_src_name(all[i]), "?") != 0);
+        for (int j = i + 1; j < n; j++) {
+            assert(strcmp(link_src_name(all[i]), link_src_name(all[j])) != 0);
+        }
+    }
+    assert(strcmp(link_src_name(LINK_SRC_NONE), CTL_NONE) == 0);
+    assert(strcmp(link_src_name(LINK_SRC_RT), CTL_RT) == 0);
+    assert(strcmp(link_src_name(LINK_SRC_SAFE), CTL_SAFE) == 0);
+    assert(strcmp(link_src_name((link_src_t)99), "?") == 0);
+}
+
 int main(void) {
+    ctl_vocabulary();
+
     link_arb_t a = { .owner = LINK_SRC_NONE, .until_ms = 0, .sticky = false };
 
     /* Nobody owns it: anyone may take it. */
@@ -53,12 +76,6 @@ int main(void) {
                       .sticky = false };
     assert(!link_arb_lapsed(&a, 0xFFFFFF00u));      /* before the deadline */
     assert(link_arb_lapsed(&a, 0x00000100u));       /* wrapped past it */
-
-    /* Names are for telemetry's "ctl" field and for logs. */
-    assert(strcmp(link_src_name(LINK_SRC_NONE), "none") == 0);
-    assert(strcmp(link_src_name(LINK_SRC_RT), "rt") == 0);
-    assert(strcmp(link_src_name(LINK_SRC_SAFE), "safe") == 0);
-    assert(strcmp(link_src_name((link_src_t)99), "?") == 0);
 
     printf("test_link: all passed\n");
     return 0;

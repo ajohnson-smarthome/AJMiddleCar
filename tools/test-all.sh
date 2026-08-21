@@ -34,13 +34,22 @@ done
 
 echo "== mock host tests =="
 python3 tools/mock_car/test_state.py
+python3 tools/mock_car/test_rtlink.py
 
 echo "== conformance =="
+# The REST matrix needs a running mock, which needs aiohttp, which needs the venv. A
+# missing venv is a skip rather than a failure so a fresh clone can run everything else —
+# but set CONFORMANCE=required (CI, or a pre-flash check) and the skip becomes an error,
+# so "nobody has run it in months" cannot look the same as "it passed".
 MOCK_PY="tools/mock_car/.venv/bin/python"
 if [ ! -x "$MOCK_PY" ]; then
     echo "skipped: tools/mock_car/.venv is missing — the mock needs aiohttp. Create it with"
     echo "  python3 -m venv tools/mock_car/.venv"
     echo "  tools/mock_car/.venv/bin/pip install -r tools/mock_car/requirements.txt"
+    if [ "${CONFORMANCE:-}" = "required" ]; then
+        echo "CONFORMANCE=required, and it did not run" >&2
+        exit 1
+    fi
 else
     # Spare ports, on loopback: a mock already serving the simulator keeps the contract's
     # ports, and this one only has to answer REST.

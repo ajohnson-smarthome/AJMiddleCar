@@ -23,10 +23,15 @@ final class CarLink: ObservableObject {
     /// for screens that legitimately show the last known reading (uptime, firmware, trips).
     @Published private(set) var lastTelemetry: Telemetry?
 
-    let path = CarPath()
+    /// Optional so the debug gallery can hold a frozen link without two real `NWPathMonitor`s
+    /// running behind every frame it builds.
+    private let path: CarPath?
     private let transport: CarTransport
+    private let config: ConfigStore?
     private var session: SessionState = .none
     private var telemetry: Telemetry?
+    /// The newest telemetry counter accepted, for ordering. The car increments it per push.
+    private var lastTelemetrySeq: Int?
     private var lastFrame: ContinuousClock.Instant?
     private var pump: Task<Void, Never>?
     private var decay: Task<Void, Never>?
@@ -37,9 +42,13 @@ final class CarLink: ObservableObject {
     private var frozen = false
     #endif
 
-    init(transport: CarTransport = .shared) {
+    init(transport: CarTransport = .shared, monitorsPath: Bool = true, config: ConfigStore? = nil) {
         self.transport = transport
-        pathSub = path.$state.sink { [weak self] p in
+        self.config = config ?? (monitorsPath ? .shared : nil)
+        guard monitorsPath else { path = nil; return }
+        let monitor = CarPath()
+        path = monitor
+        pathSub = monitor.$state.sink { [weak self] p in
             guard let self else { return }
             self.pathState = p
             self.recompute()
@@ -70,12 +79,14 @@ final class CarLink: ObservableObject {
         await transport.stop(graceful: graceful)
         telemetry = nil
         lastFrame = nil
+        lastTelemetrySeq = nil
         if case .foreign = session {} else { session = .none }
         recompute()
     }
 
-    /// The wrong-car screen's retry: forget the foreign identity and look again. Nothing else
-    /// clears it, on purpose — a wrong car is not a transient failure to retry silently.
+    /// The wrong-car and wrong-protocol screens' retry: forget what the car said about itself and
+    /// look again. Nothing else clears either, on purpose — neither is a transient failure to
+    /// retry silently behind a radar sweep.
     func retryAfterWrongCar() {
         session = .none
         device = nil
@@ -87,14 +98,34 @@ final class CarLink: ObservableObject {
             switch event {
             case .sessionOpened(let device, let fw):
                 self.device = device
-                self.fw = fw
+                lastTelemetrySeq = nil
                 if device == CarContract.device {
+                    // The firmware version is published only for our own car. It feeds the launch
+                    // gate, and a foreign car's build number there can force an OTA onto a car
+                    // that is not ours — routing straight around the wrong-car screen.
+                    self.fw = fw
                     session = .adopted(device: device, fw: fw)
                     fetchRadio()
+                    // The car is reachable exactly now. Prefetching from `onAppear` ran while the
+                    // gate was still talking to GitHub, so both GETs timed out and every trick
+                    // spent the session on the fallback geometry the `/dims` work replaced.
+                    config?.prefetchDriveGeometry()
                 } else {
+                    self.fw = nil
                     session = .foreign(device: device)
                 }
+            case .protoMismatch(let theirs):
+                self.fw = nil
+                self.device = nil
+                session = .protoMismatch(theirs: theirs)
             case .telemetry(let t):
+                // Ordered by the car's own counter: a reordered datagram walks uptime, the trip
+                // count and the calibration flag backwards, and the mandatory-calibration sheet
+                // keys on that flag.
+                if let seq = t.seq, let last = lastTelemetrySeq, !RTFrame.seqNewer(seq, than: last) {
+                    break
+                }
+                if let seq = t.seq { lastTelemetrySeq = seq }
                 telemetry = t
                 lastTelemetry = t
                 lastFrame = ContinuousClock.now
@@ -102,9 +133,12 @@ final class CarLink: ObservableObject {
                 // A foreign identity survives the session that discovered it: the transport
                 // reopens every few seconds and would otherwise flicker the wrong-car screen
                 // back to a radar the user has no reason to watch.
-                if case .foreign = session {} else { session = .none }
+                if case .foreign = session {} else if case .protoMismatch = session {} else {
+                    session = .none
+                }
                 telemetry = nil
                 lastFrame = nil
+                lastTelemetrySeq = nil
             }
             recompute()
         }
@@ -123,7 +157,7 @@ final class CarLink: ObservableObject {
             guard let data = try? await transport.get("/status", timeout: 2),
                   let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let r = j["radio"] as? [String: Any],
-                  let fw = r["fw"] as? String else { return }
+                  let fw = r[CarContract.fwField] as? String else { return }
             self?.radio = Radio(fw: fw, ok: r["ok"] as? Bool ?? true)
         }
     }
@@ -131,7 +165,7 @@ final class CarLink: ObservableObject {
     #if DEBUG
     /// One screen's worth of link, for the gallery. Nothing runs behind it.
     static func preview(_ state: Link, fw: String? = "v1.0+517", radio: Radio? = nil) -> CarLink {
-        let l = CarLink()
+        let l = CarLink(monitorsPath: false)
         l.frozen = true
         l.state = state
         l.fw = fw

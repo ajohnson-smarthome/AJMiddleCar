@@ -37,10 +37,11 @@ struct GalleryView: View {
 
     /// A link frozen in `.live` with plausible numbers — the gallery has no transport behind it.
     @MainActor private func mockLink(calibrated: Bool? = true, fw: String? = "v1.0+264",
-                                     rssi: Int? = -55, wdtTrips: Int? = nil) -> CarLink {
+                                     rssi: Int? = -55, wdtTrips: Int? = nil,
+                                     busOk: Bool = true, ctl: String = CtlOwner.rt) -> CarLink {
         var t = Telemetry()
         t.calibrated = calibrated; t.rssi = rssi; t.wdtTrips = wdtTrips
-        t.uptimeS = 3847; t.rxFps = 10; t.busOk = true; t.ctl = "rt"
+        t.uptimeS = 3847; t.rxFps = 10; t.busOk = busOk; t.ctl = ctl
         return CarLink.preview(.live(t), fw: fw, radio: CarLink.Radio(fw: "3.0.6", ok: true))
     }
 
@@ -64,7 +65,8 @@ struct GalleryView: View {
             ("No Wi-Fi",                AnyView(ConnectView(situation: .noWiFi(.notAvailable)))),
             ("Local network denied",    AnyView(ConnectView(situation: .localNetworkDenied))),
             ("NoInternet",              AnyView(NoInternetView(palette: p, onRetry: {}))),
-            ("WrongCar",                AnyView(WrongCarView(palette: p, found: "esp32-car", onRetry: {}))),
+            ("WrongCar",                AnyView(WrongCarView(palette: p, kind: .foreignDevice("esp32-car"), onRetry: {}))),
+            ("WrongProto",              AnyView(WrongCarView(palette: p, kind: .protoMismatch(theirs: CarContract.proto + 1), onRetry: {}))),
             ("UpdateCheck checking",    AnyView(UpdateCheckView(palette: p, phase: .checkUpdate, client: UpdateClient(), onRetry: {}))),
             ("UpdateCheck downloading", AnyView(UpdateCheckView(palette: p, phase: .downloading, client: { let c = UpdateClient(); c.downloadProgress = 0.45; return c }(), onRetry: {}))),
             ("UpdateCheck failed",      AnyView(UpdateCheckView(palette: p, phase: .checkFailed, client: UpdateClient(), onRetry: {}))),
@@ -81,6 +83,7 @@ struct GalleryView: View {
             ("Drive arcade",            AnyView(DriveView(link: mockLink(), intent: intent, preview: true).onAppear { UserDefaults.standard.set(Scheme.arcade.rawValue, forKey: "scheme") })),
             ("Drive tank",              AnyView(DriveView(link: mockLink(), intent: intent, preview: true).onAppear { UserDefaults.standard.set(Scheme.tank.rawValue, forKey: "scheme") })),
             ("Drive warning",           AnyView(DriveView(link: mockLink(wdtTrips: 3), intent: intent, preview: true))),
+            ("Drive bus/ctl warning",   AnyView(DriveView(link: mockLink(busOk: false, ctl: CtlOwner.recover), intent: intent, preview: true))),
             ("Settings",                AnyView(NavigationStack { SettingsView(palette: p, link: mockLink()) })),
             ("Calibration spin",        calib(.spin)),
             ("Calibration spinning",    calib(.spinning)),

@@ -8,7 +8,7 @@
 #include "telemetry.h"
 #include "identity.h"
 #include "board.h"
-#include "cfg_table.inc"
+#include "contract.h"
 #include <string.h>
 #include "esp_hosted.h"
 
@@ -47,9 +47,12 @@ static esp_err_t status_get(httpd_req_t *req) {
     }
     const char *fw = esp_app_get_description()->version;
     char buf[416];
+    /* The same three keys the hello reply carries, spelled from the same schema: one
+       wire value must not have two spellings, or a rename presents as "wrong car". */
     int n = snprintf(buf, sizeof(buf),
-                     "{\"device\":\"" CAR_DEVICE_ID "\",\"fw\":\"%s\",\"proto\":%d,%s,"
-                     "\"radio\":{\"fw\":\"%s\",\"expected\":\"" BOARD_RADIO_SLAVE_FW "\",\"ok\":%s}}",
+                     "{\"" RT_KEY_DEVICE "\":\"" CAR_DEVICE_ID "\",\"" RT_KEY_FW "\":\"%s\","
+                     "\"" RT_KEY_PROTO "\":%d,%s,"
+                     "\"radio\":{\"" RT_KEY_FW "\":\"%s\",\"expected\":\"" BOARD_RADIO_SLAVE_FW "\",\"ok\":%s}}",
                      fw, RT_PROTO, fields, s_radio_fw, s_radio_ok ? "true" : "false");
     if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
     httpd_resp_set_type(req, "application/json");

@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include "contract.h"   /* the wire's key names — RT_KEY_*, generated from the schema */
 
 /* The 10 Hz hot path, so no JSON library and no allocation: the datagram is scanned in
    place for the handful of keys the real-time channel defines. Everything below is
@@ -64,8 +65,14 @@ static int parse_u32(const char *p, size_t n, uint32_t *out) {
     int k = token(p, n, "0123456789", tmp, sizeof(tmp));
     if (k < 0) return -1;
     char *end;
-    unsigned long v = strtoul(tmp, &end, 10);
-    if (end != tmp + k || v > 0xFFFFFFFFul) return -1;
+    /* strtoull, not strtoul: unsigned long is 64 bits on the host and 32 on riscv32, so
+       with strtoul the range check below was dead code on the car — an over-large value
+       saturated to ULONG_MAX and was accepted there while this module's own host tests
+       rejected it. unsigned long long is 64 bits on both, and `token` admits at most ten
+       digits, so the conversion cannot saturate and the magnitude test is the whole
+       rule, identically in both places. */
+    unsigned long long v = strtoull(tmp, &end, 10);
+    if (end != tmp + k || v > 0xFFFFFFFFull) return -1;
     *out = (uint32_t)v;
     return 0;
 }
@@ -96,19 +103,19 @@ int control_parse_frame(const char *msg, size_t len, size_t max_len, control_fra
     size_t left = 0;   /* every reader below is guarded by its lookup, but an
                           indeterminate read is not something to leave lying around */
 
-    if ((v = value_of(msg, len, "proto", &left)) != NULL) {
+    if ((v = value_of(msg, len, RT_KEY_PROTO, &left)) != NULL) {
         if (parse_u32(v, left, &f.proto) != 0) return -1;
         f.has_proto = true;
     }
-    if ((v = value_of(msg, len, "seq", &left)) != NULL) {
+    if ((v = value_of(msg, len, RT_KEY_SEQ, &left)) != NULL) {
         if (parse_u32(v, left, &f.seq) != 0) return -1;
         f.has_seq = true;
     }
-    if ((v = value_of(msg, len, "hello", &left)) != NULL) {
+    if ((v = value_of(msg, len, RT_KEY_HELLO, &left)) != NULL) {
         if (parse_sid(v, left, f.sid, sizeof(f.sid)) != 0) return -1;
         f.has_hello = true;
     }
-    if ((v = value_of(msg, len, "bye", &left)) != NULL) {
+    if ((v = value_of(msg, len, RT_KEY_BYE, &left)) != NULL) {
         /* The wire says 1, but JSON has two ways to say yes and a client that picks the
            other one must not have its goodbye read as a drive command. */
         float b;
@@ -118,9 +125,9 @@ int control_parse_frame(const char *msg, size_t len, size_t max_len, control_fra
         else return -1;
     }
 
-    const char *vt = value_of(msg, len, "t", &left);
+    const char *vt = value_of(msg, len, RT_KEY_THROTTLE, &left);
     size_t left_t = left;
-    const char *vy = value_of(msg, len, "y", &left);
+    const char *vy = value_of(msg, len, RT_KEY_YAW, &left);
     if (vt != NULL || vy != NULL) {
         /* One axis without the other is a truncated or corrupt frame, not a command to
            hold the missing axis at zero. */
@@ -130,7 +137,11 @@ int control_parse_frame(const char *msg, size_t len, size_t max_len, control_fra
         f.has_ty = true;
     }
 
-    if (!f.has_hello && !f.has_ty) return -1;   /* nothing to act on */
+    /* A goodbye counts on its own. The axes it usually carries are zeroes the stop
+       would write anyway, and a sender that omits them still means stop — dropping the
+       frame here would instead leave the car to notice the silence and retreat, which
+       is the one thing the goodbye exists to prevent. */
+    if (!f.has_hello && !f.has_ty && !f.bye) return -1;   /* nothing to act on */
     *out = f;
     return 0;
 }

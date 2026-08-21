@@ -10,7 +10,7 @@
 #include "esp_log.h"
 #include "esp_app_desc.h"
 #include "esp_task_wdt.h"
-#include "cfg_table.inc"
+#include "contract.h"
 #include "control_proto.h"
 #include "watchdog.h"
 #include "recovery.h"
@@ -25,6 +25,14 @@ static const char *TAG = "rt";
    deadline is measured to within a tick, long enough that an idle car is not spinning. */
 #define TICK_MS 20
 #define PUSH_MS (1000 / RT_TELEMETRY_HZ)
+
+/* How many datagrams the loop will take before it yields whatever it is still holding.
+   With traffic pending, recvfrom returns immediately and this task — the highest-priority
+   one in the application — never blocks, so a flood on port RT_PORT would starve the
+   actuator task (20 ms deadline) and the idle task while this loop kept its own task
+   watchdog happy. Eight per yield is two orders of magnitude above the RT_COMMAND_HZ
+   the wire actually carries. */
+#define BURST_MAX 8
 
 /* Everything below is touched only by the rt_link task, except the two counters, which
    telemetry reads from whichever task is gathering. */
@@ -42,8 +50,8 @@ static uint32_t           s_last_seq;
 static bool               s_have_seq;
 
 /* The control watchdog, formerly watchdog.c's software timer. `s_armed` keeps it quiet
-   until traffic has actually started, so a car nobody has driven yet never "loses" a
-   link it never had. */
+   until a session exists, so a car nobody has connected to never "loses" a link it
+   never had; adoption arms it, and a goodbye disarms it again. */
 static uint32_t s_last_feed_ms;
 static bool     s_armed;
 
@@ -69,7 +77,8 @@ static void log_peer(const char *what, const struct sockaddr_in *p) {
 static void send_hello_reply(int sock, const char *sid, const struct sockaddr_in *to) {
     char buf[RT_MAX_DATAGRAM];
     int n = snprintf(buf, sizeof(buf),
-                     "{\"proto\":%d,\"hello\":\"%s\",\"device\":\"" CAR_DEVICE_ID "\",\"fw\":\"%s\"}",
+                     "{\"" RT_KEY_PROTO "\":%d,\"" RT_KEY_HELLO "\":\"%s\","
+                     "\"" RT_KEY_DEVICE "\":\"" CAR_DEVICE_ID "\",\"" RT_KEY_FW "\":\"%s\"}",
                      RT_PROTO, sid, esp_app_get_description()->version);
     if (n < 0 || n >= (int)sizeof(buf)) {
         /* Only reachable if the firmware version string grows absurdly. A truncated
@@ -86,11 +95,18 @@ static void adopt(const struct sockaddr_in *from, const char *sid) {
     s_owner      = *from;
     s_have_owner = true;
     s_have_seq   = false;   /* a new session counts from wherever it likes */
-    s_armed      = false;   /* arm on the first command, not on the handshake */
+    /* Armed by the handshake, not by the first command. A session that is adopted and
+       then goes quiet is exactly as lost as one that stops mid-drive, and the app
+       reconnects with a fresh sid well inside the deadline — arming on the first
+       command let a reconnect erase a loss that had already happened. A trip with no
+       breadcrumbs behind it degrades to a plain stop, so the wrong-car flow (hello,
+       foreign device, goodbye) costs nothing. */
+    s_last_feed_ms = now_ms();
+    s_armed        = true;
     snprintf(s_sid, sizeof(s_sid), "%s", sid);
-    /* A previous session's goodbye left SAFE holding zero. Release it here rather than
-       there, so the actuator is free for the console and the calibration wizard in
-       between, and free for this session's first command now. */
+    /* A previous session's goodbye left SAFE holding zero, deliberately: nothing may
+       command the motors between a goodbye and the next driver identifying themselves.
+       This is that moment, so release it — and with it the console and the wizard. */
     link_release(LINK_SRC_SAFE);
     log_peer("session adopted from", from);
 }
@@ -101,8 +117,17 @@ static void on_bye(void) {
        the driver is what ends one, and this frame says stop. Recording it also leaves a
        stationary newest breadcrumb, so the next retreat starts from a car at rest. */
     recovery_note_command(0.0f, 0.0f);
-    car_stop(LINK_SRC_SAFE);
-    link_release(LINK_SRC_SAFE);
+    /* Deliberately NOT released here. SAFE is sticky, so the stop holds until the next
+       adopt(): a retreat already past the seq check in its wait loop would otherwise
+       find the actuator free and land one reverse step — up to an actuator tick of the
+       car moving backwards after the driver said stop, which is the one thing a goodbye
+       exists to prevent. link_set writes nothing on a lock timeout, so a stop that was
+       not applied is worth a line: the grant lapse still stops the car within
+       RT_WATCHDOG_MS, but not because we asked. */
+    if (!car_stop(LINK_SRC_SAFE)) {
+        ESP_LOGE(TAG, "goodbye stop was not applied — %s holds the actuator",
+                 link_src_name(link_owner()));
+    }
     /* This is the whole point of carrying a goodbye on the wire: silence that was
        announced is not silence that means the driver is out of range. */
     s_armed      = false;
@@ -112,8 +137,8 @@ static void on_bye(void) {
 
 static void on_command(const control_frame_t *f) {
     s_frames++;
-    /* A parsed frame proves the link is alive, which is the only thing this watchdog
-       measures — actuator health is a separate question, answered by bus_ok. The
+    /* A frame refreshes the deadline the handshake started. That is the only thing this
+       watchdog measures — actuator health is a separate question, answered by bus_ok. The
        breadcrumb IS gated on the grant: a refused command never moved the car, so
        recording it would corrupt the path the retreat retraces. */
     s_last_feed_ms = now_ms();
@@ -125,7 +150,10 @@ static void on_command(const control_frame_t *f) {
 
 static void on_datagram(int sock, const char *buf, int n, const struct sockaddr_in *from) {
     control_frame_t f;
-    if (control_parse_frame(buf, (size_t)n, RT_MAX_DATAGRAM, &f) != 0) {
+    /* The COMMAND cap, not the datagram cap: RT_MAX_DATAGRAM sizes a receive buffer on
+       both sides (telemetry is the wide direction), while RT_MAX_COMMAND is the largest
+       thing the car will accept. Anything bigger is refused here rather than parsed. */
+    if (control_parse_frame(buf, (size_t)n, RT_MAX_COMMAND, &f) != 0) {
         /* Rate-limited: whatever is sending nonsense is usually sending it at a rate. */
         static uint32_t last_log;
         uint32_t t = now_ms();
@@ -138,10 +166,11 @@ static void on_datagram(int sock, const char *buf, int n, const struct sockaddr_
 
     if (f.has_hello) {
         if (!f.has_proto || f.proto != RT_PROTO) {
-            /* Answer anyway — the reply names our version, so the app can say "this car
-               speaks a protocol I do not" instead of searching forever — but do not
-               adopt. A session neither side can parse is worse than no session, and the
-               forced-update gate exists to make this state brief. */
+            /* Answer anyway, but do not adopt: a session neither side can parse is
+               worse than no session, and the forced-update gate exists to make this
+               state brief. The reply names our version so that a mismatch is visible
+               at all — today's app discards a reply whose proto is not its own, so
+               this is for the log and for whatever reads it next, not for the app. */
             ESP_LOGW(TAG, "hello with proto %u, this car speaks %d",
                      (unsigned)f.proto, RT_PROTO);
             send_hello_reply(sock, f.sid, from);
@@ -183,11 +212,18 @@ static void check_silence(void) {
     }
     recovery_on_link_lost();
     s_armed = false;   /* disarm until traffic returns */
+    /* Silence past the deadline already proves the stream is dead, so there is nothing
+       left to replay-protect — and a seq gate left desynchronised (one spoofed frame
+       far in the future, or a counter bug) would drop every genuine frame for the rest
+       of the session while telemetry kept flowing and the app showed a healthy link. */
+    s_have_seq = false;
 }
 
 static void push_telemetry(int sock) {
     if (!s_have_owner) return;
-    char buf[224];
+    /* The wide direction of the wire: a telemetry frame runs to ~160 bytes, which is
+       why the schema's receive cap (RT_MAX_DATAGRAM) is not the command cap. */
+    char buf[RT_MAX_DATAGRAM];
     int n = telemetry_json(buf, sizeof(buf));
     if (n <= 0) return;
     if (sendto(sock, buf, (size_t)n, 0, (const struct sockaddr *)&s_owner, sizeof(s_owner)) < 0) {
@@ -211,20 +247,32 @@ static void rt_task(void *arg) {
     if (!twdt) ESP_LOGW(TAG, "task watchdog not available");
 
     uint32_t next_push = now_ms();
+    int burst = 0;
     for (;;) {
         if (twdt) esp_task_wdt_reset();
 
-        /* One byte of headroom: a datagram that fills it was longer than the cap and is
-           refused by the parser rather than silently truncated into a valid command. */
-        char buf[RT_MAX_DATAGRAM + 1];
+        /* Sized from the receive cap, which is wider than anything the car accepts:
+           an oversized datagram arrives whole, is measured, and is refused by the
+           parser rather than silently truncated into a valid command. */
+        char buf[RT_MAX_DATAGRAM];
         struct sockaddr_in from;
         socklen_t flen = sizeof(from);
         int n = recvfrom(sock, buf, sizeof(buf), 0, (struct sockaddr *)&from, &flen);
         if (n > 0 && from.sin_family == AF_INET) {
             on_datagram(sock, buf, n, &from);
+            /* Yield after a burst: see BURST_MAX. A tick here costs the wire nothing
+               and is the difference between a flood being noisy and a flood rebooting
+               the board through the actuator task's watchdog. */
+            if (++burst >= BURST_MAX) {
+                burst = 0;
+                vTaskDelay(1);
+            }
         } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
             ESP_LOGW(TAG, "recvfrom: errno %d", errno);
             vTaskDelay(pdMS_TO_TICKS(TICK_MS));   /* do not spin on a broken socket */
+            burst = 0;
+        } else {
+            burst = 0;   /* the timeout fired: the loop is keeping up on its own */
         }
 
         check_silence();

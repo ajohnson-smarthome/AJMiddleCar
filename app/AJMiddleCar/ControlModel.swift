@@ -31,17 +31,15 @@ enum ControlModel {
         return (l, r)
     }
 
-    /// Link-quality level 0...4 from ping (we can't read real Wi-Fi RSSI on iOS).
-    static func signalLevel(online: Bool, pingMs: Int?) -> Int {
-        guard online, let p = pingMs else { return 0 }
-        if p < 50 { return 4 }
-        if p < 120 { return 3 }
-        if p < 250 { return 2 }
-        return 1
-    }
-
-    /// RSSI-based link level when the car reports its AP-side RSSI; falls back to ping.
-    static func signalLevel(online: Bool, rssi: Int?, pingMs: Int?) -> Int {
+    /// RSSI-based link level when the car reports its AP-side RSSI, and the received-frame rate
+    /// when it cannot.
+    ///
+    /// The car reports `rssi: 0` whenever the AP station list is unavailable — on this board an
+    /// RPC over SDIO to the radio co-processor, so "unavailable" is ordinary. Falling through to
+    /// zero there painted empty red bars next to a pill saying «На связи»: a live link rendered
+    /// as a dead one. `rx_fps` is the car counting what actually arrived out of the 10 Hz the app
+    /// sends, which is a truer picture of the link than RSSI anyway.
+    static func signalLevel(online: Bool, rssi: Int?, rxFps: Int?, expectedFps: Int) -> Int {
         guard online else { return 0 }
         if let r = rssi, r != 0 {
             if r >= -50 { return 4 }
@@ -49,7 +47,13 @@ enum ControlModel {
             if r >= -70 { return 2 }
             return 1
         }
-        return signalLevel(online: online, pingMs: pingMs)
+        // Live but unmeasurable is one bar, never zero: zero is reserved for "no link".
+        guard let f = rxFps, f > 0, expectedFps > 0 else { return 1 }
+        let ratio = Double(f) / Double(expectedFps)
+        if ratio >= 0.9 { return 4 }
+        if ratio >= 0.7 { return 3 }
+        if ratio >= 0.4 { return 2 }
+        return 1
     }
 
     /// Build the /calib/save body JSON {"wheels":[...]} in FL,FR,RL,RR order.

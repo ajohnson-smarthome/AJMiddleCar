@@ -22,16 +22,17 @@ typedef struct {
     float    t, y;
     bool     has_hello;
     char     sid[CONTROL_SID_MAX];  // NUL-terminated, alphanumeric, non-empty
-    bool     bye;
+    bool     bye;                 // a goodbye: stop, do not retreat, drop the session
 } control_frame_t;
 
 // Parse one datagram of `len` bytes into `out`. Zero-alloc and bounded: nothing is read
 // past `len`, so the buffer need not be NUL-terminated, and a datagram longer than
-// `max_len` is rejected untouched (the caller passes RT_MAX_DATAGRAM — the cap belongs
-// to the transport, so it arrives as an argument rather than being compiled in here).
+// `max_len` is rejected untouched (the caller passes RT_MAX_COMMAND, the largest
+// datagram the car accepts — the cap belongs to the transport, so it arrives as an
+// argument rather than being compiled in here).
 //
-// Returns 0 when the datagram carries at least one thing worth acting on — a hello, or
-// both control axes — and every key present parsed cleanly. Returns -1 otherwise:
+// Returns 0 when the datagram carries at least one thing worth acting on — a hello, a
+// goodbye, or both control axes — and every key present parsed cleanly. Returns -1:
 // oversized, unparseable, one axis without the other, a non-finite axis, or a hello
 // whose id is empty, over-long or not alphanumeric. `*out` is undefined on -1.
 //

@@ -4,32 +4,67 @@ Everything here is clock-free: the caller passes `now` (seconds, monotonic). Tha
 lets `test_state.py` drive a watchdog trip and a five-second retreat in microseconds, and
 it keeps `mock_car.py` down to plumbing with no behaviour worth testing hidden in it.
 
-Nothing in this file writes a range, a default or a deadline: `DOMAINS`, `RT` and
-`validate` come from `contract/car-api.json` via the generator, which is the same source
-the firmware compiles. A literal here would be exactly the drift the schema exists to
+It also holds the wire *shapes* — `parse_frame` and the predicates under it — because
+they are pure, they are what `control_proto.c` is, and the only useful test of them is
+"does this datagram mean here what it means on the car".
+
+Nothing in this file writes a range, a default, a deadline or a field name: `DOMAINS`,
+`RT`, `CTL_VALUES` and `validate` come from `contract/car-api.json` via the generator,
+which is the same source the firmware compiles. A literal here would be exactly the drift the schema exists to
 prevent — the mock's old `/recover` default of off/3000, against the car's on/5000, is
 why every simulator session taught that a car losing its link stops.
 """
+import json
 import math
+import re
 from collections import deque
 
-from generated import DEVICE, DOMAINS, RT, TELEMETRY_FIELDS, validate
+from generated import CTL_VALUES, DEVICE, DOMAINS, RT, TELEMETRY_FIELDS, validate
 
-# Ownership of the actuator, lowest priority first. Mirrors `link_src_t` in
-# firmware/p4/main/link.h; these names are what telemetry reports in `ctl`. They are not
-# in the schema, so they are the one part of the wire spelled out here.
-PRIORITY = ("none", "recover", "console", "rt", "calib", "ota", "safe")
+# Ownership of the actuator, lowest priority first. `link_src_t` in
+# firmware/p4/main/link.h is generated from the same list, and these names are what
+# telemetry reports in `ctl`.
+PRIORITY = tuple(CTL_VALUES)
+
+# The session id, as control_proto.c's parse_sid accepts it: non-empty, alphanumeric,
+# and short enough to fit CONTROL_SID_MAX with its NUL. Anything else is not "an id the
+# car will not like" — it is a datagram the car drops whole, because the id is echoed
+# into the hello reply and a quote in it would let the sender shape that JSON.
+SID_MAX_CHARS = 15
+_SID_RE = re.compile(r"[A-Za-z0-9]{1,%d}\Z" % SID_MAX_CHARS)
+
+
+def valid_sid(v):
+    """Would control_parse_frame accept this `hello` value?
+
+    ASCII-only on purpose: Python's `str.isalnum()` says yes to "é" and C's `isalnum`
+    says no, and the mock exists to be as strict as the car, not as strict as Python.
+    """
+    return isinstance(v, str) and _SID_RE.match(v) is not None
+
+
+def number(v):
+    """A JSON number, as cJSON and control_proto.c's `parse_num` see one, or None.
+
+    A JSON boolean and a numeric *string* are both rejected. `float(True)` is 1.0 and
+    `float("0.5")` is 0.5, so the obvious `float(v)` would drive on frames the car drops
+    outright: its tokeniser stops at the first character outside "0123456789+-.eE", so
+    `true` and `"0.5"` fail and take the whole datagram with them. A client that works
+    in the simulator and is silently inert on hardware is the one failure this mock
+    exists to prevent.
+    """
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    f = float(v)
+    if not math.isfinite(f):        # NaN and the infinities are not commands
+        return None
+    return f
 
 
 def clamp_axis(v):
     """The car clamps; a client that sends 1.5 gets 1.0, not a rejection."""
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(f):        # NaN and the infinities are not commands
-        return None
-    return max(-1.0, min(1.0, f))
+    f = number(v)
+    return None if f is None else max(-1.0, min(1.0, f))
 
 
 def seq_is_newer(seq, last):
@@ -45,8 +80,85 @@ def seq_is_newer(seq, last):
 
 
 def valid_seq(v):
-    """A `seq` is a uint32. A JSON boolean is an int in Python and is not one here."""
+    """A `seq` is a uint32. A JSON boolean is an int in Python and is not one here.
+
+    Deliberately stricter than the car in one place: `control_proto.c`'s `parse_u32`
+    tokenises `1.5` down to `1` and accepts it. Strictness in the mock is the safe
+    direction — a client that works here works there, and the reverse is the trap this
+    file exists to close — so the mock rejects it and the car's coercion is a firmware
+    nit, not something to copy.
+    """
     return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 0xFFFFFFFF
+
+
+def parse_frame(data, max_command=None):
+    """One inbound datagram -> a dict of the fields it carried, or None to drop it.
+
+    The mock's `control_parse_frame` (firmware/p4/main/control_proto.c). Same answer for
+    the same bytes is the whole point, so the rules are the car's, not JSON's:
+
+      * over the *command* cap -> dropped. `max_datagram` sizes a receive buffer; what
+        the car agrees to act on is `max_command`, and the difference is the room a
+        telemetry frame needs on the way out.
+      * every key that is present must parse, or the whole datagram is dropped. A frame
+        with a good `t` and a broken `seq` is not a command with a missing sequence
+        number; it is corrupt.
+      * `t` and `y` come as a pair. One axis without the other is a truncated frame, not
+        an instruction to hold the other at zero.
+      * a datagram carrying neither a hello nor both axes has nothing to act on. That
+        includes a bare goodbye: the app sends `t`/`y` with its `bye`, and the car
+        rejects the frame if they are missing.
+
+    Range is deliberately not checked here either — the arbiter clamps.
+    """
+    cap = RT["max_command"] if max_command is None else max_command
+    if not data or len(data) > cap:
+        return None
+    try:
+        frame = json.loads(data)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(frame, dict):
+        return None
+
+    out = {}
+    for key in (RT["proto_field"], RT["seq_field"]):
+        if key in frame:
+            if not valid_seq(frame[key]):
+                return None
+            out[key] = frame[key]
+
+    if RT["hello_field"] in frame:
+        if not valid_sid(frame[RT["hello_field"]]):
+            return None
+        out[RT["hello_field"]] = frame[RT["hello_field"]]
+
+    if RT["bye_field"] in frame:
+        v = frame[RT["bye_field"]]
+        if isinstance(v, bool):
+            out[RT["bye_field"]] = v
+        else:
+            # The wire says 1, but JSON has two ways to say yes. A string does not
+            # become a goodbye by being the word "yes".
+            n = number(v)
+            if n is None:
+                return None
+            out[RT["bye_field"]] = n != 0.0
+
+    t, y = frame.get(RT["throttle_field"]), frame.get(RT["yaw_field"])
+    has_t = RT["throttle_field"] in frame
+    has_y = RT["yaw_field"] in frame
+    if has_t or has_y:
+        if not (has_t and has_y):
+            return None
+        t, y = number(t), number(y)
+        if t is None or y is None:
+            return None
+        out[RT["throttle_field"]], out[RT["yaw_field"]] = t, y
+
+    if RT["hello_field"] not in out and RT["throttle_field"] not in out:
+        return None
+    return out
 
 
 class CarState:
@@ -184,7 +296,13 @@ class CarState:
         self._evict(now)
         self._armed = False
         self._retreating = False
-        self._owner, self._owner_until = "safe", None   # holds zero until a new session
+        # `car_stop(LINK_SRC_SAFE)` and then `link_release(LINK_SRC_SAFE)`, in that
+        # order and for that reason: the wheels are held at zero, and then the actuator
+        # is handed back so the console and the calibration wizard can have it in
+        # between sessions. Parking in a sticky `safe` instead would 409 every spin
+        # until a new hello arrived — a refusal the car never sends.
+        self._take("safe", now, None)
+        self._release("safe")
 
     def adopt_session(self, now):
         """A new `hello` was adopted: release the stop a previous `bye` left in place.
@@ -206,7 +324,8 @@ class CarState:
             line = self._trip(now)
         elif self._retreating and now >= self._retreat_until:
             self._retreating = False
-            self._t = self._y = 0.0
+            # The release is the stop: it zeroes only if the retreat still owns the
+            # actuator, so an exhausted replay cannot flatten a pulse that outranked it.
             self._release("recover")
             line = "recover: retrace exhausted — stopped"
         self._expire(now)
@@ -220,17 +339,22 @@ class CarState:
         head = f"wdt: no control frame for {silent} ms"
 
         if not self.config["/recover"]["enabled"]:
-            self._stop()
+            self._stop(now)
             return f"{head} — stopped (auto-return off)"
         if not self._history or not self._any_motion():
             # A history of nothing but zeros retraces to where the car already is, so
             # the honest answer is to stop rather than to perform a retreat.
-            self._stop()
+            self._stop(now)
             return f"{head} — stopped (nothing to retrace)"
 
+        if not self._take("recover", now, None):
+            # recovery.c aborts the whole replay the first time car_drive is refused,
+            # rather than marching through the timeline unheard. Driving anyway would
+            # reverse the car out from under an OTA or a calibration pulse while this
+            # side still reports that they hold the wheels.
+            return f"{head} — retrace refused ({self._owner} holds the actuator)"
         self._retreating = True
         self._retreat_until = now + self._retreat_duration(now)
-        self._take("recover", now, None)
         t, y, _ = self._history[-1]
         self._t, self._y = -t, -y
         return f"{head} — retracing {len(self._history)} samples in reverse"
@@ -256,10 +380,16 @@ class CarState:
         while self._history and (now - self._history[0][2]) > window:
             self._history.popleft()
 
-    def _stop(self):
-        self._t = self._y = 0.0
+    def _stop(self, now):
+        """`car_stop(LINK_SRC_RECOVER)` then `link_release` — an arbitrated zero.
+
+        Not a poke at the wheels: recovery.c stops through the arbiter, so a watchdog
+        trip during a calibration pulse or a flash leaves that source's command alone.
+        The release is what zeroes, and only if the take succeeded.
+        """
         self._retreating = False
-        self._release("recover")
+        if self._take("recover", now, None):
+            self._release("recover")
 
     # ---- the actuator arbiter --------------------------------------------------
 
@@ -273,7 +403,7 @@ class CarState:
 
     def _release(self, src):
         if self._owner == src:
-            self._owner, self._owner_until = "none", None
+            self._drop_grant()
 
     def _lapsed(self, now):
         if self._owner == "none":
@@ -284,7 +414,19 @@ class CarState:
 
     def _expire(self, now):
         if self._lapsed(now):
-            self._owner, self._owner_until = "none", None
+            self._drop_grant()
+
+    def _drop_grant(self):
+        """Nobody owns the actuator, so the actuator holds zero.
+
+        link.c makes this one fact twice — `link_release` memsets the target, and the
+        actuator task zeroes on a lapsed grant — because "ownership lapsed" has to mean
+        something physical. Without it `ctl == "none"` and "the wheels are stopped" are
+        independent here and coupled on the car, and a calibration pulse that lapses
+        leaves the mock at full throttle with nobody driving.
+        """
+        self._owner, self._owner_until = "none", None
+        self._t = self._y = 0.0
 
     # ---- calibration, OTA ------------------------------------------------------
 
@@ -294,6 +436,10 @@ class CarState:
         self._expire(now)
         if not self._take("calib", now, self.CALIB_HOLD_MS / 1000.0):
             return False
+        # Taking the actuator from a retreat is what aborts it on the car: the next
+        # car_drive(RECOVER) is refused. Leaving the flag set here would let the
+        # retreat's own expiry zero the pulse halfway through.
+        self._retreating = False
         self._t = 1.0 if direction else -1.0     # a pulse, not a mixed command
         self._y = 0.0
         return True
@@ -330,14 +476,20 @@ class CarState:
 
     # ---- telemetry -------------------------------------------------------------
 
-    def telemetry(self, rx_fps):
+    def telemetry(self, rx_fps, bump=True):
         """The 5 Hz frame, built by walking the schema.
 
         Assembling it from `TELEMETRY_FIELDS` rather than from a literal dict means a
         field added to the contract and not to the map below raises here, instead of
         going quietly missing on the wire where only a client notices.
+
+        `bump=False` for a reader that is not the real-time channel. `seq` numbers the
+        pushed stream, and telemetry.c keeps a counter per consumer for exactly this
+        reason: a `/status` poll at 1 Hz must not make the 5 Hz stream skip a number
+        once a second, because skipping is how the app measures loss.
         """
-        self._tele_seq += 1
+        if bump:
+            self._tele_seq += 1
         values = {
             "seq": self._tele_seq,
             "rx_fps": int(rx_fps),
