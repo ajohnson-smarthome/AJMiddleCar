@@ -21,6 +21,10 @@ static const char *TAG = "pca9685";
    codec we do not drive. */
 #define PCA_I2C_TIMEOUT_MS 50
 
+/* The chip has sixteen PWM channels. BOARD_PCA_CH_PER_CHIP is how many of them this
+   project wires up, which is a different number and a different question. */
+#define PCA9685_CH_TOTAL 16
+
 // Two boards, one per axle. Index 0 is the front axle, 1 the rear; a logical channel picks
 // between them by division. Their names in the log are worth the two strings: at bring-up
 // "rear board did not answer" is a wiring fault you can act on, "PCA9685 init failed" is not.
@@ -120,12 +124,13 @@ esp_err_t pca9685_set_pwm(uint8_t channel, uint16_t duty) {
 }
 
 esp_err_t pca9685_zero_all(void) {
-    /* Full-off on every channel of both boards, including the eight this project
-       does not drive. The chip's registers survive a P4 reset, so after a panic
+    /* Full-off on all sixteen channels of both boards, not just the four per chip
+       this project drives: the whole point is to catch output state the firmware
+       does not track, and the chip's registers survive a P4 reset. After a panic
        reboot or an OTA restart the outputs are whatever they were mid-drive. */
     esp_err_t first_err = ESP_OK;
     for (int i = 0; i < PCA_COUNT; i++) {
-        for (uint8_t ch = 0; ch < BOARD_PCA_CH_PER_CHIP; ch++) {
+        for (uint8_t ch = 0; ch < PCA9685_CH_TOTAL; ch++) {
             uint8_t base_reg = PCA9685_LED0_ON_L + 4 * ch;
             uint8_t buf[5] = { base_reg, 0x00, 0x00, 0x00, 0x10 };  /* OFF bit 12 set */
             esp_err_t e = i2c_master_transmit(s_dev[i], buf, sizeof(buf), PCA_I2C_TIMEOUT_MS);

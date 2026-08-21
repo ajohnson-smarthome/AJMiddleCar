@@ -95,7 +95,14 @@ void app_main(void) {
        USB cable and tells you nothing. */
     bool motors_ok = pca9685_bus_init(BOARD_I2C_SDA, BOARD_I2C_SCL, BOARD_I2C_HZ) == ESP_OK
                   && pca9685_init(BOARD_PWM_HZ) == ESP_OK;
-    if (!motors_ok) {
+    if (motors_ok) {
+        /* Immediately, not later in link_init. pca9685_init ends by writing MODE1 with
+           the RESTART bit, which by design resumes every channel at its pre-sleep duty —
+           so on a reset taken mid-drive the motors come back at full throttle. Everything
+           between here and link_init (an NVS init that may erase flash) would run with
+           them spinning. */
+        pca9685_zero_all();
+    } else {
         ESP_LOGE(TAG, "motor bus did not come up — the car will not drive, "
                       "but the network and OTA will. Check I2C wiring and power.");
     }
