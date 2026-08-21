@@ -9,11 +9,18 @@ CONFIG_IDF_TARGET="esp32p4"
 CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
 CONFIG_ESP32P4_REV_MIN_100=y
 
-# Console: main.c's `mix <t> <y>` REPL reads USB Serial JTAG directly (no UART VFS).
-# The board exposes two Type-C ports; which one carries the JTAG console is confirmed at
-# bring-up (docs/bringup.md).
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
-CONFIG_ESP_CONSOLE_UART_DEFAULT=n
+# Console on UART0, which reaches the host through the board's on-board CH343P bridge.
+#
+# Not the obvious choice — the native USB would be one chip and one cable fewer — but on this
+# board it is the working one: the USB-Serial-JTAG device stopped enumerating during bring-up
+# and never came back (docs/bringup.md). The choice costs nothing, because ESP-IDF still mirrors
+# log output to USB-Serial-JTAG as the *secondary* console, so logs reappear there by themselves
+# if that port ever returns. The reverse is not on offer: with USB-Serial-JTAG primary there is
+# no UART secondary, so a board whose native USB is silent would have no console at all.
+#
+# main.c reads whichever peripheral this selects — see console_read_byte().
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=n
 
 CONFIG_HTTPD_WS_SUPPORT=y
 

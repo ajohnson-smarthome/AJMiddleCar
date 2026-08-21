@@ -131,9 +131,12 @@ CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=n
 ```
 
-Logs and console then ride UART0 out through the CH343P bridge. This was kept out of the committed
-defaults, as a bench-local override, because it is a workaround for one board's state and not a
-property of the design.
+Logs and console then ride UART0 out through the CH343P bridge. This started as a bench-local
+override and is now the committed default, once it became clear the native USB was not coming
+back and that the choice costs nothing: ESP-IDF keeps USB-Serial-JTAG as the *secondary* console,
+so log output reappears there by itself if that port ever returns. The reverse arrangement is not
+available, which is what settles it — with USB-Serial-JTAG primary there is no UART secondary, and
+a board whose native USB is silent would have no console at all.
 
 Console *input* was broken by the same move at first, since `read_line()` read USB-Serial-JTAG
 directly. That is now fixed properly rather than worked around: `console_init()` and
