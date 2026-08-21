@@ -41,6 +41,22 @@ check(compose(.localNetworkDenied, .protoMismatch(theirs: 2), nil, nil) == .loca
       "the path still outranks it")
 check(!compose(.wifiUp, .protoMismatch(theirs: 2), fresh, 0.1).isLive, "and it is never live")
 
+// What survives a session ending. Two callers ask this — the session closing under the transport,
+// and `stop(graceful:)` when the scene leaves `.active` — and when it lived twice as an `if case`,
+// `.protoMismatch` was added to one copy and not the other: a Control Center pull-down flipped the
+// wrong-protocol screen back to the radar until the next hello reply landed.
+check(SessionState.foreign(device: "esp32-car").survivingSessionEnd == .foreign(device: "esp32-car"),
+      "a foreign identity survives the session that found it")
+check(SessionState.protoMismatch(theirs: 2).survivingSessionEnd == .protoMismatch(theirs: 2),
+      "and so does a protocol mismatch — a backgrounded app must not forget it")
+check(adopted.survivingSessionEnd == .none, "an adopted session does not")
+check(SessionState.none.survivingSessionEnd == .none, "nor does nothing at all")
+// Which is the whole point: both survivors keep their own screen across the restart.
+check(compose(.wifiUp, SessionState.protoMismatch(theirs: 2).survivingSessionEnd, nil, nil)
+        == .wrongProto(theirs: 2), "the wrong-protocol screen holds across a session end")
+check(compose(.wifiUp, SessionState.foreign(device: "esp32-car").survivingSessionEnd, nil, nil)
+        == .wrongCar(device: "esp32-car"), "the wrong-car screen holds across a session end")
+
 // The staleness threshold is the contract's telemetry rate, not a number picked here.
 check(LinkRule.staleAfter == 5 / Double(CarContract.telemetryHz), "staleness from the contract")
 check(compose(.wifiUp, adopted, fresh, LinkRule.staleAfter - 0.01).isLive, "just inside the window")

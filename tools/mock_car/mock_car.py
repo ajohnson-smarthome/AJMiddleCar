@@ -135,7 +135,10 @@ async def status(request):
         # A poll is not a push: `bump=False` keeps the real-time stream's `seq`
         # continuous however often something reads /status.
         **car.telemetry(link.rx_fps(now), bump=False),
-        "radio": {"fw": "mock", "expected": "mock", "ok": True},
+        # `radio` is a /status-only object the schema does not describe, but the
+        # version inside it is spelled with the contract's key, as status_api.c
+        # spells it (`RT_KEY_FW`).
+        "radio": {RT["fw_field"]: "mock", "expected": "mock", "ok": True},
     })
 
 
@@ -233,7 +236,7 @@ async def serve(args):
     print(f"  link      {impair.describe()}; watchdog {RT['watchdog_ms']} ms, "
           f"auto-return {car.config['/recover']['window_ms']} ms")
 
-    await service_loop(car, link)
+    await service_loop(link)
 
 
 def main():

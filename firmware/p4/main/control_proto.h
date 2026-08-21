@@ -33,8 +33,10 @@ typedef struct {
 //
 // Returns 0 when the datagram carries at least one thing worth acting on — a hello, a
 // goodbye, or both control axes — and every key present parsed cleanly. Returns -1:
-// oversized, unparseable, one axis without the other, a non-finite axis, or a hello
-// whose id is empty, over-long or not alphanumeric. `*out` is undefined on -1.
+// oversized, unparseable, one axis without the other, a non-finite axis, a hello whose
+// id is empty, over-long or not alphanumeric, or anything but a hello that carries no
+// `seq` (the wire's rule: a datagram the transport cannot order is one it will not
+// apply, and that includes a goodbye). `*out` is undefined on -1.
 //
 // Range is deliberately not checked: car_drive clamps, and a parser that also enforced
 // policy would have two reasons to change.

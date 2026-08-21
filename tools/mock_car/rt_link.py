@@ -18,8 +18,10 @@ from collections import deque
 from generated import PROTO, RT
 from state import parse_frame, seq_is_newer
 
-# The service tick. The firmware's rt_link uses a 20 ms SO_RCVTIMEO as its clock, so the
-# watchdog is checked at the same granularity here and telemetry rides a counter on it.
+# The service tick. firmware/p4/main/rt_link.c uses a 20 ms SO_RCVTIMEO as its clock
+# (TICK_MS there), so the watchdog is checked at the same granularity here and telemetry
+# rides a counter on it. Not in contract/car-api.json — mirrored by hand from that file,
+# unlike PUSH_EVERY below, which is derived from the schema's telemetry rate.
 TICK_S = 0.020
 PUSH_EVERY = round((1.0 / RT["telemetry_hz"]) / TICK_S)
 
@@ -135,8 +137,18 @@ class RTLink(asyncio.DatagramProtocol):
         self.last_seq = seq
 
         if frame.get(RT["bye_field"]):
-            print(f"rt: bye from session {self.session} — stopped, retreat suppressed")
-            self.car.note_bye(now)
+            # A goodbye needs no axes: `{"seq":n,"bye":1}` is a complete instruction, and
+            # the car acts on one. The seq gate above still applies — every app->car
+            # datagram except `hello` carries `seq`, or it is dropped.
+            if self.car.note_bye(now):
+                print(f"rt: bye from session {self.session} — stopped, history cleared")
+            else:
+                # `car_stop(LINK_SRC_SAFE)` refused. Nothing outranks SAFE, so this is
+                # unreachable today — but the car checks the same return, and a stop
+                # that was not applied must never be silent.
+                print(f"rt: bye from session {self.session} — stop REFUSED, "
+                      f"{self.car.ctl} holds the actuator")
+            # Ownership is not resumable: the next session says hello again.
             self.owner, self.session, self.last_seq = None, None, None
             return
 
@@ -158,6 +170,10 @@ class RTLink(asyncio.DatagramProtocol):
             return
         if self.owner != addr or self.session != sid:
             evicted = self.owner if self.owner and self.owner != addr else None
+            # Step 3 of the plan's adoption sequence: the sequence gate is the link's
+            # state, so it is reset here; `adopt_session` does the other three. A repeat
+            # hello from the same peer and sid reaches neither, which is what stops a
+            # retransmitted handshake from resetting a live session.
             self.owner, self.session, self.last_seq = addr, sid, None
             self.car.adopt_session(now)
             self._rx.clear()
@@ -184,6 +200,26 @@ class RTLink(asyncio.DatagramProtocol):
             self.loop.call_later(self.impair.delay_s, self.transport.sendto, data, addr)
         else:
             self.transport.sendto(data, addr)
+
+    def tick(self, now):
+        """One service tick of the car's clock, plus the state a trip invalidates here.
+
+        `rt_link.c` clears `s_have_seq` in the same breath as `s_armed` when the deadline
+        passes: silence past it already proves the stream is dead, so there is nothing
+        left to replay-protect — and a gate left desynchronised (a spoofed frame far in
+        the future, a counter bug) would drop every genuine frame for the rest of the
+        session while telemetry kept flowing and the app showed a healthy link. The car's
+        gate lives beside its watchdog; the mock's lives here, so the trip has to be
+        carried across.
+
+        Channel ownership deliberately survives: a stream that resumes after a dropout is
+        the same session, and evicting it would ignore the driver until the app noticed.
+        """
+        trips = self.car.wdt_trips
+        line = self.car.tick(now)
+        if self.car.wdt_trips != trips:
+            self.last_seq = None
+        return line
 
     def push_telemetry(self, now):
         if self.owner is None or self.impair.stalled(now):
@@ -214,8 +250,12 @@ class RTLink(asyncio.DatagramProtocol):
                   f"ctl={self.car.ctl}")
 
 
-async def service_loop(car, link):
-    """The car's own clock: the watchdog every tick, telemetry every fifth."""
+async def service_loop(link):
+    """The car's own clock: the watchdog every tick, telemetry every fifth.
+
+    Everything goes through the link rather than through the car, because a watchdog
+    trip is not only the car's business — it also invalidates the sequence gate.
+    """
     loop = asyncio.get_running_loop()
     next_at = loop.time()
     ticks = 0
@@ -223,7 +263,7 @@ async def service_loop(car, link):
         next_at += TICK_S
         await asyncio.sleep(max(0.0, next_at - loop.time()))
         now = loop.time()
-        line = car.tick(now)
+        line = link.tick(now)
         if line:
             print(line)
         ticks += 1

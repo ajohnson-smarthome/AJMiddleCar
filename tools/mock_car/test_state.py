@@ -13,7 +13,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from generated import CTL_VALUES, DOMAINS, RT, TELEMETRY_FIELDS   # noqa: E402
-from state import (CarState, clamp_axis, number, parse_frame,      # noqa: E402
+from state import (CTL_CALIB, CTL_NONE, CTL_OTA, CTL_RECOVER,     # noqa: E402
+                   CTL_RT, CarState, clamp_axis, number, parse_frame,
                    seq_is_newer, valid_seq, valid_sid)
 
 DEADLINE_S = RT["watchdog_ms"] / 1000.0
@@ -89,11 +90,24 @@ class TestWireShapes(unittest.TestCase):
             self.assertIsNone(parse_frame(bad), bad)
 
     def test_nothing_to_act_on_is_dropped(self):
-        # A bare goodbye included: the app sends t/y with its bye, and the car's parser
-        # rejects a frame carrying neither a hello nor both axes.
-        for bad in (b'{"seq":1}', b'{"seq":1,"bye":1}', b'{}', b'[]', b'not json',
-                    b'"a string"', b''):
+        # No hello, no axes, no goodbye. `{"bye":0}` says nothing and carries nothing
+        # else, so it is in this list rather than in the one below.
+        for bad in (b'{"seq":1}', b'{"seq":1,"bye":0}', b'{"seq":1,"bye":false}',
+                    b'{}', b'[]', b'not json', b'"a string"', b''):
             self.assertIsNone(parse_frame(bad), bad)
+
+    def test_a_bare_goodbye_is_a_goodbye(self):
+        """`{"seq":n,"bye":1}` is a complete instruction, and the car acts on one.
+
+        control_proto.c: `if (!f.has_hello && !f.has_ty && !f.bye) return -1;` — the
+        goodbye counts on its own. The app happens to send `t`/`y` with its `bye`, but
+        the mock's job is to answer what the car answers for the same bytes, not what
+        today's client happens to send.
+        """
+        frame = parse_frame(b'{"seq":1,"bye":1}')
+        self.assertIsNotNone(frame)
+        self.assertIs(frame["bye"], True)
+        self.assertNotIn("t", frame)
 
     def test_bye_is_a_goodbye_however_json_spells_yes(self):
         self.assertIs(parse_frame(b'{"seq":1,"t":0,"y":0,"bye":1}')["bye"], True)
@@ -186,12 +200,19 @@ class TestBreadcrumbs(unittest.TestCase):
         car.note_command(0.9, 0.0, after)            # the pulse has lapsed
         self.assertEqual(car.history_len, 1)
 
-    def test_bye_leaves_the_car_at_rest_in_the_history(self):
+    def test_bye_clears_the_path_behind_it(self):
+        """The empty history is what suppresses the retreat, not a sticky grant.
+
+        The plan's "Session lifecycle" step 3: `any_motion()` over an empty history is
+        false, so even a later trip stops instead of retracing. Leaving the samples in
+        place and relying on a held SAFE grant instead is what locked OTA, the wizard
+        and the console out of the car until an app reconnected.
+        """
         car = CarState(now=0.0)
         last = stream(car, 0.9, 0.0, 0.0, 5)
         self.assertEqual(car.history_len, 5)
-        car.note_bye(last + 0.05)
-        self.assertEqual(car.history_len, 6, "the goodbye is a breadcrumb of its own")
+        self.assertTrue(car.note_bye(last + 0.05), "SAFE outranks everything; the stop lands")
+        self.assertEqual(car.history_len, 0)
 
     def test_a_malformed_axis_changes_nothing(self):
         car = CarState(now=0.0)
@@ -242,7 +263,7 @@ class TestRetreat(unittest.TestCase):
         last = stream(car, 0.6, -0.2, 0.0, 20)
         car.tick(last + DEADLINE_S + 0.01)
         self.assertTrue(car.retreating)
-        self.assertEqual(car.ctl, "recover")
+        self.assertEqual(car.ctl, CTL_RECOVER)
         self.assertEqual(car.command, (-0.6, 0.2))
 
     def test_a_still_history_stops_instead(self):
@@ -252,7 +273,7 @@ class TestRetreat(unittest.TestCase):
         self.assertIn("nothing to retrace", line)
         self.assertFalse(car.retreating)
         self.assertEqual(car.command, (0.0, 0.0))
-        self.assertEqual(car.ctl, "none")
+        self.assertEqual(car.ctl, CTL_NONE)
 
     def test_disabled_recovery_stops_instead(self):
         car = CarState(now=0.0)
@@ -271,7 +292,7 @@ class TestRetreat(unittest.TestCase):
         self.assertTrue(car.retreating)
         car.note_command(0.4, 0.0, last + DEADLINE_S + 0.2)
         self.assertFalse(car.retreating)
-        self.assertEqual(car.ctl, "rt")
+        self.assertEqual(car.ctl, CTL_RT)
         self.assertEqual(car.command, (0.4, 0.0))
 
     def test_it_ends_on_its_own_when_the_history_runs_out(self):
@@ -286,32 +307,81 @@ class TestRetreat(unittest.TestCase):
         self.assertIn("exhausted", end)
         self.assertFalse(car.retreating)
         self.assertEqual(car.command, (0.0, 0.0))
-        self.assertEqual(car.ctl, "none")
+        self.assertEqual(car.ctl, CTL_NONE)
 
 
 class TestGoodbye(unittest.TestCase):
     def test_bye_stops_without_a_trip(self):
+        """Stop, release SAFE, clear the path, disarm — the plan's four steps.
+
+        `ctl` is `none` afterwards on purpose: SAFE is released immediately, because a
+        sticky grant would also lock out OTA, the calibration wizard and the console
+        until an app reconnected. What suppresses the retreat is the cleared history,
+        asserted separately.
+        """
         car = CarState(now=0.0)
         last = stream(car, 0.9, 0.0, 0.0, 20)
         car.note_bye(last + 0.05)
         self.assertEqual(car.command, (0.0, 0.0))
-        # `car_stop(SAFE)` then `link_release(SAFE)`: stopped, and handed back. Parking
-        # in a sticky `safe` would 409 every /calib/spin until a new hello — a refusal
-        # the car never sends, and one that stalls the wizard in the simulator.
-        self.assertEqual(car.ctl, "none")
+        self.assertEqual(car.ctl, CTL_NONE)
+        self.assertEqual(car.history_len, 0)
         for k in range(50):
             self.assertIsNone(car.tick(last + 0.05 + k * 0.05))
         self.assertEqual(car.wdt_trips, 0)
         self.assertFalse(car.retreating)
+
+    def test_a_goodbye_leaves_nothing_to_retrace(self):
+        """A session that says goodbye and comes back must not reverse the old path.
+
+        Without the clear, the 2 s of forward driving before the goodbye is still in the
+        ring, and the next trip — a genuine one, in the *new* session — retraces it.
+        """
+        car = CarState(now=0.0)
+        last = stream(car, 0.9, 0.0, 0.0, 20)
+        car.note_bye(last + 0.05)
+        car.adopt_session(last + 0.1)
+        car.note_command(0.0, 0.0, last + 0.2)          # arms the watchdog, adds a still crumb
+        line = car.tick(last + 0.2 + DEADLINE_S + 0.01)
+        self.assertIn("nothing to retrace", line)
+        self.assertFalse(car.retreating)
+        self.assertEqual(car.command, (0.0, 0.0))
 
     def test_a_new_session_releases_the_stop(self):
         car = CarState(now=0.0)
         car.note_command(0.5, 0.0, 0.0)
         car.note_bye(0.1)
         car.adopt_session(0.2)
-        self.assertEqual(car.ctl, "none")
+        self.assertEqual(car.ctl, CTL_NONE)
         car.note_command(0.3, 0.0, 0.3)
-        self.assertEqual(car.ctl, "rt")
+        self.assertEqual(car.ctl, CTL_RT)
+
+    def test_adopting_forgets_the_previous_drivers_path(self):
+        """Step 2 of adoption. A new session has no path to retrace, and retreating
+        along the last driver's is worse than not retreating at all — this is the case a
+        goodbye never happened in: the app was killed, the car retreated, and the next
+        session inherits a ring full of someone else's driving."""
+        car = CarState(now=0.0)
+        stream(car, 0.9, 0.0, 0.0, 20)
+        self.assertGreater(car.history_len, 10)
+        car.adopt_session(5.0)
+        self.assertEqual(car.history_len, 0)
+
+    def test_adoption_leaves_the_watchdog_disarmed(self):
+        """Step 4: it arms on the first accepted *command*, which is what it measures.
+
+        Arming on the handshake trips a session whose first command is still in flight —
+        the app repeats `hello` until it is answered and only then starts its send loop,
+        so two lost replies at 10% loss are enough to spend the whole deadline in the
+        handshake.
+        """
+        car = CarState(now=0.0)
+        car.adopt_session(0.0)
+        for k in range(100):                        # 5 s of silence after the hello
+            self.assertIsNone(car.tick(k * 0.05))
+        self.assertEqual(car.wdt_trips, 0)
+        car.note_command(0.5, 0.0, 5.0)             # the first command arms it
+        self.assertIsNotNone(car.tick(5.0 + DEADLINE_S + 0.01))
+        self.assertEqual(car.wdt_trips, 1)
 
 
 class TestActuatorOwnership(unittest.TestCase):
@@ -319,9 +389,9 @@ class TestActuatorOwnership(unittest.TestCase):
         car = CarState(now=0.0)
         car.note_command(0.5, 0.0, 0.0)
         self.assertTrue(car.begin_spin(0.05, 2, 1))
-        self.assertEqual(car.ctl, "calib")
+        self.assertEqual(car.ctl, CTL_CALIB)
         car.note_command(0.5, 0.0, 0.1)      # the app keeps streaming through the pulse
-        self.assertEqual(car.ctl, "calib")
+        self.assertEqual(car.ctl, CTL_CALIB)
         self.assertEqual(car.command, (1.0, 0.0))
 
     def test_the_stream_still_feeds_the_watchdog_through_a_spin(self):
@@ -339,31 +409,38 @@ class TestActuatorOwnership(unittest.TestCase):
     def test_a_pulse_lapses_on_its_own(self):
         car = CarState(now=0.0)
         car.begin_spin(0.0, 1, 0)
-        self.assertEqual(car.ctl, "calib")
+        self.assertEqual(car.ctl, CTL_CALIB)
         car.tick(CarState.CALIB_HOLD_MS / 1000.0 + 0.01)
-        self.assertEqual(car.ctl, "none")
+        self.assertEqual(car.ctl, CTL_NONE)
 
     def test_ota_refuses_a_spin(self):
         car = CarState(now=0.0)
         car.begin_ota(0.0)
-        self.assertEqual(car.ctl, "ota")
+        self.assertEqual(car.ctl, CTL_OTA)
         self.assertFalse(car.begin_spin(0.1, 0, 1))
         car.end_ota()
         self.assertTrue(car.begin_spin(0.2, 0, 1))
 
     def test_a_goodbye_leaves_the_wizard_free_to_spin(self):
-        """rt_link.c releases SAFE with the same call that stops the wheels."""
+        """SAFE is released immediately, so a backgrounded app cannot wedge the car.
+
+        The plan's step 2, and the reason it is not a sticky grant: held SAFE outranks
+        OTA, `calib` and the console, so an app that says goodbye and is then killed
+        would leave the car unflashable and unbenchable until someone pulled the
+        battery.
+        """
         car = CarState(now=0.0)
         car.note_bye(0.0)
+        self.assertEqual(car.ctl, CTL_NONE)
         self.assertTrue(car.begin_spin(0.1, 0, 1))
-        self.assertEqual(car.ctl, "calib")
+        self.assertEqual(car.ctl, CTL_CALIB)
 
     def test_a_goodbye_during_an_ota_does_not_wedge_the_mock(self):
         car = CarState(now=0.0)
         car.begin_ota(0.0)
         car.note_bye(0.1)            # SAFE outranks OTA on the car too
         car.end_ota()
-        self.assertEqual(car.ctl, "none")
+        self.assertEqual(car.ctl, CTL_NONE)
         self.assertTrue(car.begin_spin(0.2, 0, 1))
 
     def test_ota_bumps_the_build(self):
@@ -383,7 +460,7 @@ class TestActuatorOwnership(unittest.TestCase):
         car.begin_spin(0.0, 1, 1)
         self.assertEqual(car.command, (1.0, 0.0))
         car.tick(5.0)
-        self.assertEqual(car.ctl, "none")
+        self.assertEqual(car.ctl, CTL_NONE)
         self.assertEqual(car.command, (0.0, 0.0))
 
     def test_a_new_session_during_a_retreat_leaves_the_wheels_stopped(self):
@@ -392,7 +469,7 @@ class TestActuatorOwnership(unittest.TestCase):
         car.tick(last + DEADLINE_S + 0.01)
         self.assertTrue(car.retreating)
         car.adopt_session(last + 1.0)
-        self.assertEqual(car.ctl, "none")
+        self.assertEqual(car.ctl, CTL_NONE)
         self.assertEqual(car.command, (0.0, 0.0))
 
     def test_a_retrace_refused_by_the_actuator_does_not_drive(self):
@@ -413,11 +490,11 @@ class TestActuatorOwnership(unittest.TestCase):
         last = stream(car, 0.8, 0.0, 0.0, 20)
         car.begin_ota(last + 0.01)
         now = stream(car, 0.8, 0.0, last + 0.1, 5)
-        self.assertEqual(car.ctl, "ota")
+        self.assertEqual(car.ctl, CTL_OTA)
         line = car.tick(now + DEADLINE_S + 0.01)
         self.assertIn("refused", line)
         self.assertFalse(car.retreating)
-        self.assertEqual(car.ctl, "ota")
+        self.assertEqual(car.ctl, CTL_OTA)
         self.assertEqual(car.command, (0.0, 0.0), "the flash holds the wheels at zero")
 
     def test_a_trip_with_auto_return_off_still_goes_through_the_arbiter(self):
@@ -429,7 +506,7 @@ class TestActuatorOwnership(unittest.TestCase):
         now = stream(car, 0.8, 0.0, last + 0.05, 2)
         line = car.tick(now + DEADLINE_S + 0.01)
         self.assertIn("auto-return off", line)
-        self.assertEqual(car.ctl, "calib")
+        self.assertEqual(car.ctl, CTL_CALIB)
         self.assertEqual(car.command, (1.0, 0.0), "the pulse is not flattened by the trip")
 
     def test_a_spin_during_a_retreat_ends_it(self):
@@ -442,7 +519,7 @@ class TestActuatorOwnership(unittest.TestCase):
         self.assertEqual(car.command, (1.0, 0.0))
         # The retreat's own deadline must not zero the pulse halfway through.
         car.tick(last + DEADLINE_S + 0.03)
-        self.assertEqual(car.ctl, "calib")
+        self.assertEqual(car.ctl, CTL_CALIB)
         self.assertEqual(car.command, (1.0, 0.0))
 
     def test_ota_silences_the_watchdog(self):
@@ -492,7 +569,7 @@ class TestOwnershipVocabulary(unittest.TestCase):
         car.tick(last + DEADLINE_S + 0.01)
         seen.add(car.ctl)
         self.assertTrue(seen <= set(CTL_VALUES), seen)
-        self.assertIn("recover", seen)
+        self.assertIn(CTL_RECOVER, seen)
 
 
 class TestTelemetry(unittest.TestCase):
@@ -525,10 +602,10 @@ class TestTelemetry(unittest.TestCase):
     def test_it_reports_the_live_state(self):
         car = CarState(now=0.0)
         last = stream(car, 0.7, 0.0, 0.0, 20)
-        self.assertEqual(car.telemetry(10)["ctl"], "rt")
+        self.assertEqual(car.telemetry(10)["ctl"], CTL_RT)
         car.tick(last + DEADLINE_S + 0.01)
         frame = car.telemetry(0)
-        self.assertEqual(frame["ctl"], "recover")
+        self.assertEqual(frame["ctl"], CTL_RECOVER)
         self.assertEqual(frame["wdt_trips"], 1)
         car.set_bus_ok(False)
         self.assertFalse(car.telemetry(0)["bus_ok"])

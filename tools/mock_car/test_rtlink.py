@@ -19,10 +19,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from generated import PROTO, RT                        # noqa: E402
 from rt_link import Impairment, RTLink                 # noqa: E402
-from state import CarState                             # noqa: E402
+from state import CTL_NONE, CTL_RT, CarState           # noqa: E402
 
 APP = ("192.168.4.2", 50000)
 OTHER = ("192.168.4.3", 50001)
+DEADLINE_S = RT["watchdog_ms"] / 1000.0
 
 HELLO = RT["hello_field"]
 SEQ = RT["seq_field"]
@@ -152,7 +153,7 @@ class TestOwnedTraffic(Quiet):
             loop.t = k * 0.1
             send(rt, cmd(k + 1, 0.5, -0.25))
         self.assertEqual(car.command, (0.5, -0.25))
-        self.assertEqual(car.ctl, "rt")
+        self.assertEqual(car.ctl, CTL_RT)
         self.assertEqual(rt.rx_fps(loop.t), 10)
 
     def test_a_stranger_is_dropped_without_touching_anything(self):
@@ -232,9 +233,35 @@ class TestGoodbye(Quiet):
         self.assertIsNone(rt.last_seq)
         # Silence after a goodbye is not silence that means the driver is out of range.
         loop.t = 2.0
-        self.assertIsNone(car.tick(loop.t))
+        self.assertIsNone(rt.tick(loop.t))
         self.assertEqual(car.wdt_trips, 0)
-        self.assertEqual(car.ctl, "none", "the wizard and the console can have the wheels")
+        # SAFE is released with the stop, not held: a goodbye must not lock OTA, the
+        # wizard and the console out of the car until an app reconnects. What suppresses
+        # the retreat is the cleared history.
+        self.assertEqual(car.ctl, CTL_NONE)
+        self.assertEqual(car.history_len, 0)
+
+    def test_a_bare_goodbye_is_acted_on(self):
+        """`{"seq":n,"bye":1}` with no axes — the car acts on it, so this must too."""
+        rt, car, loop = link()
+        send(rt, hello())
+        send(rt, cmd(1, 0.9))
+        rt.datagram_received(json.dumps({SEQ: 2, BYE: 1}).encode(), APP)
+        self.assertEqual(car.command, (0.0, 0.0))
+        self.assertIsNone(rt.owner, "a bare goodbye still drops ownership")
+
+    def test_a_goodbye_without_a_seq_is_dropped(self):
+        """Every app->car datagram except `hello` carries `seq`, goodbye included.
+
+        Accepting one would be a frame that bypasses replay protection: a recorded
+        goodbye replayed later would stop a session that never sent it.
+        """
+        rt, car, _ = link()
+        send(rt, hello())
+        send(rt, cmd(1, 0.9))
+        rt.datagram_received(json.dumps({BYE: 1}).encode(), APP)
+        self.assertEqual(car.command, (0.9, 0.0))
+        self.assertEqual(rt.owner, APP)
 
     def test_after_a_goodbye_the_old_peer_is_a_stranger(self):
         rt, car, _ = link()
@@ -246,6 +273,48 @@ class TestGoodbye(Quiet):
         send(rt, hello("beef0002"))
         send(rt, cmd(1, 0.4))
         self.assertEqual(car.command, (0.4, 0.0))
+
+
+class TestWatchdog(Quiet):
+    def test_a_trip_clears_the_sequence_gate(self):
+        """rt_link.c clears `s_have_seq` with `s_armed`, and for a reason.
+
+        Silence past the deadline already proves the stream is dead, so there is nothing
+        left to replay-protect. Keeping the gate is how a mock ends up dropping every
+        frame of a stream that resumed with a counter of its own while telemetry kept
+        flowing and the app showed a healthy link.
+        """
+        rt, car, loop = link()
+        send(rt, hello())
+        loop.t = 1.0
+        send(rt, cmd(500, 0.9))
+        loop.t = 1.0 + DEADLINE_S + 0.05
+        self.assertIsNotNone(rt.tick(loop.t))
+        self.assertEqual(car.wdt_trips, 1)
+        self.assertIsNone(rt.last_seq)
+        # Channel ownership survives, as it does on the car: a stream that comes back is
+        # the same session, and the app would otherwise be ignored until it said hello.
+        self.assertEqual(rt.owner, APP)
+        send(rt, cmd(1, -0.5))
+        self.assertEqual(car.command, (-0.5, 0.0), "the resumed stream is heard")
+
+    def test_a_handshake_that_goes_quiet_does_not_trip(self):
+        """Adoption leaves the watchdog disarmed; the first command arms it.
+
+        The app repeats `hello` until it is answered and starts its send loop only then,
+        so at 10% loss a handshake can easily outlast the deadline. Tripping there would
+        run the retreat before a single command had arrived.
+        """
+        rt, car, loop = link()
+        send(rt, hello())
+        for k in range(1, 101):                        # 5 s of hello-only silence
+            loop.t = k * 0.05
+            self.assertIsNone(rt.tick(loop.t))
+        self.assertEqual(car.wdt_trips, 0)
+        send(rt, cmd(1, 0.9))
+        loop.t += DEADLINE_S + 0.05
+        self.assertIsNotNone(rt.tick(loop.t), "the first command arms it")
+        self.assertEqual(car.wdt_trips, 1)
 
 
 class TestTelemetry(Quiet):
@@ -262,7 +331,7 @@ class TestTelemetry(Quiet):
         rt.push_telemetry(loop.t)
         frame, addr, size = rt.transport.sent[-1]
         self.assertEqual(addr, APP)
-        self.assertEqual(frame["ctl"], "rt")
+        self.assertEqual(frame["ctl"], CTL_RT)
         self.assertEqual(frame["rx_fps"], 1)
         self.assertLessEqual(size, RT["max_datagram"])
 

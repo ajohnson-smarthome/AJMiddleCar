@@ -58,11 +58,35 @@ mock answers JSON, and the contract picks neither.
 
 ## The two caps
 
-`max_command` (96 bytes) is the largest datagram the car will **act on**; anything longer
-is dropped by the parser without touching ownership, the sequence window or the watchdog.
-`max_datagram` (320 bytes) is the receive-buffer size at both ends, and the ceiling on
-what the car **sends** — a telemetry frame does not fit in 96 bytes. Inbound is capped by
-the first, outbound by the second.
+`max_command` is the largest datagram the car will **act on**; anything longer is dropped
+by the parser without touching ownership, the sequence window or the watchdog.
+`max_datagram` is the receive-buffer size at both ends, and the ceiling on what the car
+**sends** — a telemetry frame does not fit inside the command cap, which is the whole
+reason there are two. Inbound is capped by the first, outbound by the second. Both
+numbers live in `contract/car-api.json` and nowhere else; read them from `generated.RT`.
+
+## Session lifecycle
+
+Who owns the actuator, and when, is the one thing the three implementations answered
+three different ways — see "Session lifecycle — who owns the actuator, and when" in
+`docs/superpowers/plans/2026-08-21-link-layer-cutover.md`, which is authoritative. In
+short, and as `state.py` implements it:
+
+- Every app→car datagram except `hello` carries `seq`. One without it is dropped, a
+  goodbye included. A *bare* goodbye (`{"seq":n,"bye":1}`, no axes) is a complete
+  instruction and is acted on.
+- **Adopting** a session releases SAFE, clears the breadcrumb history, resets the
+  sequence gate, and leaves the watchdog **disarmed** — it arms on the first accepted
+  command, because that is what it measures. A repeat `hello` from the same peer and sid
+  is answered but does not re-adopt.
+- **A goodbye** stops through the arbiter (and the result is checked), releases SAFE
+  immediately, clears the breadcrumb history, disarms the watchdog and drops ownership.
+  The empty history is what suppresses the retreat; a sticky SAFE grant would do it too,
+  but it would also lock OTA, the wizard and the console out of the car until an app
+  reconnected.
+- A watchdog trip clears the sequence gate along with the arm flag: silence past the
+  deadline proves the stream is dead, and a gate left desynchronised drops every genuine
+  frame for the rest of the session while telemetry keeps flowing.
 
 ## Talking to it by hand
 
@@ -79,5 +103,8 @@ for seq in range(1, 21):                        # 2 s of driving forward
 s.sendto(json.dumps({"seq": 21, "t": 0, "y": 0, "bye": 1}).encode(), car)
 PY
 ```
+
+The axes on that goodbye are what the app happens to send; `{"seq": 21, "bye": 1}` is
+accepted just the same.
 
 Stop streaming without the `bye` and the mock retreats, exactly as the car does.

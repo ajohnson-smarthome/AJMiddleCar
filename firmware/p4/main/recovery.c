@@ -60,6 +60,17 @@ void recovery_note_command(float t, float y) {
     taskEXIT_CRITICAL(&s_mux);
 }
 
+void recovery_forget(void) {
+    taskENTER_CRITICAL(&s_mux);
+    s_head  = 0;
+    s_count = 0;
+    /* The bump is the abort signal: retreat_task compares s_seq against the value it
+       snapshotted, so a replay in flight stops at its next check instead of driving a
+       path this call just declared gone. */
+    s_seq++;
+    taskEXIT_CRITICAL(&s_mux);
+}
+
 // Snapshot in-window samples newest→oldest into out[] (cap MAX_SAMPLES). Returns count.
 // *seq receives the liveness sequence at snapshot time.
 static int snapshot(sample_t *out, uint32_t now, uint32_t *seq) {
@@ -98,18 +109,34 @@ static void retreat_task(void *arg) {
         ESP_LOGW(TAG, "link lost — retracing %d samples in reverse", n);
         bool aborted = false;
         for (int i = 0; i < n && !aborted; i++) {
+            /* Checked before the step as well as during the wait below: a segment whose
+               duration rounds to zero would otherwise skip the wait loop entirely and
+               command one more reverse step after a goodbye or a new session had already
+               thrown the path away. */
+            if (s_seq != snap_seq) { aborted = true; break; }
             float rt, ry;
             recovery_reverse(snap[i].t, snap[i].y, &rt, &ry);
             uint32_t dur = (i == 0)
                 ? (uint32_t)(t_loss - snap[0].ts)            // newest held until link loss
                 : (uint32_t)(snap[i - 1].ts - snap[i].ts);   // until the next-newer frame
             if (i == 0 && dur > TAIL_MS) dur = TAIL_MS;       // cap the open segment
+            /* One call, two ways to stop. A refusal means something outranks us —
+               calibration, OTA, or the driver coming back — and marching on refused
+               would leave the remaining steps to fire the moment the holder let go.
+               A liveness bump means the path was thrown away while this step was in
+               flight: the window between the check above and this call is a few
+               microseconds, but on two cores a goodbye lands inside it and releases
+               SAFE. Undoing it is enough rather than merely tidy — the actuator task
+               writes every 20 ms, so a target replaced microseconds later never
+               reaches the chip at all. */
             if (!car_drive(LINK_SRC_RECOVER, rt, ry)) {
-                /* Something outranks us — calibration, OTA, or the driver coming
-                   back. Stop retreating rather than marching through the timeline
-                   refused, which would leave the remaining steps to fire the moment
-                   the holder let go. */
                 ESP_LOGI(TAG, "retrace refused — someone else holds the actuator");
+                aborted = true;
+                break;
+            }
+            if (s_seq != snap_seq) {
+                car_stop(LINK_SRC_RECOVER);
+                ESP_LOGI(TAG, "retrace overtaken — the path was thrown away mid-step");
                 aborted = true;
                 break;
             }

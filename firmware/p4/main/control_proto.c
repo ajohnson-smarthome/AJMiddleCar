@@ -137,11 +137,16 @@ int control_parse_frame(const char *msg, size_t len, size_t max_len, control_fra
         f.has_ty = true;
     }
 
-    /* A goodbye counts on its own. The axes it usually carries are zeroes the stop
-       would write anyway, and a sender that omits them still means stop — dropping the
-       frame here would instead leave the car to notice the silence and retreat, which
-       is the one thing the goodbye exists to prevent. */
-    if (!f.has_hello && !f.has_ty && !f.bye) return -1;   /* nothing to act on */
+    /* Something to act on: a hello, a goodbye, or both axes. A goodbye counts without
+       the axes it usually carries — they are zeroes the stop would write anyway. */
+    if (!f.has_hello && !f.has_ty && !f.bye) return -1;
+    /* And something the transport can order. Every app->car datagram except a hello
+       carries seq — a goodbye included — because one without it would bypass replay
+       protection, so the whole frame is dropped rather than half-honoured. The rule
+       lives here as well as in rt_link so that the two halves cannot disagree about
+       which datagrams the car acts on: they did, and a goodbye the parser accepted and
+       the transport dropped looked like a working feature. */
+    if (!f.has_hello && !f.has_seq) return -1;
     *out = f;
     return 0;
 }

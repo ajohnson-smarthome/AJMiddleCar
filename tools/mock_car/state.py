@@ -26,11 +26,21 @@ from generated import CTL_VALUES, DEVICE, DOMAINS, RT, TELEMETRY_FIELDS, validat
 # telemetry reports in `ctl`.
 PRIORITY = tuple(CTL_VALUES)
 
-# The session id, as control_proto.c's parse_sid accepts it: non-empty, alphanumeric,
-# and short enough to fit CONTROL_SID_MAX with its NUL. Anything else is not "an id the
-# car will not like" — it is a datagram the car drops whole, because the id is echoed
-# into the hello reply and a quote in it would let the sender shape that JSON.
-SID_MAX_CHARS = 15
+# The vocabulary, named. Unpacked from the list rather than written out, because the
+# generator emits per-name symbols for the other two implementations (C's `CTL_RT`,
+# Swift's `CtlOwner.rt`) and for Python only the flat list — so this is the nearest
+# thing to a generated symbol until `emit_python` catches up. Position is rank on all
+# three sides, and a schema that adds or drops a value fails here, at import, instead
+# of at the first `PRIORITY.index()` deep inside the arbiter.
+CTL_NONE, CTL_RECOVER, CTL_CONSOLE, CTL_RT, CTL_CALIB, CTL_OTA, CTL_SAFE = PRIORITY
+
+# The session id, as `parse_sid` in firmware/p4/main/control_proto.c accepts it:
+# non-empty, alphanumeric, and short enough to fit that file's CONTROL_SID_MAX with its
+# NUL. Not in contract/car-api.json on any of the three sides, so it is mirrored here by
+# hand — see the report. Anything else is not "an id the car will not like": it is a
+# datagram the car drops whole, because the id is echoed into the hello reply and a
+# quote in it would let the sender shape that JSON.
+SID_MAX_CHARS = 15         # mirrors CONTROL_SID_MAX - 1 in firmware/p4/main/control_proto.h
 _SID_RE = re.compile(r"[A-Za-z0-9]{1,%d}\Z" % SID_MAX_CHARS)
 
 
@@ -105,9 +115,10 @@ def parse_frame(data, max_command=None):
         number; it is corrupt.
       * `t` and `y` come as a pair. One axis without the other is a truncated frame, not
         an instruction to hold the other at zero.
-      * a datagram carrying neither a hello nor both axes has nothing to act on. That
-        includes a bare goodbye: the app sends `t`/`y` with its `bye`, and the car
-        rejects the frame if they are missing.
+      * a datagram carrying no hello, no axes and no goodbye has nothing to act on.
+        A *bare* goodbye is not that: `{"seq":n,"bye":1}` says stop, and the car acts
+        on it (`control_proto.c`: `if (!f.has_hello && !f.has_ty && !f.bye) return -1`).
+        `{"bye":0}` is not a goodbye and carries nothing else, so it goes.
 
     Range is deliberately not checked here either — the arbiter clamps.
     """
@@ -156,7 +167,8 @@ def parse_frame(data, max_command=None):
             return None
         out[RT["throttle_field"]], out[RT["yaw_field"]] = t, y
 
-    if RT["hello_field"] not in out and RT["throttle_field"] not in out:
+    if not (RT["hello_field"] in out or RT["throttle_field"] in out
+            or out.get(RT["bye_field"])):
         return None
     return out
 
@@ -167,9 +179,12 @@ class CarState:
     # Constants that belong to the firmware's behaviour rather than to the wire, kept at
     # the values firmware/p4/main defines so the mock retreats for the same duration the
     # car does.
-    MOVE_EPS = 0.02        # recovery.c: below this a sample counts as stationary
-    TAIL_MS = 400          # recovery.c: cap on the newest segment's reverse duration
-    CALIB_HOLD_MS = 600    # link.h LINK_HOLD_CALIB_MS: one identification pulse
+    # None of these three is in contract/car-api.json, so they are mirrored by hand from
+    # the file named beside each one. See the report for the schema additions that would
+    # let them be generated instead.
+    MOVE_EPS = 0.02        # firmware/p4/main/recovery.c: below this a sample is stationary
+    TAIL_MS = 400          # firmware/p4/main/recovery.c: cap on the newest segment
+    CALIB_HOLD_MS = 600    # firmware/p4/main/link.h LINK_HOLD_CALIB_MS: one pulse
 
     def __init__(self, device=DEVICE, fw="v1.0+9000", now=0.0):
         self.device = device
@@ -188,7 +203,7 @@ class CarState:
         self._wdt_trips = 0
         self._retreating = False
         self._retreat_until = now
-        self._owner = "none"
+        self._owner = CTL_NONE
         self._owner_until = None       # None means the grant is sticky
         self._calibrated = False
         self._bus_ok = True
@@ -273,8 +288,8 @@ class CarState:
             # The driver is back. recovery.c aborts mid-replay for exactly this reason:
             # the retreat exists to reach the driver, so hearing from them ends it.
             self._retreating = False
-            self._release("recover")
-        if self._take("rt", now, RT["watchdog_ms"] / 1000.0):
+            self._release(CTL_RECOVER)
+        if self._take(CTL_RT, now, RT["watchdog_ms"] / 1000.0):
             self._t, self._y = t, y
             self._history.append((t, y, now))
         self._evict(now)
@@ -287,34 +302,58 @@ class CarState:
         This is the whole point of the `bye` field. Without it, backgrounding the app is
         indistinguishable from walking out of range, and the car reverses along its own
         path with the controls off-screen.
+
+        The four steps, in the order the plan's "Session lifecycle — who owns the
+        actuator, and when" names them, because that section exists precisely because
+        three implementations answered this differently:
+
+          1. `car_stop(LINK_SRC_SAFE)`, with the result **checked**. Returned here, so a
+             stop that was not applied is a line in the log rather than a silence.
+          2. Release SAFE immediately. Holding it sticky would suppress the retreat too,
+             but it would also lock out OTA, the wizard and the console until an app
+             reconnected — background the app and the car cannot be flashed over the air.
+          3. Clear the breadcrumb history. *This* is what suppresses the retreat:
+             `_any_motion()` over an empty history is false, so even a later trip stops
+             rather than retraces. The mechanism is the empty history, not the grant.
+          4. Disarm the watchdog — silence that was announced is not a loss.
+
+        Ownership of the channel is dropped by the caller: `bye` is not resumable, and
+        the next session arrives with a fresh `hello`.
         """
         self._now = now
-        self._t = self._y = 0.0
-        # A stationary newest breadcrumb, so a later retreat starts from a car at rest
-        # rather than replaying the last thing this session was doing at speed.
-        self._history.append((0.0, 0.0, now))
-        self._evict(now)
-        self._armed = False
+        # Clearing the history is also what ends a replay still running from an earlier
+        # dropout: on the car the retreat task aborts as soon as the breadcrumb sequence
+        # moves under it (recovery.c's `s_seq != snap_seq`).
+        self._history.clear()
         self._retreating = False
-        # `car_stop(LINK_SRC_SAFE)` and then `link_release(LINK_SRC_SAFE)`, in that
-        # order and for that reason: the wheels are held at zero, and then the actuator
-        # is handed back so the console and the calibration wizard can have it in
-        # between sessions. Parking in a sticky `safe` instead would 409 every spin
-        # until a new hello arrived — a refusal the car never sends.
-        self._take("safe", now, None)
-        self._release("safe")
+        self._armed = False
+        stopped = self._take(CTL_SAFE, now, None)
+        if stopped:
+            self._t = self._y = 0.0
+        self._release(CTL_SAFE)
+        return stopped
 
     def adopt_session(self, now):
-        """A new `hello` was adopted: release the stop a previous `bye` left in place.
+        """A new `hello` was adopted. The plan's other half of the lifecycle:
 
-        The breadcrumb history survives, as it does on the car: it is a record of where
-        the wheels have been, and nothing about a new session moved them.
+          1. Release SAFE, so a previous session's stop does not outlive it.
+          2. Clear the breadcrumb history. A new session has no path to retrace, and
+             retreating along the *previous* driver's path is worse than not retreating
+             at all.
+          3. Reset the sequence gate — the link's own state, done by `RTLink._adopt`.
+          4. Leave the watchdog **disarmed**. It arms on the first accepted command,
+             because a command is the thing it measures; arming it on the handshake
+             trips a session whose first command is still in flight.
+
+        A repeat `hello` from the same peer and sid is answered but does not land here,
+        so a retransmitted handshake cannot reset a live session.
         """
         self._now = now
+        self._history.clear()
         self._armed = False
         self._retreating = False
-        self._release("safe")
-        self._release("recover")
+        self._release(CTL_SAFE)
+        self._release(CTL_RECOVER)
 
     def tick(self, now):
         """Advance time. Returns a log line at the moments worth printing, else None."""
@@ -326,7 +365,7 @@ class CarState:
             self._retreating = False
             # The release is the stop: it zeroes only if the retreat still owns the
             # actuator, so an exhausted replay cannot flatten a pulse that outranked it.
-            self._release("recover")
+            self._release(CTL_RECOVER)
             line = "recover: retrace exhausted — stopped"
         self._expire(now)
         return line
@@ -347,7 +386,7 @@ class CarState:
             self._stop(now)
             return f"{head} — stopped (nothing to retrace)"
 
-        if not self._take("recover", now, None):
+        if not self._take(CTL_RECOVER, now, None):
             # recovery.c aborts the whole replay the first time car_drive is refused,
             # rather than marching through the timeline unheard. Driving anyway would
             # reverse the car out from under an OTA or a calibration pulse while this
@@ -388,8 +427,8 @@ class CarState:
         The release is what zeroes, and only if the take succeeded.
         """
         self._retreating = False
-        if self._take("recover", now, None):
-            self._release("recover")
+        if self._take(CTL_RECOVER, now, None):
+            self._release(CTL_RECOVER)
 
     # ---- the actuator arbiter --------------------------------------------------
 
@@ -406,7 +445,7 @@ class CarState:
             self._drop_grant()
 
     def _lapsed(self, now):
-        if self._owner == "none":
+        if self._owner == CTL_NONE:
             return True
         if self._owner_until is None:
             return False
@@ -425,7 +464,7 @@ class CarState:
         independent here and coupled on the car, and a calibration pulse that lapses
         leaves the mock at full throttle with nobody driving.
         """
-        self._owner, self._owner_until = "none", None
+        self._owner, self._owner_until = CTL_NONE, None
         self._t = self._y = 0.0
 
     # ---- calibration, OTA ------------------------------------------------------
@@ -434,7 +473,7 @@ class CarState:
         """Take the actuator for one identification pulse. False when something outranks."""
         self._now = now
         self._expire(now)
-        if not self._take("calib", now, self.CALIB_HOLD_MS / 1000.0):
+        if not self._take(CTL_CALIB, now, self.CALIB_HOLD_MS / 1000.0):
             return False
         # Taking the actuator from a retreat is what aborts it on the car: the next
         # car_drive(RECOVER) is refused. Leaving the flag set here would let the
@@ -464,12 +503,12 @@ class CarState:
         self._t = self._y = 0.0
         self._armed = False
         self._retreating = False
-        self._owner, self._owner_until = "ota", None
+        self._owner, self._owner_until = CTL_OTA, None
 
     def end_ota(self, flashed=True):
         if flashed:
             self.fw = _bump_build(self.fw)
-        self._release("ota")
+        self._release(CTL_OTA)
 
     def set_bus_ok(self, ok):
         self._bus_ok = ok
@@ -490,6 +529,11 @@ class CarState:
         """
         if bump:
             self._tele_seq += 1
+        # The keys below are the schema's telemetry field names, and the generator emits
+        # no symbols for them in any of the three languages (the firmware spells them in
+        # telemetry.h the same way). They are safe as literals *because* of the
+        # comprehension underneath: a field renamed in the schema raises KeyError here
+        # rather than going quietly missing on the wire.
         values = {
             "seq": self._tele_seq,
             "rx_fps": int(rx_fps),

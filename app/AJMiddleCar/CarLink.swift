@@ -80,7 +80,10 @@ final class CarLink: ObservableObject {
         telemetry = nil
         lastFrame = nil
         lastTelemetrySeq = nil
-        if case .foreign = session {} else { session = .none }
+        // Backgrounding is not a verdict on who the car is. Leaving `.active` — which a Control
+        // Center pull-down alone does — used to clear `.protoMismatch`, so the screen naming the
+        // mismatch flipped to the radar until the next hello reply landed.
+        session = session.survivingSessionEnd
         recompute()
     }
 
@@ -130,12 +133,10 @@ final class CarLink: ObservableObject {
                 lastTelemetry = t
                 lastFrame = ContinuousClock.now
             case .sessionClosed:
-                // A foreign identity survives the session that discovered it: the transport
-                // reopens every few seconds and would otherwise flicker the wrong-car screen
-                // back to a radar the user has no reason to watch.
-                if case .foreign = session {} else if case .protoMismatch = session {} else {
-                    session = .none
-                }
+                // A foreign identity — or a protocol we cannot speak — survives the session that
+                // discovered it: the transport reopens every few seconds and would otherwise
+                // flicker the screen naming the problem back to a radar.
+                session = session.survivingSessionEnd
                 telemetry = nil
                 lastFrame = nil
                 lastTelemetrySeq = nil

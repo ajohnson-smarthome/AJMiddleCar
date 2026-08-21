@@ -30,10 +30,6 @@ struct WrongCarView: View {
         self.onRetry = onRetry
     }
 
-    init(palette: Palette, found: String, onRetry: @escaping () -> Void) {
-        self.init(palette: palette, kind: .foreignDevice(found), onRetry: onRetry)
-    }
-
     private var title: String {
         switch kind {
         case .foreignDevice: return L.wrongCarTitle

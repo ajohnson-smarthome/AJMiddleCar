@@ -51,18 +51,20 @@ static void seq_newer(uint32_t seq, uint32_t last, bool want) {
 int main(void) {
     /* --- commands, as the app sends them ------------------------------------ */
     ok("{\"seq\":1,\"t\":0.5,\"y\":0}", 0.5f, 0.0f);
-    ok("{\"t\":0,\"y\":1}", 0.0f, 1.0f);
-    ok("{\"t\":-1,\"y\":-0.5}", -1.0f, -0.5f);
-    ok("{\"y\":-1.0,\"t\":1.0}", 1.0f, -1.0f);            // key order independent
-    ok("{ \"t\" : 0.25 , \"y\" : 0.75 }", 0.25f, 0.75f);  // whitespace tolerated
+    ok("{\"seq\":2,\"t\":0,\"y\":1}", 0.0f, 1.0f);
+    ok("{\"seq\":3,\"t\":-1,\"y\":-0.5}", -1.0f, -0.5f);
+    ok("{\"y\":-1.0,\"t\":1.0,\"seq\":4}", 1.0f, -1.0f);            // key order independent
+    ok("{ \"seq\" : 5 , \"t\" : 0.25 , \"y\" : 0.75 }", 0.25f, 0.75f);  // whitespace tolerated
 
     control_frame_t f = parse("{\"seq\":1234,\"t\":0.50,\"y\":-0.25}");
     assert(f.has_seq && f.seq == 1234 && !f.bye && !f.has_hello && !f.has_proto);
 
-    /* A command with no seq parses — the transport, not the parser, decides that a
-       command it cannot order is one it will not apply. */
-    f = parse("{\"t\":0,\"y\":0}");
-    assert(!f.has_seq);
+    /* Everything but a hello carries seq. A datagram the transport cannot order is one
+       the car does not act on, so it is refused whole here rather than parsed into a
+       frame rt_link then drops — the two halves used to disagree about exactly this,
+       and a goodbye the parser accepted and the transport threw away looked from the
+       outside like a working feature. */
+    bad("{\"t\":0,\"y\":0}");
 
     /* --- hello --------------------------------------------------------------- */
     f = parse("{\"proto\":1,\"hello\":\"7f3a91c2\"}");
@@ -97,11 +99,13 @@ int main(void) {
 
     /* A goodbye is worth acting on with no axes at all: the alternative is dropping it
        at the parser, and then the car waits out the deadline and retreats — the one
-       thing a goodbye exists to prevent. */
+       thing a goodbye exists to prevent. It still has to carry seq, though: it is an
+       app->car datagram like any other, and one that skipped the sequence gate would be
+       a stop anybody on the network could spoof after watching one exchange. */
     f = parse("{\"seq\":6,\"bye\":1}");
     assert(f.bye && f.has_seq && f.seq == 6 && !f.has_ty);
-    f = parse("{\"bye\":true}");
-    assert(f.bye);
+    bad("{\"bye\":true}");                            // no seq: nothing to order it by
+    bad("{\"t\":0,\"y\":0,\"bye\":1}");
     bad("{\"seq\":7,\"bye\":0}");                      // "not a goodbye" is not a command
 
     /* --- seq comparison, including the wrap ---------------------------------- */
@@ -150,17 +154,17 @@ int main(void) {
 
     /* --- malformed ----------------------------------------------------------- */
     bad("abc");
-    bad("{\"t\":0.5}");            // one axis without the other
-    bad("{\"y\":0.5}");
+    bad("{\"seq\":1,\"t\":0.5}");   // one axis without the other
+    bad("{\"seq\":1,\"y\":0.5}");
     bad("{}");
     bad("");
     bad(NULL);
-    bad("{\"t\":nan,\"y\":0}");    // non-finite rejected
-    bad("{\"t\":inf,\"y\":0}");
-    bad("{\"t\":1,\"y\":-inf}");
-    bad("{\"t\"0.5,\"y\":0}");     // missing colon
-    bad("{\"t\":\"0.5\",\"y\":0}");// string value, not a JSON number
-    bad("{\"t\":1e,\"y\":0}");     // half a number
+    bad("{\"seq\":1,\"t\":nan,\"y\":0}");    // non-finite rejected
+    bad("{\"seq\":1,\"t\":inf,\"y\":0}");
+    bad("{\"seq\":1,\"t\":1,\"y\":-inf}");
+    bad("{\"seq\":1,\"t\"0.5,\"y\":0}");     // missing colon
+    bad("{\"seq\":1,\"t\":\"0.5\",\"y\":0}"); // string value, not a JSON number
+    bad("{\"seq\":1,\"t\":1e,\"y\":0}");     // half a number
     bad("{\"seq\":-1,\"t\":0,\"y\":0}");            // seq is unsigned on the wire
     bad("{\"seq\":99999999999,\"t\":0,\"y\":0}");   // and fits 32 bits
     /* One past UINT32_MAX, in ten digits so the token length rule does not catch it
@@ -169,13 +173,14 @@ int main(void) {
     bad("{\"seq\":4294967296,\"t\":0,\"y\":0}");
     ok("{\"seq\":4294967295,\"t\":0,\"y\":0}", 0.0f, 0.0f);   // the last legal one
     /* Only a real key position counts: the name inside a string value must not match. */
-    bad("{\"note\":\"t\":0,\"y\":0}");
+    bad("{\"seq\":1,\"note\":\"t\":0,\"y\":0}");
 
     /* Nothing is read past `len`, so a buffer that is not NUL-terminated is safe. */
-    const char raw[] = "{\"t\":0.5,\"y\":0}{\"t\":1,\"y\":1}";
+    const char first[] = "{\"seq\":1,\"t\":0.5,\"y\":0}";
+    const char raw[]   = "{\"seq\":1,\"t\":0.5,\"y\":0}{\"seq\":2,\"t\":1,\"y\":1}";
     control_frame_t part;
-    assert(control_parse_frame(raw, 16, RT_MAX_COMMAND, &part) == 0);
-    assert(part.has_ty && approx(part.t, 0.5f) && approx(part.y, 0.0f));
+    assert(control_parse_frame(raw, sizeof(first) - 1, RT_MAX_COMMAND, &part) == 0);
+    assert(part.has_ty && approx(part.t, 0.5f) && approx(part.y, 0.0f) && part.seq == 1);
 
     printf("test_control_proto: all passed\n");
     return 0;

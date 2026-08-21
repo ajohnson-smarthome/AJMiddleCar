@@ -13,6 +13,26 @@ check(RTFrame.command(seq: 0, t: 2, y: -2) == #"{"seq":0,"t":1.00,"y":-1.00}"#, 
 check(RTFrame.hello(sid: "7f3a91c2") == #"{"proto":1,"hello":"7f3a91c2"}"#, "hello frame")
 check(RTFrame.bye(seq: 1235) == #"{"seq":1235,"t":0.00,"y":0.00,"bye":1}"#, "bye frame")
 
+// Every app->car datagram except `hello` carries `seq`, because the car DROPS one that does not
+// — goodbye included. A bye without a sequence number is not a quiet nonconformance: the car never
+// hears the stop, notices the silence 300 ms later, and retreats along its own breadcrumbs with
+// the controls off-screen. There is no other way to build one — `bye` and `command` both take it —
+// and this pins that there never is.
+for seq in [UInt32(0), 1, 1235, .max] {
+    check(RTFrame.bye(seq: seq).contains("\"\(CarContract.seqField)\":\(seq),"),
+          "bye carries its seq")
+    check(RTFrame.command(seq: seq, t: 0, y: 0).contains("\"\(CarContract.seqField)\":\(seq),"),
+          "command carries its seq")
+}
+// `hello` is the one exemption, and it is the car's, not ours: it is the datagram that resets the
+// sequence gate, so it cannot be judged by it.
+check(!RTFrame.hello(sid: "7f3a91c2").contains(CarContract.seqField), "hello carries no seq")
+// Successive byes are successive numbers, so a repeat cannot be dropped as a replay of the first.
+var byeSeq = UInt32(7)
+var seen: [UInt32] = []
+for _ in 0..<3 { byeSeq = RTFrame.nextSeq(byeSeq); seen.append(byeSeq) }
+check(seen == [8, 9, 10], "repeated goodbyes advance the sequence")
+
 // Two decimals with a period, whatever the phone's language does to numbers: `String(format:)`
 // with no locale formats in the C locale, and a comma here would desync the car's parser on
 // exactly the phones this app is written for.
@@ -71,7 +91,7 @@ check(!RTFrame.seqNewer(4294967295, than: 0), "and not backwards")
 if case .telemetry(let t)? = RTFrame.parse(
     #"{"seq":88,"rx_fps":10,"rssi":-58,"wdt_trips":0,"uptime_s":812,"heap":200000,"calibrated":true,"bus_ok":true,"ctl":"rt"}"#) {
     check(t.rxFps == 10 && t.rssi == -58 && t.uptimeS == 812, "telemetry numbers")
-    check(t.calibrated == true && t.busOk == true && t.ctl == "rt", "telemetry flags")
+    check(t.calibrated == true && t.busOk == true && t.ctl == CtlOwner.rt, "telemetry flags")
 } else {
     check(false, "telemetry parses")
 }

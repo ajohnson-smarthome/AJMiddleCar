@@ -1,7 +1,9 @@
 #define TELEMETRY_HOST_TEST
 #include "../main/telemetry.h"
-/* The push is a datagram, so the caps that bound it are the schema's. */
-#include "cfg_table.inc"
+/* The push is a datagram, so the caps that bound it are the schema's. telemetry.h has
+   already pulled the generated table in through contract.h; going through the wrapper
+   here too is what keeps that from being defined twice. */
+#include "contract.h"
 #include <assert.h>
 #include <string.h>
 #include <stdio.h>

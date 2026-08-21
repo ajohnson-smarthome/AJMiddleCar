@@ -139,6 +139,21 @@ struct DriveView: View {
             }
             .padding(.bottom, 16)
         }
+        // Zero the intent, and deliberately do NOT say goodbye here.
+        //
+        // The plan lists a bye "when the drive screen is dismissed", written for a screen the
+        // user leaves on purpose. This one has none: it is dismissed only because `link.state`
+        // stopped being `.live` — a second of stale telemetry does it — and `link.stop()` there
+        // would be unrecoverable, because the only callers of `link.start()` are the scene
+        // becoming `.active` and `carRoot.onAppear`, and neither fires again while the app stays
+        // in the foreground on `.ready`. One dropped telemetry frame would end the drive.
+        //
+        // Nothing is lost by leaving it out. The transport keeps streaming `t:0, y:0` at
+        // `commandHz`, which feeds the car's control watchdog and so suppresses the retreat the
+        // bye exists to suppress; ownership is worth nothing to hold onto, because the car adopts
+        // whichever peer says hello next; and OTA outranks RT in the car's own arbitration
+        // (`link.h`: `LINK_SRC_OTA > LINK_SRC_RT`), so a streaming pult cannot lock out a flash.
+        // The two real departures — the scene leaving `.active`, and teardown — do send it.
         .onDisappear { if !preview { intent.neutral() } }
         .onReceive(pad.$leftX) { _ in padPush() }
         .onReceive(pad.$leftY) { _ in padPush() }

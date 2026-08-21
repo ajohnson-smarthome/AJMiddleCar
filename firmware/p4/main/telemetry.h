@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include "contract.h"   /* CTL_NONE — the `ctl` vocabulary is the schema's, not ours */
 
 // Who is asking. The two consumers keep separate frame-rate accumulators: sharing them
 // meant a /status poll consumed the push's measurement interval, so the number both
@@ -19,7 +20,7 @@ typedef struct {
     long     uptime_s;    // seconds
     uint32_t heap;        // free heap, bytes
     bool     calibrated;  // valid calibration present
-    const char *ctl;      // which source owns the actuator ("rt"/"recover"/"none"/…)
+    const char *ctl;      // which source owns the actuator: one of the CTL_* spellings
     bool     bus_ok;      // false once a PCA9685 write failed and has not since succeeded
 } telemetry_t;
 
@@ -37,7 +38,7 @@ static inline int telemetry_fields(char *buf, size_t n, const telemetry_t *t) {
         (unsigned)t->heap,
         t->calibrated ? "true" : "false",
         t->bus_ok ? "true" : "false",
-        t->ctl ? t->ctl : "none");
+        t->ctl ? t->ctl : CTL_NONE);
     if (r < 0 || r >= (int)n) return -1;
     return r;
 }

@@ -24,6 +24,24 @@ enum SessionState: Equatable {
     /// A car answered our hello naming a protocol version this app does not speak. The car
     /// answers a mismatched hello on purpose so this state can exist rather than a silent radar.
     case protoMismatch(theirs: Int)
+
+    /// What is still true after the session that discovered it has ended.
+    ///
+    /// An identity the car told us about itself — someone else's name, or a protocol this build
+    /// cannot speak — is not a transient failure to retry behind a radar sweep: the transport
+    /// reopens every second or two, and re-deciding it from scratch each time flickers the screen
+    /// that names the problem back to the radar the user has no reason to watch. Only the retry
+    /// button clears them.
+    ///
+    /// It is one function because it has two callers — the session ending and the app being
+    /// stopped — and the version of this that lived twice as an `if case` got `.protoMismatch`
+    /// added to one copy and not the other.
+    var survivingSessionEnd: SessionState {
+        switch self {
+        case .foreign, .protoMismatch: return self
+        case .none, .adopted: return .none
+        }
+    }
 }
 
 /// The one liveness truth. Everything on screen — the status pill, the signal bars, the searching

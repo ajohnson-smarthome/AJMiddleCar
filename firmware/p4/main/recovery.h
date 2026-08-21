@@ -20,6 +20,14 @@ void recovery_note_command(float t, float y);
 // disabled / empty / stationary history → car_stop(); else → trigger the reverse replay.
 void recovery_on_link_lost(void);
 
+// Throw the breadcrumbs away: there is no path behind the car any more. Called by
+// rt_link when a session ends (a goodbye) and when one begins (a hello adopted), which
+// is what actually suppresses the retreat in both cases — an empty history has no
+// motion in it, so a later trip degrades to a plain stop instead of retracing somebody
+// else's drive. Also bumps the liveness sequence, so a replay already running aborts at
+// its next step rather than finishing a path that no longer exists.
+void recovery_forget(void);
+
 // Config getters/setters (RAM; the API layer persists to NVS).
 void recovery_set_config(bool enabled, uint16_t window_ms);
 void recovery_get_config(bool *enabled, uint16_t *window_ms);

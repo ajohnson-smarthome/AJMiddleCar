@@ -42,18 +42,13 @@ static volatile uint32_t s_trips;
 /* The owner is (address, port, session id), learned from recvfrom rather than from a
    socket table — which is what "strictly one client, last connect wins" means when the
    transport has no connections. A datagram from anyone else is dropped; the only way in
-   is a hello, and a hello always wins. */
-static struct sockaddr_in s_owner;
-static bool               s_have_owner;
-static char               s_sid[CONTROL_SID_MAX];
-static uint32_t           s_last_seq;
-static bool               s_have_seq;
+   is a hello, and a hello always wins.
 
-/* The control watchdog, formerly watchdog.c's software timer. `s_armed` keeps it quiet
-   until a session exists, so a car nobody has connected to never "loses" a link it
-   never had; adoption arms it, and a goodbye disarms it again. */
-static uint32_t s_last_feed_ms;
-static bool     s_armed;
+   The address lives here because it is the only part of the session that needs lwip;
+   the rest — the sid, the sequence gate, the control watchdog's arm flag and deadline —
+   is `rt_session_t` in rt_link.h, pure and host-tested. */
+static struct sockaddr_in s_owner;
+static rt_session_t       s_ses;
 
 uint32_t rt_link_frames(void)    { return s_frames; }
 uint32_t rt_link_wdt_trips(void) { return s_trips; }
@@ -92,57 +87,52 @@ static void send_hello_reply(int sock, const char *sid, const struct sockaddr_in
 }
 
 static void adopt(const struct sockaddr_in *from, const char *sid) {
-    s_owner      = *from;
-    s_have_owner = true;
-    s_have_seq   = false;   /* a new session counts from wherever it likes */
-    /* Armed by the handshake, not by the first command. A session that is adopted and
-       then goes quiet is exactly as lost as one that stops mid-drive, and the app
-       reconnects with a fresh sid well inside the deadline — arming on the first
-       command let a reconnect erase a loss that had already happened. A trip with no
-       breadcrumbs behind it degrades to a plain stop, so the wrong-car flow (hello,
-       foreign device, goodbye) costs nothing. */
-    s_last_feed_ms = now_ms();
-    s_armed        = true;
-    snprintf(s_sid, sizeof(s_sid), "%s", sid);
-    /* A previous session's goodbye left SAFE holding zero, deliberately: nothing may
-       command the motors between a goodbye and the next driver identifying themselves.
-       This is that moment, so release it — and with it the console and the wizard. */
+    s_owner = *from;
+    /* The sequence gate restarts and the watchdog stays disarmed — see
+       rt_session_adopt: it arms on the first accepted command, which is the thing it
+       measures. */
+    rt_session_adopt(&s_ses, sid);
+    /* A previous session may have left SAFE holding zero. It must not outlive the
+       session that asked for it, or the console, the wizard and OTA stay locked out. */
     link_release(LINK_SRC_SAFE);
+    /* A new session has no path behind it. Retracing the *previous* driver's path is
+       worse than not retracing at all, so the breadcrumbs go with the old session. */
+    recovery_forget();
     log_peer("session adopted from", from);
 }
 
 static void on_bye(void) {
     ESP_LOGI(TAG, "goodbye — stopping, and not retreating");
-    /* First, in case a retreat is already running from an earlier dropout: a frame from
-       the driver is what ends one, and this frame says stop. Recording it also leaves a
-       stationary newest breadcrumb, so the next retreat starts from a car at rest. */
-    recovery_note_command(0.0f, 0.0f);
-    /* Deliberately NOT released here. SAFE is sticky, so the stop holds until the next
-       adopt(): a retreat already past the seq check in its wait loop would otherwise
-       find the actuator free and land one reverse step — up to an actuator tick of the
-       car moving backwards after the driver said stop, which is the one thing a goodbye
-       exists to prevent. link_set writes nothing on a lock timeout, so a stop that was
-       not applied is worth a line: the grant lapse still stops the car within
+    /* SAFE outranks everything, so this both stops the car and, for as long as it is
+       held, refuses the next step of a retreat that is already running from an earlier
+       dropout. link_set writes nothing on a lock timeout, so a stop that was not
+       applied is worth a line: the grant lapse still stops the car within
        RT_WATCHDOG_MS, but not because we asked. */
     if (!car_stop(LINK_SRC_SAFE)) {
         ESP_LOGE(TAG, "goodbye stop was not applied — %s holds the actuator",
                  link_src_name(link_owner()));
     }
+    /* What actually suppresses the retreat, now and later: an empty history has no
+       motion in it, so even if the watchdog trips afterwards the car stops instead of
+       retracing. It also aborts a replay in flight before SAFE is let go below. */
+    recovery_forget();
+    /* Released immediately rather than held sticky. Holding it would suppress the
+       retreat too, but it would also lock out OTA, the calibration wizard and the
+       console until an app reconnected — background the app and the car cannot be
+       flashed over the air, which contradicts what ota_api promises. */
+    link_release(LINK_SRC_SAFE);
     /* This is the whole point of carrying a goodbye on the wire: silence that was
-       announced is not silence that means the driver is out of range. */
-    s_armed      = false;
-    s_have_owner = false;
-    s_have_seq   = false;
+       announced is not silence that means the driver is out of range. Ownership is not
+       resumable — the next session arrives with a fresh hello. */
+    rt_session_bye(&s_ses);
 }
 
 static void on_command(const control_frame_t *f) {
     s_frames++;
-    /* A frame refreshes the deadline the handshake started. That is the only thing this
-       watchdog measures — actuator health is a separate question, answered by bus_ok. The
-       breadcrumb IS gated on the grant: a refused command never moved the car, so
-       recording it would corrupt the path the retreat retraces. */
-    s_last_feed_ms = now_ms();
-    s_armed = true;
+    /* The first accepted command arms the watchdog; every one after it refreshes the
+       deadline. The breadcrumb IS gated on the grant: a refused command never moved the
+       car, so recording it would corrupt the path the retreat retraces. */
+    rt_session_command(&s_ses, f->seq, now_ms());
     if (car_drive(LINK_SRC_RT, f->t, f->y)) {
         recovery_note_command(f->t, f->y);
     }
@@ -164,63 +154,56 @@ static void on_datagram(int sock, const char *buf, int n, const struct sockaddr_
         return;
     }
 
-    if (f.has_hello) {
+    /* Every rule about who this datagram is from, whether it can be ordered and what it
+       asks for is in rt_session_classify — pure, and host-tested in test_rt_session.c.
+       What is left here is the part that needs a socket and an actuator. */
+    switch (rt_session_classify(&s_ses, s_ses.have_owner && same_peer(&s_owner, from), &f)) {
+    case RT_ADOPT:
+        adopt(from, f.sid);
+        send_hello_reply(sock, f.sid, from);
+        break;
+    case RT_REPLY:
+        /* The forced-update gate exists to make a mismatch brief, but it only works if
+           the mismatch is visible: the reply names our version. Today's app discards a
+           reply whose proto is not its own, so this line is for the log and for
+           whatever reads it next. */
         if (!f.has_proto || f.proto != RT_PROTO) {
-            /* Answer anyway, but do not adopt: a session neither side can parse is
-               worse than no session, and the forced-update gate exists to make this
-               state brief. The reply names our version so that a mismatch is visible
-               at all — today's app discards a reply whose proto is not its own, so
-               this is for the log and for whatever reads it next, not for the app. */
             ESP_LOGW(TAG, "hello with proto %u, this car speaks %d",
                      (unsigned)f.proto, RT_PROTO);
-            send_hello_reply(sock, f.sid, from);
-            return;
         }
-        if (!s_have_owner || !same_peer(&s_owner, from) || strcmp(s_sid, f.sid) != 0) {
-            adopt(from, f.sid);
-        }
-        /* Reply to every hello, not only to the one that adopted: the app repeats it
-           until answered, so a lost reply must be answerable by the next repeat. */
+        /* Answered whether or not it adopted: the app repeats the handshake until it is
+           answered, so a lost reply must be answerable by the next repeat. */
         send_hello_reply(sock, f.sid, from);
-        return;
+        break;
+    case RT_BYE:
+        on_bye();
+        break;
+    case RT_COMMAND:
+        on_command(&f);
+        break;
+    case RT_DROP:
+        break;
     }
-
-    if (!s_have_owner || !same_peer(&s_owner, from)) return;   /* not our driver */
-
-    /* Replay protection is what leaving TCP buys: a reordered or duplicated command
-       costs one dropped datagram instead of blocking the queue behind a retransmission. */
-    if (!f.has_seq) return;
-    if (s_have_seq && !control_seq_newer(f.seq, s_last_seq)) return;
-    s_last_seq = f.seq;
-    s_have_seq = true;
-
-    if (f.bye)          on_bye();
-    else if (f.has_ty)  on_command(&f);
 }
 
 static void check_silence(void) {
-    if (!s_armed || !watchdog_stale(s_last_feed_ms, now_ms(), RT_WATCHDOG_MS)) return;
+    if (!rt_session_lost(&s_ses, now_ms())) return;
     ESP_LOGW(TAG, "no control frame for >%dms — the driver is gone", RT_WATCHDOG_MS);
     s_trips++;
     /* Revoke the dead stream's grant explicitly rather than waiting for it to lapse at
        this same instant, so the retreat is not refused by a grant that is technically
-       still alive. Ownership of the *channel* is deliberately kept: a stream that
-       resumes after a dropout is the same session, and would otherwise be ignored
-       until the app noticed and said hello again. */
+       still alive. */
     if (!link_release(LINK_SRC_RT)) {
         ESP_LOGE(TAG, "could not revoke the dead stream's grant");
     }
     recovery_on_link_lost();
-    s_armed = false;   /* disarm until traffic returns */
-    /* Silence past the deadline already proves the stream is dead, so there is nothing
-       left to replay-protect — and a seq gate left desynchronised (one spoofed frame
-       far in the future, or a counter bug) would drop every genuine frame for the rest
-       of the session while telemetry kept flowing and the app showed a healthy link. */
-    s_have_seq = false;
+    /* Disarms and forgets the sequence gate, keeps the channel's owner — see
+       rt_session_trip. */
+    rt_session_trip(&s_ses);
 }
 
 static void push_telemetry(int sock) {
-    if (!s_have_owner) return;
+    if (!s_ses.have_owner) return;
     /* The wide direction of the wire: a telemetry frame runs to ~160 bytes, which is
        why the schema's receive cap (RT_MAX_DATAGRAM) is not the command cap. */
     char buf[RT_MAX_DATAGRAM];
