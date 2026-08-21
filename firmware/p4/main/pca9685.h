@@ -17,4 +17,8 @@ esp_err_t pca9685_init(uint16_t pwm_freq_hz);
 // live on two chips — see BOARD_PCA_* in board.h for the split.
 esp_err_t pca9685_set_pwm(uint8_t channel, uint16_t duty);
 
+// Drive every channel of every board fully off. Used at boot, because the chip's
+// registers survive a P4 reset and the firmware's idea of "stopped" does not.
+esp_err_t pca9685_zero_all(void);
+
 #endif // PCA9685_H

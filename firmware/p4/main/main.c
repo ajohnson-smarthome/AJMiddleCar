@@ -10,6 +10,7 @@
 #include "identity.h"
 #include "pca9685.h"
 #include "car.h"
+#include "link.h"
 #include "nvs_flash.h"
 #include "wifi_ap.h"
 #include "http_server.h"
@@ -89,8 +90,22 @@ static int parse_mix(const char *line, float *t, float *y) {
 }
 
 void app_main(void) {
-    ESP_ERROR_CHECK(pca9685_bus_init(BOARD_I2C_SDA, BOARD_I2C_SCL, BOARD_I2C_HZ));
-    ESP_ERROR_CHECK(pca9685_init(BOARD_PWM_HZ));
+    /* A dead motor bus must not take the radio with it. Booting into the network
+       with bus_ok=false is diagnosable and OTA-recoverable; a boot loop needs a
+       USB cable and tells you nothing. */
+    bool motors_ok = pca9685_bus_init(BOARD_I2C_SDA, BOARD_I2C_SCL, BOARD_I2C_HZ) == ESP_OK
+                  && pca9685_init(BOARD_PWM_HZ) == ESP_OK;
+    if (motors_ok) {
+        /* Immediately, not later in link_init. pca9685_init ends by writing MODE1 with
+           the RESTART bit, which by design resumes every channel at its pre-sleep duty —
+           so on a reset taken mid-drive the motors come back at full throttle. Everything
+           between here and link_init (an NVS init that may erase flash) would run with
+           them spinning. */
+        pca9685_zero_all();
+    } else {
+        ESP_LOGE(TAG, "motor bus did not come up — the car will not drive, "
+                      "but the network and OTA will. Check I2C wiring and power.");
+    }
 
     esp_err_t nvs = nvs_flash_init();
     if (nvs == ESP_ERR_NVS_NO_FREE_PAGES || nvs == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -99,7 +114,8 @@ void app_main(void) {
     }
     ESP_ERROR_CHECK(nvs);
 
-    ESP_ERROR_CHECK(ramp_init());   // start the sole PCA9685 writer before any car_* call
+    ESP_ERROR_CHECK(ramp_init());   // ramp_ms must be loaded before the actuator task ticks
+    ESP_ERROR_CHECK(link_init());   // the sole PCA9685 writer; zeroes the chip at boot
     car_init();
     wheel_init();                          // load wheel/encoder params (NVS or defaults)
     dims_init();                           // load car dimensions (NVS or defaults)
@@ -140,7 +156,15 @@ void app_main(void) {
         }
         float t, y;
         if (parse_mix(line, &t, &y) == 0) {
-            car_drive(t, y);
+            if (!car_drive(LINK_SRC_CONSOLE, t, y)) {
+                ESP_LOGW(TAG, "refused: %s holds the actuator", link_src_name(link_owner()));
+            } else if (t == 0.0f && y == 0.0f) {
+                /* A console grant is sticky — that is the documented bench behaviour,
+                   so `mix 1 0` runs until told otherwise. But `mix 0 0` means "done",
+                   and holding on after that would refuse the auto-return for the rest
+                   of the boot. It is the only sticky source a human enters by hand. */
+                link_release(LINK_SRC_CONSOLE);
+            }
         } else {
             ESP_LOGE(TAG, "bad command, expected 'mix <t> <y>' with t,y in [-1,1]");
         }

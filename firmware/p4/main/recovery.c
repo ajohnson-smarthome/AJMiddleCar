@@ -6,6 +6,7 @@
 #include "cJSON.h"
 #include "cfg_json.h"
 #include "car.h"
+#include "link.h"
 
 static const char *TAG = "recovery";
 
@@ -90,7 +91,7 @@ static void retreat_task(void *arg) {
         uint32_t t_loss = now_ms();
         uint32_t snap_seq;
         int n = snapshot(snap, t_loss, &snap_seq);
-        if (n == 0 || !any_motion(snap, n)) { car_stop(); continue; }
+        if (n == 0 || !any_motion(snap, n)) { car_stop(LINK_SRC_RECOVER); link_release(LINK_SRC_RECOVER); continue; }
 
         ESP_LOGW(TAG, "link lost — retracing %d samples in reverse", n);
         bool aborted = false;
@@ -101,7 +102,15 @@ static void retreat_task(void *arg) {
                 ? (uint32_t)(t_loss - snap[0].ts)            // newest held until link loss
                 : (uint32_t)(snap[i - 1].ts - snap[i].ts);   // until the next-newer frame
             if (i == 0 && dur > TAIL_MS) dur = TAIL_MS;       // cap the open segment
-            car_drive(rt, ry);
+            if (!car_drive(LINK_SRC_RECOVER, rt, ry)) {
+                /* Something outranks us — calibration, OTA, or the driver coming
+                   back. Stop retreating rather than marching through the timeline
+                   refused, which would leave the remaining steps to fire the moment
+                   the holder let go. */
+                ESP_LOGI(TAG, "retrace refused — someone else holds the actuator");
+                aborted = true;
+                break;
+            }
             for (uint32_t waited = 0; waited < dur; ) {
                 if (s_seq != snap_seq) { aborted = true; break; }  // a frame arrived → link back
                 uint32_t step = (dur - waited < TICK_MS) ? (dur - waited) : TICK_MS;
@@ -109,15 +118,24 @@ static void retreat_task(void *arg) {
                 waited += step;
             }
         }
-        if (aborted) ESP_LOGI(TAG, "link returned — handing control back");
-        else { car_stop(); ESP_LOGI(TAG, "retrace exhausted — stopped"); }
+        if (aborted) {
+            ESP_LOGI(TAG, "link returned — handing control back");
+        } else {
+            car_stop(LINK_SRC_RECOVER);
+            ESP_LOGI(TAG, "retrace exhausted — stopped");
+        }
+        link_release(LINK_SRC_RECOVER);
     }
 }
 
 void recovery_on_link_lost(void) {
-    if (!s_enabled) { car_stop(); return; }   // feature off → plain stop (old watchdog behavior)
+    if (!s_enabled) {                          // feature off → plain stop (old watchdog behavior)
+        car_stop(LINK_SRC_RECOVER);
+        link_release(LINK_SRC_RECOVER);
+        return;
+    }
     if (s_task) xTaskNotifyGive(s_task);       // hand off to the retreat task
-    else car_stop();
+    else { car_stop(LINK_SRC_RECOVER); link_release(LINK_SRC_RECOVER); }
 }
 
 void recovery_save(void) {

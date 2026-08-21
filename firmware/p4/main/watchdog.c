@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "recovery.h"
+#include "link.h"
 
 static const char *TAG = "wdt";
 
@@ -35,6 +36,12 @@ static void wdt_cb(TimerHandle_t t) {
     if (watchdog_stale(s_last_feed_ms, now_ms(), s_timeout_ms)) {
         ESP_LOGW(TAG, "no control frame for >%ums — stopping car", (unsigned)s_timeout_ms);
         s_trips++;
+        /* The stream is gone. Revoke its grant explicitly rather than waiting for it
+           to lapse at the same instant this fires, so recovery is not refused by a
+           grant that is technically still alive. */
+        if (!link_release(LINK_SRC_RT)) {
+            ESP_LOGE(TAG, "could not revoke the dead stream's grant");
+        }
         recovery_on_link_lost();
         s_armed = false;  // disarm until traffic resumes
     }

@@ -10,6 +10,7 @@
 #include "http_server.h"
 #include "calibration.h"
 #include "car.h"
+#include "link.h"
 #include "motors.h"
 
 static const char *TAG = "calib_api";
@@ -51,9 +52,18 @@ static esp_err_t calib_spin(httpd_req_t *req) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "pair 0..3, dir 0|1");
     }
     ESP_LOGI(TAG, "spin pair %d %s", pair, dir ? "fwd" : "rev");
-    car_spin_pair((uint8_t)pair, dir != 0);
-    vTaskDelay(pdMS_TO_TICKS(600));
-    car_stop();
+    if (!car_spin_pair((uint8_t)pair, dir != 0)) {
+        /* 409 is the honest code — the request is fine, the actuator is taken. IDF's
+           httpd_err_code_t has no 409, so the status line is set directly. */
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"error\":\"actuator busy\"}");
+    }
+    /* The grant lapses on its own after LINK_HOLD_CALIB_MS, so the pulse ends whether
+       or not this handler is still here. The delay is only so the reply lands after
+       the wheel has stopped, which is what the wizard's next step assumes. */
+    vTaskDelay(pdMS_TO_TICKS(LINK_HOLD_CALIB_MS));
+    link_release(LINK_SRC_CALIB);
     return httpd_resp_sendstr(req, "ok");
 }
 

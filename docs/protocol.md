@@ -57,13 +57,23 @@ to stop; stop streaming only when disconnecting deliberately.
 Pushed on the same socket, unsolicited:
 
 ```json
-{"rssi":-58,"ws_fps":10,"wdt_trips":0,"uptime_s":812,"heap":200000,"calibrated":true}
+{"rssi":-58,"ws_fps":10,"wdt_trips":0,"uptime_s":812,"heap":200000,"calibrated":true,
+ "ctl":"rt","bus_ok":true}
 ```
 
 `rssi` is the AP-side signal for the connected station, `0` when unavailable — clients should
 fall back to their own latency measure. `ws_fps` is control frames received per second, a direct
 measure of the uplink. `wdt_trips` counts watchdog trips since boot; a rising count means the
 link is dropping.
+
+`ctl` names the source that currently owns the actuator — `rt`, `console`, `calib`, `recover`,
+`ota`, `safe`, or `none`. It is how a client tells "the car is ignoring me because something
+outranks me" from "the car is not hearing me". A car retreating under its own command reports
+`recover`, which is the only way to show that honestly.
+
+`bus_ok` is false once a write to the motor driver has failed and has not since succeeded. A car
+with `bus_ok: false` is reachable, updatable and undriveable — a state worth distinguishing from
+being offline, and the one a car boots into when its I2C bus is unplugged.
 
 Only one client is served: the socket of the most recent connection wins, and telemetry stops
 being pushed to a socket that errors.
@@ -92,7 +102,7 @@ own body shape:
 | Endpoint | GET returns | POST body | Range |
 |---|---|---|---|
 | `/calib` | `{"calibrated":true}` | — | — |
-| `/calib/spin` | — | `{"pair":0,"dir":1}` | pair `0..3`, dir `0` reverse / `1` forward; pulses ~0.6 s |
+| `/calib/spin` | — | `{"pair":0,"dir":1}` | pair `0..3`, dir `0` reverse / `1` forward; pulses ~0.6 s. `409` when a higher-priority source holds the actuator — the wheel did **not** turn, and a client must not advance its wizard |
 | `/calib/save` | — | `{"wheels":[{"pair":0,"sign":1},…]}` | exactly 4 entries, order FL, FR, RL, RR; `pair` `0..3` unique, `sign` ±1 |
 
 `GET /` returns a one-line plain-text identity. There is no web UI.

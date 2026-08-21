@@ -7,6 +7,7 @@
 #include "motors.h"
 #include "ws_control.h"
 #include "watchdog.h"
+#include "link.h"
 
 static const char *TAG = "telemetry";
 #define PUSH_PERIOD_US 200000   // 5 Hz
@@ -43,12 +44,14 @@ void telemetry_gather(telemetry_t *out) {
     out->uptime_s   = (long)(esp_timer_get_time() / 1000000);
     out->heap       = (uint32_t)esp_get_free_heap_size();
     out->calibrated = calibration_load(&tmp);
+    out->ctl        = link_src_name(link_owner());
+    out->bus_ok     = link_bus_ok();
 }
 
 int telemetry_json(char *buf, size_t n) {
     telemetry_t t;
     telemetry_gather(&t);
-    char fields[160];
+    char fields[224];
     if (telemetry_fields(fields, sizeof(fields), &t) < 0) return -1;
     int r = snprintf(buf, n, "{%s}", fields);
     return (r < 0 || r >= (int)n) ? -1 : r;
@@ -56,7 +59,7 @@ int telemetry_json(char *buf, size_t n) {
 
 static void push_cb(void *arg) {
     (void)arg;
-    char buf[200];
+    char buf[288];
     int n = telemetry_json(buf, sizeof(buf));
     if (n > 0) ws_control_send(buf, (size_t)n);
 }

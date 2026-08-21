@@ -5,6 +5,7 @@
 #include "http_server.h"
 #include "control_proto.h"
 #include "car.h"
+#include "link.h"
 #include "watchdog.h"
 #include "recovery.h"
 
@@ -52,9 +53,16 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     float t, y;
     if (control_parse_json((const char *)buf, &t, &y) == 0) {
         s_frames++;
+        /* A parsed frame proves the link is alive, which is the only thing this
+           watchdog measures. Actuator health is a separate question, answered
+           separately by bus_ok — conflating them made every calibration spin look
+           like a dropped link, because a refused frame is not a silent one.
+           The breadcrumb IS gated on the grant: a refused command never moved the
+           car, so recording it would corrupt the path the retreat retraces. */
         watchdog_feed();
-        recovery_note_command(t, y);
-        car_drive(t, y);
+        if (car_drive(LINK_SRC_RT, t, y)) {
+            recovery_note_command(t, y);
+        }
     } else {
         ESP_LOGW(TAG, "bad ws msg: '%s'", (const char *)buf);
     }

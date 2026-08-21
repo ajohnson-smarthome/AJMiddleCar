@@ -11,24 +11,35 @@
 #include "freertos/task.h"
 #include "http_server.h"
 #include "car.h"
+#include "link.h"
 
 static const char *TAG = "ota_api";
 
 static esp_err_t ota_post(httpd_req_t *req) {
-    car_stop();  // motors off during flashing
+    // Sticky: nothing may command the motors during a flash. Every failure path below
+    // releases it again — a refused upload must not leave the car undriveable until
+    // someone pulls the battery, because a failed flash leaves the running image intact.
+    if (!car_stop(LINK_SRC_OTA)) {
+        ESP_LOGE(TAG, "could not take the actuator for the flash — refusing the upload");
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "actuator busy");
+    }
     if (req->content_len < 4096) {  // reject obviously-bogus uploads before erasing a slot
+        link_release(LINK_SRC_OTA);
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "image too small");
     }
     if (req->content_len > INT_MAX) {  // guard the (int) cast below: a huge len wraps negative
+        link_release(LINK_SRC_OTA);
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "image too large");
     }
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
     if (part == NULL) {
+        link_release(LINK_SRC_OTA);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no ota partition");
         return ESP_FAIL;
     }
     esp_ota_handle_t handle = 0;
     if (esp_ota_begin(part, OTA_SIZE_UNKNOWN, &handle) != ESP_OK) {
+        link_release(LINK_SRC_OTA);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota begin failed");
         return ESP_FAIL;
     }
@@ -43,24 +54,28 @@ static esp_err_t ota_post(httpd_req_t *req) {
         if (r <= 0) {
             if (r == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts <= 6) continue;  // ~6×5s grace, then abort
             esp_ota_abort(handle);
+            link_release(LINK_SRC_OTA);
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "recv error");
             return ESP_FAIL;
         }
         timeouts = 0;  // progress resets the stall budget
         if (esp_ota_write(handle, buf, r) != ESP_OK) {
             esp_ota_abort(handle);
+            link_release(LINK_SRC_OTA);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota write failed");
             return ESP_FAIL;
         }
         remaining -= r;
     }
     if (esp_ota_end(handle) != ESP_OK) {
+        link_release(LINK_SRC_OTA);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "image invalid");
         return ESP_FAIL;
     }
     esp_err_t berr = esp_ota_set_boot_partition(part);
     if (berr != ESP_OK) {
         ESP_LOGE(TAG, "set_boot_partition failed: %s (image written+valid but not booted)", esp_err_to_name(berr));
+        link_release(LINK_SRC_OTA);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "set boot failed");
         return ESP_FAIL;
     }
