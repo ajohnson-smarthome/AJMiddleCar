@@ -148,5 +148,28 @@ class TestCEmitter(unittest.TestCase):
             self.assertEqual(out.count(f'"{d["nvs_key"]}"'), 1, d["path"])
 
 
+class TestSwiftEmitter(unittest.TestCase):
+    def test_structs_and_constants(self):
+        import gen_contract
+        out = gen_contract.emit_swift(load())
+        self.assertIn(gen_contract.BANNER, out)
+        self.assertIn("public struct Wheel: Codable, Equatable, Sendable {", out)
+        self.assertIn("public var diameter_mm: Int", out)
+        self.assertIn("public var enabled: Bool", out)
+        # Inside a `public extension` the members are already public; an explicit
+        # `public` there is a redundant modifier, so the emitter omits it.
+        self.assertIn("    static let diameter_mmRange: ClosedRange<Int> = 20...150", out)
+        self.assertIn("    static let quadAllowed: [Int] = [1, 2, 4]", out)
+        self.assertIn('    static let path = "/wheel"', out)
+        self.assertIn("public static let rtPort: UInt16 = 4210", out)
+        self.assertIn("public static let proto = 1", out)
+
+    def test_default_uses_the_schema_values(self):
+        import gen_contract
+        out = gen_contract.emit_swift(load())
+        self.assertIn("Wheel(diameter_mm: 65, ppr: 11, gear_x100: 2100, quad: 4)", out)
+        self.assertIn("Recover(enabled: true, window_ms: 5000)", out)
+
+
 if __name__ == "__main__":
     unittest.main()

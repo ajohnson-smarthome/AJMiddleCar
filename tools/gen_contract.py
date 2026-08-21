@@ -97,6 +97,57 @@ def emit_c(schema):
     return "\n".join(out)
 
 
+def _swift_type(f):
+    return "Bool" if f["type"] == "bool" else "Int"
+
+
+def _swift_literal(f):
+    return ("true" if f["default"] else "false") if f["type"] == "bool" else str(f["default"])
+
+
+def emit_swift(schema):
+    rt, net = schema["rt"], schema["network"]
+    out = [f"// {BANNER}", "", "import Foundation", "",
+           "public enum CarContract {",
+           f"    public static let proto = {schema['proto']}",
+           f'    public static let device = "{schema["device"]}"',
+           f'    public static let ssid = "{net["ssid"]}"',
+           f'    public static let password = "{net["password"]}"',
+           f'    public static let host = "{net["host"]}"',
+           f"    public static let rtPort: UInt16 = {rt['port']}",
+           f"    public static let maxDatagram = {rt['max_datagram']}",
+           f"    public static let commandHz = {rt['command_hz']}",
+           f"    public static let telemetryHz = {rt['telemetry_hz']}",
+           f"    public static let watchdogMs = {rt['watchdog_ms']}",
+           "}", ""]
+    for d in schema["domains"]:
+        n = d["swift"]
+        out.append(f"/// {d['doc']}")
+        out.append(f"public struct {n}: Codable, Equatable, Sendable {{")
+        for f in d["fields"]:
+            out.append(f"    /// {f['doc']}")
+            out.append(f"    public var {f['name']}: {_swift_type(f)}")
+        args = ", ".join(f"{f['name']}: {_swift_type(f)}" for f in d["fields"])
+        assigns = "; ".join(f"self.{f['name']} = {f['name']}" for f in d["fields"])
+        out.append(f"    public init({args}) {{ {assigns} }}")
+        out.append("}")
+        out.append("")
+        out.append(f"public extension {n} {{")
+        out.append(f'    static let path = "{d["path"]}"')
+        lit = ", ".join(f"{f['name']}: {_swift_literal(f)}" for f in d["fields"])
+        out.append(f"    static let `default` = {n}({lit})")
+        for f in d["fields"]:
+            if f["type"] == "int":
+                out.append(f"    static let {f['name']}Range: ClosedRange<Int> "
+                           f"= {f['min']}...{f['max']}")
+            elif f["type"] == "enum":
+                vals = ", ".join(str(v) for v in f["values"])
+                out.append(f"    static let {f['name']}Allowed: [Int] = [{vals}]")
+        out.append("}")
+        out.append("")
+    return "\n".join(out)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--schema", default=str(SCHEMA))
@@ -114,6 +165,7 @@ def main(argv=None):
         write(doc_path, splice(doc_path.read_text(), emit_doc(schema)))
 
     write(root / "firmware" / "p4" / "main" / "cfg_table.inc", emit_c(schema))
+    write(root / "app" / "AJMiddleCar" / "Generated" / "CarAPI.swift", emit_swift(schema))
 
     return 0
 
