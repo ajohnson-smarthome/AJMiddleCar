@@ -20,10 +20,15 @@ class TestSchema(unittest.TestCase):
         self.assertEqual(s["network"]["ssid"], "AJMiddleCar")
         self.assertEqual(s["network"]["host"], "192.168.4.1")
 
+    def test_the_command_cap_is_below_the_datagram_cap(self):
+        rt = load()["rt"]
+        self.assertLess(rt["max_command"], rt["max_datagram"],
+                        "a receive buffer sized from the command cap truncates telemetry")
+
     def test_rt_constants(self):
         rt = load()["rt"]
         self.assertEqual(rt["port"], 4210)
-        self.assertEqual(rt["max_datagram"], 96)
+        self.assertEqual(rt["max_datagram"], 320)
         self.assertEqual(rt["command_hz"], 10)
         self.assertEqual(rt["telemetry_hz"], 5)
         self.assertEqual(rt["watchdog_ms"], 300)
@@ -148,14 +153,24 @@ class TestCEmitter(unittest.TestCase):
         # the mock read, so the port and the deadline cannot drift between the three.
         self.assertIn("#define RT_PORT 4210", out)
         self.assertIn("#define RT_WATCHDOG_MS 300", out)
-        self.assertIn("#define RT_MAX_DATAGRAM 96", out)
+        # Two caps, deliberately different: the car accepts at most RT_MAX_COMMAND, but a
+        # telemetry frame is 119-156 bytes, so a receive buffer sized from the command cap
+        # would truncate every one of them.
+        self.assertIn("#define RT_MAX_COMMAND 96", out)
+        self.assertIn("#define RT_MAX_DATAGRAM 320", out)
+        self.assertIn('#define RT_KEY_THROTTLE "t"', out)
+        self.assertIn('#define RT_KEY_BYE "bye"', out)
+        self.assertIn('#define CTL_RECOVER "recover"', out)
         self.assertIn("#define RT_PROTO 1", out)
 
     def test_every_domain_appears_once(self):
         import gen_contract
         out = gen_contract.emit_c(load())
         for d in load()["domains"]:
-            self.assertEqual(out.count(f'"{d["nvs_key"]}"'), 1, d["path"])
+            # Match the domain row's shape, not the bare key: the ctl vocabulary also
+            # contains the word "recover", and counting substrings caught that instead.
+            row = f'{{ "{d["path"]}", "{d["nvs_key"]}", '
+            self.assertEqual(out.count(row), 1, d["path"])
 
 
 class TestSwiftEmitter(unittest.TestCase):
@@ -178,6 +193,9 @@ class TestSwiftEmitter(unittest.TestCase):
         self.assertIn("public enum TelemetryKey {", out)
         self.assertIn('public static let rxFps = "rx_fps"', out)
         self.assertIn('public static let busOk = "bus_ok"', out)
+        self.assertIn("public enum CtlOwner {", out)
+        self.assertIn('public static let recover = "recover"', out)
+        self.assertIn('public static let throttleField = "t"', out)
 
     def test_default_uses_the_schema_values(self):
         import gen_contract

@@ -9,7 +9,13 @@ public enum CarContract {
     public static let password = "drive1234"
     public static let host = "192.168.4.1"
     public static let rtPort: UInt16 = 4210
-    public static let maxDatagram = 96
+    public static let maxDatagram = 320
+    public static let maxCommand = 96
+    public static let protoField = "proto"
+    public static let deviceField = "device"
+    public static let fwField = "fw"
+    public static let throttleField = "t"
+    public static let yawField = "y"
     public static let commandHz = 10
     public static let telemetryHz = 5
     public static let watchdogMs = 300
@@ -38,6 +44,18 @@ public enum TelemetryKey {
     public static let busOk = "bus_ok"
     /// which source owns the actuator
     public static let ctl = "ctl"
+}
+
+/// The values the car reports in telemetry's `ctl` field.
+public enum CtlOwner {
+    public static let none = "none"
+    public static let recover = "recover"
+    public static let console = "console"
+    public static let rt = "rt"
+    public static let calib = "calib"
+    public static let ota = "ota"
+    public static let safe = "safe"
+    public static let all = ["none", "recover", "console", "rt", "calib", "ota", "safe"]
 }
 
 /// Slew-rate limit on acceleration. Rise is bounded, fall is instant, so stopping is never delayed.

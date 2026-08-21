@@ -38,6 +38,10 @@ check(CarContract.device == "ajmiddlecar", "device")
 check(CarContract.rtPort == 4210, "rt port")
 check(CarContract.watchdogMs == 300, "watchdog")
 check(CarContract.seqField == "seq" && CarContract.byeField == "bye", "rt frame fields")
+check(CarContract.throttleField == "t" && CarContract.yawField == "y", "axis fields")
+check(CarContract.maxCommand < CarContract.maxDatagram,
+      "a receive buffer sized from the command cap would truncate telemetry")
+check(CtlOwner.all.contains(CtlOwner.recover) && CtlOwner.all.count == 7, "ctl vocabulary")
 check(TelemetryKey.rxFps == "rx_fps" && TelemetryKey.busOk == "bus_ok"
       && TelemetryKey.ctl == "ctl", "telemetry keys")
 

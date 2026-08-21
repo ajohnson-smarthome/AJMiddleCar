@@ -8,13 +8,19 @@
   },
   "rt": {
     "port": 4210,
-    "max_datagram": 96,
+    "max_datagram": 320,
     "command_hz": 10,
     "telemetry_hz": 5,
     "watchdog_ms": 300,
     "hello_field": "hello",
     "seq_field": "seq",
-    "bye_field": "bye"
+    "bye_field": "bye",
+    "max_command": 96,
+    "proto_field": "proto",
+    "device_field": "device",
+    "fw_field": "fw",
+    "throttle_field": "t",
+    "yaw_field": "y"
   },
   "domains": [
     {
@@ -187,5 +193,14 @@
         "doc": "which source owns the actuator"
       }
     ]
-  }
+  },
+  "ctl_values": [
+    "none",
+    "recover",
+    "console",
+    "rt",
+    "calib",
+    "ota",
+    "safe"
+  ]
 }

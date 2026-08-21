@@ -97,6 +97,12 @@ def emit_c(schema):
     rt = schema["rt"]
     out.append(f'#define RT_PORT {rt["port"]}')
     out.append(f'#define RT_MAX_DATAGRAM {rt["max_datagram"]}')
+    out.append(f'#define RT_MAX_COMMAND {rt["max_command"]}')
+    for k in ("hello", "seq", "bye", "proto", "device", "fw", "throttle", "yaw"):
+        out.append(f'#define RT_KEY_{k.upper()} "{rt[k + "_field"]}"')
+    for i, v in enumerate(schema["ctl_values"]):
+        out.append(f'#define CTL_{v.upper()} "{v}"')
+    out.append(f'#define CTL_COUNT {len(schema["ctl_values"])}')
     out.append(f'#define RT_COMMAND_HZ {rt["command_hz"]}')
     out.append(f'#define RT_TELEMETRY_HZ {rt["telemetry_hz"]}')
     out.append(f'#define RT_WATCHDOG_MS {rt["watchdog_ms"]}')
@@ -127,6 +133,12 @@ def emit_swift(schema):
            f'    public static let host = "{net["host"]}"',
            f"    public static let rtPort: UInt16 = {rt['port']}",
            f"    public static let maxDatagram = {rt['max_datagram']}",
+           f"    public static let maxCommand = {rt['max_command']}",
+           f'    public static let protoField = "{rt["proto_field"]}"',
+           f'    public static let deviceField = "{rt["device_field"]}"',
+           f'    public static let fwField = "{rt["fw_field"]}"',
+           f'    public static let throttleField = "{rt["throttle_field"]}"',
+           f'    public static let yawField = "{rt["yaw_field"]}"',
            f"    public static let commandHz = {rt['command_hz']}",
            f"    public static let telemetryHz = {rt['telemetry_hz']}",
            f"    public static let watchdogMs = {rt['watchdog_ms']}",
@@ -140,6 +152,13 @@ def emit_swift(schema):
         camel = f["name"].split("_")[0] + "".join(w.title() for w in f["name"].split("_")[1:])
         out.append(f'    /// {f["doc"]}')
         out.append(f'    public static let {camel} = "{f["name"]}"')
+    out += ["}", ""]
+    out.append("/// The values the car reports in telemetry's `ctl` field.")
+    out.append("public enum CtlOwner {")
+    for v in schema["ctl_values"]:
+        out.append(f'    public static let {v} = "{v}"')
+    joined = ", ".join(f'"{v}"' for v in schema["ctl_values"])
+    out.append(f"    public static let all = [{joined}]")
     out += ["}", ""]
     for d in schema["domains"]:
         n = d["swift"]
@@ -216,6 +235,7 @@ def emit_python(schema):
         f"NETWORK = {schema['network']!r}",
         f"RT = {schema['rt']!r}",
         f"TELEMETRY_FIELDS = {schema['telemetry']['fields']!r}",
+        f"CTL_VALUES = {schema['ctl_values']!r}",
         "",
         # pformat, not json.dumps: this file is a Python module, and JSON writes
         # `true` where Python needs `True`. sort_dicts=False keeps it deterministic.

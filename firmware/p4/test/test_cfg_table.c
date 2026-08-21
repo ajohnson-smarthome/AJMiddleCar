@@ -25,7 +25,11 @@ int main(void) {
     /* The real-time channel's constants come from the same schema as the app's. */
     assert(RT_PORT == 4210);
     assert(RT_WATCHDOG_MS == 300);
-    assert(RT_MAX_DATAGRAM == 96);
+    /* Two caps: the car accepts at most RT_MAX_COMMAND, but telemetry is 119-156 bytes,
+       so a receive buffer sized from the command cap would truncate every frame. */
+    assert(RT_MAX_COMMAND == 96);
+    assert(RT_MAX_DATAGRAM == 320);
+    assert(RT_MAX_COMMAND < RT_MAX_DATAGRAM);
     assert(RT_PROTO == 1);
     for (int i = 0; i < CFG_DOMAIN_COUNT; i++) assert(CFG_DOMAINS[i].n_fields <= CFG_MAX_FIELDS);
 
