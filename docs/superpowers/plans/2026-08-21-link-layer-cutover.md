@@ -42,6 +42,45 @@ Stop, suppress the retreat, drop ownership. Sent when the scene leaves `.active`
 screen is dismissed, and on teardown. **Ownership is not resumable**: after `bye` the app opens a
 new session with a fresh `hello` and a fresh `sid`.
 
+### Session lifecycle — who owns the actuator, and when
+
+This section exists because its absence cost a day. The contract said what `hello` and `bye` mean
+for the *link* and said nothing about what they mean for the *actuator*, so three implementations
+answered that question three different ways — and two of them then grew tests pinning their answer
+as correct.
+
+**Every app→car datagram except `hello` carries `seq`.** A datagram without it is dropped,
+including a goodbye. The app has no reason to send one, and accepting it would mean a frame that
+bypasses replay protection.
+
+**On adopting a session** (`hello` accepted, from any peer):
+
+1. Release `SAFE` if the car holds it, so the previous session's stop does not outlive it.
+2. **Clear the breadcrumb history.** A new session has no path to retrace; retreating along the
+   *previous* driver's path is worse than not retreating at all.
+3. Reset the sequence gate.
+4. Leave the control watchdog **disarmed**. It arms on the first accepted *command*, because that
+   is the thing it measures. Arming it at the handshake means a session whose first command is
+   still in flight trips it.
+
+A repeat `hello` from the same peer with the same sid is answered but does not re-adopt, so a
+retransmitted handshake cannot reset a live session's state.
+
+**On `bye`:**
+
+1. `car_stop(LINK_SRC_SAFE)` — and the result is checked, not discarded.
+2. **Release `SAFE` immediately.** Holding it sticky would suppress the retreat, but it also locks
+   out OTA, the calibration wizard and the console until an app reconnects — you could background
+   the app and then be unable to flash the car over the air.
+3. **Clear the breadcrumb history**, which is what actually suppresses the retreat: `any_motion()`
+   over an empty history is false, so even if the watchdog later trips, the car stops rather than
+   retraces. This is the mechanism, not the sticky grant.
+4. Disarm the control watchdog. The silence after a goodbye is not a loss.
+5. Drop ownership. The next session needs a fresh `hello`.
+
+The two properties this buys, which no single mechanism gives on its own: not one reverse step
+after the driver says stop, and every other actuator source still reachable afterwards.
+
 ### Car → app
 
 **Hello reply**, once per adopted session:
