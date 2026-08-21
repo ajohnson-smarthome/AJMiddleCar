@@ -40,12 +40,12 @@ static void read_radio_version(void) {
 static esp_err_t status_get(httpd_req_t *req) {
     telemetry_t t;
     telemetry_gather(&t);
-    char fields[160];
+    char fields[224];
     if (telemetry_fields(fields, sizeof(fields), &t) < 0) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "telemetry");
     }
     const char *fw = esp_app_get_description()->version;
-    char buf[320];
+    char buf[416];
     int n = snprintf(buf, sizeof(buf),
                      "{\"device\":\"" CAR_DEVICE_ID "\",\"fw\":\"%s\",%s,"
                      "\"radio\":{\"fw\":\"%s\",\"expected\":\"" BOARD_RADIO_SLAVE_FW "\",\"ok\":%s}}",

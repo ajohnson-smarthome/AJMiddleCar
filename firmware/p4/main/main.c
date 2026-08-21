@@ -10,6 +10,7 @@
 #include "identity.h"
 #include "pca9685.h"
 #include "car.h"
+#include "link.h"
 #include "nvs_flash.h"
 #include "wifi_ap.h"
 #include "http_server.h"
@@ -140,7 +141,9 @@ void app_main(void) {
         }
         float t, y;
         if (parse_mix(line, &t, &y) == 0) {
-            car_drive(t, y);
+            if (!car_drive(LINK_SRC_CONSOLE, t, y)) {
+                ESP_LOGW(TAG, "refused: %s holds the actuator", link_src_name(link_owner()));
+            }
         } else {
             ESP_LOGE(TAG, "bad command, expected 'mix <t> <y>' with t,y in [-1,1]");
         }

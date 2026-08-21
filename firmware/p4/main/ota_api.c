@@ -11,11 +11,12 @@
 #include "freertos/task.h"
 #include "http_server.h"
 #include "car.h"
+#include "link.h"
 
 static const char *TAG = "ota_api";
 
 static esp_err_t ota_post(httpd_req_t *req) {
-    car_stop();  // motors off during flashing
+    car_stop(LINK_SRC_OTA);   // sticky: nothing may command the motors during a flash
     if (req->content_len < 4096) {  // reject obviously-bogus uploads before erasing a slot
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "image too small");
     }

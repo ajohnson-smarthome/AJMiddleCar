@@ -13,15 +13,20 @@ typedef struct {
     long     uptime_s;    // seconds
     uint32_t heap;        // free heap, bytes
     bool     calibrated;  // valid calibration present
+    const char *ctl;      // which source owns the actuator ("rt"/"recover"/"none"/…)
+    bool     bus_ok;      // false once a PCA9685 write failed and has not since succeeded
 } telemetry_t;
 
 // Pure: format the live fields (NO surrounding braces) into buf. Returns length, or -1 on truncation.
 // Shared by the WS push ("{<fields>}") and /status ("{\"device\":..,\"fw\":..,<fields>}").
 static inline int telemetry_fields(char *buf, size_t n, const telemetry_t *t) {
     int r = snprintf(buf, n,
-        "\"rssi\":%d,\"ws_fps\":%d,\"wdt_trips\":%u,\"uptime_s\":%ld,\"heap\":%u,\"calibrated\":%s",
+        "\"rssi\":%d,\"ws_fps\":%d,\"wdt_trips\":%u,\"uptime_s\":%ld,\"heap\":%u,"
+        "\"calibrated\":%s,\"ctl\":\"%s\",\"bus_ok\":%s",
         t->rssi, t->ws_fps, (unsigned)t->wdt_trips, t->uptime_s, (unsigned)t->heap,
-        t->calibrated ? "true" : "false");
+        t->calibrated ? "true" : "false",
+        t->ctl ? t->ctl : "none",
+        t->bus_ok ? "true" : "false");
     if (r < 0 || r >= (int)n) return -1;
     return r;
 }
