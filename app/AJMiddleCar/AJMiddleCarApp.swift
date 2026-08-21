@@ -31,8 +31,15 @@ struct AJMiddleCarApp: App {
             // car stays "online" during the connect/update gates, not only while driving.
             .task { conn.onTelemetry = { status.apply($0) }; await flow.startupCheck() }
             .onChange(of: phase) { newPhase in
-                if newPhase == .active { conn.resume(); status.start() }
-                else { conn.pause(); status.stop() }
+                if newPhase == .active {
+                    // Not while the wrong-car screen is up: resuming there would start
+                    // streaming control frames at somebody else's car, which is exactly
+                    // what that screen exists to prevent.
+                    if flow.phase != .wrongCar { conn.resume() }
+                    status.start()
+                } else {
+                    conn.pause(); status.stop()
+                }
             }
     }
 

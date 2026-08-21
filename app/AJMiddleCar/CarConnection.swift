@@ -38,10 +38,17 @@ final class CarConnection: ObservableObject {
     }
 
     func start() {
-        guard !started else { return }
-        started = true
-        connect()
-        armTimer()
+        /* Idempotent per concern, not per call. `started` guards the socket; the timer
+           has its own guard, because pause() cancels the timer and deliberately leaves
+           `started` true. Without this, visiting the wrong-car screen — which pauses —
+           and coming back left the 10 Hz timer dead for the rest of the process: the
+           socket connected, telemetry arrived, the pill said connected, and the
+           joysticks did nothing at all. */
+        if !started {
+            started = true
+            connect()
+        }
+        if timer == nil { armTimer() }
     }
 
     /// The stream runs on its own dispatch timer, not a `Timer` on the main run loop.
