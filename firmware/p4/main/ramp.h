@@ -10,13 +10,19 @@ static inline uint16_t ramp_step(uint16_t current, uint16_t target, uint16_t max
     return next > target ? target : (uint16_t)next;
 }
 
+// Pure: how much a channel may rise in one tick, given the configured 0→full time.
+// ramp_ms shorter than a tick (including 0, "off") means no limit at all.
+static inline uint16_t ramp_max_up_per_tick(uint16_t ramp_ms, uint16_t tick_ms) {
+    if (ramp_ms < tick_ms) return 4095;
+    uint16_t step = (uint16_t)(4095u * tick_ms / ramp_ms);
+    return step ? step : 1;
+}
+
 #ifndef RAMP_HOST_TEST
 #include "esp_err.h"
-// Start the 50 Hz ramp task (sole PCA9685 writer). Loads ramp_ms from NVS (default 300).
+// Load ramp_ms from NVS (default 300). No task: the actuator task lives in link.c.
 esp_err_t ramp_init(void);
-// Set the 8-channel duty target (copied under the ramp lock).
-void ramp_set_target(const uint16_t duty[8]);
-// Acceleration time 0→full in ms (0 = ramp off / instant). Clamped to 0..2000. Persisted by caller.
+// Acceleration time 0→full in ms (0 = ramp off / instant). Clamped to 0..2000.
 void ramp_set_ms(uint16_t ms);
 uint16_t ramp_get_ms(void);
 // Persist the current ramp_ms as a JSON string in NVS.

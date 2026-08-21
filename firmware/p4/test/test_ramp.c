@@ -17,6 +17,15 @@ int main(void) {
     assert(ramp_step(0, 4095, 4095) == 4095);
     // no uint16 overflow near the top
     assert(ramp_step(4090, 4095, 4095) == 4095);
+    // ramp_max_up_per_tick: a full-scale rise spread over ramp_ms
+    assert(ramp_max_up_per_tick(300, 20) == 4095u * 20 / 300);   // 273
+    assert(ramp_max_up_per_tick(2000, 20) == 40);
+    // ramp off, or a ramp shorter than one tick: no limit
+    assert(ramp_max_up_per_tick(0, 20) == 4095);
+    assert(ramp_max_up_per_tick(19, 20) == 4095);
+    assert(ramp_max_up_per_tick(20, 20) == 4095);                // exactly one tick
+    // never zero: a very long ramp still moves
+    assert(ramp_max_up_per_tick(65535, 20) >= 1);
     printf("test_ramp: all passed\n");
     return 0;
 }
