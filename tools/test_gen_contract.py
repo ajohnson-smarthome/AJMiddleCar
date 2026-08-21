@@ -79,5 +79,55 @@ class TestSchema(unittest.TestCase):
             self.assertIn(str(hi), src, f"{hi} is not in the firmware sources")
 
 
+import filecmp
+import subprocess
+import sys
+import tempfile
+
+sys.path.insert(0, str(ROOT / "tools"))
+
+
+class TestDocEmitter(unittest.TestCase):
+    def test_table_has_a_row_per_domain_with_ranges(self):
+        import gen_contract
+        out = gen_contract.emit_doc(load())
+        self.assertIn("| `/wheel` |", out)
+        self.assertIn("`diameter_mm` 20..150", out)
+        self.assertIn("`quad` 1 \\| 2 \\| 4", out)
+        self.assertIn("`enabled` true \\| false", out)
+        for path in ("/ramp", "/trim", "/recover", "/wheel", "/dims"):
+            self.assertIn(f"| `{path}` |", out)
+
+    def test_splice_replaces_only_the_marked_region(self):
+        import gen_contract
+        doc = ("keep me\n" + gen_contract.MARK_BEGIN + "\nstale\n"
+               + gen_contract.MARK_END + "\nkeep me too\n")
+        out = gen_contract.splice(doc, "fresh")
+        self.assertIn("keep me", out)
+        self.assertIn("keep me too", out)
+        self.assertIn("fresh", out)
+        self.assertNotIn("stale", out)
+
+    def test_splice_refuses_a_document_without_markers(self):
+        import gen_contract
+        with self.assertRaises(ValueError):
+            gen_contract.splice("no markers here", "fresh")
+
+
+class TestDeterminism(unittest.TestCase):
+    def test_two_runs_are_byte_identical(self):
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            for d in (a, b):
+                r = subprocess.run([sys.executable, str(ROOT / "tools" / "gen_contract.py"),
+                                    "--out-dir", d], capture_output=True, text=True)
+                self.assertEqual(r.returncode, 0, r.stderr)
+            same, diff, funny = filecmp.cmpfiles(
+                a, b, [str(q.relative_to(a)) for q in pathlib.Path(a).rglob("*") if q.is_file()],
+                shallow=False)
+            self.assertEqual(diff, [])
+            self.assertEqual(funny, [])
+            self.assertTrue(same, "the generator wrote nothing")
+
+
 if __name__ == "__main__":
     unittest.main()

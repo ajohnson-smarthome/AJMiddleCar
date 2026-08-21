@@ -76,16 +76,24 @@ message; `/wheel` and `/dims` instead clamp silently into range, and an unrecogn
 falls back to the default 4. Every accepted POST persists to NVS immediately, and a
 POST of unchanged values does not rewrite flash.
 
+<!-- generated:endpoints -->
+| Endpoint | GET returns | POST body | Ranges |
+|---|---|---|---|
+| `/ramp` | `{"ramp_ms":…}` | same | `ramp_ms` 0..2000 |
+| `/trim` | `{"trim_pct":…}` | same | `trim_pct` -30..30 |
+| `/recover` | `{"enabled":…, "window_ms":…}` | same | `enabled` true \| false<br>`window_ms` 1000..10000 |
+| `/wheel` | `{"diameter_mm":…, "ppr":…, "gear_x100":…, "quad":…}` | same | `diameter_mm` 20..150<br>`ppr` 1..1000<br>`gear_x100` 100..30000<br>`quad` 1 \| 2 \| 4 |
+| `/dims` | `{"track_mm":…, "wheelbase_mm":…}` | same | `track_mm` 60..300<br>`wheelbase_mm` 90..360 |
+<!-- /generated:endpoints -->
+
+Calibration is not a config domain and is not generated — each of its endpoints has its
+own body shape:
+
 | Endpoint | GET returns | POST body | Range |
 |---|---|---|---|
 | `/calib` | `{"calibrated":true}` | — | — |
 | `/calib/spin` | — | `{"pair":0,"dir":1}` | pair `0..3`, dir `0` reverse / `1` forward; pulses ~0.6 s |
 | `/calib/save` | — | `{"wheels":[{"pair":0,"sign":1},…]}` | exactly 4 entries, order FL, FR, RL, RR; `pair` `0..3` unique, `sign` ±1 |
-| `/ramp` | `{"ramp_ms":300}` | `{"ramp_ms":300}` | `0..2000`, 0 disables |
-| `/trim` | `{"trim_pct":0}` | `{"trim_pct":0}` | `-30..30` |
-| `/recover` | `{"enabled":true,"window_ms":3000}` | same | `window_ms` `1000..10000` |
-| `/wheel` | `{"diameter_mm":65,"ppr":11,"gear_x100":2100,"quad":4}` | same | diameter `20..150`, ppr `1..1000`, gear ×100 `100..30000`, quad `1/2/4` |
-| `/dims` | `{"track_mm":130,"wheelbase_mm":210}` | same | track `60..300`, wheelbase `90..360` |
 
 `GET /` returns a one-line plain-text identity. There is no web UI.
 
