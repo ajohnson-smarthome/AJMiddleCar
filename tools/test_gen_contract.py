@@ -171,5 +171,75 @@ class TestSwiftEmitter(unittest.TestCase):
         self.assertIn("Recover(enabled: true, window_ms: 5000)", out)
 
 
+class TestPythonEmitter(unittest.TestCase):
+    def setUp(self):
+        import gen_contract
+        ns = {}
+        exec(gen_contract.emit_python(load()), ns)
+        self.ns = ns
+
+    def test_table(self):
+        self.assertEqual(self.ns["PROTO"], 1)
+        self.assertEqual(self.ns["DEVICE"], "ajmiddlecar")
+        self.assertEqual(self.ns["RT"]["port"], 4210)
+        self.assertEqual(set(self.ns["DOMAINS"]),
+                         {"/ramp", "/trim", "/recover", "/wheel", "/dims"})
+        self.assertEqual(self.ns["DOMAINS"]["/recover"]["defaults"],
+                         {"enabled": True, "window_ms": 5000})
+
+    def test_validate_accepts_the_defaults(self):
+        v = self.ns["validate"]
+        for path, d in self.ns["DOMAINS"].items():
+            ok, why = v(path, dict(d["defaults"]))
+            self.assertTrue(ok, f"{path}: {why}")
+
+    def test_validate_accepts_the_range_edges(self):
+        v = self.ns["validate"]
+        ok, why = v("/wheel", {"diameter_mm": 20, "ppr": 1000, "gear_x100": 100, "quad": 1})
+        self.assertTrue(ok, why)
+        ok, why = v("/trim", {"trim_pct": -30})
+        self.assertTrue(ok, why)
+
+    def test_validate_rejects_out_of_range(self):
+        v = self.ns["validate"]
+        ok, why = v("/wheel", {"diameter_mm": 200, "ppr": 11, "gear_x100": 2100, "quad": 4})
+        self.assertFalse(ok)
+        self.assertIn("diameter_mm", why)
+
+    def test_validate_rejects_a_missing_field(self):
+        v = self.ns["validate"]
+        ok, why = v("/dims", {"track_mm": 130})
+        self.assertFalse(ok)
+        self.assertIn("wheelbase_mm", why)
+
+    def test_validate_rejects_a_bad_enum_and_a_bad_type(self):
+        v = self.ns["validate"]
+        ok, why = v("/wheel", {"diameter_mm": 65, "ppr": 11, "gear_x100": 2100, "quad": 3})
+        self.assertFalse(ok)
+        self.assertIn("quad", why)
+        ok, why = v("/recover", {"enabled": "yes", "window_ms": 5000})
+        self.assertFalse(ok)
+        self.assertIn("enabled", why)
+
+    def test_validate_rejects_an_unknown_path(self):
+        ok, why = self.ns["validate"]("/nope", {})
+        self.assertFalse(ok)
+        self.assertIn("/nope", why)
+
+    def test_bool_is_not_accepted_as_an_int(self):
+        """In Python True == 1, so a bool sneaks past a naive isinstance check."""
+        v = self.ns["validate"]
+        ok, why = v("/ramp", {"ramp_ms": True})
+        self.assertFalse(ok)
+        self.assertIn("ramp_ms", why)
+
+
+class TestDriftCheck(unittest.TestCase):
+    def test_check_script_passes_on_a_clean_tree(self):
+        r = subprocess.run(["bash", str(ROOT / "tools" / "check_contract.sh")],
+                           capture_output=True, text=True, cwd=str(ROOT))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

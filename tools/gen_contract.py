@@ -8,6 +8,7 @@ where the committed output and a fresh run disagree.
 import argparse
 import json
 import pathlib
+import pprint
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -148,6 +149,61 @@ def emit_swift(schema):
     return "\n".join(out)
 
 
+VALIDATE_SRC = '''
+
+def validate(path, body):
+    """Return (True, "") or (False, reason). Mirrors the firmware exactly."""
+    domain = DOMAINS.get(path)
+    if domain is None:
+        return False, f"unknown endpoint {path}"
+    for f in domain["fields"]:
+        name = f["name"]
+        if name not in body:
+            return False, f"missing {name}"
+        v = body[name]
+        if f["type"] == "bool":
+            if not isinstance(v, bool):
+                return False, f"{name} must be a boolean"
+            continue
+        # bool is a subclass of int in Python, so {"ramp_ms": true} would sneak
+        # past a plain isinstance check. The firmware's cJSON_IsNumber does not
+        # accept a JSON boolean, so neither does this.
+        if isinstance(v, bool) or not isinstance(v, int):
+            return False, f"{name} must be an integer"
+        if f["type"] == "enum":
+            if v not in f["values"]:
+                return False, f"{name} must be one of {f['values']}"
+        elif not (f["min"] <= v <= f["max"]):
+            return False, f"{name} must be {f['min']}..{f['max']}"
+    return True, ""
+'''
+
+
+def emit_python(schema):
+    body = {
+        d["path"]: {
+            "key": d["nvs_key"],
+            "defaults": {f["name"]: f["default"] for f in d["fields"]},
+            "fields": d["fields"],
+        }
+        for d in schema["domains"]
+    }
+    return "\n".join([
+        f"# {BANNER}",
+        "",
+        f"PROTO = {schema['proto']}",
+        f"DEVICE = {schema['device']!r}",
+        f"NETWORK = {schema['network']!r}",
+        f"RT = {schema['rt']!r}",
+        "",
+        # pformat, not json.dumps: this file is a Python module, and JSON writes
+        # `true` where Python needs `True`. sort_dicts=False keeps it deterministic.
+        f"DOMAINS = {pprint.pformat(body, indent=4, sort_dicts=False, width=96)}",
+        VALIDATE_SRC.rstrip("\n"),
+        "",
+    ])
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--schema", default=str(SCHEMA))
@@ -166,6 +222,7 @@ def main(argv=None):
 
     write(root / "firmware" / "p4" / "main" / "cfg_table.inc", emit_c(schema))
     write(root / "app" / "AJMiddleCar" / "Generated" / "CarAPI.swift", emit_swift(schema))
+    write(root / "tools" / "mock_car" / "generated.py", emit_python(schema))
 
     return 0
 
