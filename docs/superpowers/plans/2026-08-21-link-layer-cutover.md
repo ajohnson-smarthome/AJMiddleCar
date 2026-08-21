@@ -13,9 +13,13 @@
 
 ## The wire, exactly
 
-UDP, port `RT_PORT` (4210). Every datagram is JSON, at most `RT_MAX_DATAGRAM` (96) bytes.
-Anything larger, malformed, or from a non-owner is dropped without affecting ownership or the
-watchdog.
+UDP, port `RT_PORT` (4210). Every datagram is JSON.
+
+Two size limits, and they answer different questions. The car accepts a datagram of at most
+`RT_MAX_COMMAND` (96 bytes) and drops anything larger, malformed, or from a non-owner, without
+affecting ownership or the watchdog. Both sides read into a buffer of `RT_MAX_DATAGRAM`
+(320 bytes), because a telemetry frame is 119-156 bytes and a receive buffer sized from the
+command cap would truncate every one of them.
 
 ### App → car
 
