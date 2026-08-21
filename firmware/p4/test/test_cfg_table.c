@@ -22,6 +22,11 @@ int main(void) {
     /* The generic handler sizes a stack array from this; a sixth field in the
        schema must break the build, not the runtime. */
     assert(CFG_MAX_FIELDS == 4);
+    /* The real-time channel's constants come from the same schema as the app's. */
+    assert(RT_PORT == 4210);
+    assert(RT_WATCHDOG_MS == 300);
+    assert(RT_MAX_DATAGRAM == 96);
+    assert(RT_PROTO == 1);
     for (int i = 0; i < CFG_DOMAIN_COUNT; i++) assert(CFG_DOMAINS[i].n_fields <= CFG_MAX_FIELDS);
 
     const cfg_field_t *d = find("/wheel", "diameter_mm");

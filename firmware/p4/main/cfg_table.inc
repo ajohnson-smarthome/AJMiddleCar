@@ -33,5 +33,12 @@ static const cfg_domain_t CFG_DOMAINS[] = {
     { "/dims", "dims", CFG_DIMS_FIELDS, 2 },
 };
 
+#define RT_PORT 4210
+#define RT_MAX_DATAGRAM 96
+#define RT_COMMAND_HZ 10
+#define RT_TELEMETRY_HZ 5
+#define RT_WATCHDOG_MS 300
+#define RT_PROTO 1
+
 #define CFG_DOMAIN_COUNT 5
 #define CFG_MAX_FIELDS 4

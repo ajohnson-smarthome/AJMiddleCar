@@ -37,5 +37,8 @@ check(CarContract.proto == 1, "proto")
 check(CarContract.device == "ajmiddlecar", "device")
 check(CarContract.rtPort == 4210, "rt port")
 check(CarContract.watchdogMs == 300, "watchdog")
+check(CarContract.seqField == "seq" && CarContract.byeField == "bye", "rt frame fields")
+check(TelemetryKey.rxFps == "rx_fps" && TelemetryKey.busOk == "bus_ok"
+      && TelemetryKey.ctl == "ctl", "telemetry keys")
 
 if failures == 0 { print("test_carapi: OK") } else { exit(1) }

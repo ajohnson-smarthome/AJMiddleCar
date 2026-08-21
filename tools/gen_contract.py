@@ -94,6 +94,14 @@ def emit_c(schema):
                    f'{len(d["fields"])} }},')
     out.append("};")
     out.append("")
+    rt = schema["rt"]
+    out.append(f'#define RT_PORT {rt["port"]}')
+    out.append(f'#define RT_MAX_DATAGRAM {rt["max_datagram"]}')
+    out.append(f'#define RT_COMMAND_HZ {rt["command_hz"]}')
+    out.append(f'#define RT_TELEMETRY_HZ {rt["telemetry_hz"]}')
+    out.append(f'#define RT_WATCHDOG_MS {rt["watchdog_ms"]}')
+    out.append(f'#define RT_PROTO {schema["proto"]}')
+    out.append("")
     out.append(f"#define CFG_DOMAIN_COUNT {len(schema['domains'])}")
     widest = max(len(d["fields"]) for d in schema["domains"])
     out.append(f"#define CFG_MAX_FIELDS {widest}")
@@ -122,7 +130,17 @@ def emit_swift(schema):
            f"    public static let commandHz = {rt['command_hz']}",
            f"    public static let telemetryHz = {rt['telemetry_hz']}",
            f"    public static let watchdogMs = {rt['watchdog_ms']}",
-           "}", ""]
+           f'    public static let helloField = "{rt["hello_field"]}"',
+           f'    public static let seqField = "{rt["seq_field"]}"',
+           f'    public static let byeField = "{rt["bye_field"]}"',
+           "}", "",
+           "/// The fields the car sends in every telemetry datagram.",
+           "public enum TelemetryKey {"]
+    for f in schema["telemetry"]["fields"]:
+        camel = f["name"].split("_")[0] + "".join(w.title() for w in f["name"].split("_")[1:])
+        out.append(f'    /// {f["doc"]}')
+        out.append(f'    public static let {camel} = "{f["name"]}"')
+    out += ["}", ""]
     for d in schema["domains"]:
         n = d["swift"]
         out.append(f"/// {d['doc']}")
@@ -197,6 +215,7 @@ def emit_python(schema):
         f"DEVICE = {schema['device']!r}",
         f"NETWORK = {schema['network']!r}",
         f"RT = {schema['rt']!r}",
+        f"TELEMETRY_FIELDS = {schema['telemetry']['fields']!r}",
         "",
         # pformat, not json.dumps: this file is a Python module, and JSON writes
         # `true` where Python needs `True`. sort_dicts=False keeps it deterministic.

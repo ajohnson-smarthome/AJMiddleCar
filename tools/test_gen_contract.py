@@ -144,6 +144,12 @@ class TestCEmitter(unittest.TestCase):
         self.assertIn('{ "quad", CFG_ENUM, 1, 4, 4, CFG_WHEEL_QUAD_ALLOWED, 3 }', out)
         self.assertIn("#define CFG_DOMAIN_COUNT 5", out)
         self.assertIn("#define CFG_MAX_FIELDS 4", out)   # /wheel is the widest
+        # The real-time channel's constants reach C from the same schema the app and
+        # the mock read, so the port and the deadline cannot drift between the three.
+        self.assertIn("#define RT_PORT 4210", out)
+        self.assertIn("#define RT_WATCHDOG_MS 300", out)
+        self.assertIn("#define RT_MAX_DATAGRAM 96", out)
+        self.assertIn("#define RT_PROTO 1", out)
 
     def test_every_domain_appears_once(self):
         import gen_contract
@@ -167,6 +173,11 @@ class TestSwiftEmitter(unittest.TestCase):
         self.assertIn('    static let path = "/wheel"', out)
         self.assertIn("public static let rtPort: UInt16 = 4210", out)
         self.assertIn("public static let proto = 1", out)
+        self.assertIn('public static let seqField = "seq"', out)
+        self.assertIn('public static let byeField = "bye"', out)
+        self.assertIn("public enum TelemetryKey {", out)
+        self.assertIn('public static let rxFps = "rx_fps"', out)
+        self.assertIn('public static let busOk = "bus_ok"', out)
 
     def test_default_uses_the_schema_values(self):
         import gen_contract
@@ -181,6 +192,13 @@ class TestPythonEmitter(unittest.TestCase):
         ns = {}
         exec(gen_contract.emit_python(load()), ns)
         self.ns = ns
+
+    def test_telemetry_fields_reach_python(self):
+        names = [f["name"] for f in self.ns["TELEMETRY_FIELDS"]]
+        self.assertEqual(names[0], "seq")
+        self.assertIn("rx_fps", names)
+        self.assertIn("ctl", names)
+        self.assertIn("bus_ok", names)
 
     def test_table(self):
         self.assertEqual(self.ns["PROTO"], 1)
