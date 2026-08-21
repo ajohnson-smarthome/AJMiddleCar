@@ -19,7 +19,10 @@ static esp_err_t ota_post(httpd_req_t *req) {
     // Sticky: nothing may command the motors during a flash. Every failure path below
     // releases it again — a refused upload must not leave the car undriveable until
     // someone pulls the battery, because a failed flash leaves the running image intact.
-    car_stop(LINK_SRC_OTA);
+    if (!car_stop(LINK_SRC_OTA)) {
+        ESP_LOGE(TAG, "could not take the actuator for the flash — refusing the upload");
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "actuator busy");
+    }
     if (req->content_len < 4096) {  // reject obviously-bogus uploads before erasing a slot
         link_release(LINK_SRC_OTA);
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "image too small");

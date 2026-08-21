@@ -60,14 +60,15 @@ bool link_set(link_src_t src, const uint16_t duty[8], uint32_t hold_ms, bool sti
     return granted;
 }
 
-void link_release(link_src_t src) {
-    if (!s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(20)) != pdTRUE) return;
+bool link_release(link_src_t src) {
+    if (!s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(20)) != pdTRUE) return false;
     if (s_arb.owner == src) {
         link_arb_release(&s_arb, src);
         memset(s_target, 0, sizeof(s_target));   /* nobody owns it -> the safe target */
         s_owner_pub = LINK_SRC_NONE;
     }
     xSemaphoreGive(s_lock);
+    return true;
 }
 
 static void link_task(void *arg) {

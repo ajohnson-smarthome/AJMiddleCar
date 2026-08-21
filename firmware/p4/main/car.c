@@ -29,8 +29,14 @@ static motors_config_t s_cfg_buf[2] = {
     },
 };
 static _Atomic(const motors_config_t *) s_cfg = &s_cfg_buf[0];
-static int s_cfg_next = 1;          /* only touched by config writers, which are serialised
-                                       by the single httpd task */
+static int s_cfg_next = 1;          /* touched by car_init (app_main, before the server is
+                                       up) and by /calib/save (the single httpd task), so
+                                       writers never overlap. Two saves within the ~1 us a
+                                       reader spends in motors_plan could reuse a buffer
+                                       under it; the worst case is one wheel wrong for one
+                                       20 ms tick, because motors_plan always writes both
+                                       channels of a pair and so cannot produce
+                                       shoot-through from a torn table. */
 static _Atomic int s_trim_pct = 0;  /* [-30..30] */
 
 static float clamp_unit(float v) {
@@ -69,8 +75,8 @@ bool car_drive(link_src_t src, float throttle, float yaw) {
     return applied;
 }
 
-void car_stop(link_src_t src) {
-    car_drive(src, 0.0f, 0.0f);
+bool car_stop(link_src_t src) {
+    return car_drive(src, 0.0f, 0.0f);
 }
 
 void car_set_calibration(const motors_config_t *cfg) {

@@ -158,6 +158,12 @@ void app_main(void) {
         if (parse_mix(line, &t, &y) == 0) {
             if (!car_drive(LINK_SRC_CONSOLE, t, y)) {
                 ESP_LOGW(TAG, "refused: %s holds the actuator", link_src_name(link_owner()));
+            } else if (t == 0.0f && y == 0.0f) {
+                /* A console grant is sticky — that is the documented bench behaviour,
+                   so `mix 1 0` runs until told otherwise. But `mix 0 0` means "done",
+                   and holding on after that would refuse the auto-return for the rest
+                   of the boot. It is the only sticky source a human enters by hand. */
+                link_release(LINK_SRC_CONSOLE);
             }
         } else {
             ESP_LOGE(TAG, "bad command, expected 'mix <t> <y>' with t,y in [-1,1]");

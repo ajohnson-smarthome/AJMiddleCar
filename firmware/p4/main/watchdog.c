@@ -39,7 +39,9 @@ static void wdt_cb(TimerHandle_t t) {
         /* The stream is gone. Revoke its grant explicitly rather than waiting for it
            to lapse at the same instant this fires, so recovery is not refused by a
            grant that is technically still alive. */
-        link_release(LINK_SRC_RT);
+        if (!link_release(LINK_SRC_RT)) {
+            ESP_LOGE(TAG, "could not revoke the dead stream's grant");
+        }
         recovery_on_link_lost();
         s_armed = false;  // disarm until traffic resumes
     }

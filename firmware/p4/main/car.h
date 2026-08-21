@@ -23,8 +23,10 @@ void car_init(void);
 bool car_drive(link_src_t src, float throttle, float yaw);
 
 // Safety stop on behalf of `src` — car_drive(src, 0, 0). Subject to the same
-// arbitration, so a stop from a low-priority source can be refused.
-void car_stop(link_src_t src);
+// arbitration, so a stop from a low-priority source can be refused; the result is
+// returned rather than discarded, because a silently dropped stop is the failure
+// class this whole module exists to remove.
+bool car_stop(link_src_t src);
 
 // Replace the active calibration table (e.g. after the user saves a new one).
 // Publishes a new immutable copy; callers are serialised by the single httpd task.

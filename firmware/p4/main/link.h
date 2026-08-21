@@ -95,8 +95,10 @@ esp_err_t link_init(void);
  * as applied — the control watchdog is fed only on a true return. */
 bool link_set(link_src_t src, const uint16_t duty[8], uint32_t hold_ms, bool sticky);
 
-/* Give up ownership held by `src`. Harmless if `src` does not hold it. */
-void link_release(link_src_t src);
+/* Give up ownership held by `src`. Harmless if `src` does not hold it. Returns false
+ * only when the lock could not be taken — the caller still does not own the actuator,
+ * but the safe target was not written either, so a safety caller should say so. */
+bool link_release(link_src_t src);
 
 /* Who owns the actuator right now, for telemetry and logs. */
 link_src_t link_owner(void);
