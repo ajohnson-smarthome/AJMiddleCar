@@ -75,8 +75,13 @@ outranks me" from "the car is not hearing me". A car retreating under its own co
 with `bus_ok: false` is reachable, updatable and undriveable — a state worth distinguishing from
 being offline, and the one a car boots into when its I2C bus is unplugged.
 
-Only one client is served: the socket of the most recent connection wins, and telemetry stops
-being pushed to a socket that errors.
+One client is served at a time: the car remembers the socket of whichever client most recently
+sent a control frame, and pushes telemetry there. It does not close a displaced socket — a second
+client can still send commands, and the two will fight. Strict eviction arrives with the UDP
+channel, where the sender's address is part of every datagram.
+
+A failed push does **not** stop the pushing: a full send buffer is a moment, not a disconnection.
+A socket that is no longer a WebSocket is detected as such and dropped.
 
 ## Configuration — REST
 
@@ -104,6 +109,11 @@ own body shape:
 | `/calib` | `{"calibrated":true}` | — | — |
 | `/calib/spin` | — | `{"pair":0,"dir":1}` | pair `0..3`, dir `0` reverse / `1` forward; pulses ~0.6 s. `409` when a higher-priority source holds the actuator — the wheel did **not** turn, and a client must not advance its wizard |
 | `/calib/save` | — | `{"wheels":[{"pair":0,"sign":1},…]}` | exactly 4 entries, order FL, FR, RL, RR; `pair` `0..3` unique, `sign` ±1 |
+
+A successful POST answers `{"ok":true}`. A rejected one answers `4xx` with
+`{"error":"…","field":"…"}`, where `field` names the offending key — or is empty when the fault is
+with the body as a whole. Both carry `Content-Type: application/json`. The body may arrive in any
+number of TCP segments; the car reads until `Content-Length` is satisfied.
 
 `GET /` returns a one-line plain-text identity. There is no web UI.
 
