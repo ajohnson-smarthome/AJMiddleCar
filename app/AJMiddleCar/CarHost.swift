@@ -4,11 +4,14 @@ import Foundation
 /// real-device builds talk to the car's softAP at 192.168.4.1.
 enum CarHost {
     #if targetEnvironment(simulator)
-    static let httpBase = "http://127.0.0.1:8080"
-    static let wsURL    = "ws://127.0.0.1:8080/ws"
+    static let host = "127.0.0.1"
+    static let port: UInt16 = 8080
     #else
-    static let httpBase = "http://192.168.4.1"
-    static let wsURL    = "ws://192.168.4.1/ws"
+    static let host = "192.168.4.1"
+    static let port: UInt16 = 80
     #endif
+
+    static var httpBase: String { "http://\(host):\(port)" }
+    static var wsURL: String { "ws://\(host):\(port)/ws" }
     static var statusURL: String { httpBase + "/status" }
 }

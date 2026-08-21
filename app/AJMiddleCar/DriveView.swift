@@ -213,7 +213,14 @@ struct DriveView: View {
                 showCalib = true
             }
         }
-        .sheet(isPresented: $showCalib) {
+        .sheet(isPresented: $showCalib, onDismiss: {
+            // The wizard is interactiveDismissDisabled, so the only way it closes is its own
+            // dismiss() after a save the car accepted. Treat that as "calibrated" for the
+            // purposes of the guard below: the telemetry frame already in flight was computed
+            // before the write and still says false, and without this the very first
+            // calibration re-opens the sheet the instant it closes.
+            lastCalibTrue = Date()
+        }) {
             NavigationStack {
                 CarDimensionsView(palette: p, wizard: true)  // step 1 → Wheel → Calibration
             }

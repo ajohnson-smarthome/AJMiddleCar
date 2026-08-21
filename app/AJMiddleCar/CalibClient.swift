@@ -1,20 +1,17 @@
 import Foundation
 
-/// REST client for the car's calibration endpoints (uses CarHost's base address,
-/// so it talks to the localhost mock in the simulator and 192.168.4.1 on device).
+/// REST client for the car's calibration endpoints.
+///
+/// Runs over `CarHTTP` — a connection bound to the Wi-Fi interface — because `URLSession` stops
+/// reaching the car once iOS decides its network has no internet. See `CarNet`.
 @MainActor
 final class CalibClient {
-    private var base: String { CarHost.httpBase }
-
     func fetchCalibrated() async -> Bool {
-        guard let url = URL(string: base + "/calib") else { return false }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            if let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                return (j["calibrated"] as? Bool) ?? false
-            }
-        } catch {}
-        return false
+        guard let r = await CarHTTP.get("/calib"), r.status == 200,
+              let j = try? JSONSerialization.jsonObject(with: r.body) as? [String: Any] else {
+            return false
+        }
+        return (j["calibrated"] as? Bool) ?? false
     }
 
     func spin(pair: Int, dir: Int) async {
@@ -28,13 +25,6 @@ final class CalibClient {
 
     @discardableResult
     private func post(_ path: String, body: String) async -> Bool {
-        guard let url = URL(string: base + path) else { return false }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.httpBody = body.data(using: .utf8)
-        do {
-            let (_, resp) = try await URLSession.shared.data(for: req)
-            return (resp as? HTTPURLResponse)?.statusCode == 200
-        } catch { return false }
+        await CarHTTP.post(path, body: Data(body.utf8))?.status == 200
     }
 }
