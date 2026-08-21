@@ -5,6 +5,11 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+// Who is asking. The two consumers keep separate frame-rate accumulators: sharing them
+// meant a /status poll consumed the push's measurement interval, so the number both
+// reported was a function of how the callers interleaved rather than of the uplink.
+typedef enum { TELEM_PUSH, TELEM_STATUS, TELEM_CONSUMERS } telem_consumer_t;
+
 // Live telemetry snapshot (changing fields only; device/fw stay in /status bootstrap).
 typedef struct {
     int      rssi;        // dBm, 0 = no data
@@ -33,7 +38,7 @@ static inline int telemetry_fields(char *buf, size_t n, const telemetry_t *t) {
 
 #ifndef TELEMETRY_HOST_TEST
 #include "esp_err.h"
-void      telemetry_gather(telemetry_t *out);  // read live values (IDF)
+void      telemetry_gather(telemetry_t *out, telem_consumer_t who);  // read live values (IDF)
 int       telemetry_json(char *buf, size_t n); // gather + "{<fields>}" for the WS push
 esp_err_t telemetry_start(void);               // start the 5 Hz push timer
 #endif

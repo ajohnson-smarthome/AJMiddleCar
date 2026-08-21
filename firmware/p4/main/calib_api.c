@@ -26,8 +26,8 @@ static int read_body(httpd_req_t *req, char *buf, size_t n) {
 
 // GET /calib -> {"calibrated":true|false}
 static esp_err_t calib_get(httpd_req_t *req) {
-    motors_config_t tmp;
-    bool cal = calibration_load(&tmp);
+    /* The cached flag, not a flash read: a GET of a boolean should not open NVS. */
+    bool cal = calibration_is_valid();
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, cal ? "{\"calibrated\":true}" : "{\"calibrated\":false}");
 }
@@ -99,6 +99,7 @@ static esp_err_t calib_save(httpd_req_t *req) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid calibration");
     }
     car_set_calibration(&cfg);
+    calibration_set_valid(true);
     ESP_LOGI(TAG, "calibration saved and applied");
     return httpd_resp_sendstr(req, "ok");
 }

@@ -118,6 +118,7 @@ void car_init(void) {
     if (calibration_load(&loaded)) {
         car_set_calibration(&loaded);
     } else {
+        calibration_set_valid(false);
         ESP_LOGW(TAG, "no NVS calibration — using default mapping");
     }
 

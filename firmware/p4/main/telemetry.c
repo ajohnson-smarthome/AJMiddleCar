@@ -1,5 +1,7 @@
 #include "telemetry.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_heap_caps.h"
 #include "esp_wifi.h"
 #include "esp_log.h"
@@ -10,66 +12,81 @@
 #include "link.h"
 
 static const char *TAG = "telemetry";
-#define PUSH_PERIOD_US 200000   // 5 Hz
+#define PUSH_PERIOD_MS 200   // 5 Hz
 
-static int ap_client_rssi(void) {
-    wifi_sta_list_t sta;
-    if (esp_wifi_ap_get_sta_list(&sta) != ESP_OK || sta.num == 0) return 0;
-    return sta.sta[0].rssi;
+/* The AP-side RSSI costs an esp_wifi_ap_get_sta_list, which on this board is an RPC
+   across SDIO to the C6 — the same class of call whose timeout used to cost five
+   seconds of every boot. It is a display value that changes slowly, so it is sampled
+   at 1 Hz rather than on every frame. */
+static int      s_rssi_cached = 0;
+static int64_t  s_rssi_at_us  = 0;
+
+static int ap_client_rssi_cached(void) {
+    int64_t now = esp_timer_get_time();
+    if (s_rssi_at_us == 0 || now - s_rssi_at_us > 1000000) {
+        s_rssi_at_us = now;
+        wifi_sta_list_t sta;
+        s_rssi_cached = (esp_wifi_ap_get_sta_list(&sta) == ESP_OK && sta.num > 0)
+                      ? sta.sta[0].rssi : 0;
+    }
+    return s_rssi_cached;
 }
 
-// WS frames/sec between consecutive gather() calls (0 on first call or after a >10s gap).
-static int ws_fps_now(void) {
-    static uint32_t last_frames = 0;
-    static int64_t last_us = 0;
+/* One accumulator per consumer — see telem_consumer_t. */
+static int fps_now(telem_consumer_t who) {
+    static uint32_t last_frames[TELEM_CONSUMERS];
+    static int64_t  last_us[TELEM_CONSUMERS];
     uint32_t frames = ws_control_frames();
     int64_t now = esp_timer_get_time();
     int fps = 0;
-    if (last_us != 0) {
-        int64_t dt = now - last_us;
+    if (last_us[who] != 0) {
+        int64_t dt = now - last_us[who];
         if (dt > 0 && dt < 10 * 1000000LL) {
-            fps = (int)(((int64_t)(uint32_t)(frames - last_frames) * 1000000LL) / dt);
+            fps = (int)(((int64_t)(uint32_t)(frames - last_frames[who]) * 1000000LL) / dt);
         }
     }
-    last_frames = frames;
-    last_us = now;
+    last_frames[who] = frames;
+    last_us[who] = now;
     return fps;
 }
 
-void telemetry_gather(telemetry_t *out) {
-    motors_config_t tmp;
-    out->rssi       = ap_client_rssi();
-    out->ws_fps     = ws_fps_now();
+void telemetry_gather(telemetry_t *out, telem_consumer_t who) {
+    out->rssi       = ap_client_rssi_cached();
+    out->ws_fps     = fps_now(who);
     out->wdt_trips  = watchdog_trips();
     out->uptime_s   = (long)(esp_timer_get_time() / 1000000);
     out->heap       = (uint32_t)esp_get_free_heap_size();
-    out->calibrated = calibration_load(&tmp);
+    out->calibrated = calibration_is_valid();
     out->ctl        = link_src_name(link_owner());
     out->bus_ok     = link_bus_ok();
 }
 
 int telemetry_json(char *buf, size_t n) {
     telemetry_t t;
-    telemetry_gather(&t);
+    telemetry_gather(&t, TELEM_PUSH);
     char fields[224];
     if (telemetry_fields(fields, sizeof(fields), &t) < 0) return -1;
     int r = snprintf(buf, n, "{%s}", fields);
     return (r < 0 || r >= (int)n) ? -1 : r;
 }
 
-static void push_cb(void *arg) {
+static void push_task(void *arg) {
     (void)arg;
-    char buf[288];
-    int n = telemetry_json(buf, sizeof(buf));
-    if (n > 0) ws_control_send(buf, (size_t)n);
+    TickType_t last = xTaskGetTickCount();
+    for (;;) {
+        vTaskDelayUntil(&last, pdMS_TO_TICKS(PUSH_PERIOD_MS));
+        char buf[288];
+        int n = telemetry_json(buf, sizeof(buf));
+        if (n > 0) ws_control_send(buf, (size_t)n);
+    }
 }
 
 esp_err_t telemetry_start(void) {
-    const esp_timer_create_args_t args = { .callback = push_cb, .name = "telemetry" };
-    esp_timer_handle_t h;
-    esp_err_t e = esp_timer_create(&args, &h);
-    if (e != ESP_OK) return e;
-    e = esp_timer_start_periodic(h, PUSH_PERIOD_US);
-    if (e == ESP_OK) ESP_LOGI(TAG, "telemetry push started (5 Hz)");
-    return e;
+    /* A task, not an esp_timer callback. httpd_ws_send_frame_async writes from the
+       calling context, so a client with a full receive window blocks it for as long as
+       the socket's send timeout — which on the esp_timer task, at priority 22, delays
+       every other timer in the system, IDF's own included. */
+    if (xTaskCreate(push_task, "telemetry", 3072, NULL, 4, NULL) != pdPASS) return ESP_FAIL;
+    ESP_LOGI(TAG, "telemetry push started (5 Hz)");
+    return ESP_OK;
 }

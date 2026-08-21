@@ -39,7 +39,7 @@ static void read_radio_version(void) {
 
 static esp_err_t status_get(httpd_req_t *req) {
     telemetry_t t;
-    telemetry_gather(&t);
+    telemetry_gather(&t, TELEM_STATUS);
     char fields[224];
     if (telemetry_fields(fields, sizeof(fields), &t) < 0) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "telemetry");

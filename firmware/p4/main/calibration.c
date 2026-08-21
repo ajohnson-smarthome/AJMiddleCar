@@ -5,6 +5,11 @@
 #include "cfg_json.h"
 
 static const char *TAG = "calib";
+
+static bool s_valid = false;
+
+bool calibration_is_valid(void) { return s_valid; }
+void calibration_set_valid(bool v) { s_valid = v; }
 #define KEY "calib"
 
 bool calibration_load(motors_config_t *out) {
@@ -29,6 +34,7 @@ bool calibration_load(motors_config_t *out) {
     cJSON_Delete(j);
     if (!calibration_valid(&tmp)) return false;
     *out = tmp;
+    s_valid = true;
     ESP_LOGI(TAG, "loaded calibration from NVS");
     return true;
 }
