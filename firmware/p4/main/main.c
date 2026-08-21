@@ -90,8 +90,15 @@ static int parse_mix(const char *line, float *t, float *y) {
 }
 
 void app_main(void) {
-    ESP_ERROR_CHECK(pca9685_bus_init(BOARD_I2C_SDA, BOARD_I2C_SCL, BOARD_I2C_HZ));
-    ESP_ERROR_CHECK(pca9685_init(BOARD_PWM_HZ));
+    /* A dead motor bus must not take the radio with it. Booting into the network
+       with bus_ok=false is diagnosable and OTA-recoverable; a boot loop needs a
+       USB cable and tells you nothing. */
+    bool motors_ok = pca9685_bus_init(BOARD_I2C_SDA, BOARD_I2C_SCL, BOARD_I2C_HZ) == ESP_OK
+                  && pca9685_init(BOARD_PWM_HZ) == ESP_OK;
+    if (!motors_ok) {
+        ESP_LOGE(TAG, "motor bus did not come up — the car will not drive, "
+                      "but the network and OTA will. Check I2C wiring and power.");
+    }
 
     esp_err_t nvs = nvs_flash_init();
     if (nvs == ESP_ERR_NVS_NO_FREE_PAGES || nvs == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -100,7 +107,8 @@ void app_main(void) {
     }
     ESP_ERROR_CHECK(nvs);
 
-    ESP_ERROR_CHECK(ramp_init());   // start the sole PCA9685 writer before any car_* call
+    ESP_ERROR_CHECK(ramp_init());   // ramp_ms must be loaded before the actuator task ticks
+    ESP_ERROR_CHECK(link_init());   // the sole PCA9685 writer; zeroes the chip at boot
     car_init();
     wheel_init();                          // load wheel/encoder params (NVS or defaults)
     dims_init();                           // load car dimensions (NVS or defaults)
