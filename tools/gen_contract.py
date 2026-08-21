@@ -95,6 +95,8 @@ def emit_c(schema):
     out.append("};")
     out.append("")
     out.append(f"#define CFG_DOMAIN_COUNT {len(schema['domains'])}")
+    widest = max(len(d["fields"]) for d in schema["domains"])
+    out.append(f"#define CFG_MAX_FIELDS {widest}")
     return "\n".join(out)
 
 

@@ -37,4 +37,10 @@ bool calibration_load(motors_config_t *out);
 // if invalid, otherwise the NVS commit result.
 esp_err_t calibration_save(const motors_config_t *cfg);
 
+// Whether a valid calibration is loaded, answered from RAM. The car reports this at
+// 5 Hz, and reading flash and running a JSON parse that often — from a timer callback
+// at that — is not a price a status flag is worth.
+bool calibration_is_valid(void);
+void calibration_set_valid(bool v);
+
 #endif // CALIBRATION_H

@@ -128,6 +128,15 @@ esp_err_t pca9685_set_pwm(uint8_t channel, uint16_t duty) {
     return e;
 }
 
+esp_err_t pca9685_bus_recover(void) {
+    /* Clocks the bus until a slave holding SDA low lets go. This is the standard
+       recovery for a wedged I2C bus and it is the only lever the firmware has: the
+       PCA9685's outputs cannot be commanded while the bus is stuck, so without it the
+       motors hold their last duty until the battery comes off. */
+    if (bus_handle == NULL) return ESP_ERR_INVALID_STATE;
+    return i2c_master_bus_reset(bus_handle);
+}
+
 esp_err_t pca9685_zero_all(void) {
     /* Full-off on all sixteen channels of both boards, not just the four per chip
        this project drives: the whole point is to catch output state the firmware
