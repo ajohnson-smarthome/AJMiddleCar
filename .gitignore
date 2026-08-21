@@ -19,3 +19,7 @@ firmware/p4/test/test_*
 # is the reproducibility guarantee, not 37 MB of vendored source.
 firmware/p4/managed_components/
 firmware/c6/managed_components/
+
+# Python bytecode from the contract generator and its tests
+__pycache__/
+*.pyc
