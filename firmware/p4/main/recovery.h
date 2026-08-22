@@ -3,6 +3,12 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#ifdef ESP_PLATFORM
+#  include "esp_err.h"
+#else
+   typedef int esp_err_t;
+#  define ESP_OK 0
+#endif
 
 // Configurable history-window bounds (milliseconds).
 #define RECOVER_WIN_MIN_MS 1000
@@ -31,8 +37,9 @@ void recovery_forget(void);
 // Config getters/setters (RAM; the API layer persists to NVS).
 void recovery_set_config(bool enabled, uint16_t window_ms);
 void recovery_get_config(bool *enabled, uint16_t *window_ms);
-// Persist the current enabled+window config as a JSON string in NVS.
-void recovery_save(void);
+// Persist the current enabled+window config as a JSON string in NVS, and say
+// whether it landed.
+esp_err_t recovery_save(void);
 
 // Pure (host-tested): reverse a command = negate both axes.
 static inline void recovery_reverse(float t, float y, float *rt, float *ry) {

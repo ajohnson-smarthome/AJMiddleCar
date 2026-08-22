@@ -27,11 +27,11 @@ void wheel_get(wheel_params_t *out) {
 }
 
 // JSON string in NVS under "wheel": {"diameter_mm":..,"ppr":..,"gear_x100":..,"quad":..}
-void wheel_save(void) {
+esp_err_t wheel_save(void) {
     char buf[96];
     snprintf(buf, sizeof(buf), "{\"diameter_mm\":%u,\"ppr\":%u,\"gear_x100\":%u,\"quad\":%u}",
              s_params.diameter_mm, s_params.ppr, s_params.gear_x100, s_params.quad);
-    cfg_json_save("wheel", buf);
+    return cfg_json_save("wheel", buf);
 }
 
 void wheel_init(void) {

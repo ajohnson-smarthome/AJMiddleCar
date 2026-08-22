@@ -22,9 +22,9 @@ _Static_assert(CFG_MAX_FIELDS <= 8, "widen vals[] below");
 /* Values move as an array of int32 in the field order the generated table declares, so
    the generic handler never needs to know a domain's struct layout. The binding is the
    one part of a config domain a schema cannot describe. */
-typedef void (*cfg_get_fn)(int32_t *out);
-typedef void (*cfg_set_fn)(const int32_t *in);
-typedef void (*cfg_save_fn)(void);
+typedef void      (*cfg_get_fn)(int32_t *out);
+typedef bool      (*cfg_set_fn)(const int32_t *in);
+typedef esp_err_t (*cfg_save_fn)(void);
 
 typedef struct {
     const char *path;
@@ -34,36 +34,39 @@ typedef struct {
 } cfg_binding_t;
 
 static void ramp_get_v(int32_t *o) { o[0] = ramp_get_ms(); }
-static void ramp_set_v(const int32_t *v) { ramp_set_ms((uint16_t)v[0]); }
+static bool ramp_set_v(const int32_t *v) { return ramp_set_ms((uint16_t)v[0]); }
 
 static void trim_get_v(int32_t *o) { o[0] = car_get_trim(); }
-static void trim_set_v(const int32_t *v) { car_set_trim((int8_t)v[0]); }
+static bool trim_set_v(const int32_t *v) { car_set_trim((int8_t)v[0]); return true; }
 
 static void recover_get_v(int32_t *o) {
     bool en; uint16_t win;
     recovery_get_config(&en, &win);
     o[0] = en ? 1 : 0; o[1] = win;
 }
-static void recover_set_v(const int32_t *v) {
+static bool recover_set_v(const int32_t *v) {
     recovery_set_config(v[0] != 0, (uint16_t)v[1]);
+    return true;
 }
 
 static void wheel_get_v(int32_t *o) {
     wheel_params_t w; wheel_get(&w);
     o[0] = w.diameter_mm; o[1] = w.ppr; o[2] = w.gear_x100; o[3] = w.quad;
 }
-static void wheel_set_v(const int32_t *v) {
+static bool wheel_set_v(const int32_t *v) {
     wheel_params_t w = { (uint16_t)v[0], (uint16_t)v[1], (uint16_t)v[2], (uint8_t)v[3] };
     wheel_set(&w);
+    return true;
 }
 
 static void dims_get_v(int32_t *o) {
     dims_params_t d; dims_get(&d);
     o[0] = d.track_mm; o[1] = d.wheelbase_mm;
 }
-static void dims_set_v(const int32_t *v) {
+static bool dims_set_v(const int32_t *v) {
     dims_params_t d = { (uint16_t)v[0], (uint16_t)v[1] };
     dims_set(&d);
+    return true;
 }
 
 static const cfg_binding_t BINDINGS[] = {
@@ -147,6 +150,13 @@ static esp_err_t cfg_post(httpd_req_t *req) {
             cJSON_Delete(j);
             return api_reply_error(req, "400 Bad Request", f->name, "expected a number");
         }
+        /* cJSON's valueint TRUNCATES a fractional number, so {"trim_pct":25.7} used to
+           apply as 25 under a 200 while the generated validator (the mock, conformance)
+           answered 400 "must be an integer" for the same bytes. Same rule both sides. */
+        if (it->valuedouble != (double)it->valueint) {
+            cJSON_Delete(j);
+            return api_reply_error(req, "400 Bad Request", f->name, "not an integer");
+        }
         int32_t v = (int32_t)it->valueint;
         if (f->type == CFG_ENUM) {
             bool ok = false;
@@ -163,8 +173,12 @@ static esp_err_t cfg_post(httpd_req_t *req) {
     }
     cJSON_Delete(j);
 
-    b->set(vals);
-    b->save();
+    if (!b->set(vals)) {
+        return api_reply_error(req, "500 Internal Server Error", "", "could not apply");
+    }
+    if (b->save() != ESP_OK) {
+        return api_reply_error(req, "500 Internal Server Error", "", "could not persist");
+    }
     return api_reply_ok(req);
 }
 

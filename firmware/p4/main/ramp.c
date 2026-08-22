@@ -13,12 +13,18 @@ static const char *TAG = "ramp";
 static SemaphoreHandle_t s_lock;          // protects s_ramp_ms
 static uint16_t s_ramp_ms = RAMP_MS_DEFAULT;
 
-void ramp_set_ms(uint16_t ms) {
+bool ramp_set_ms(uint16_t ms) {
     if (ms > RAMP_MS_MAX) ms = RAMP_MS_MAX;
-    if (s_lock && xSemaphoreTake(s_lock, pdMS_TO_TICKS(200)) != pdTRUE) return;
+    if (s_lock && xSemaphoreTake(s_lock, pdMS_TO_TICKS(200)) != pdTRUE) {
+        /* Unreachable while the lock guards one u16 — but a timed-out set that then
+           answered ok:true persisted the OLD value under a success reply. */
+        ESP_LOGE(TAG, "ramp lock busy — %u not applied", ms);
+        return false;
+    }
     s_ramp_ms = ms;
     if (s_lock) xSemaphoreGive(s_lock);
     ESP_LOGI(TAG, "ramp_ms = %u", ms);
+    return true;
 }
 
 uint16_t ramp_get_ms(void) {
@@ -29,10 +35,10 @@ uint16_t ramp_get_ms(void) {
     return ms;
 }
 
-void ramp_save(void) {
+esp_err_t ramp_save(void) {
     char buf[32];
     snprintf(buf, sizeof(buf), "{\"ramp_ms\":%u}", ramp_get_ms());
-    cfg_json_save("ramp", buf);
+    return cfg_json_save("ramp", buf);
 }
 
 esp_err_t ramp_init(void) {

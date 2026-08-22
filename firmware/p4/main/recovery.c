@@ -176,12 +176,12 @@ void recovery_on_link_lost(void) {
     xTaskNotifyGive(task);
 }
 
-void recovery_save(void) {
+esp_err_t recovery_save(void) {
     bool en; uint16_t win;
     recovery_get_config(&en, &win);
     char buf[64];
     snprintf(buf, sizeof(buf), "{\"enabled\":%s,\"window_ms\":%u}", en ? "true" : "false", win);
-    cfg_json_save("recover", buf);
+    return cfg_json_save("recover", buf);
 }
 
 void recovery_init(void) {
