@@ -130,7 +130,7 @@ final class CarLink: ObservableObject {
                 }
                 if let seq = t.seq { lastTelemetrySeq = seq }
                 telemetry = t
-                lastTelemetry = t
+                if lastTelemetry != t { lastTelemetry = t }
                 lastFrame = ContinuousClock.now
             case .sessionClosed:
                 // A foreign identity — or a protocol we cannot speak — survives the session that
@@ -150,7 +150,10 @@ final class CarLink: ObservableObject {
         if frozen { return }
         #endif
         let age = lastFrame.map { (ContinuousClock.now - $0).seconds }
-        state = LinkRule.compose(path: pathState, session: session, telemetry: telemetry, age: age)
+        let next = LinkRule.compose(path: pathState, session: session, telemetry: telemetry, age: age)
+        // Only on a real change: the decay tick re-asks five times a second, and `@Published`
+        // emits on assignment whether or not the value moved.
+        if state != next { state = next }
     }
 
     private func fetchRadio() {
