@@ -106,8 +106,13 @@ void app_main(void) {
 
     esp_err_t nvs = nvs_flash_init();
     if (nvs == ESP_ERR_NVS_NO_FREE_PAGES || nvs == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        /* The migration erases the bench-earned calibration and every config domain.
+           There is no snapshot/restore (deferred — 2026-08-23 audit); the flag is how
+           the app tells the user the wizard must be re-run, instead of silence. */
+        ESP_LOGW(TAG, "NVS format changed — erasing (calibration and config are lost)");
         ESP_ERROR_CHECK(nvs_flash_erase());
         nvs = nvs_flash_init();
+        status_api_note_nvs_wiped();
     }
     ESP_ERROR_CHECK(nvs);
 

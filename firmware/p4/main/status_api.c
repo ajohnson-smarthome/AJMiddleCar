@@ -11,6 +11,7 @@
 #include "contract.h"
 #include <string.h>
 #include "esp_hosted.h"
+#include "esp_ota_ops.h"
 #include "api_util.h"
 
 static const char *TAG = "status_api";
@@ -24,6 +25,24 @@ static const char *TAG = "status_api";
 // the handler — then only read, so the cross-task safety is ordering, not a lock.
 static char s_radio_fw[24] = "unavailable";
 static bool s_radio_ok     = false;
+
+/* Did the bootloader revert the previous OTA? The other slot is left ESP_OTA_IMG_ABORTED
+ * exactly when an update failed its first boot — the one signal a client has that the
+ * image it flashed did not survive. Read once at start: the answer cannot change without
+ * a reboot. */
+static bool s_rollback  = false;
+static bool s_nvs_wiped = false;
+
+void status_api_note_nvs_wiped(void) { s_nvs_wiped = true; }
+
+static void read_rollback_state(void) {
+    const esp_partition_t *other = esp_ota_get_next_update_partition(NULL);
+    esp_ota_img_states_t st;
+    s_rollback = other != NULL &&
+                 esp_ota_get_state_partition(other, &st) == ESP_OK &&
+                 st == ESP_OTA_IMG_ABORTED;
+    if (s_rollback) ESP_LOGW(TAG, "the previous OTA was rolled back by the bootloader");
+}
 
 static void read_radio_version(void) {
     esp_hosted_coprocessor_fwver_t v;
@@ -54,14 +73,17 @@ static esp_err_t status_get(httpd_req_t *req) {
         return api_reply_error(req, "500 Internal Server Error", "", "telemetry unavailable");
     }
     const char *fw = esp_app_get_description()->version;
-    char buf[416];
+    char buf[480];
     /* The same three keys the hello reply carries, spelled from the same schema: one
        wire value must not have two spellings, or a rename presents as "wrong car". */
     int n = snprintf(buf, sizeof(buf),
                      "{\"" RT_KEY_DEVICE "\":\"" CAR_DEVICE_ID "\",\"" RT_KEY_FW "\":\"%s\","
                      "\"" RT_KEY_PROTO "\":%d,%s,"
+                     "\"rollback\":%s,\"nvs_wiped\":%s,"
                      "\"radio\":{\"" RT_KEY_FW "\":\"%s\",\"expected\":\"" BOARD_RADIO_SLAVE_FW "\",\"ok\":%s}}",
-                     fw, RT_PROTO, fields, s_radio_fw, s_radio_ok ? "true" : "false");
+                     fw, RT_PROTO, fields,
+                     s_rollback ? "true" : "false", s_nvs_wiped ? "true" : "false",
+                     s_radio_fw, s_radio_ok ? "true" : "false");
     if (n < 0 || n >= (int)sizeof(buf)) {
         /* Same rule as the hello reply: truncated identity JSON parses as a different
            car (or as nothing), and shipping it under a 200 hides exactly that. Only
@@ -77,6 +99,7 @@ esp_err_t status_api_start(void) {
     httpd_handle_t server = http_server_get_handle();
     if (server == NULL) { ESP_LOGE(TAG, "http server not started"); return ESP_FAIL; }
     read_radio_version();
+    read_rollback_state();
     httpd_uri_t u = { .uri = "/status", .method = HTTP_GET, .handler = status_get };
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &u), TAG, "reg /status");
     ESP_LOGI(TAG, "status endpoint registered");
