@@ -87,7 +87,15 @@ final class CarLink: ObservableObject {
 
     private func beginPumping() async {
         guard pump == nil else { return }
-        pump = Task { [weak self] in await self?.consume() }
+        // Acquire the streams before starting the transport (rather than inside `consume()`,
+        // after the pump task is merely spawned): `events()`/`telemetryFrames()` install this
+        // session's listeners on the actor by finishing whatever the previous consumer held, and
+        // that install must be visible to the actor before `transport.start()` can possibly emit
+        // into it — otherwise a `.sessionOpened` racing the still-unscheduled pump task would
+        // land in a stream nobody is reading and be lost for good.
+        let events = await transport.events()
+        let frames = await transport.telemetryFrames()
+        pump = Task { [weak self] in await self?.consume(events: events, frames: frames) }
         // Liveness has to expire on its own: telemetry stopping is silence, and silence
         // generates no event to react to.
         decay = Task { [weak self] in
@@ -106,7 +114,15 @@ final class CarLink: ObservableObject {
         pump?.cancel(); pump = nil
         decay?.cancel(); decay = nil
         radioFetch?.cancel(); radioFetch = nil
-        await transport.stop(graceful: graceful)
+        // Bounded: a goodbye stuck on a dead path (Wi-Fi gone while the socket was still
+        // `.waiting`) must not dam the lifecycle chain forever — every later start/stop queues
+        // behind an unbounded await otherwise. 300 ms covers 3 sends at 10 Hz spacing with
+        // margin; `transport.stop` is cancel-safe mid-goodbye (`send`'s `onCancel` resolves the
+        // pending send, `sayGoodbye`'s `try?` swallows it, and `socket.cancel()` still runs).
+        let stop = Task { await transport.stop(graceful: graceful) }
+        let deadline = Task { try? await Task.sleep(for: .milliseconds(300)); stop.cancel() }
+        await stop.value
+        deadline.cancel()
         telemetry = nil
         lastFrame = nil
         lastTelemetrySeq = nil
@@ -129,9 +145,7 @@ final class CarLink: ObservableObject {
         Task { [transport] in await transport.retryNow() }
     }
 
-    private func consume() async {
-        let events = await transport.events()
-        let frames = await transport.telemetryFrames()
+    private func consume(events: AsyncStream<CarTransport.Event>, frames: AsyncStream<Telemetry>) async {
         // Two streams, one consumer. Ordering between them is not guaranteed; a frame from the
         // previous session can land after this session's `.sessionOpened` (or after
         // `.sessionClosed`) — `apply(_:)` gates on an adopted session, so a late frame from the
