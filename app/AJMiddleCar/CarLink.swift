@@ -35,6 +35,7 @@ final class CarLink: ObservableObject {
     private var lastFrame: ContinuousClock.Instant?
     private var pump: Task<Void, Never>?
     private var decay: Task<Void, Never>?
+    private var radioFetch: Task<Void, Never>?
     private var pathSub: AnyCancellable?
     private var pathState: PathState = .noWifi(.notAvailable)
     #if DEBUG
@@ -76,6 +77,7 @@ final class CarLink: ObservableObject {
     func stop(graceful: Bool) async {
         pump?.cancel(); pump = nil
         decay?.cancel(); decay = nil
+        radioFetch?.cancel(); radioFetch = nil
         await transport.stop(graceful: graceful)
         telemetry = nil
         lastFrame = nil
@@ -189,15 +191,30 @@ final class CarLink: ObservableObject {
         if state != next { state = next }
     }
 
+    /// `/status` is one GET against a single-request server that is busy with the geometry
+    /// prefetch fired in the same instant — one miss must not hide a radio mismatch for the
+    /// whole session. Four tries, backing off; the task is replaced on refetch and cancelled
+    /// when the link stops.
     private func fetchRadio() {
-        Task { [weak self, transport] in
-            guard let data = try? await transport.get("/status", timeout: 2),
-                  let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let r = j["radio"] as? [String: Any],
-                  let fw = r[CarContract.fwField] as? String else { return }
-            self?.radio = Radio(fw: fw, ok: r["ok"] as? Bool ?? true)
+        radioFetch?.cancel()
+        radioFetch = Task { [weak self, transport] in
+            for delay: Double in [0, 1, 2, 4] {
+                if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+                if Task.isCancelled { return }
+                if let data = try? await transport.get("/status", timeout: 2),
+                   let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let r = j["radio"] as? [String: Any],
+                   let fw = r[CarContract.fwField] as? String {
+                    self?.radio = Radio(fw: fw, ok: r["ok"] as? Bool ?? true)
+                    return
+                }
+            }
         }
     }
+
+    /// FirmwareView calls this on appear: the radio line is that screen's reason to exist,
+    /// and an OTA just behind us may have changed the answer.
+    func refreshRadio() { fetchRadio() }
 
     #if DEBUG
     /// One screen's worth of link, for the gallery. Nothing runs behind it.
