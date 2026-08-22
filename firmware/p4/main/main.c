@@ -122,6 +122,18 @@ void app_main(void) {
     wheel_init();                          // load wheel/encoder params (NVS or defaults)
     dims_init();                           // load car dimensions (NVS or defaults)
     ESP_ERROR_CHECK(wifi_ap_start(CAR_AP_SSID, CAR_AP_PASS));
+    /* OTA rollback: the property rollback protects is "the car is reachable" — the AP is
+       up, so mark the image valid NOW, before the API registrations and before
+       status_api_start's radio-version RPC (up to 5 s against a mismatched slave). One
+       reset inside that window used to silently revert a good update. The tradeoff is
+       deliberate: an image that fails beyond this line boot-loops WITHOUT rollback, so
+       everything below must tolerate failure — a panic after this point is its own bug. */
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_img_states_t ota_state;
+    if (esp_ota_get_state_partition(running, &ota_state) == ESP_OK &&
+        ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+        esp_ota_mark_app_valid_cancel_rollback();
+    }
     telemetry_start();                     // 1 Hz RSSI sampler, off the control task
     recovery_init();                       // breadcrumb buffer; the watchdog trips into it
     /* Driving comes up before the API: rt_link carries control, the watchdog and
@@ -132,14 +144,6 @@ void app_main(void) {
     ESP_ERROR_CHECK(status_api_start());
     ESP_ERROR_CHECK(ota_api_start());
     ESP_ERROR_CHECK(cfg_api_start());   // all five config domains, from the generated table
-
-    // OTA rollback: mark this freshly-flashed image valid so the bootloader won't roll back.
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    esp_ota_img_states_t ota_state;
-    if (esp_ota_get_state_partition(running, &ota_state) == ESP_OK &&
-        ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
-        esp_ota_mark_app_valid_cancel_rollback();
-    }
 
     console_init();
     ESP_LOGI(TAG, "Ready. Enter 'mix <throttle> <yaw>' (each -1..1), e.g. 'mix 0.5 0.2':");
