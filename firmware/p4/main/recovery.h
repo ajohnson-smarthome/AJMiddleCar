@@ -46,4 +46,12 @@ static inline bool recovery_evict(uint32_t ts, uint32_t now, uint16_t window_ms)
     return (uint32_t)(now - ts) > window_ms;
 }
 
+// Pure (host-tested): one replay segment's duration, from the gap between two
+// breadcrumb timestamps, capped at RECOVER_SEG_MAX_MS. Rollover-safe like the rest.
+#define RECOVER_SEG_MAX_MS 250u
+static inline uint32_t recovery_seg_ms(uint32_t newer_ts, uint32_t older_ts) {
+    uint32_t d = newer_ts - older_ts;
+    return d > RECOVER_SEG_MAX_MS ? RECOVER_SEG_MAX_MS : d;
+}
+
 #endif // RECOVERY_H

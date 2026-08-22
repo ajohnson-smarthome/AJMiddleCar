@@ -16,7 +16,6 @@ static const char *TAG = "recovery";
 // it rather than from a number that would have to be remembered twice.
 #define MAX_SAMPLES   (WINDOW_MAX_S * RT_COMMAND_HZ * 3 / 2) // 150: 10 s @10 Hz + 50% headroom
 #define TICK_MS       30                              // replay granularity / reconnect-abort latency
-#define TAIL_MS       400                             // cap for the newest segment's reverse duration
 #define MOVE_EPS      0.02f                           // below this a sample counts as "stationary"
 
 typedef struct { float t, y; uint32_t ts; } sample_t;
@@ -71,18 +70,25 @@ void recovery_forget(void) {
     taskEXIT_CRITICAL(&s_mux);
 }
 
-// Snapshot in-window samples newest→oldest into out[] (cap MAX_SAMPLES). Returns count.
-// *seq receives the liveness sequence at snapshot time.
-static int snapshot(sample_t *out, uint32_t now, uint32_t *seq) {
+// Snapshot the in-window samples newest→oldest AND consume them: the ring is cleared
+// and the liveness sequence bumped, *seq receiving the post-bump value — so the replay
+// that follows aborts on the NEXT bump (a resumed stream, a goodbye, a new session),
+// not on its own consumption. Consuming is the fix for the double retrace: the
+// retreat's own motion is never recorded, so a second trip inside window_ms used to
+// replay distance the first retreat had already covered, on top of it.
+static int snapshot_consume(sample_t *out, uint32_t now, uint32_t *seq) {
     int n = 0;
     taskENTER_CRITICAL(&s_mux);
-    *seq = s_seq;
     uint16_t win = s_window_ms;
     for (int k = 0; k < s_count; k++) {
         int idx = (s_head - 1 - k + MAX_SAMPLES) % MAX_SAMPLES;  // newest → oldest
-        if (recovery_evict(s_buf[idx].ts, now, win)) break;       // older than window → stop
+        if (recovery_evict(s_buf[idx].ts, now, win)) break;
         out[n++] = s_buf[idx];
     }
+    s_head  = 0;
+    s_count = 0;
+    s_seq++;
+    *seq = s_seq;
     taskEXIT_CRITICAL(&s_mux);
     return n;
 }
@@ -103,7 +109,7 @@ static void retreat_task(void *arg) {
 
         uint32_t t_loss = now_ms();
         uint32_t snap_seq;
-        int n = snapshot(snap, t_loss, &snap_seq);
+        int n = snapshot_consume(snap, t_loss, &snap_seq);
         if (n == 0 || !any_motion(snap, n)) { car_stop(LINK_SRC_RECOVER); link_release_must(LINK_SRC_RECOVER); continue; }
 
         ESP_LOGW(TAG, "link lost — retracing %d samples in reverse", n);
@@ -117,9 +123,8 @@ static void retreat_task(void *arg) {
             float rt, ry;
             recovery_reverse(snap[i].t, snap[i].y, &rt, &ry);
             uint32_t dur = (i == 0)
-                ? (uint32_t)(t_loss - snap[0].ts)            // newest held until link loss
-                : (uint32_t)(snap[i - 1].ts - snap[i].ts);   // until the next-newer frame
-            if (i == 0 && dur > TAIL_MS) dur = TAIL_MS;       // cap the open segment
+                ? recovery_seg_ms(t_loss, snap[0].ts)
+                : recovery_seg_ms(snap[i - 1].ts, snap[i].ts);
             /* One call, two ways to stop. A refusal means something outranks us —
                calibration, OTA, or the driver coming back — and marching on refused
                would leave the remaining steps to fire the moment the holder let go.
@@ -158,13 +163,17 @@ static void retreat_task(void *arg) {
 }
 
 void recovery_on_link_lost(void) {
-    if (!s_enabled) {                          // feature off → plain stop (old watchdog behavior)
+    bool enabled;
+    taskENTER_CRITICAL(&s_mux);
+    enabled = s_enabled;
+    taskEXIT_CRITICAL(&s_mux);
+    TaskHandle_t task = s_task;   /* written once in recovery_init, before rt_link exists */
+    if (!enabled || task == NULL) {   // feature off → plain stop (old watchdog behavior)
         car_stop(LINK_SRC_RECOVER);
         link_release_must(LINK_SRC_RECOVER);
         return;
     }
-    if (s_task) xTaskNotifyGive(s_task);       // hand off to the retreat task
-    else { car_stop(LINK_SRC_RECOVER); link_release_must(LINK_SRC_RECOVER); }
+    xTaskNotifyGive(task);
 }
 
 void recovery_save(void) {
