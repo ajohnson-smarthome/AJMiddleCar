@@ -63,7 +63,7 @@ static esp_err_t calib_spin(httpd_req_t *req) {
        or not this handler is still here. The delay is only so the reply lands after
        the wheel has stopped, which is what the wizard's next step assumes. */
     vTaskDelay(pdMS_TO_TICKS(LINK_HOLD_CALIB_MS));
-    link_release(LINK_SRC_CALIB);
+    link_release_must(LINK_SRC_CALIB);
     return httpd_resp_sendstr(req, "ok");
 }
 

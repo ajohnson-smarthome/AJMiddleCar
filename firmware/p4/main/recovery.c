@@ -104,7 +104,7 @@ static void retreat_task(void *arg) {
         uint32_t t_loss = now_ms();
         uint32_t snap_seq;
         int n = snapshot(snap, t_loss, &snap_seq);
-        if (n == 0 || !any_motion(snap, n)) { car_stop(LINK_SRC_RECOVER); link_release(LINK_SRC_RECOVER); continue; }
+        if (n == 0 || !any_motion(snap, n)) { car_stop(LINK_SRC_RECOVER); link_release_must(LINK_SRC_RECOVER); continue; }
 
         ESP_LOGW(TAG, "link lost — retracing %d samples in reverse", n);
         bool aborted = false;
@@ -153,18 +153,18 @@ static void retreat_task(void *arg) {
             car_stop(LINK_SRC_RECOVER);
             ESP_LOGI(TAG, "retrace exhausted — stopped");
         }
-        link_release(LINK_SRC_RECOVER);
+        link_release_must(LINK_SRC_RECOVER);
     }
 }
 
 void recovery_on_link_lost(void) {
     if (!s_enabled) {                          // feature off → plain stop (old watchdog behavior)
         car_stop(LINK_SRC_RECOVER);
-        link_release(LINK_SRC_RECOVER);
+        link_release_must(LINK_SRC_RECOVER);
         return;
     }
     if (s_task) xTaskNotifyGive(s_task);       // hand off to the retreat task
-    else { car_stop(LINK_SRC_RECOVER); link_release(LINK_SRC_RECOVER); }
+    else { car_stop(LINK_SRC_RECOVER); link_release_must(LINK_SRC_RECOVER); }
 }
 
 void recovery_save(void) {

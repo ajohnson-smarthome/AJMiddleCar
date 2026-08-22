@@ -28,6 +28,13 @@ static void ctl_vocabulary(void) {
 int main(void) {
     ctl_vocabulary();
 
+    /* The RT grant must outlive the watchdog deadline by one actuator tick: with the
+       two equal, the grant's >= lapsed the target to zero up to a tick before the
+       trip's > declared the loss, so every trip began from motors already at rest —
+       and a frame arriving exactly on the deadline dipped the duty with no trip at
+       all. link.h's own comment claimed this ordering could not happen. */
+    assert(LINK_HOLD_RT_MS == (uint32_t)RT_WATCHDOG_MS + LINK_TICK_MS);
+
     link_arb_t a = { .owner = LINK_SRC_NONE, .until_ms = 0, .sticky = false };
 
     /* Nobody owns it: anyone may take it. */

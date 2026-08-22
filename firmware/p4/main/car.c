@@ -131,5 +131,5 @@ void car_init(void) {
     }
 
     car_stop(LINK_SRC_SAFE);       /* safety stop */
-    link_release(LINK_SRC_SAFE);   /* boot is over; leave the actuator free */
+    link_release_must(LINK_SRC_SAFE);   /* boot is over; leave the actuator free */
 }

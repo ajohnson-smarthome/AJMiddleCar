@@ -87,16 +87,20 @@ static inline const char *link_src_name(link_src_t s) {
  * added to the contract must break this build rather than surface as "?" on the wire. */
 _Static_assert(LINK_SRC_SAFE + 2 == CTL_COUNT, "link_src_t and ctl_values disagree");
 
+/* The actuator task's beat, public because the RT hold is defined against it. */
+#define LINK_TICK_MS 20u
+
+/* How long each source's grant holds without being refreshed. The RT hold is one
+ * actuator tick PAST the control watchdog's deadline, and necessarily so: the trip
+ * must be declared before the grant lapses, or the car coasts to a stop before the
+ * loss is noticed and the retreat starts from rest instead of from the path it was
+ * on. rt_link checks silence on a beat of its own, so one tick of slack covers the
+ * scheduling gap; the RT_COMMAND_HZ stream refreshes the grant far inside it. */
+#define LINK_HOLD_RT_MS     ((uint32_t)RT_WATCHDOG_MS + LINK_TICK_MS)
+#define LINK_HOLD_CALIB_MS  600u   /* one identification pulse */
+
 #ifndef LINK_HOST_TEST
 #include "esp_err.h"
-
-/* How long each source's grant holds without being refreshed. */
-/* The same deadline the control watchdog measures, and necessarily so: if the grant
- * lapsed first the car would coast to a stop before the loss was declared, and the
- * retreat would then start from rest instead of retracing the path it was on. The
- * RT_COMMAND_HZ stream refreshes it. */
-#define LINK_HOLD_RT_MS     ((uint32_t)RT_WATCHDOG_MS)
-#define LINK_HOLD_CALIB_MS  600u   /* one identification pulse */
 
 /* Start the 50 Hz actuator task. The sole writer to the PCA9685 after this call. */
 esp_err_t link_init(void);
@@ -110,6 +114,12 @@ bool link_set(link_src_t src, const uint16_t duty[8], uint32_t hold_ms, bool sti
  * only when the lock could not be taken — the caller still does not own the actuator,
  * but the safe target was not written either, so a safety caller should say so. */
 bool link_release(link_src_t src);
+
+/* link_release, insisted upon: one retry a tick later, then a loud log. A false
+ * return leaves `src`'s grant standing — for a sticky top-rank source (SAFE after a
+ * goodbye) that is an actuator nothing else can ever take, so no caller may drop the
+ * result on the floor. */
+bool link_release_must(link_src_t src);
 
 /* Who owns the actuator right now, for telemetry and logs. */
 link_src_t link_owner(void);

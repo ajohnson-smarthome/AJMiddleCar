@@ -10,7 +10,6 @@
 
 static const char *TAG = "link";
 
-#define TICK_MS 20                 /* 50 Hz */
 #define SHADOW_UNKNOWN 0xFFFFu     /* forces a real write on the first tick */
 
 static SemaphoreHandle_t s_lock;   /* guards s_arb and s_target */
@@ -73,6 +72,15 @@ bool link_release(link_src_t src) {
     return true;
 }
 
+bool link_release_must(link_src_t src) {
+    if (link_release(src)) return true;
+    vTaskDelay(1);   /* the lock is held across a memcpy, never across a wait */
+    if (link_release(src)) return true;
+    ESP_LOGE(TAG, "%s could not release the actuator — the grant is stuck",
+             link_src_name(src));
+    return false;
+}
+
 static void link_task(void *arg) {
     (void)arg;
     /* The only writer to the PCA9685: if this task stops running, the motors keep
@@ -83,11 +91,11 @@ static void link_task(void *arg) {
 
     TickType_t last = xTaskGetTickCount();
     for (;;) {
-        vTaskDelayUntil(&last, pdMS_TO_TICKS(TICK_MS));
+        vTaskDelayUntil(&last, pdMS_TO_TICKS(LINK_TICK_MS));
         if (twdt) esp_task_wdt_reset();
 
         uint16_t tgt[8];
-        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(TICK_MS)) != pdTRUE) continue;
+        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(LINK_TICK_MS)) != pdTRUE) continue;
         /* An expired grant means nobody is driving: fall to zero rather than holding
            the last command, which is what "ownership lapses" has to mean physically. */
         if (link_arb_lapsed(&s_arb, now_ms())) {
@@ -98,7 +106,7 @@ static void link_task(void *arg) {
         memcpy(tgt, s_target, sizeof(tgt));
         xSemaphoreGive(s_lock);
 
-        uint16_t up = ramp_max_up_per_tick(ramp_get_ms(), TICK_MS);
+        uint16_t up = ramp_max_up_per_tick(ramp_get_ms(), LINK_TICK_MS);
         bool wrote = false, failed = false;
         esp_err_t last_err = ESP_OK;
         for (uint8_t ch = 0; ch < 8; ch++) {

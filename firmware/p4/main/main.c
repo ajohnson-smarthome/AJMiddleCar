@@ -153,7 +153,7 @@ void app_main(void) {
                    so `mix 1 0` runs until told otherwise. But `mix 0 0` means "done",
                    and holding on after that would refuse the auto-return for the rest
                    of the boot. It is the only sticky source a human enters by hand. */
-                link_release(LINK_SRC_CONSOLE);
+                link_release_must(LINK_SRC_CONSOLE);
             }
         } else {
             ESP_LOGE(TAG, "bad command, expected 'mix <t> <y>' with t,y in [-1,1]");
