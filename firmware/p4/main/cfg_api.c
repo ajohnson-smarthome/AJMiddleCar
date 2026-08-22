@@ -112,7 +112,7 @@ static esp_err_t cfg_get(httpd_req_t *req) {
             w = snprintf(buf + n, sizeof(buf) - n, "%s\"%s\":%ld",
                          sep, f->name, (long)vals[i]);
         }
-        if (w < 0 || (size_t)(n + w) >= sizeof(buf)) {
+        if (w < 0 || (size_t)(n + w) >= sizeof(buf) - 1) {   /* -1: the brace's byte */
             return api_reply_error(req, "500 Internal Server Error", "", "response too long");
         }
         n += w;

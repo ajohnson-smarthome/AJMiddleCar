@@ -1,17 +1,21 @@
 #include "http_server.h"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "identity.h"
+#include "esp_app_desc.h"
 
 static const char *TAG = "http";
 static httpd_handle_t s_server = NULL;
 
-// The car is driven by the native iOS app over the real-time UDP channel; this server
-// carries only the cold path (/status, /calib*, /ota and the config domains). There is no
-// web UI: GET / answers with a short plain-text identity so a stray browser (or a human
-// poking around) understands what this device is.
+// There is no web UI: GET / answers "<device> <fw>" so a stray browser (or a script)
+// learns what this device is — the same one-line identity the mock serves, because
+// protocol.md calls this endpoint an identity and only the mock was honoring that.
 static esp_err_t root_get_handler(httpd_req_t *req) {
+    char line[64];
+    snprintf(line, sizeof(line), "%s %s\n", CAR_DEVICE_ID,
+             esp_app_get_description()->version);
     httpd_resp_set_type(req, "text/plain");
-    return httpd_resp_sendstr(req, "AJMiddleCar: use the iOS app (control on UDP, config over REST).\n");
+    return httpd_resp_sendstr(req, line);
 }
 
 httpd_handle_t http_server_get_handle(void) {

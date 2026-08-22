@@ -133,8 +133,9 @@ static inline bool link_rise_safe(uint16_t mate_cur, uint16_t duty) {
 esp_err_t link_init(void);
 
 /* Ask to set the eight duties. Returns false when a higher-priority source holds the
- * actuator, in which case nothing is written and the caller must not treat the command
- * as applied — the control watchdog is fed only on a true return. */
+ * actuator: nothing was written, and the caller must not treat the command as applied.
+ * (Only the breadcrumb recorder keys on this return; the control watchdog is fed
+ * upstream on every parsed in-session command, refused ones included — see car.h.) */
 bool link_set(link_src_t src, const uint16_t duty[8], uint32_t hold_ms, bool sticky);
 
 /* Give up ownership held by `src`. Harmless if `src` does not hold it. Returns false

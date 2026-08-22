@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/usb_serial_jtag.h"
@@ -78,6 +79,9 @@ static int parse_mix(const char *line, float *t, float *y) {
     if (sscanf(line, "%7s %f %f", cmd, t, y) != 3) return -1;
     if (strcmp(cmd, "mix") != 0) return -1;
     // Reject out-of-range console input early with an error (car_drive also clamps).
+    // NaN fails every comparison below, so without isfinite `mix nan nan` was accepted
+    // and rode a formally-undefined float->uint16 cast to a lucky stop.
+    if (!isfinite(*t) || !isfinite(*y)) return -1;
     if (*t < -1.0f || *t > 1.0f || *y < -1.0f || *y > 1.0f) return -1;
     return 0;
 }
