@@ -90,8 +90,15 @@ class TestSchema(unittest.TestCase):
                 if f["type"] == "int":
                     got[(d["path"], f["name"])] = (f["min"], f["max"])
         self.assertEqual(got, expected)
-        for lo, hi in expected.values():
-            self.assertIn(str(hi), src, f"{hi} is not in the firmware sources")
+        for (path, name), (lo, hi) in expected.items():
+            for bound in (lo, hi):
+                # Word-bounded: "2000" must not be satisfied by "12000", and "30"
+                # must not be found inside "-30". The min bounds were entirely
+                # unchecked before — a firmware floor drifting from the schema is
+                # exactly what this test exists to catch.
+                pat = rf"(?<![\w.-]){re.escape(str(bound))}(?![\w.])"
+                self.assertRegex(src, pat,
+                                 f"{path} {name}: bound {bound} not in the firmware sources")
 
 
 import filecmp
