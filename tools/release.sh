@@ -111,7 +111,11 @@ fi
 echo "Running the test suite before building..."
 ./tools/test-all.sh
 
-source tools/env-p4.sh >/dev/null 2>&1 || { echo "ERROR: failed to source tools/env-p4.sh"; exit 1; }
+set +e
+source tools/env-p4.sh >/dev/null 2>&1
+RC=$?
+set -e
+[ "$RC" = 0 ] || { echo "ERROR: failed to source tools/env-p4.sh"; exit 1; }
 # A stray bench sdkconfig must not configure a release: regenerate purely from defaults.
 rm -f firmware/p4/sdkconfig firmware/p4/sdkconfig.old
 (cd firmware/p4 && idf.py fullclean >/dev/null && idf.py build)
