@@ -23,3 +23,6 @@ firmware/c6/managed_components/
 # Python bytecode from the contract generator and its tests
 __pycache__/
 *.pyc
+
+# Claude Code session worktrees
+.claude/
