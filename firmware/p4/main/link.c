@@ -107,15 +107,21 @@ static void link_task(void *arg) {
         xSemaphoreGive(s_lock);
 
         uint16_t up = ramp_max_up_per_tick(ramp_get_ms(), LINK_TICK_MS);
+        uint16_t next[8];
+        uint8_t  order[8];
+        uint8_t  writes = link_plan_writes(s_current, tgt, up, next, order);
         bool wrote = false, failed = false;
         esp_err_t last_err = ESP_OK;
-        for (uint8_t ch = 0; ch < 8; ch++) {
-            uint16_t next = ramp_step(s_current[ch], tgt[ch], up);
-            if (next == s_current[ch]) continue;
+        for (uint8_t k = 0; k < writes; k++) {
+            uint8_t ch = order[k];
+            /* The mate's fall is ordered before this rise; if that write failed the
+               mate still shows its old duty here, and the rise waits with it rather
+               than driving both inputs of one bridge. */
+            if (!link_rise_safe(s_current[ch ^ 1], next[ch])) continue;
             wrote = true;
-            esp_err_t e = pca9685_set_pwm(ch, next);
+            esp_err_t e = pca9685_set_pwm(ch, next[ch]);
             if (e == ESP_OK) {
-                s_current[ch] = next;          /* shadow follows the chip, not our intent */
+                s_current[ch] = next[ch];      /* shadow follows the chip, not our intent */
             } else {
                 /* Deliberately leave s_current alone. It still differs from the target,
                    so the next tick retries — where updating it first would have left the

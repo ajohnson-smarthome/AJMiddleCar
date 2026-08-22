@@ -1,3 +1,4 @@
+#define RAMP_HOST_TEST
 #define LINK_HOST_TEST
 #include "../main/link.h"
 #include <assert.h>
@@ -83,6 +84,43 @@ int main(void) {
                       .sticky = false };
     assert(!link_arb_lapsed(&a, 0xFFFFFF00u));      /* before the deadline */
     assert(link_arb_lapsed(&a, 0x00000100u));       /* wrapped past it */
+
+    /* --- write ordering: within a pair, the fall lands before the rise -----------
+       A single ascending pass wrote a reversal's rising channel while its pair-mate
+       still held the old duty on the chip — both BTS7960 inputs driven for the I2C
+       gap, and for >=20 ms per tick while the fall's write kept failing. */
+    {
+        uint16_t cur[8] = { 2000, 0, 0, 1500, 0, 0, 0, 0 };
+        uint16_t tgt[8] = { 0, 4095, 0, 1500, 0, 0, 300, 0 };
+        uint16_t next[8];
+        uint8_t  order[8];
+        uint8_t  n = link_plan_writes(cur, tgt, 4095, next, order);
+        assert(n == 3);
+        assert(order[0] == 0);                    /* the fall (ch0: 2000 -> 0) first */
+        assert(order[1] == 1 && order[2] == 6);   /* rises after, ascending */
+        assert(next[0] == 0 && next[1] == 4095 && next[6] == 300);
+        assert(next[3] == 1500);                  /* unchanged channel: no write */
+
+        /* Bounded rise still ramps; fall is instant. */
+        uint16_t cur2[8] = { 0, 1000, 0, 0, 0, 0, 0, 0 };
+        uint16_t tgt2[8] = { 500, 0, 0, 0, 0, 0, 0, 0 };
+        n = link_plan_writes(cur2, tgt2, 100, next, order);
+        assert(n == 2 && order[0] == 1 && order[1] == 0);
+        assert(next[1] == 0 && next[0] == 100);
+
+        /* At boot the shadow is SHADOW-unknown (0xFFFF): everything "falls" to its
+           target, so the zeroing writes are ordered first by construction. */
+        uint16_t cur3[8] = { 0xFFFF, 0xFFFF, 0, 0, 0, 0, 0, 0 };
+        uint16_t tgt3[8] = { 0 };
+        n = link_plan_writes(cur3, tgt3, 4095, next, order);
+        assert(n == 2 && order[0] == 0 && order[1] == 1 && next[0] == 0);
+    }
+    /* A rise may not land while the pair-mate holds ANY duty on the chip — the
+       unknown boot shadow counts as driving. */
+    assert(link_rise_safe(0, 4095));
+    assert(link_rise_safe(2000, 0));      /* writing a zero is always safe */
+    assert(!link_rise_safe(2000, 4095));
+    assert(!link_rise_safe(0xFFFF, 1));
 
     printf("test_link: all passed\n");
     return 0;

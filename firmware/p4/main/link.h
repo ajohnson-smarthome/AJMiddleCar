@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "contract.h"   /* RT_WATCHDOG_MS, RT_COMMAND_HZ, the CTL_* vocabulary */
+#include "ramp.h"
 
 /* Who may command the actuator.
  *
@@ -98,6 +99,32 @@ _Static_assert(LINK_SRC_SAFE + 2 == CTL_COUNT, "link_src_t and ctl_values disagr
  * scheduling gap; the RT_COMMAND_HZ stream refreshes the grant far inside it. */
 #define LINK_HOLD_RT_MS     ((uint32_t)RT_WATCHDOG_MS + LINK_TICK_MS)
 #define LINK_HOLD_CALIB_MS  600u   /* one identification pulse */
+
+/* Pure: plan one actuator tick. next[] receives every channel's post-ramp duty;
+ * order[] receives the channels that need writing — every falling channel first, then
+ * the rises — and the count is returned. Channel pairs are (0,1)(2,3)(4,5)(6,7), one
+ * BTS7960 each (motors.h): a single ascending pass wrote a reversal's rise before its
+ * pair-mate's fall, driving both bridge inputs for the I2C gap between them. */
+static inline uint8_t link_plan_writes(const uint16_t cur[8], const uint16_t tgt[8],
+                                       uint16_t max_up, uint16_t next[8],
+                                       uint8_t order[8]) {
+    uint8_t n = 0;
+    for (uint8_t ch = 0; ch < 8; ch++) {
+        next[ch] = ramp_step(cur[ch], tgt[ch], max_up);
+        if (next[ch] < cur[ch]) order[n++] = ch;
+    }
+    for (uint8_t ch = 0; ch < 8; ch++) {
+        if (next[ch] > cur[ch]) order[n++] = ch;
+    }
+    return n;
+}
+
+/* Pure: may a channel be driven to `duty` while its pair-mate's last-written duty is
+ * `mate_cur`? Writing zero is always safe; a nonzero rise needs the mate at zero on
+ * the chip. The boot shadow's unknown value is nonzero, so it counts as driving. */
+static inline bool link_rise_safe(uint16_t mate_cur, uint16_t duty) {
+    return duty == 0 || mate_cur == 0;
+}
 
 #ifndef LINK_HOST_TEST
 #include "esp_err.h"

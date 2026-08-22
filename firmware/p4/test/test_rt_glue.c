@@ -3,6 +3,7 @@
  * cutover plan specifies, which had no host test while test_state.py pinned the same
  * rules on the mock. The recorder is the world: every effect appends its name. */
 #define RT_LINK_HOST_TEST
+#define RAMP_HOST_TEST
 #define LINK_HOST_TEST
 #include "../main/rt_glue.h"
 #include <assert.h>
