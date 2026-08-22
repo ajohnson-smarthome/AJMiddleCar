@@ -566,7 +566,7 @@ class CarState:
                         return False
             pairs = {int(w["pair"]) for w in wheels}
             signs = [int(w["sign"]) for w in wheels]
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, OverflowError, KeyError):
             return False
         if pairs != {0, 1, 2, 3} or any(s not in (-1, 1) for s in signs):
             return False

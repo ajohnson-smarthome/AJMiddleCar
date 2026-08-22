@@ -624,6 +624,14 @@ class TestCalibration(unittest.TestCase):
                         {"pair": "3", "sign": "1"}],
                        [{"pair": p, "sign": True} for p in range(4)],    # booleans
                        [{"pair": p + 0.5, "sign": 1} for p in range(4)],  # fractions
+                       [{"pair": 10**400, "sign": 1},                    # huge integer
+                        {"pair": 1, "sign": 1},
+                        {"pair": 2, "sign": 1},
+                        {"pair": 3, "sign": 1}],
+                       [{"pair": float('inf'), "sign": 1},               # non-finite
+                        {"pair": 1, "sign": 1},
+                        {"pair": 2, "sign": 1},
+                        {"pair": 3, "sign": 1}],
                        ):
             self.assertFalse(car.save_calibration(wheels), wheels)
         self.assertFalse(car.calibrated)
