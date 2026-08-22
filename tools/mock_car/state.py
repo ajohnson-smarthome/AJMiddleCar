@@ -539,6 +539,14 @@ class CarState:
         self._y = 0.0
         return True
 
+    def end_spin(self):
+        """The pulse is over: release CALIB, which zeroes if the pulse still owns.
+
+        calib_api.c does exactly this after its vTaskDelay, *before* replying, so
+        the wizard's 200 arrives with the wheel already stopped and the grant gone.
+        """
+        self._release(CTL_CALIB)
+
     def save_calibration(self, wheels):
         """Mirrors calibration_valid: four entries, unique pairs 0..3, signs ±1."""
         try:

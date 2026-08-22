@@ -163,6 +163,11 @@ async def calib_spin(request):
         # wheel did not turn, and four blind taps produce a table nothing can reject.
         return json_error(409, "actuator busy")
     print(f"calib: spin pair={pair} {'fwd' if direction else 'rev'}")
+    # The firmware's order (calib_api.c): sleep the pulse out, release, then answer.
+    # The reply lands after the wheel has stopped — the wizard's next step assumes
+    # it — and the app lock is held throughout, as the single httpd task is.
+    await asyncio.sleep(CarState.CALIB_HOLD_MS / 1000.0)
+    car.end_spin()
     return web.json_response({"ok": True})
 
 

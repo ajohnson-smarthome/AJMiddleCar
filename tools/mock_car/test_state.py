@@ -575,6 +575,18 @@ class TestActuatorOwnership(unittest.TestCase):
         self.assertIsNone(car.tick(last + 1.0))
         self.assertEqual(car.wdt_trips, 0)
 
+    def test_end_spin_releases_the_pulse_and_only_the_pulse(self):
+        """calib_api.c sleeps the pulse out and releases before replying, so the
+        200 lands after the wheel has stopped — the wizard's next step assumes it."""
+        car = CarState(now=0.0)
+        self.assertTrue(car.begin_spin(0.0, 1, 1))
+        car.end_spin()
+        self.assertEqual(car.ctl, CTL_NONE)
+        self.assertEqual(car.command, (0.0, 0.0), "the release is the stop")
+        car.begin_ota(1.0)
+        car.end_spin()
+        self.assertEqual(car.ctl, CTL_OTA, "end_spin never releases someone else's grant")
+
 
 class TestCalibration(unittest.TestCase):
     def test_a_valid_table_is_accepted(self):
