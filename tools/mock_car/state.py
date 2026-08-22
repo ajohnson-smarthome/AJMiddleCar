@@ -335,6 +335,9 @@ class CarState:
              rather than retraces. The mechanism is the empty history, not the grant.
           4. Disarm the watchdog — silence that was announced is not a loss.
 
+        A sticky holder (OTA, CALIB) is exempt from steps 1-2: see rule 2 of
+        docs/superpowers/specs/2026-08-22-audit-fix-decisions.md.
+
         Ownership of the channel is dropped by the caller: `bye` is not resumable, and
         the next session arrives with a fresh `hello`.
         """
@@ -345,6 +348,13 @@ class CarState:
         self._history.clear()
         self._retreating = False
         self._armed = False
+        if self._owner in (CTL_OTA, CTL_CALIB):
+            # Rule 2 (audit-fix spec): a sticky hold is not stolen and not released.
+            # The motors are already stopped (OTA) or under the wizard's pulse; the
+            # goodbye's other duties — history, watchdog, session — are done above
+            # and by the caller. Grabbing SAFE here displaced OTA's grant and then
+            # released it to NONE, unlocking the motors for the rest of the flash.
+            return False
         stopped = self._take(CTL_SAFE, now, None)
         if stopped:
             self._t = self._y = 0.0

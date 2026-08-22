@@ -461,13 +461,33 @@ class TestActuatorOwnership(unittest.TestCase):
         self.assertTrue(car.begin_spin(0.1, 0, 1))
         self.assertEqual(car.ctl, CTL_CALIB)
 
-    def test_a_goodbye_during_an_ota_does_not_wedge_the_mock(self):
+    def test_a_goodbye_during_an_ota_leaves_the_flash_its_grant(self):
+        """Rule 2: bye must not steal-and-release a sticky hold. Before this rule
+        the SAFE grab displaced OTA and released to NONE, so anything could drive
+        the motors for the rest of the flash — and the restart could land mid-drive."""
         car = CarState(now=0.0)
-        car.begin_ota(0.0)
-        car.note_bye(0.1)            # SAFE outranks OTA on the car too
+        stream(car, 0.5, 0.0, 0.0, 5)
+        car.begin_ota(1.0)
+        self.assertFalse(car.note_bye(1.1), "no stop was issued; the flash holds")
+        self.assertEqual(car.ctl, CTL_OTA, "the goodbye did not touch the grant")
+        self.assertEqual(car.history_len, 0, "the retreat is still suppressed")
+        self.assertFalse(car.begin_spin(1.2, 0, 1), "still flashing; a spin is refused")
+        for k in range(50):
+            self.assertIsNone(car.tick(1.2 + k * 0.05))
+        self.assertEqual(car.wdt_trips, 0, "the watchdog was still disarmed")
         car.end_ota()
-        self.assertEqual(car.ctl, CTL_NONE)
-        self.assertTrue(car.begin_spin(0.2, 0, 1))
+        self.assertEqual(car.ctl, CTL_NONE, "not wedged: the flash's own end releases")
+        self.assertTrue(car.begin_spin(5.0, 0, 1))
+
+    def test_a_goodbye_during_a_spin_leaves_the_pulse_alone(self):
+        car = CarState(now=0.0)
+        self.assertTrue(car.begin_spin(0.0, 1, 1))
+        self.assertFalse(car.note_bye(0.1))
+        self.assertEqual(car.ctl, CTL_CALIB)
+        self.assertEqual(car.command, (1.0, 0.0), "the pulse is not flattened")
+        car.tick(CarState.CALIB_HOLD_MS / 1000.0 + 0.01)
+        self.assertEqual(car.ctl, CTL_NONE, "the pulse lapses on its own schedule")
+        self.assertEqual(car.command, (0.0, 0.0))
 
     def test_ota_bumps_the_build(self):
         car = CarState(fw="v1.0+9000", now=0.0)

@@ -143,11 +143,11 @@ class RTLink(asyncio.DatagramProtocol):
             if self.car.note_bye(now):
                 print(f"rt: bye from session {self.session} — stopped, history cleared")
             else:
-                # `car_stop(LINK_SRC_SAFE)` refused. Nothing outranks SAFE, so this is
-                # unreachable today — but the car checks the same return, and a stop
-                # that was not applied must never be silent.
-                print(f"rt: bye from session {self.session} — stop REFUSED, "
-                      f"{self.car.ctl} holds the actuator")
+                # A sticky holder (an OTA flash, a calibration pulse) keeps the
+                # actuator through a goodbye — rule 2 of the audit-fix spec. The
+                # goodbye still ended the session and cleared the history.
+                print(f"rt: bye from session {self.session} — history cleared, "
+                      f"{self.car.ctl} keeps the actuator")
             # Ownership is not resumable: the next session says hello again.
             self.owner, self.session, self.last_seq = None, None, None
             return
