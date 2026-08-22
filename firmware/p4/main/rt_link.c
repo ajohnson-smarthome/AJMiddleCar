@@ -18,6 +18,7 @@
 #include "identity.h"
 #include "car.h"
 #include "link.h"
+#include "rt_glue.h"
 
 static const char *TAG = "rt";
 
@@ -50,6 +51,17 @@ static volatile uint32_t s_trips;
 static struct sockaddr_in s_owner;
 static rt_session_t       s_ses;
 static rt_dead_sids_t     s_dead;
+
+/* The real effects table — every entry a one-line adapter, so the orderings above it
+   are exactly the host-tested ones in rt_glue.h. */
+static bool fx_stop_safe(void *c)    { (void)c; return car_stop(LINK_SRC_SAFE); }
+static bool fx_release_safe(void *c) { (void)c; return link_release_must(LINK_SRC_SAFE); }
+static bool fx_release_rt(void *c)   { (void)c; return link_release_must(LINK_SRC_RT); }
+static void fx_forget(void *c)       { (void)c; recovery_forget(); }
+static void fx_on_lost(void *c)      { (void)c; recovery_on_link_lost(); }
+static link_src_t fx_owner(void *c)  { (void)c; return link_owner(); }
+static const rt_effects_t FX = { NULL, fx_stop_safe, fx_release_safe, fx_release_rt,
+                                 fx_forget, fx_on_lost, fx_owner };
 
 uint32_t rt_link_frames(void)    { return s_frames; }
 uint32_t rt_link_wdt_trips(void) { return s_trips; }
@@ -89,43 +101,30 @@ static void send_hello_reply(int sock, const char *sid, const struct sockaddr_in
 
 static void adopt(const struct sockaddr_in *from, const char *sid) {
     s_owner = *from;
-    /* The sequence gate restarts and the watchdog stays disarmed — see
-       rt_session_adopt: it arms on the first accepted command, which is the thing it
-       measures. */
-    rt_session_adopt(&s_ses, sid, now_ms());
-    /* A previous session may have left SAFE holding zero. It must not outlive the
-       session that asked for it, or the console, the wizard and OTA stay locked out. */
-    link_release(LINK_SRC_SAFE);
-    /* A new session has no path behind it. Retracing the *previous* driver's path is
-       worse than not retracing at all, so the breadcrumbs go with the old session. */
-    recovery_forget();
+    /* Ordering and rationale live in rt_glue_adopt, where they are host-tested. */
+    if (!rt_glue_adopt(&s_ses, &s_dead, sid, now_ms(), &FX)) {
+        ESP_LOGE(TAG, "adopt could not release a leftover SAFE grant");
+    }
     log_peer("session adopted from", from);
 }
 
 static void on_bye(void) {
-    ESP_LOGI(TAG, "goodbye — stopping, and not retreating");
-    /* SAFE outranks everything, so this both stops the car and, for as long as it is
-       held, refuses the next step of a retreat that is already running from an earlier
-       dropout. link_set writes nothing on a lock timeout, so a stop that was not
-       applied is worth a line: the grant lapse still stops the car within
-       RT_WATCHDOG_MS, but not because we asked. */
-    if (!car_stop(LINK_SRC_SAFE)) {
+    switch (rt_glue_bye(&s_ses, &s_dead, &FX)) {
+    case RT_BYE_PLAIN:
+        ESP_LOGI(TAG, "goodbye — stopping, and not retreating");
+        break;
+    case RT_BYE_UNDER_STICKY:
+        /* OTA or the wizard owns the motors; the goodbye ends the session and the
+           breadcrumbs, and keeps its hands off the sticky grant — grabbing SAFE over
+           a flash re-opened the actuator for the rest of the write. */
+        ESP_LOGI(TAG, "goodbye during %s — session over, actuator untouched",
+                 link_src_name(link_owner()));
+        break;
+    case RT_BYE_STOP_REFUSED:
         ESP_LOGE(TAG, "goodbye stop was not applied — %s holds the actuator",
                  link_src_name(link_owner()));
+        break;
     }
-    /* What actually suppresses the retreat, now and later: an empty history has no
-       motion in it, so even if the watchdog trips afterwards the car stops instead of
-       retracing. It also aborts a replay in flight before SAFE is let go below. */
-    recovery_forget();
-    /* Released immediately rather than held sticky. Holding it would suppress the
-       retreat too, but it would also lock out OTA, the calibration wizard and the
-       console until an app reconnected — background the app and the car cannot be
-       flashed over the air, which contradicts what ota_api promises. */
-    link_release(LINK_SRC_SAFE);
-    /* This is the whole point of carrying a goodbye on the wire: silence that was
-       announced is not silence that means the driver is out of range. Ownership is not
-       resumable — the next session arrives with a fresh hello. */
-    rt_session_bye(&s_ses);
 }
 
 static void on_command(const control_frame_t *f) {
@@ -188,19 +187,15 @@ static void on_datagram(int sock, const char *buf, int n, const struct sockaddr_
 }
 
 static void check_silence(void) {
-    if (!rt_session_lost(&s_ses, now_ms())) return;
-    ESP_LOGW(TAG, "no control frame for >%dms — the driver is gone", RT_WATCHDOG_MS);
+    if (!rt_glue_silence(&s_ses, now_ms(), &FX)) return;
     s_trips++;
-    /* Revoke the dead stream's grant explicitly rather than waiting for it to lapse at
-       this same instant, so the retreat is not refused by a grant that is technically
-       still alive. */
-    if (!link_release(LINK_SRC_RT)) {
-        ESP_LOGE(TAG, "could not revoke the dead stream's grant");
-    }
-    recovery_on_link_lost();
-    /* Disarms and forgets the sequence gate, keeps the channel's owner — see
-       rt_session_trip. */
-    rt_session_trip(&s_ses);
+    ESP_LOGW(TAG, "no control frame for >%dms — the driver is gone", RT_WATCHDOG_MS);
+}
+
+static void check_idle(void) {
+    if (!rt_glue_idle(&s_ses, &s_dead, now_ms(), &FX)) return;
+    ESP_LOGI(TAG, "session idle for >%dms — over; the next driver says hello",
+             RT_SESSION_IDLE_MS);
 }
 
 static void push_telemetry(int sock) {
@@ -260,6 +255,7 @@ static void rt_task(void *arg) {
         }
 
         check_silence();
+        check_idle();
 
         /* A deadline rather than a tick count: the loop runs faster than its timeout
            whenever datagrams arrive, so counting iterations would make the push rate a
