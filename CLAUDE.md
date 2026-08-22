@@ -84,15 +84,20 @@ The pure modules have **zero ESP-IDF dependencies** and are host-tested with pla
   Shoot-through-safe by construction.
 - `control_proto.{c,h}` — *pure*, zero-alloc parser for the 10 Hz control frame. Deliberately
   not cJSON: ten parses a second is ten mallocs a second on the control path.
-- `car.{c,h}` — clamps, mixes, plans, and hands the duties to the ramp task. Holds the mutex
-  around the calibration read, with a bounded 200 ms wait so a stuck holder cannot wedge the
-  watchdog.
-- `ramp.{c,h}` — 50 Hz task, the **sole writer** to the PCA9685. Bounded rise, instant fall.
-- `watchdog.{c,h}` — 50 Hz check; 300 ms without a control frame calls `recovery_on_link_lost()`.
+- `car.{c,h}` — clamps, mixes, plans, and offers the duties to the actuator arbiter. Holds the
+  mutex around the calibration read, with a bounded 200 ms wait so a stuck holder cannot wedge
+  the watchdog.
+- `ramp.{c,h}` — *pure* slew step plus the `/ramp` config; the 50 Hz actuator task lives in
+  `link.c`. Bounded rise, instant fall.
+- `link.{c,h}` — the actuator arbiter (who may command the motors: `rt`, `console`, `calib`,
+  `recover`, `ota`, `safe`) and the 50 Hz task that is the **sole writer** to the PCA9685.
+- `rt_link.{c,h}` — the UDP real-time channel: session ownership, the sequence gate, the
+  control watchdog (300 ms without a command calls `recovery_on_link_lost()`), and the 5 Hz
+  telemetry push. `watchdog.h` keeps only the pure staleness predicate.
 - `recovery.{c,h}` — breadcrumb ring buffer; on link loss a task replays it reversed and negated
   to retrace back into range, aborting the instant a frame arrives.
-- `pca9685`, `wifi_ap`, `http_server`, `ws_control`, `telemetry`, `calibration`, `wheel`, `dims`,
-  `trim`, `cfg_json` and the seven `*_api` modules — driver, transport, config, persistence.
+- `pca9685`, `wifi_ap`, `http_server`, `telemetry`, `calibration`, `wheel`, `dims`,
+  `trim`, `cfg_json` and the four `*_api` modules — driver, transport, config, persistence.
 
 All configuration persists in NVS as **one JSON string per domain**, with a dirty check so an
 unchanged POST does not rewrite flash.
@@ -144,7 +149,7 @@ Pure Swift modules are host-tested with `swiftc` directly — no XCTest runtime 
 ## Gotchas
 
 1. **`mix` on the console is exempt from the watchdog** — bench debugging does not stop every
-   300 ms. Only `/ws` traffic feeds it.
+   300 ms. Only UDP command datagrams on `rt_link` feed it.
 2. **"Motors don't spin" is usually delivery, not firmware.** Opening the serial port resets the
    board, so a command sent in the first second is swallowed during boot. And a control client
    must *stream* the held command at 10 Hz: one frame is a ~40 ms pulse that cannot visibly move
