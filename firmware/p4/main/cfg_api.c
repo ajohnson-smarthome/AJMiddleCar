@@ -13,6 +13,7 @@
 #include "recovery.h"
 #include "wheel.h"
 #include "dims.h"
+#include "api_util.h"
 
 static const char *TAG = "cfg_api";
 
@@ -87,36 +88,10 @@ static const cfg_binding_t *binding_for(const char *path) {
     return NULL;
 }
 
-static esp_err_t reply_error(httpd_req_t *req, const char *status, const char *field,
-                             const char *msg) {
-    char buf[128];
-    snprintf(buf, sizeof(buf), "{\"error\":\"%s\",\"field\":\"%s\"}", msg, field);
-    httpd_resp_set_status(req, status);
-    httpd_resp_set_type(req, "application/json");
-    return httpd_resp_sendstr(req, buf);
-}
-
-/* Read the whole body, however TCP chose to split it. The five handlers this file
-   replaces each made a single httpd_req_recv call, so a body arriving in two segments
-   was silently truncated and then rejected with a message blaming the field names. */
-static int read_body(httpd_req_t *req, char *buf, size_t n) {
-    if (req->content_len <= 0 || (size_t)req->content_len >= n) return -1;
-    size_t got = 0;
-    int timeouts = 0;
-    while (got < (size_t)req->content_len) {
-        int r = httpd_req_recv(req, buf + got, (size_t)req->content_len - got);
-        if (r > 0) { got += (size_t)r; timeouts = 0; continue; }
-        if (r == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts <= 3) continue;
-        return -1;
-    }
-    buf[got] = '\0';
-    return (int)got;
-}
-
 static esp_err_t cfg_get(httpd_req_t *req) {
     const cfg_domain_t *d = domain_for(req->uri);
     const cfg_binding_t *b = binding_for(req->uri);
-    if (!d || !b) return reply_error(req, "404 Not Found", "", "unknown endpoint");
+    if (!d || !b) return api_reply_error(req, "404 Not Found", "", "unknown endpoint");
 
     int32_t vals[CFG_MAX_FIELDS];
     b->get(vals);
@@ -135,7 +110,7 @@ static esp_err_t cfg_get(httpd_req_t *req) {
                          sep, f->name, (long)vals[i]);
         }
         if (w < 0 || (size_t)(n + w) >= sizeof(buf)) {
-            return reply_error(req, "500 Internal Server Error", "", "response too long");
+            return api_reply_error(req, "500 Internal Server Error", "", "response too long");
         }
         n += w;
     }
@@ -147,14 +122,14 @@ static esp_err_t cfg_get(httpd_req_t *req) {
 static esp_err_t cfg_post(httpd_req_t *req) {
     const cfg_domain_t *d = domain_for(req->uri);
     const cfg_binding_t *b = binding_for(req->uri);
-    if (!d || !b) return reply_error(req, "404 Not Found", "", "unknown endpoint");
+    if (!d || !b) return api_reply_error(req, "404 Not Found", "", "unknown endpoint");
 
     char body[192];
-    if (read_body(req, body, sizeof(body)) < 0) {
-        return reply_error(req, "400 Bad Request", "", "body missing or too long");
+    if (api_read_body(req, body, sizeof(body)) < 0) {
+        return api_reply_error(req, "400 Bad Request", "", "body missing or too long");
     }
     cJSON *j = cJSON_Parse(body);
-    if (!j) return reply_error(req, "400 Bad Request", "", "malformed JSON");
+    if (!j) return api_reply_error(req, "400 Bad Request", "", "malformed JSON");
 
     int32_t vals[CFG_MAX_FIELDS];
     for (int i = 0; i < d->n_fields; i++) {
@@ -163,14 +138,14 @@ static esp_err_t cfg_post(httpd_req_t *req) {
         if (f->type == CFG_BOOL) {
             if (!cJSON_IsBool(it)) {
                 cJSON_Delete(j);
-                return reply_error(req, "400 Bad Request", f->name, "expected a boolean");
+                return api_reply_error(req, "400 Bad Request", f->name, "expected a boolean");
             }
             vals[i] = cJSON_IsTrue(it) ? 1 : 0;
             continue;
         }
         if (!cJSON_IsNumber(it)) {
             cJSON_Delete(j);
-            return reply_error(req, "400 Bad Request", f->name, "expected a number");
+            return api_reply_error(req, "400 Bad Request", f->name, "expected a number");
         }
         int32_t v = (int32_t)it->valueint;
         if (f->type == CFG_ENUM) {
@@ -178,11 +153,11 @@ static esp_err_t cfg_post(httpd_req_t *req) {
             for (uint8_t k = 0; k < f->n_allowed; k++) if (f->allowed[k] == v) ok = true;
             if (!ok) {
                 cJSON_Delete(j);
-                return reply_error(req, "400 Bad Request", f->name, "not an allowed value");
+                return api_reply_error(req, "400 Bad Request", f->name, "not an allowed value");
             }
         } else if (v < f->min || v > f->max) {
             cJSON_Delete(j);
-            return reply_error(req, "400 Bad Request", f->name, "out of range");
+            return api_reply_error(req, "400 Bad Request", f->name, "out of range");
         }
         vals[i] = v;
     }
@@ -190,8 +165,7 @@ static esp_err_t cfg_post(httpd_req_t *req) {
 
     b->set(vals);
     b->save();
-    httpd_resp_set_type(req, "application/json");
-    return httpd_resp_sendstr(req, "{\"ok\":true}");
+    return api_reply_ok(req);
 }
 
 esp_err_t cfg_api_start(void) {
