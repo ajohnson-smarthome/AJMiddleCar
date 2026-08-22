@@ -306,6 +306,14 @@ class TestPythonEmitter(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("ramp_ms", why)
 
+    def test_ctl_symbols_are_name_keyed(self):
+        """Reordering ctl_values in the schema must not silently re-rank the
+        mock's arbiter against the car's hand-written link_src_t (whose build
+        guard checks only the count). Name-keyed symbols make state.py immune
+        to position, as C's CTL_RT and Swift's CtlOwner.rt already are."""
+        for v in load()["ctl_values"]:
+            self.assertEqual(self.ns[f"CTL_{v.upper()}"], v)
+
 
 class TestDriftCheck(unittest.TestCase):
     def test_check_script_passes_on_a_clean_tree(self):

@@ -239,6 +239,10 @@ def emit_python(schema):
         f"TELEMETRY_FIELDS = {schema['telemetry']['fields']!r}",
         f"CTL_VALUES = {schema['ctl_values']!r}",
         "",
+        "# Name-keyed, like C's CTL_RT and Swift's CtlOwner.rt. Position in",
+        "# CTL_VALUES is still rank; these names free callers from the unpack.",
+        *[f"CTL_{v.upper()} = {v!r}" for v in schema["ctl_values"]],
+        "",
         # pformat, not json.dumps: this file is a Python module, and JSON writes
         # `true` where Python needs `True`. sort_dicts=False keeps it deterministic.
         f"DOMAINS = {pprint.pformat(body, indent=4, sort_dicts=False, width=96)}",

@@ -7,6 +7,16 @@ RT = {'port': 4210, 'max_datagram': 320, 'command_hz': 10, 'telemetry_hz': 5, 'w
 TELEMETRY_FIELDS = [{'name': 'seq', 'type': 'int', 'doc': 'monotonic frame counter from the car'}, {'name': 'rx_fps', 'type': 'int', 'doc': 'control frames the car received per second'}, {'name': 'rssi', 'type': 'int', 'doc': 'AP-side signal for the station, 0 when unavailable'}, {'name': 'wdt_trips', 'type': 'int', 'doc': 'control-watchdog trips since boot'}, {'name': 'uptime_s', 'type': 'int', 'doc': 'seconds since boot'}, {'name': 'heap', 'type': 'int', 'doc': 'free heap in bytes'}, {'name': 'calibrated', 'type': 'bool', 'doc': 'a valid calibration is loaded'}, {'name': 'bus_ok', 'type': 'bool', 'doc': 'the motor driver is answering'}, {'name': 'ctl', 'type': 'str', 'doc': 'which source owns the actuator'}]
 CTL_VALUES = ['none', 'recover', 'console', 'rt', 'calib', 'ota', 'safe']
 
+# Name-keyed, like C's CTL_RT and Swift's CtlOwner.rt. Position in
+# CTL_VALUES is still rank; these names free callers from the unpack.
+CTL_NONE = 'none'
+CTL_RECOVER = 'recover'
+CTL_CONSOLE = 'console'
+CTL_RT = 'rt'
+CTL_CALIB = 'calib'
+CTL_OTA = 'ota'
+CTL_SAFE = 'safe'
+
 DOMAINS = {   '/ramp': {   'key': 'ramp',
                  'defaults': {'ramp_ms': 300},
                  'fields': [   {   'name': 'ramp_ms',

@@ -665,6 +665,10 @@ class TestOwnershipVocabulary(unittest.TestCase):
         self.assertTrue(seen <= set(CTL_VALUES), seen)
         self.assertIn(CTL_RECOVER, seen)
 
+    def test_the_symbols_spell_the_wire_values(self):
+        self.assertEqual((CTL_NONE, CTL_RECOVER, CTL_RT, CTL_OTA),
+                         ("none", "recover", "rt", "ota"))
+
 
 class TestTelemetry(unittest.TestCase):
     def test_it_carries_exactly_the_schema_fields(self):

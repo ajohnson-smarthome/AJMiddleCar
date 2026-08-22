@@ -19,20 +19,15 @@ import math
 import re
 from collections import deque
 
-from generated import CTL_VALUES, DEVICE, DOMAINS, RT, TELEMETRY_FIELDS, validate
+from generated import (CTL_CALIB, CTL_CONSOLE, CTL_NONE, CTL_OTA, CTL_RECOVER,
+                       CTL_RT, CTL_SAFE, CTL_VALUES, DEVICE, DOMAINS, RT,
+                       TELEMETRY_FIELDS, validate)
 
 # Ownership of the actuator, lowest priority first. `link_src_t` in
-# firmware/p4/main/link.h is generated from the same list, and these names are what
-# telemetry reports in `ctl`.
+# firmware/p4/main/link.h is generated from the same list, and these names are
+# what telemetry reports in `ctl`. Position is rank on all three sides, and the
+# per-name symbols come from the generator, same as C's and Swift's.
 PRIORITY = tuple(CTL_VALUES)
-
-# The vocabulary, named. Unpacked from the list rather than written out, because the
-# generator emits per-name symbols for the other two implementations (C's `CTL_RT`,
-# Swift's `CtlOwner.rt`) and for Python only the flat list — so this is the nearest
-# thing to a generated symbol until `emit_python` catches up. Position is rank on all
-# three sides, and a schema that adds or drops a value fails here, at import, instead
-# of at the first `PRIORITY.index()` deep inside the arbiter.
-CTL_NONE, CTL_RECOVER, CTL_CONSOLE, CTL_RT, CTL_CALIB, CTL_OTA, CTL_SAFE = PRIORITY
 
 # The session id, as `parse_sid` in firmware/p4/main/control_proto.c accepts it:
 # non-empty, alphanumeric, and short enough to fit that file's CONTROL_SID_MAX with its
