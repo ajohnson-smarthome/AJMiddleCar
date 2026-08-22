@@ -21,7 +21,6 @@ actor CarTransport {
         /// A car answered in a protocol version this app does not speak. Reported by name: the
         /// car replies to a mismatched hello precisely so this is sayable.
         case protoMismatch(theirs: Int)
-        case telemetry(Telemetry)
         case sessionClosed
     }
 
@@ -59,6 +58,7 @@ actor CarTransport {
     private var seq: UInt32 = 0
     private var lastRx = ContinuousClock.now
     private var listener: AsyncStream<Event>.Continuation?
+    private var telemetryListener: AsyncStream<Telemetry>.Continuation?
     private var httpTail: [String: Task<Void, Never>] = [:]
     /// Whether the car adopted the session that is running now. A session only ever ends by
     /// failing, so this — not the return of `session()` — is what says the car was reachable.
@@ -67,11 +67,23 @@ actor CarTransport {
     /// that is not switched on yet" from "the link we had went away".
     private var everAdopted = false
 
-    /// The event stream feeding `CarLink`. One consumer by design; a second call replaces it.
+    /// Session lifecycle, lossless. Its rate is bounded by the session loop itself — a
+    /// handful of events per reconnect — so `.unbounded` cannot grow. What must never happen
+    /// is `.sessionOpened` being evicted by a telemetry backlog: it is emitted once per
+    /// session, and losing it leaves the app on the radar behind a live, streaming session.
     func events() -> AsyncStream<Event> {
-        let (stream, cont) = AsyncStream<Event>.makeStream(bufferingPolicy: .bufferingNewest(8))
+        let (stream, cont) = AsyncStream<Event>.makeStream(bufferingPolicy: .unbounded)
         listener?.finish()
         listener = cont
+        return stream
+    }
+
+    /// Telemetry, latest-wins. One slot: a consumer that falls behind skips straight to the
+    /// newest frame instead of replaying a queue of stale ones.
+    func telemetryFrames() -> AsyncStream<Telemetry> {
+        let (stream, cont) = AsyncStream<Telemetry>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        telemetryListener?.finish()
+        telemetryListener = cont
         return stream
     }
 
@@ -287,7 +299,7 @@ actor CarTransport {
     private func receiveLoop() async throws {
         while !Task.isCancelled {
             guard let text = try await receiveOne() else { continue }
-            if case .telemetry(let t) = RTFrame.parse(text) { emit(.telemetry(t)) }
+            if case .telemetry(let t) = RTFrame.parse(text) { telemetryListener?.yield(t) }
         }
     }
 

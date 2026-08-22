@@ -97,52 +97,74 @@ final class CarLink: ObservableObject {
     }
 
     private func consume() async {
-        for await event in await transport.events() {
-            switch event {
-            case .sessionOpened(let device, let fw):
-                self.device = device
-                lastTelemetrySeq = nil
-                if device == CarContract.device {
-                    // The firmware version is published only for our own car. It feeds the launch
-                    // gate, and a foreign car's build number there can force an OTA onto a car
-                    // that is not ours — routing straight around the wrong-car screen.
-                    self.fw = fw
-                    session = .adopted(device: device, fw: fw)
-                    fetchRadio()
-                    // The car is reachable exactly now. Prefetching from `onAppear` ran while the
-                    // gate was still talking to GitHub, so both GETs timed out and every trick
-                    // spent the session on the fallback geometry the `/dims` work replaced.
-                    config?.prefetchDriveGeometry()
-                } else {
-                    self.fw = nil
-                    session = .foreign(device: device)
+        let events = await transport.events()
+        let frames = await transport.telemetryFrames()
+        // Two streams, one consumer. Ordering between them is not guaranteed; a stale frame
+        // landing after `.sessionClosed` only refreshes `lastTelemetry` — `LinkRule.compose`
+        // still requires an adopted session to say `.live`, so it cannot resurrect the link.
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { @MainActor [weak self] in
+                for await e in events {
+                    self?.handle(e)
+                    self?.recompute()
                 }
-            case .protoMismatch(let theirs):
-                self.fw = nil
-                self.device = nil
-                session = .protoMismatch(theirs: theirs)
-            case .telemetry(let t):
-                // Ordered by the car's own counter: a reordered datagram walks uptime, the trip
-                // count and the calibration flag backwards, and the mandatory-calibration sheet
-                // keys on that flag.
-                if let seq = t.seq, let last = lastTelemetrySeq, !RTFrame.seqNewer(seq, than: last) {
-                    break
-                }
-                if let seq = t.seq { lastTelemetrySeq = seq }
-                telemetry = t
-                if lastTelemetry != t { lastTelemetry = t }
-                lastFrame = ContinuousClock.now
-            case .sessionClosed:
-                // A foreign identity — or a protocol we cannot speak — survives the session that
-                // discovered it: the transport reopens every few seconds and would otherwise
-                // flicker the screen naming the problem back to a radar.
-                session = session.survivingSessionEnd
-                telemetry = nil
-                lastFrame = nil
-                lastTelemetrySeq = nil
             }
-            recompute()
+            group.addTask { @MainActor [weak self] in
+                for await t in frames {
+                    self?.apply(t)
+                    self?.recompute()
+                }
+            }
+            await group.waitForAll()
         }
+    }
+
+    private func handle(_ event: CarTransport.Event) {
+        switch event {
+        case .sessionOpened(let device, let fw):
+            self.device = device
+            lastTelemetrySeq = nil
+            if device == CarContract.device {
+                // The firmware version is published only for our own car. It feeds the launch
+                // gate, and a foreign car's build number there can force an OTA onto a car
+                // that is not ours — routing straight around the wrong-car screen.
+                self.fw = fw
+                session = .adopted(device: device, fw: fw)
+                fetchRadio()
+                // The car is reachable exactly now. Prefetching from `onAppear` ran while the
+                // gate was still talking to GitHub, so both GETs timed out and every trick
+                // spent the session on the fallback geometry the `/dims` work replaced.
+                config?.prefetchDriveGeometry()
+            } else {
+                self.fw = nil
+                session = .foreign(device: device)
+            }
+        case .protoMismatch(let theirs):
+            self.fw = nil
+            self.device = nil
+            session = .protoMismatch(theirs: theirs)
+        case .sessionClosed:
+            // A foreign identity — or a protocol we cannot speak — survives the session that
+            // discovered it: the transport reopens every few seconds and would otherwise
+            // flicker the screen naming the problem back to a radar.
+            session = session.survivingSessionEnd
+            telemetry = nil
+            lastFrame = nil
+            lastTelemetrySeq = nil
+        }
+    }
+
+    private func apply(_ t: Telemetry) {
+        // Ordered by the car's own counter: a reordered datagram walks uptime, the trip
+        // count and the calibration flag backwards, and the mandatory-calibration sheet
+        // keys on that flag.
+        if let seq = t.seq, let last = lastTelemetrySeq, !RTFrame.seqNewer(seq, than: last) {
+            return
+        }
+        if let seq = t.seq { lastTelemetrySeq = seq }
+        telemetry = t
+        if lastTelemetry != t { lastTelemetry = t }
+        lastFrame = ContinuousClock.now
     }
 
     private func recompute() {
