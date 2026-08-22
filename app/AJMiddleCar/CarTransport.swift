@@ -66,6 +66,10 @@ actor CarTransport {
     /// Whether any session has ever been adopted, which is what separates "searching for a car
     /// that is not switched on yet" from "the link we had went away".
     private var everAdopted = false
+    /// The wrong-car / wrong-proto hold. Stored so the retry button can abort it: without
+    /// that the transport sleeps out its ten seconds while the user watches a radar that
+    /// claims to be retrying.
+    private var identityHold: Task<Void, Error>?
 
     /// Session lifecycle, lossless. Its rate is bounded by the session loop itself — a
     /// handful of events per reconnect — so `.unbounded` cannot grow. What must never happen
@@ -131,6 +135,24 @@ actor CarTransport {
             try? await send(RTFrame.bye(seq: seq), on: socket)
         }
     }
+
+    /// Hold the session after a car identified itself as undriveable — long enough that the
+    /// screen naming the problem is not a flicker between radar sweeps, but abortable the
+    /// moment the user asks for another look.
+    private func holdIdentity() async {
+        let hold = Task { try await Task.sleep(for: .seconds(10)) }
+        identityHold = hold
+        // Outer cancellation (stop()) must not wait out the unstructured hold.
+        await withTaskCancellationHandler {
+            _ = try? await hold.value
+        } onCancel: {
+            hold.cancel()
+        }
+        identityHold = nil
+    }
+
+    /// The retry button on the wrong-car and wrong-protocol screens.
+    func retryNow() { identityHold?.cancel() }
 
     private func tearDown() {
         conn?.cancel()
@@ -200,7 +222,7 @@ actor CarTransport {
             // not a flicker between radar sweeps.
             emit(.protoMismatch(theirs: theirs))
             await sayGoodbye(on: socket)
-            try await Task.sleep(for: .seconds(10))
+            await holdIdentity()
             throw CarError.malformed("protocol \(theirs), not \(CarContract.proto)")
         }
         emit(.sessionOpened(device: identity.device, fw: identity.fw))
@@ -210,7 +232,7 @@ actor CarTransport {
             // we say goodbye — the other car drops ownership and stops — and hold the session
             // long enough that the wrong-car screen is not a flicker.
             await sayGoodbye(on: socket)
-            try await Task.sleep(for: .seconds(10))
+            await holdIdentity()
             throw CarError.malformed("foreign device \(identity.device)")
         }
 

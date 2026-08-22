@@ -94,6 +94,9 @@ final class CarLink: ObservableObject {
         session = .none
         device = nil
         recompute()
+        // The transport is mid-hold on the session that discovered the identity; abort it so
+        // the next hello goes out now, not after the remainder of the ten seconds.
+        Task { [transport] in await transport.retryNow() }
     }
 
     private func consume() async {
