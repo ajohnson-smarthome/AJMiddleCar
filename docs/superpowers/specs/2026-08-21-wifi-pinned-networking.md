@@ -1,5 +1,13 @@
 # Pinning the car's traffic to Wi-Fi
 
+> **Superseded (2026-08-22):** the components this spec designs — `CarHTTP`, `CarSocket` over
+> `NWProtocolWebSocket`, a `CarConnection` interface — were replaced by the UDP cutover;
+> the shipped owners are `CarTransport` (one actor for the UDP session and the pinned HTTP
+> requests) and `CarNet` (the one place the pinning rule lives). The load-bearing rule —
+> `requiredInterfaceType = .wifi`, applied only off-simulator — survives unchanged. The
+> 40-second general-path bench check below has **not** been re-run against the UDP transport;
+> `docs/bringup.md` owns that box until it has.
+
 ## The problem, as measured
 
 The car is a stand-alone Wi-Fi accessory: it publishes an access point and never provides a route
