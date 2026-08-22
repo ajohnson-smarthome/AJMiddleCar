@@ -99,9 +99,11 @@ final class CarLink: ObservableObject {
     private func consume() async {
         let events = await transport.events()
         let frames = await transport.telemetryFrames()
-        // Two streams, one consumer. Ordering between them is not guaranteed; a stale frame
-        // landing after `.sessionClosed` only refreshes `lastTelemetry` — `LinkRule.compose`
-        // still requires an adopted session to say `.live`, so it cannot resurrect the link.
+        // Two streams, one consumer. Ordering between them is not guaranteed; a frame from the
+        // previous session can land after this session's `.sessionOpened` (or after
+        // `.sessionClosed`) — `apply(_:)` gates on an adopted session, so a late frame from the
+        // wrong session is simply dropped rather than re-seeding `lastTelemetrySeq` with a stale
+        // counter or resurrecting a link that `LinkRule.compose` has already retired.
         await withTaskGroup(of: Void.self) { group in
             group.addTask { @MainActor [weak self] in
                 for await e in events {
@@ -155,6 +157,12 @@ final class CarLink: ObservableObject {
     }
 
     private func apply(_ t: Telemetry) {
+        // Telemetry only flows inside an adopted session (the transport's `receiveLoop` starts
+        // after adoption). Gating here means a frame the previous session's buffer was still
+        // holding — and that lands after this session's `.sessionOpened` reset
+        // `lastTelemetrySeq` to nil — cannot re-seed it with a stale, free-running counter from
+        // the car's old boot and lock every fresh frame out as "not newer" forever.
+        guard case .adopted = session else { return }
         // Ordered by the car's own counter: a reordered datagram walks uptime, the trip
         // count and the calibration flag backwards, and the mandatory-calibration sheet
         // keys on that flag.
