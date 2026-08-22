@@ -22,8 +22,8 @@ implementation writes them as literals, and neither does this file except by exa
 
 Every datagram is a single JSON object. Two size limits answer different questions: the car
 accepts an app→car datagram of at most **96 bytes** (`max_command`) and drops anything larger;
-both sides read into **320-byte** buffers (`max_datagram`), because a telemetry frame runs
-119–156 bytes and a receive buffer sized from the command cap would truncate every one.
+a receiver must be sized for **320 bytes** (`max_datagram`), because a telemetry frame
+runs up to ~160 bytes and a buffer sized from the command cap would not fit one.
 
 Datagrams are parsed strictly, and identically on both implementations: keys are read at the
 top level only, numbers follow JSON grammar (no leading `+`, no bare `.` mantissa, no leading
@@ -116,14 +116,14 @@ disarmed — after a trip, or after a handshake that never commanded.
 {"seq":1235,"t":0,"y":0,"bye":1}
 ```
 
-Stop, suppress the retreat, drop ownership. Sent when the scene leaves `.active`, when the
-drive screen is dismissed, and on teardown. On a `bye` the car stops, clears the breadcrumb
-history (which is what actually suppresses the retreat — replaying an empty history moves
-nothing), disarms the watchdog, and releases its stop-grant immediately, so OTA, the
-calibration wizard and the console stay reachable while the app is away. The one exception:
-when a flash or a calibration pulse holds the actuator, the goodbye leaves that hold untouched —
-a backgrounded app must not hand the motors back mid-flash. **Ownership is not resumable:**
-after `bye` the app opens a new session with a fresh `hello` and a fresh sid.
+Stop, suppress the retreat, drop ownership. Sent when the scene leaves `.active` and on
+teardown. On a `bye` the car stops, clears the breadcrumb history (which is what actually
+suppresses the retreat — replaying an empty history moves nothing), disarms the watchdog, and
+releases its stop-grant immediately, so OTA, the calibration wizard and the console stay
+reachable while the app is away. The one exception: when a flash or a calibration pulse holds
+the actuator, the goodbye leaves that hold untouched — a backgrounded app must not hand the
+motors back mid-flash. **Ownership is not resumable:** after `bye` the app opens a new session
+with a fresh `hello` and a fresh sid.
 
 ### Telemetry — car → app, 5 Hz
 
@@ -198,7 +198,7 @@ own body shape:
 
 | Endpoint | GET returns | POST body | Range |
 |---|---|---|---|
-| `/calib` | `{"calibrated":true}` | — | — |
+| `/calib` | `{"calibrated":true\|false}` | — | — |
 | `/calib/spin` | — | `{"pair":0,"dir":1}` | pair `0..3`, dir `0` reverse / `1` forward; pulses ~0.6 s, and the `200` lands only after the pulse ends — the wizard's "which wheel turned?" must not race a spinning wheel. `409` when a higher-priority source holds the actuator — the wheel did **not** turn, and a client must not advance its wizard |
 | `/calib/save` | — | `{"wheels":[{"pair":0,"sign":1},…]}` | exactly 4 entries, order FL, FR, RL, RR; `pair` `0..3` unique, `sign` ±1 |
 
