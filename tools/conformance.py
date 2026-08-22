@@ -147,6 +147,9 @@ class Conformance:
             got = parsed.get(f["name"])
             self.check(isinstance(got, want) and not (want is int and isinstance(got, bool)),
                        f"/status: {f['name']} is {got!r}, want {f['type']}")
+        for key in ("rollback", "nvs_wiped"):
+            self.check(isinstance(parsed.get(key), bool),
+                       f"/status: {key} is {parsed.get(key)!r}, want bool")
 
     def identity(self):
         print("/")

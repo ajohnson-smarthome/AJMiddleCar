@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from generated import CTL_VALUES, DOMAINS, RT, TELEMETRY_FIELDS   # noqa: E402
 from state import (CTL_CALIB, CTL_NONE, CTL_OTA, CTL_RECOVER,     # noqa: E402
                    CTL_RT, CTL_SAFE, CarState, clamp_axis, number, parse_frame,
-                   seq_is_newer, valid_seq, valid_sid)
+                   parse_image_version, seq_is_newer, valid_seq, valid_sid)
 
 DEADLINE_S = RT["watchdog_ms"] / 1000.0
 
@@ -737,6 +737,46 @@ class TestTelemetry(unittest.TestCase):
         car = CarState(now=100.0)
         car.tick(142.0)
         self.assertEqual(car.telemetry(0)["uptime_s"], 42)
+
+
+def synthetic_image(version=b"v9.9+123", magic=0xABCD5432, first=0xE9, size=4096):
+    """The least image parse_image_version accepts: 0xE9 header, esp_app_desc_t at 32
+    (image header 24 + segment header 8), magic word first, version[32] at its offset 16."""
+    img = bytearray(size)
+    img[0] = first
+    img[32:36] = magic.to_bytes(4, "little")
+    img[48:48 + len(version)] = version
+    return bytes(img)
+
+
+class TestImageVersion(unittest.TestCase):
+    def test_a_real_layout_yields_its_version(self):
+        self.assertEqual(parse_image_version(synthetic_image()), "v9.9+123")
+
+    def test_garbage_yields_none(self):
+        """A 0xE9 blob without the app-desc magic is not an app image — the fallback
+        (a synthetic bump) keeps old rehearsal blobs working."""
+        self.assertIsNone(parse_image_version(b"\xe9" + b"\x00" * 8191))
+        self.assertIsNone(parse_image_version(b"\x00" * 8192))
+        self.assertIsNone(parse_image_version(b"\xe9short"))
+
+    def test_end_ota_prefers_the_parsed_version(self):
+        car = CarState(now=0.0)
+        car.begin_ota(0.0)
+        car.end_ota(version="v2.0+700")
+        self.assertEqual(car.fw, "v2.0+700")
+
+    def test_end_ota_without_a_version_still_bumps(self):
+        car = CarState(now=0.0)
+        old = car.fw
+        car.begin_ota(0.0)
+        car.end_ota()
+        self.assertNotEqual(car.fw, old)
+
+    def test_rollback_and_nvs_wiped_default_false(self):
+        car = CarState(now=0.0)
+        self.assertFalse(car.rollback)
+        self.assertFalse(car.nvs_wiped)
 
 
 if __name__ == "__main__":

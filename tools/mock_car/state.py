@@ -114,6 +114,29 @@ def _no_duplicates(pairs):
     return d
 
 
+_APP_DESC_OFFSET = 32          # esp_image_header_t (24 B) + esp_image_segment_header_t (8 B)
+_APP_DESC_MAGIC = 0xABCD5432   # esp_app_desc.h ESP_APP_DESC_MAGIC_WORD
+
+
+def parse_image_version(data):
+    """The version a real ESP application image embeds, or None.
+
+    esp_app_desc_t sits at the start of the first segment: image header (24 bytes,
+    first byte 0xE9), one segment header (8), then the descriptor — magic_word first,
+    version[32] at its offset 16, i.e. absolute offset 48. This is what the car will
+    report after flashing these bytes, so the simulator must report the same — a
+    synthetic bump hid every asset-vs-tag mismatch from rehearsal (2026-08-23 audit).
+    """
+    if len(data) < _APP_DESC_OFFSET + 48 or data[0] != 0xE9:
+        return None
+    magic = int.from_bytes(data[_APP_DESC_OFFSET:_APP_DESC_OFFSET + 4], "little")
+    if magic != _APP_DESC_MAGIC:
+        return None
+    raw = data[_APP_DESC_OFFSET + 16:_APP_DESC_OFFSET + 48]
+    ver = raw.split(b"\x00", 1)[0].decode("ascii", "replace")
+    return ver or None
+
+
 def parse_frame(data, max_command=None):
     """One inbound datagram -> a dict of the fields it carried, or None to drop it.
 
@@ -202,6 +225,8 @@ class CarState:
     def __init__(self, device=DEVICE, fw="v1.0+9000", now=0.0):
         self.device = device
         self.fw = fw
+        self.rollback = False    # the previous "OTA" was rolled back — /status mirrors it
+        self.nvs_wiped = False   # one-boot flag after a simulated NVS migration erase
         self.rssi = -58
         self.heap = 200000
         self.config = {path: dict(d["defaults"]) for path, d in DOMAINS.items()}
@@ -598,9 +623,9 @@ class CarState:
         self._retreating = False
         return True
 
-    def end_ota(self, flashed=True):
+    def end_ota(self, flashed=True, version=None):
         if flashed:
-            self.fw = _bump_build(self.fw)
+            self.fw = version or _bump_build(self.fw)
         self._release(CTL_OTA)
 
     def set_bus_ok(self, ok):
