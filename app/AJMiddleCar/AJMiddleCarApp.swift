@@ -34,18 +34,27 @@ struct AJMiddleCarApp: App {
                 // was ready to hear it.
                 flow.carIdentified(fw: link.fw)
             }
-            .onChange(of: scenePhase) { _, newPhase in
-                if newPhase == .active {
-                    // The config prefetch is not here: nothing can be read from a car the app has
-                    // not met yet, and both GETs would time out into `.failed` with nothing to
-                    // retrigger them. `CarLink` warms them the moment the session is adopted.
-                    link.start()
-                } else {
-                    // Leaving `.active` is a goodbye said in words. The car stops in under
-                    // 150 ms instead of noticing silence 300 ms later and retreating along its
-                    // own path with the controls off-screen.
+            .onChange(of: scenePhase) { oldPhase, newPhase in
+                switch newPhase {
+                case .active:
+                    // The config prefetch is not here: nothing can be read from a car the app
+                    // has not met yet. And the gate decides whether there is a link to open at
+                    // all — starting behind the no-internet screen opened an invisible session
+                    // that streamed zeros and outranked the bench console.
+                    if flow.phase.opensLink { link.start() }
+                case .inactive:
+                    // Only on the way down. On the way up (.background → .inactive → .active)
+                    // the link is already stopped, and a stop enqueued here would cancel the
+                    // start the .active step is about to make.
+                    if oldPhase == .active {
+                        intent.neutral()
+                        link.requestStop(graceful: true)
+                    }
+                case .background:
                     intent.neutral()
-                    Task { await link.stop(graceful: true) }
+                    link.requestStop(graceful: true)
+                @unknown default:
+                    break
                 }
             }
             .onChange(of: link.fw) { _, fw in flow.carIdentified(fw: fw) }

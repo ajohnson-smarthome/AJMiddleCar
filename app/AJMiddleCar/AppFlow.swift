@@ -16,6 +16,16 @@ final class AppFlow: ObservableObject {
         case updateRequired
         /// The gate is satisfied. `CarLink` decides whether that means the drive screen.
         case ready
+
+        /// The phases whose screens open the link — the same set `root` switches on. The
+        /// scene handler restarts the link on `.active` and must not open a session behind
+        /// a gate screen that says there is nothing to talk to.
+        var opensLink: Bool {
+            switch self {
+            case .updateRequired, .awaitingCar, .ready: return true
+            case .checkInternet, .noInternet, .checkUpdate, .checkFailed, .downloading: return false
+            }
+        }
     }
 
     @Published var phase: Phase = .checkInternet

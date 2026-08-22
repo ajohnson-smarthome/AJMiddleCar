@@ -37,6 +37,11 @@ final class CarLink: ObservableObject {
     private var decay: Task<Void, Never>?
     private var radioFetch: Task<Void, Never>?
     private var pathSub: AnyCancellable?
+    /// Lifecycle operations run strictly in call order. `start()` and `requestStop()` enqueue
+    /// synchronously on the main actor, so the order the scene handler calls them in is the
+    /// order they execute in — the unstructured stop task racing a later start() is how the
+    /// link used to die until the next background/foreground cycle.
+    private var lifecycle: Task<Void, Never>?
     private var pathState: PathState = .noWifi(.notAvailable)
     #if DEBUG
     /// Set by the debug gallery: hold the seeded state, with no transport and no path behind it.
@@ -58,8 +63,29 @@ final class CarLink: ObservableObject {
 
     var isLive: Bool { state.isLive }
 
+    private func enqueue(_ op: @escaping @MainActor () async -> Void) {
+        let prev = lifecycle
+        lifecycle = Task { await prev?.value; await op() }
+    }
+
     /// Open the channel. Idempotent; the transport owns the reconnect loop.
     func start() {
+        enqueue { [weak self] in await self?.beginPumping() }
+    }
+
+    /// Leaving the app is a goodbye said in words — the car is told to stop rather than left
+    /// to notice. Synchronous enqueue: callers in view handlers must not need an await for
+    /// the ordering guarantee to hold.
+    func requestStop(graceful: Bool) {
+        enqueue { [weak self] in await self?.shutDown(graceful: graceful) }
+    }
+
+    func stop(graceful: Bool) async {
+        requestStop(graceful: graceful)
+        await lifecycle?.value
+    }
+
+    private func beginPumping() async {
         guard pump == nil else { return }
         pump = Task { [weak self] in await self?.consume() }
         // Liveness has to expire on its own: telemetry stopping is silence, and silence
@@ -70,11 +96,13 @@ final class CarLink: ObservableObject {
                 self?.recompute()
             }
         }
-        Task { [transport] in await transport.start() }
+        await transport.start()
     }
 
-    /// Leaving the app is `graceful: true` — the car is told to stop rather than left to notice.
-    func stop(graceful: Bool) async {
+    private func shutDown(graceful: Bool) async {
+        // Idempotent: the scene path can enqueue two stops back to back (.inactive, then
+        // .background), and the second must be a no-op rather than a second goodbye.
+        guard pump != nil else { return }
         pump?.cancel(); pump = nil
         decay?.cancel(); decay = nil
         radioFetch?.cancel(); radioFetch = nil
