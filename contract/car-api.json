@@ -21,7 +21,8 @@
     "device_field": "device",
     "fw_field": "fw",
     "throttle_field": "t",
-    "yaw_field": "y"
+    "yaw_field": "y",
+    "doc": "hello carries the session id: producers send 8 hex characters; acceptors take 1-15 alphanumerics"
   },
   "domains": [
     {

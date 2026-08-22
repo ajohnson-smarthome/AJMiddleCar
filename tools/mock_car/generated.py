@@ -3,7 +3,7 @@
 PROTO = 1
 DEVICE = 'ajmiddlecar'
 NETWORK = {'ssid': 'AJMiddleCar', 'password': 'drive1234', 'host': '192.168.4.1'}
-RT = {'port': 4210, 'max_datagram': 320, 'command_hz': 10, 'telemetry_hz': 5, 'watchdog_ms': 300, 'session_idle_ms': 10000, 'hello_field': 'hello', 'seq_field': 'seq', 'bye_field': 'bye', 'max_command': 96, 'proto_field': 'proto', 'device_field': 'device', 'fw_field': 'fw', 'throttle_field': 't', 'yaw_field': 'y'}
+RT = {'port': 4210, 'max_datagram': 320, 'command_hz': 10, 'telemetry_hz': 5, 'watchdog_ms': 300, 'session_idle_ms': 10000, 'hello_field': 'hello', 'seq_field': 'seq', 'bye_field': 'bye', 'max_command': 96, 'proto_field': 'proto', 'device_field': 'device', 'fw_field': 'fw', 'throttle_field': 't', 'yaw_field': 'y', 'doc': 'hello carries the session id: producers send 8 hex characters; acceptors take 1-15 alphanumerics'}
 TELEMETRY_FIELDS = [{'name': 'seq', 'type': 'int', 'doc': 'monotonic frame counter from the car'}, {'name': 'rx_fps', 'type': 'int', 'doc': 'control frames the car received per second'}, {'name': 'rssi', 'type': 'int', 'doc': 'AP-side signal for the station, 0 when unavailable'}, {'name': 'wdt_trips', 'type': 'int', 'doc': 'control-watchdog trips since boot'}, {'name': 'uptime_s', 'type': 'int', 'doc': 'seconds since boot'}, {'name': 'heap', 'type': 'int', 'doc': 'free heap in bytes'}, {'name': 'calibrated', 'type': 'bool', 'doc': 'a valid calibration is loaded'}, {'name': 'bus_ok', 'type': 'bool', 'doc': 'the motor driver is answering'}, {'name': 'ctl', 'type': 'str', 'doc': 'which source owns the actuator'}]
 CTL_VALUES = ['none', 'recover', 'console', 'rt', 'calib', 'ota', 'safe']
 
