@@ -15,7 +15,11 @@ The dropped-frames check does not just look for aliveness (some push arriving):
 a mock that quietly accepts one of the seven bad datagrams still looks "alive" to
 a check that only wants any push at all. It reads the car's own rx_fps instead —
 0 means nothing landed, non-zero means one was silently accepted — the same
-signal a real fleet's telemetry would surface.
+signal a real fleet's telemetry would surface. And the seven rule-6 shapes are
+numbered fresh against the live seq counter, not with small fixed literals: a
+literal that is already stale gets dropped by the (both-implementations-shared)
+replay gate regardless of whether the shape itself would have been rejected, so
+a lax parser's real defect never gets exercised — see rule6_seq_frames below.
 
 Stdlib only — no venv needed against a car. The dropped frames come from the
 rule-6 table in docs/superpowers/specs/2026-08-22-audit-fix-decisions.md, the
@@ -41,14 +45,44 @@ JSON_TYPES = {"int": int, "bool": bool, "str": str}
 CTL_KEY = "ctl"                      # TELEMETRY_FIELDS' name for the actuator's owner
 BAD_HELLO_SID = "abcd1234"           # the sid the malformed hello below carries
 
-DROPPED_FRAMES = [                       # rule 6: both sides drop these whole
-    b'{"seq":5,"junk":{"t":0.9},"y":0.5}',
-    b'{"seq":7,"t":.5,"y":0}',
-    b'{"seq":8,"t":+1,"y":0}',
-    b'{"seq":9,"t":0.5,"y":0,"t":0.9}',
+# rule 6: both sides drop these whole. Neither carries a seq, so the staleness
+# problem rule6_seq_frames exists to dodge does not apply to these two — a
+# hello is never subject to the owned-traffic seq gate at all, and a bye
+# missing its seq entirely is exactly the shape under test.
+DROPPED_FRAMES = [
     ('{"proto":1.5,"hello":"%s"}' % BAD_HELLO_SID).encode(),
     b'{"bye":1}',                        # a goodbye without a seq is dropped too
 ]
+
+
+def rule6_seq_frames(fresh_seqs):
+    """The four rule-6 malformed shapes that carry a seq — numbered fresh, not
+    with the small fixed literals (5, 7, 8, 9) an earlier version of this tool
+    used.
+
+    Those literals are always stale by the time the batch is sent (the
+    telemetry loop above has already pushed the live counter well past single
+    digits), so on a mock whose actual defect is a lax *parser*, the frame
+    still gets dropped — just at the seq gate, for the wrong reason, before
+    the parser is ever exercised. The defect is invisible either way the
+    frame ends up rejected, which is exactly the failure mode a review caught
+    empirically: a lax mock that accepted every one of these malformed shapes
+    still reported "all checks passed", because the seq gate was silently
+    doing the rejecting instead of the parser being tested.
+
+    Freshly numbered, a frame a lax parser wrongly accepts also clears the
+    (unrelated, correctly-functioning) replay gate, reaches note_command, and
+    shows up in rx_fps — which is what the caller below is checking. Only the
+    seq digits differ from the original literals; the malformed shapes
+    themselves are unchanged.
+    """
+    a, b, c, d = fresh_seqs
+    return [
+        ('{"seq":%d,"junk":{"t":0.9},"y":0.5}' % a).encode(),
+        ('{"seq":%d,"t":.5,"y":0}' % b).encode(),
+        ('{"seq":%d,"t":+1,"y":0}' % c).encode(),
+        ('{"seq":%d,"t":0.5,"y":0,"t":0.9}' % d).encode(),
+    ]
 
 
 class Unreachable(Exception):
@@ -57,6 +91,22 @@ class Unreachable(Exception):
 
 def enc(obj):
     return json.dumps(obj, separators=(",", ":")).encode()
+
+
+def padded_frame(seq_value, total_len):
+    """A valid seq/t/y frame, padded via an ignored "p" key to exactly
+    total_len bytes.
+
+    Not a fixed byte template: seq_value's digit count depends on how far the
+    live counter has moved by the time this is called, so the padding has to
+    be sized against the actual encoded prefix rather than a guess baked in
+    at import time.
+    """
+    obj = {RT["seq_field"]: seq_value, RT["throttle_field"]: 0, RT["yaw_field"]: 0, "p": ""}
+    fill = total_len - len(enc(obj))
+    assert fill >= 0, f"{total_len} bytes is too small to hold seq {seq_value}"
+    obj["p"] = "x" * fill
+    return enc(obj)
 
 
 class RTConformance:
@@ -224,15 +274,20 @@ class RTConformance:
         flushed = self.recv_matching(s, lambda f: CTL_KEY in f, 1.0)
         self.check(flushed is not None, "a push still arrives once streaming stops")
 
-        pad = b"x" * (RT["max_command"] + 1 - len(b'{"seq":0,"t":0,"y":0,"p":""}'))
-        oversized = b'{"seq":0,"t":0,"y":0,"p":"' + pad + b'"}'
-        # The stale/replayed seq: not a new bad-frame shape, but the same "must
-        # be dropped whole" rule applied to a network-delayed duplicate. t is
-        # zeroed — on a car with broken replay protection this would otherwise
-        # be a live 90% throttle command issued by a conformance tool.
+        # The seven rule-6 shapes, numbered fresh against the live counter (see
+        # rule6_seq_frames' docstring) — only the four that carry a seq need it;
+        # the malformed hello and the seq-less bye are unaffected either way.
+        seq_frames = rule6_seq_frames([seq + 10, seq + 11, seq + 12, seq + 13])
+        oversized = padded_frame(seq + 14, RT["max_command"] + 1)
+        # The stale/replayed seq is the one frame that is *supposed* to be low —
+        # this is what a network-delayed duplicate of the telemetry loop's own
+        # traffic looks like, and it is the replay gate specifically under test
+        # here, not the parser. t is zeroed: on a car with broken replay
+        # protection this would otherwise be a live 90% throttle command issued
+        # by a conformance tool.
         stale_frame = enc({RT["seq_field"]: 1, RT["throttle_field"]: 0.0,
                             RT["yaw_field"]: 0.0})
-        bad_batch = DROPPED_FRAMES + [oversized, stale_frame]
+        bad_batch = DROPPED_FRAMES + seq_frames + [oversized, stale_frame]
         for bad in bad_batch:
             s.sendto(bad, self.addr)
 
@@ -241,13 +296,27 @@ class RTConformance:
         # recv_matching) would have each one discard frames the other needed:
         # a search for the stray hello-reply throws away every push it passes
         # over, including the one whose rx_fps would prove a bad frame got in.
-        seen = self.scan_window(s, 0.6)
+        # 1.0 s (not the tighter 0.6 s used elsewhere below) because this scan
+        # also carries the "does the session even survive" check — on real
+        # WiFi a lost push or two must not read as a dead session.
+        seen = self.scan_window(s, 1.0)
         stray = next((f for f in seen if f.get(RT["hello_field"]) == BAD_HELLO_SID), None)
         self.check(stray is None, "a malformed hello (proto:1.5) must not be answered")
         pushes = [f for f in seen if CTL_KEY in f]
         self.check(bool(pushes),
                    "the session survives the dropped datagrams and still pushes")
-        bad_fps = [f.get("rx_fps") for f in pushes if f.get("rx_fps")]
+        bad_fps = []
+        for f in pushes:
+            fps = f.get("rx_fps")
+            if fps is None:
+                # A push missing rx_fps entirely must not read the same as a
+                # push reporting 0 — an omitting car would otherwise pass this
+                # check by accident rather than by actually rejecting the batch.
+                self.check(False, f"a push after the bad batch is missing rx_fps: "
+                                   f"{sorted(f)}")
+                continue
+            if fps:
+                bad_fps.append(fps)
         self.check(not bad_fps,
                    f"rx_fps after the {len(bad_batch)} bad datagrams was "
                    f"{bad_fps or [0]}, want all 0 — a lax car accepted one or more "
@@ -256,19 +325,23 @@ class RTConformance:
         print("accepted at the cap")
         # The other side of the same boundary: a *valid* command padded to
         # exactly max_command bytes must be admitted, not just the over-cap one
-        # rejected above.
-        seq += 1
-        prefix = enc({RT["seq_field"]: seq, RT["throttle_field"]: 0.0,
-                      RT["yaw_field"]: 0.0, "p": ""})
-        valid_padded = enc({RT["seq_field"]: seq, RT["throttle_field"]: 0.0,
-                            RT["yaw_field"]: 0.0,
-                            "p": "x" * (RT["max_command"] - len(prefix))})
+        # rejected above. seq jumps clear of the whole seq+10..seq+14 range the
+        # batch above just used, so a lax car cannot confuse this probe with one
+        # of those (the padded probe used to reuse seq+1, which collided with
+        # the batch's literal seq 9 on exactly such a car).
+        seq += 20
+        valid_padded = padded_frame(seq, RT["max_command"])
         self.check(len(valid_padded) == RT["max_command"],
                    f"the padded probe is {len(valid_padded)} bytes, want exactly "
                    f"{RT['max_command']}")
-        s.sendto(valid_padded, self.addr)
+        # Sent 3 times, same seq: on real WiFi a single lost datagram would
+        # otherwise read as a cap defect that was never actually exercised.
+        # Duplicates land as harmless replay-drops after the first acceptance
+        # (same seq is never "newer"), so acceptance is still measured once.
+        for _ in range(3):
+            s.sendto(valid_padded, self.addr)
         # A single recv_matching for "the next push" is not safe here: the
-        # server's push tick is on its own 200 ms clock, so the one datagram we
+        # server's push tick is on its own 200 ms clock, so the datagrams we
         # just sent can land either side of the next tick's window depending on
         # timing alone, with no defect involved. Scan a few ticks' worth and
         # require the bump to show up on any one of them, the same tolerance

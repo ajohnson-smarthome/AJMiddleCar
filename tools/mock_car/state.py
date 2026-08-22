@@ -87,11 +87,11 @@ def seq_is_newer(seq, last):
 def valid_seq(v):
     """A `seq` is a uint32. A JSON boolean is an int in Python and is not one here.
 
-    Deliberately stricter than the car in one place: `control_proto.c`'s `parse_u32`
-    tokenises `1.5` down to `1` and accepts it. Strictness in the mock is the safe
-    direction — a client that works here works there, and the reverse is the trap this
-    file exists to close — so the mock rejects it and the car's coercion is a firmware
-    nit, not something to copy.
+    Used to be deliberately stricter than the car here: `control_proto.c`'s old
+    `parse_u32` tokenised `1.5` down to `1` and accepted it. It no longer does —
+    `json_int_shape` there now rejects a non-integer token exactly as this does,
+    so the two sides are equally strict and this function is no longer the safe
+    direction against a gap, just the shared rule stated twice.
     """
     return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 0xFFFFFFFF
 
