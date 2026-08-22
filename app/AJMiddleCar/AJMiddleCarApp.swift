@@ -2,10 +2,10 @@ import SwiftUI
 
 @main
 struct AJMiddleCarApp: App {
-    @StateObject private var conn = CarConnection()
-    @StateObject private var status = CarStatus()
+    @StateObject private var link = CarLink()
+    @StateObject private var intent = ControlIntent()
     @StateObject private var flow = AppFlow()
-    @Environment(\.scenePhase) private var phase
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var colorScheme
     private var p: Palette { Theme.current(colorScheme) }
 
@@ -27,19 +27,41 @@ struct AJMiddleCarApp: App {
         root
             .statusBarHidden(true)
             .persistentSystemOverlays(.hidden)
-            // Forward WS telemetry to CarStatus in every phase (not just DriveView) so the
-            // car stays "online" during the connect/update gates, not only while driving.
-            .task { conn.onTelemetry = { status.apply($0) }; await flow.startupCheck() }
-            .onChange(of: phase) { newPhase in
-                if newPhase == .active {
-                    // Not while the wrong-car screen is up: resuming there would start
-                    // streaming control frames at somebody else's car, which is exactly
-                    // what that screen exists to prevent.
-                    if flow.phase != .wrongCar { conn.resume() }
-                    status.start()
-                } else {
-                    conn.pause(); status.stop()
+            .task {
+                await flow.startupCheck()
+                // The car may have identified itself while the gate was still talking to
+                // GitHub; `onChange` would have missed a value that arrived before the phase
+                // was ready to hear it.
+                flow.carIdentified(fw: link.fw)
+            }
+            .onChange(of: scenePhase) { oldPhase, newPhase in
+                switch newPhase {
+                case .active:
+                    // The config prefetch is not here: nothing can be read from a car the app
+                    // has not met yet. And the gate decides whether there is a link to open at
+                    // all — starting behind the no-internet screen opened an invisible session
+                    // that streamed zeros and outranked the bench console.
+                    if flow.phase.opensLink { link.start() }
+                case .inactive:
+                    // Only on the way down. On the way up (.background → .inactive → .active)
+                    // the link is already stopped, and a stop enqueued here would cancel the
+                    // start the .active step is about to make.
+                    if oldPhase == .active {
+                        intent.neutral()
+                        link.requestStop(graceful: true)
+                    }
+                case .background:
+                    intent.neutral()
+                    link.requestStop(graceful: true)
+                @unknown default:
+                    break
                 }
+            }
+            .onChange(of: link.fw) { _, fw in flow.carIdentified(fw: fw) }
+            .onChange(of: link.state) { _, _ in
+                // The identity may already be known when the gate finishes; re-asking is cheap
+                // and closes the race where the hello landed before `startupCheck` returned.
+                if case .live = link.state { flow.carIdentified(fw: link.fw) }
             }
     }
 
@@ -49,35 +71,36 @@ struct AJMiddleCarApp: App {
             UpdateCheckView(palette: p, phase: flow.phase, client: flow.client) { flow.retry() }
         case .noInternet:
             NoInternetView(palette: p) { flow.retry() }
-        case .connectToCar:
-            ZStack {
-                p.bg.ignoresSafeArea()
-                ConnectView()
-            }
-            .onAppear { conn.start(); status.start(); tryCarConnected() }  // fw may already be known
-            .onChange(of: status.online) { _ in tryCarConnected() }
-            .onChange(of: status.fw) { _ in tryCarConnected() }
-            .onChange(of: status.foreignDevice) { dev in if dev != nil { flow.foreignCarDetected() } }
-        case .wrongCar:
-            // Stop streaming to a car that is not ours: the WS control frames would drive it.
-            WrongCarView(palette: p, found: status.foreignDevice ?? "?") {
-                flow.retryConnect(); status.start()
-            }
-            .onAppear { conn.pause() }
         case .updateRequired:
-            FirmwareView(palette: p, forced: true, onDone: { flow.updateFinished() }, status: status)
-                .onAppear { conn.start(); status.start() }
-        case .drive:
-            ZStack {
-                DriveView(conn: conn, status: status)
-                if !status.online { ConnectView() }
-            }
+            FirmwareView(palette: p, forced: true, onDone: { flow.updateFinished() }, link: link)
+                .onAppear { link.start() }
+        case .awaitingCar, .ready:
+            // The link opens when the gate hands over, not at launch: until then there is
+            // nothing to say to the car, and the gate is talking to GitHub.
+            carRoot.onAppear { link.start() }
         }
     }
 
-    private func tryCarConnected() {
-        // fw is set only by a successful /status bootstrap → it's a reliable "car reached" signal
-        // and (unlike `online`) isn't cleared by the telemetry-freshness timer.
-        if status.fw != nil { flow.carConnected(carFw: status.fw) }
+    /// Past the gate, the screen is whatever `CarLink` currently is. There is no second opinion.
+    @ViewBuilder private var carRoot: some View {
+        switch link.state {
+        case .noWiFi(let reason):
+            ConnectView(situation: .noWiFi(reason))
+        case .localNetworkDenied:
+            ConnectView(situation: .localNetworkDenied)
+        case .wrongCar(let device):
+            WrongCarView(palette: p, kind: .foreignDevice(device)) { link.retryAfterWrongCar() }
+        case .wrongProto(let theirs):
+            WrongCarView(palette: p, kind: .protoMismatch(theirs: theirs)) { link.retryAfterWrongCar() }
+        case .searching:
+            ZStack { p.bg.ignoresSafeArea(); ConnectView() }
+        case .live:
+            if flow.phase == .ready {
+                DriveView(link: link, intent: intent)
+            } else {
+                // Live, but the version gate has not answered yet — a moment, not a state.
+                ZStack { p.bg.ignoresSafeArea(); ConnectView() }
+            }
+        }
     }
 }

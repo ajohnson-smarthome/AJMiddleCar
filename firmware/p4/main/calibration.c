@@ -6,7 +6,8 @@
 
 static const char *TAG = "calib";
 
-static bool s_valid = false;
+// written by the httpd task on save, read at 5 Hz on rt_link
+static volatile bool s_valid = false;
 
 bool calibration_is_valid(void) { return s_valid; }
 void calibration_set_valid(bool v) { s_valid = v; }

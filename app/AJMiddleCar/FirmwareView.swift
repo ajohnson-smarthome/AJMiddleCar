@@ -5,7 +5,7 @@ struct FirmwareView: View {
     var forced: Bool = false
     var onDone: (() -> Void)? = nil
     var debugPhase: FwPhase? = nil   // gallery: render a static phase, skip the network check
-    @ObservedObject var status: CarStatus
+    @ObservedObject var link: CarLink
     @StateObject private var client = UpdateClient()
 
     @State private var release: UpdateClient.Release?
@@ -13,7 +13,7 @@ struct FirmwareView: View {
     @State private var phase: FwPhase = .checking
     @Environment(\.dismiss) private var dismiss
 
-    private var current: String { status.fw ?? "—" }
+    private var current: String { link.fw ?? "—" }
     private var p: Palette { palette }
 
     var body: some View {
@@ -24,6 +24,7 @@ struct FirmwareView: View {
         }
         .task {
             if let dp = debugPhase { phase = dp; return }
+            link.refreshRadio()
             await check()
         }
     }
@@ -48,7 +49,7 @@ struct FirmwareView: View {
                             palette: p)
             case .downloaded:
                 title(L.fwConnectTitle); sub(L.fwConnectSub)
-                fwButton(L.fwFlash, prominent: true, disabled: !status.online) { Task { await flash() } }
+                fwButton(L.fwFlash, prominent: true, disabled: !link.isLive) { Task { await flash() } }
             case .uploading:
                 title(L.fwUploadTitle)
                 sub("\(release?.tag ?? "") · \(Int(client.uploadProgress * 100))%")
@@ -69,12 +70,12 @@ struct FirmwareView: View {
     /// The radio co-processor's firmware. Shown on every phase because it is the only place a
     /// pinned-version mismatch can be noticed: nothing else in the app reports it.
     @ViewBuilder private var radioLine: some View {
-        if let fw = status.radioFw {
-            if status.radioOK == false {
-                Text(L.fwRadioMismatch(fw)).font(.system(size: 12)).foregroundStyle(p.warn)
+        if let radio = link.radio {
+            if !radio.ok {
+                Text(L.fwRadioMismatch(radio.fw)).font(.system(size: 12)).foregroundStyle(p.warn)
                     .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 260, alignment: .leading)
             } else {
-                Text(L.fwRadio(fw)).font(.system(size: 12)).foregroundStyle(p.muted)
+                Text(L.fwRadio(radio.fw)).font(.system(size: 12)).foregroundStyle(p.muted)
             }
         }
     }
@@ -110,7 +111,7 @@ struct FirmwareView: View {
         let r = await client.latestRelease()
         release = r
         guard let r else { phase = .failed; return }
-        phase = UpdateClient.isUpdateAvailable(running: status.fw, latest: r.tag) ? .available : .upToDate
+        phase = UpdateClient.isUpdateAvailable(running: link.fw, latest: r.tag) ? .available : .upToDate
     }
     private func download() async {
         guard let r = release else { return }
@@ -127,7 +128,7 @@ struct FirmwareView: View {
         phase = .uploading
         guard await client.upload(url) else { phase = .failed; return }
         phase = .rebooting
-        let oldFw = status.fw
+        let oldFw = link.fw
         var sawOffline = false
         let deadline = Date.now.addingTimeInterval(25)
         while Date.now < deadline {
@@ -135,8 +136,8 @@ struct FirmwareView: View {
             // Success = the firmware version changed (reboot confirmed) OR the classic
             // offline→online bounce. The version check also catches a fast reboot that never
             // tripped the offline debounce.
-            if let nf = status.fw, oldFw != nil, nf != oldFw { phase = .done; return }
-            if !status.online { sawOffline = true }
+            if let nf = link.fw, oldFw != nil, nf != oldFw { phase = .done; return }
+            if !link.isLive { sawOffline = true }
             else if sawOffline { phase = .done; return }
         }
         phase = .failed

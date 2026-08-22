@@ -10,9 +10,20 @@ enum L {
     static var wrongCarTitle: String { s("wrongCar.title") }
     static func fwRadio(_ v: String) -> String { s("fw.radio", v) }
     static func fwRadioMismatch(_ v: String) -> String { s("fw.radioMismatch", v) }
-    static func wrongCarSub(_ found: String) -> String { s("wrongCar.sub", found) }
+    static func wrongCarSub(_ found: String, _ ours: String) -> String { s("wrongCar.sub", found, ours) }
+    static var wrongProtoTitle: String { s("wrongProto.title") }
+    static func wrongProtoSub(_ theirs: Int, _ ours: Int) -> String { s("wrongProto.sub", theirs, ours) }
+    static var wrongProtoHint: String { s("wrongProto.hint") }
     static func wrongCarHint(_ ssid: String) -> String { s("wrongCar.hint", ssid) }
-    static var connectBody: String { s("connect.body") }
+    static func connectBody(_ ssid: String, _ password: String) -> String { s("connect.body", ssid, password) }
+    static var linkNoWifiTitle: String { s("link.noWifiTitle") }
+    static func linkNoWifiSub(_ ssid: String, _ password: String) -> String { s("link.noWifiSub", ssid, password) }
+    static var linkDeniedTitle: String { s("link.deniedTitle") }
+    static var linkDeniedSub: String { s("link.deniedSub") }
+    static var configNotRead: String { s("config.notRead") }
+    static var configRetry: String { s("config.retry") }
+    static var calibSpinFailTitle: String { s("calib.spinFailTitle") }
+    static var calibSpinFailSub: String { s("calib.spinFailSub") }
     static var openSettings: String { s("common.openSettings") }
     static var close: String { s("common.close") }
     static var settingsTitle: String { s("settings.title") }
@@ -89,6 +100,13 @@ enum L {
     static var actLeft: String { s("tricks.left") }
     static var actTurn: String { s("tricks.turn") }
     static func driveWdtTrips(_ n: Int) -> String { s("drive.wdtTrips", n) }
+    static var driveBusFail: String { s("drive.busFail") }
+    static func driveCtlOther(_ owner: String) -> String { s("drive.ctlOther", owner) }
+    /// The actuator owner, by the generated vocabulary — an unknown value is shown as the car
+    /// said it rather than silently dropped.
+    static func ctlOwner(_ raw: String) -> String {
+        CtlOwner.all.contains(raw) ? s("ctl." + raw) : raw
+    }
     static var wheelTitle: String { s("wheel.title") }
     static var wheelWizardTitle: String { s("wheel.wizardTitle") }
     static func wheelStep(_ a: Int, _ b: Int) -> String { s("wheel.step", a, b) }

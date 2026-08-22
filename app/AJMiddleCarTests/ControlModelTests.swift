@@ -25,8 +25,10 @@ final class ControlModelTests: XCTestCase {
         XCTAssertEqual(ControlModel.clamp(-2.5), -1)
         XCTAssertEqual(ControlModel.clamp(0.3), 0.3)
     }
+    // The frame itself is host-tested in app/tests/rtframe; this only guards the wiring.
     func testFrame() {
-        XCTAssertEqual(ControlModel.frame(t: 0.5, y: -1), "{\"t\":0.50,\"y\":-1.00}")
+        XCTAssertEqual(RTFrame.command(seq: 7, t: 0.5, y: -1),
+                       "{\"seq\":7,\"t\":0.50,\"y\":-1.00}")
     }
     func testSidesForward() {
         let s = ControlModel.sides(t: 1, y: 0)
@@ -63,26 +65,31 @@ final class ControlModelTests: XCTestCase {
         let a: [Corner: (pair: Int, sign: Int)] = [.fl: (0, 1), .fr: (1, -1), .rl: (2, 1), .rr: (3, -1)]
         XCTAssertEqual(ControlModel.calibSaveBody(a), #"{"wheels":[{"pair":0,"sign":1},{"pair":1,"sign":-1},{"pair":2,"sign":1},{"pair":3,"sign":-1}]}"#)
     }
-    func testSignalLevel() {
-        XCTAssertEqual(ControlModel.signalLevel(online: false, pingMs: 10), 0)
-        XCTAssertEqual(ControlModel.signalLevel(online: true, pingMs: nil), 0)
-        XCTAssertEqual(ControlModel.signalLevel(online: true, pingMs: 10), 4)
-        XCTAssertEqual(ControlModel.signalLevel(online: true, pingMs: 100), 3)
-        XCTAssertEqual(ControlModel.signalLevel(online: true, pingMs: 200), 2)
-        XCTAssertEqual(ControlModel.signalLevel(online: true, pingMs: 400), 1)
-    }
     func testSignalLevelRssi() {
-        XCTAssertEqual(ControlModel.signalLevel(online: true, rssi: -45, pingMs: 500), 4)
-        XCTAssertEqual(ControlModel.signalLevel(online: true, rssi: -55, pingMs: 500), 3)
-        XCTAssertEqual(ControlModel.signalLevel(online: true, rssi: -65, pingMs: 500), 2)
-        XCTAssertEqual(ControlModel.signalLevel(online: true, rssi: -80, pingMs: 10), 1)
-        XCTAssertEqual(ControlModel.signalLevel(online: true, rssi: nil, pingMs: 10), 4)
-        XCTAssertEqual(ControlModel.signalLevel(online: false, rssi: -45, pingMs: 10), 0)
+        let fps = CarContract.commandHz
+        XCTAssertEqual(ControlModel.signalLevel(online: true, rssi: -45, rxFps: 0, expectedFps: fps), 4)
+        XCTAssertEqual(ControlModel.signalLevel(online: true, rssi: -55, rxFps: 0, expectedFps: fps), 3)
+        XCTAssertEqual(ControlModel.signalLevel(online: true, rssi: -65, rxFps: 0, expectedFps: fps), 2)
+        XCTAssertEqual(ControlModel.signalLevel(online: true, rssi: -80, rxFps: 10, expectedFps: fps), 1)
+        XCTAssertEqual(ControlModel.signalLevel(online: false, rssi: -45, rxFps: 10, expectedFps: fps), 0)
+    }
+    /// A car that cannot read its AP station list reports rssi 0; a live link must never render
+    /// as empty red bars because of it.
+    func testSignalLevelFallsBackToRxFps() {
+        let fps = CarContract.commandHz
+        XCTAssertEqual(ControlModel.signalLevel(online: true, rssi: nil, rxFps: 10, expectedFps: fps), 4)
+        XCTAssertEqual(ControlModel.signalLevel(online: true, rssi: 0, rxFps: 10, expectedFps: fps), 4)
+        XCTAssertEqual(ControlModel.signalLevel(online: true, rssi: nil, rxFps: 8, expectedFps: fps), 3)
+        XCTAssertEqual(ControlModel.signalLevel(online: true, rssi: nil, rxFps: 5, expectedFps: fps), 2)
+        XCTAssertEqual(ControlModel.signalLevel(online: true, rssi: nil, rxFps: 2, expectedFps: fps), 1)
+        XCTAssertEqual(ControlModel.signalLevel(online: true, rssi: nil, rxFps: nil, expectedFps: fps), 1)
+        XCTAssertEqual(ControlModel.signalLevel(online: false, rssi: nil, rxFps: 10, expectedFps: fps), 0)
     }
     func testTelemetryParse() {
-        let ok = Telemetry.parse("{\"rssi\":-55,\"ws_fps\":10,\"wdt_trips\":2,\"uptime_s\":123,\"heap\":198000,\"calibrated\":true}")!
+        let ok = Telemetry.parse("{\"rssi\":-55,\"rx_fps\":10,\"wdt_trips\":2,\"uptime_s\":123,\"heap\":198000,\"calibrated\":true,\"bus_ok\":true,\"ctl\":\"rt\"}")!
         XCTAssertEqual(ok.rssi, -55); XCTAssertEqual(ok.uptimeS, 123); XCTAssertEqual(ok.calibrated, true)
-        XCTAssertNil(Telemetry.parse("{\"rssi\":0}")!.rssi)
+        XCTAssertEqual(ok.rxFps, 10); XCTAssertEqual(ok.busOk, true); XCTAssertEqual(ok.ctl, CtlOwner.rt)
+        XCTAssertNil(Telemetry.parse("{\"uptime_s\":1,\"rssi\":0}")!.rssi)
         XCTAssertNil(Telemetry.parse("nope"))
         XCTAssertNil(Telemetry.parse("{\"foo\":1}"))
     }

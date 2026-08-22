@@ -23,11 +23,11 @@ void dims_get(dims_params_t *out) {
 }
 
 // JSON string in NVS under "dims": {"track_mm":..,"wheelbase_mm":..}
-void dims_save(void) {
+esp_err_t dims_save(void) {
     char buf[64];
     snprintf(buf, sizeof(buf), "{\"track_mm\":%u,\"wheelbase_mm\":%u}",
              s_params.track_mm, s_params.wheelbase_mm);
-    cfg_json_save("dims", buf);
+    return cfg_json_save("dims", buf);
 }
 
 void dims_init(void) {

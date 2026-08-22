@@ -12,29 +12,36 @@ import Network
 /// `URLSession` cannot express that binding, which is why the car's traffic runs on
 /// `Network.framework`. Both transports build their parameters here so the rule cannot drift.
 enum CarNet {
-    static func params(webSocket: Bool) -> NWParameters {
-        let p = NWParameters.tcp
-        if webSocket {
-            let ws = NWProtocolWebSocket.Options()
-            ws.autoReplyPing = true
-            p.defaultProtocolStack.applicationProtocols.insert(ws, at: 0)
-        }
+    /// REST: `/status`, `/calib*`, `/ota` and the five config domains.
+    static func tcpParams() -> NWParameters { pinToWiFi(.tcp) }
+
+    /// The real-time channel. Control and telemetry are state with last-wins semantics, which is
+    /// what a datagram is: a lost command costs one 10 Hz tick instead of head-of-line-blocking
+    /// the stream for a 1.5 s TCP retransmission — five times the car's watchdog deadline.
+    static func udpParams() -> NWParameters { pinToWiFi(.udp) }
+
+    private static func pinToWiFi(_ p: NWParameters) -> NWParameters {
         #if !targetEnvironment(simulator)
-        // Deliberately absent in the simulator: there the car is the mock on 127.0.0.1, and
-        // loopback is not Wi-Fi — pinning would make every simulator build unable to connect.
         p.requiredInterfaceType = .wifi
         p.prohibitedInterfaceTypes = [.cellular]
+        #else
+        // Deliberately absent in the simulator: the car there is the mock, which may be on
+        // loopback (not an interface type at all) or on the Mac's LAN. Pinning would make every
+        // simulator build unable to connect to either.
+        _ = p
         #endif
         return p
     }
 
+    /// The REST endpoint.
     static func endpoint() -> NWEndpoint {
         NWEndpoint.hostPort(host: NWEndpoint.Host(CarHost.host),
                             port: NWEndpoint.Port(rawValue: CarHost.port)!)
     }
 
-    /// The WebSocket needs its path, which a host/port endpoint cannot carry.
-    static func wsEndpoint() -> NWEndpoint {
-        NWEndpoint.url(URL(string: CarHost.wsURL)!)
+    /// The real-time endpoint: same host, the contract's UDP port.
+    static func rtEndpoint() -> NWEndpoint {
+        NWEndpoint.hostPort(host: NWEndpoint.Host(CarHost.host),
+                            port: NWEndpoint.Port(rawValue: CarHost.rtPort)!)
     }
 }

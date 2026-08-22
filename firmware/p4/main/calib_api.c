@@ -12,17 +12,9 @@
 #include "car.h"
 #include "link.h"
 #include "motors.h"
+#include "api_util.h"
 
 static const char *TAG = "calib_api";
-
-// Read the POST body into buf (NUL-terminated). Returns 0 on success, -1 otherwise.
-static int read_body(httpd_req_t *req, char *buf, size_t n) {
-    if (req->content_len <= 0 || (size_t)req->content_len >= n) return -1;
-    int got = httpd_req_recv(req, buf, req->content_len);
-    if (got <= 0) return -1;
-    buf[got] = '\0';
-    return 0;
-}
 
 // GET /calib -> {"calibrated":true|false}
 static esp_err_t calib_get(httpd_req_t *req) {
@@ -35,59 +27,63 @@ static esp_err_t calib_get(httpd_req_t *req) {
 // POST /calib/spin  body {"pair":0..3,"dir":1|0} (1=forward, 0=reverse). Pulses ~0.6s.
 static esp_err_t calib_spin(httpd_req_t *req) {
     char b[32];
-    if (read_body(req, b, sizeof(b)) != 0) {
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body");
+    if (api_read_body(req, b, sizeof(b)) < 0) {
+        return api_reply_error(req, "400 Bad Request", "", "bad body");
     }
-    // Body is JSON: {"pair":0..3,"dir":0|1}
     cJSON *j = cJSON_Parse(b);
     cJSON *jp = cJSON_GetObjectItemCaseSensitive(j, "pair");
     cJSON *jd = cJSON_GetObjectItemCaseSensitive(j, "dir");
-    if (!cJSON_IsNumber(jp) || !cJSON_IsNumber(jd)) {
+    if (!cJSON_IsNumber(jp) || !cJSON_IsNumber(jd) ||
+        jp->valuedouble != (double)jp->valueint ||
+        jd->valuedouble != (double)jd->valueint) {
         cJSON_Delete(j);
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need {pair,dir}");
+        return api_reply_error(req, "400 Bad Request", "", "need integer {pair,dir}");
     }
     int pair = jp->valueint, dir = jd->valueint;
     cJSON_Delete(j);
-    if (pair < 0 || pair > 3 || (dir != 0 && dir != 1)) {
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "pair 0..3, dir 0|1");
+    if (pair < 0 || pair > 3) {
+        return api_reply_error(req, "400 Bad Request", "pair", "pair 0..3");
+    }
+    if (dir != 0 && dir != 1) {
+        return api_reply_error(req, "400 Bad Request", "dir", "dir 0|1");
     }
     ESP_LOGI(TAG, "spin pair %d %s", pair, dir ? "fwd" : "rev");
     if (!car_spin_pair((uint8_t)pair, dir != 0)) {
         /* 409 is the honest code — the request is fine, the actuator is taken. IDF's
            httpd_err_code_t has no 409, so the status line is set directly. */
-        httpd_resp_set_status(req, "409 Conflict");
-        httpd_resp_set_type(req, "application/json");
-        return httpd_resp_sendstr(req, "{\"error\":\"actuator busy\"}");
+        return api_reply_error(req, "409 Conflict", "", "actuator busy");
     }
     /* The grant lapses on its own after LINK_HOLD_CALIB_MS, so the pulse ends whether
        or not this handler is still here. The delay is only so the reply lands after
        the wheel has stopped, which is what the wizard's next step assumes. */
     vTaskDelay(pdMS_TO_TICKS(LINK_HOLD_CALIB_MS));
-    link_release(LINK_SRC_CALIB);
-    return httpd_resp_sendstr(req, "ok");
+    link_release_must(LINK_SRC_CALIB);
+    return api_reply_ok(req);
 }
 
-// POST /calib/save  body "<p>:<s>,<p>:<s>,<p>:<s>,<p>:<s>" for FL,FR,RL,RR.
+// POST /calib/save  body {"wheels":[{"pair":0..3,"sign":-1|1} x4]} in FL,FR,RL,RR order.
 static esp_err_t calib_save(httpd_req_t *req) {
     char b[128];
-    if (read_body(req, b, sizeof(b)) != 0) {
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body");
+    if (api_read_body(req, b, sizeof(b)) < 0) {
+        return api_reply_error(req, "400 Bad Request", "", "bad body");
     }
     // Body is JSON: {"wheels":[{"pair":..,"sign":..} × 4]} in FL,FR,RL,RR order.
     cJSON *j = cJSON_Parse(b);
     cJSON *arr = cJSON_GetObjectItemCaseSensitive(j, "wheels");
     if (!cJSON_IsArray(arr) || cJSON_GetArraySize(arr) != 4) {
         cJSON_Delete(j);
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need {wheels:[4x{pair,sign}]}");
+        return api_reply_error(req, "400 Bad Request", "wheels", "need {wheels:[4x{pair,sign}]}");
     }
     motors_config_t cfg = { .deadzone = 0.05f };
     for (int i = 0; i < 4; i++) {
         cJSON *w = cJSON_GetArrayItem(arr, i);
         cJSON *jp = cJSON_GetObjectItemCaseSensitive(w, "pair");
         cJSON *js = cJSON_GetObjectItemCaseSensitive(w, "sign");
-        if (!cJSON_IsNumber(jp) || !cJSON_IsNumber(js)) {
+        if (!cJSON_IsNumber(jp) || !cJSON_IsNumber(js) ||
+            jp->valuedouble != (double)jp->valueint ||
+            js->valuedouble != (double)js->valueint) {
             cJSON_Delete(j);
-            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "wheel needs {pair,sign}");
+            return api_reply_error(req, "400 Bad Request", "pair", "wheel needs integer {pair,sign}");
         }
         cfg.wheels[i].channel_pair = (uint8_t)jp->valueint;
         cfg.wheels[i].sign = (int8_t)js->valueint;
@@ -96,12 +92,12 @@ static esp_err_t calib_save(httpd_req_t *req) {
     esp_err_t e = calibration_save(&cfg);
     if (e != ESP_OK) {
         ESP_LOGW(TAG, "save rejected: %s", esp_err_to_name(e));
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid calibration");
+        return api_reply_error(req, "400 Bad Request", "wheels", "invalid calibration");
     }
     car_set_calibration(&cfg);
     calibration_set_valid(true);
     ESP_LOGI(TAG, "calibration saved and applied");
-    return httpd_resp_sendstr(req, "ok");
+    return api_reply_ok(req);
 }
 
 esp_err_t calib_api_start(void) {

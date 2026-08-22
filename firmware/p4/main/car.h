@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "esp_err.h"
 #include "motors.h"
 #include "link.h"
 
@@ -15,8 +16,12 @@ void car_init(void);
 // to the arbiter on behalf of `src`.
 //
 // Returns false when a higher-priority source holds the actuator. Nothing was applied
-// in that case, and the caller must not treat the command as a live frame — the
-// control watchdog is fed only on a true return.
+// in that case, and the caller must not treat the command as APPLIED: the breadcrumb
+// history records only true returns, because a refused command never moved the car.
+// The control watchdog is a different matter — rt_link feeds it on every parsed
+// in-session command, accepted or refused, deliberately: a stream refused by a wizard
+// pulse or an OTA hold is still a live stream, and tripping into a retreat mid-wizard
+// is worse than the refusal. (The plan, the mock and its tests all pin this.)
 //
 // Lock-free on the read side: the calibration is immutable and published by pointer
 // swap, so any task may call this without blocking and without tearing a read.
@@ -36,8 +41,9 @@ void car_set_calibration(const motors_config_t *cfg);
 void car_set_trim(int8_t pct);
 int8_t car_get_trim(void);
 
-// Persist the current trim as a JSON string in NVS (the trim value lives in car.c).
-void car_save_trim(void);
+// Persist the current trim as a JSON string in NVS (the trim value lives in car.c),
+// and say whether it landed.
+esp_err_t car_save_trim(void);
 
 // Calibration helper: spin ONE raw PCA9685 channel pair (0..3) at low duty to identify
 // which physical wheel it is. Bypasses the calibration table. forward=true drives CH_A.

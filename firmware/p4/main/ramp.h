@@ -19,13 +19,15 @@ static inline uint16_t ramp_max_up_per_tick(uint16_t ramp_ms, uint16_t tick_ms) 
 }
 
 #ifndef RAMP_HOST_TEST
+#include <stdbool.h>
 #include "esp_err.h"
 // Load ramp_ms from NVS (default 300). No task: the actuator task lives in link.c.
 esp_err_t ramp_init(void);
 // Acceleration time 0→full in ms (0 = ramp off / instant). Clamped to 0..2000.
-void ramp_set_ms(uint16_t ms);
+// Returns false (without applying) if the internal lock could not be taken in time.
+bool ramp_set_ms(uint16_t ms);
 uint16_t ramp_get_ms(void);
-// Persist the current ramp_ms as a JSON string in NVS.
-void ramp_save(void);
+// Persist the current ramp_ms as a JSON string in NVS, and say whether it landed.
+esp_err_t ramp_save(void);
 #endif
 #endif // RAMP_H

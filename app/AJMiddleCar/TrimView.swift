@@ -1,10 +1,12 @@
 import SwiftUI
 
 /// Dedicated straight-line-trim screen: demo car with bending rails left, slider right.
+/// The slider appears only once the car's own value has been read.
 struct TrimView: View {
     let palette: Palette
-    @State private var trimPct = 0          // live slider value
-    @State private var demoPct = 0          // applied on release (keeps the demo steady mid-drag)
+    @ObservedObject private var store = ConfigStore.shared.trim
+    @State private var trimPct = Trim.default.trim_pct    // live slider value
+    @State private var demoPct = Trim.default.trim_pct    // illustration only, applied on release
     @Environment(\.dismiss) private var dismiss
     private var p: Palette { palette }
 
@@ -14,7 +16,13 @@ struct TrimView: View {
         } right: {
             rightPanel
         }
-        .task { if let v = await TrimClient().get() { trimPct = v; demoPct = v } }
+        .task { await store.loadIfNeeded(); adopt() }
+    }
+
+    private func adopt() {
+        guard let v = store.value else { return }
+        trimPct = v.trim_pct
+        demoPct = v.trim_pct
     }
 
     private var valueText: String {
@@ -27,19 +35,25 @@ struct TrimView: View {
             Text(L.trimTitle).font(.system(size: 22, weight: .semibold)).foregroundStyle(p.text)
             Text(L.trimSub).font(.system(size: 13)).foregroundStyle(p.muted)
                 .fixedSize(horizontal: false, vertical: true)
-            Slider(value: Binding(
-                get: { Double(trimPct) },
-                set: { trimPct = Int($0.rounded()) }
-            ), in: -30...30) { editing in
-                if !editing {
-                    demoPct = trimPct
-                    Task { await TrimClient().set(trimPct) }
+            if store.value != nil {
+                Slider(value: Binding(
+                    get: { Double(trimPct) },
+                    set: { trimPct = Int($0.rounded()) }
+                ), in: Double(Trim.trim_pctRange.lowerBound)...Double(Trim.trim_pctRange.upperBound)) { editing in
+                    if !editing {
+                        demoPct = trimPct
+                        Task { await store.save(Trim(trim_pct: trimPct)) }
+                    }
+                }
+                .tint(p.accent)
+                .frame(width: 220)
+                Text(valueText)
+                    .font(.system(size: 14)).foregroundStyle(p.muted).monospacedDigit()
+            } else {
+                ConfigNotice(palette: p, error: store.error) {
+                    Task { await store.reload(); adopt() }
                 }
             }
-            .tint(p.accent)
-            .frame(width: 220)
-            Text(valueText)
-                .font(.system(size: 14)).foregroundStyle(p.muted).monospacedDigit()
         }
     }
 }

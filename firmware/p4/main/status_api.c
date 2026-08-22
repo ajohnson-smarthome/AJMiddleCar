@@ -8,8 +8,10 @@
 #include "telemetry.h"
 #include "identity.h"
 #include "board.h"
+#include "contract.h"
 #include <string.h>
 #include "esp_hosted.h"
+#include "api_util.h"
 
 static const char *TAG = "status_api";
 
@@ -17,6 +19,9 @@ static const char *TAG = "status_api";
 // SDIO traffic on the app's 1.5 s status poll for a value that cannot change without a reboot.
 // It matters because the C6's image is flashed by wire and pinned in board.h: a mismatch has no
 // other symptom than the radio misbehaving in ways that look like anything else.
+//
+// Written once by read_radio_version() — which status_api_start runs BEFORE registering
+// the handler — then only read, so the cross-task safety is ordering, not a lock.
 static char s_radio_fw[24] = "unavailable";
 static bool s_radio_ok     = false;
 
@@ -42,15 +47,28 @@ static esp_err_t status_get(httpd_req_t *req) {
     telemetry_gather(&t, TELEM_STATUS);
     char fields[224];
     if (telemetry_fields(fields, sizeof(fields), &t) < 0) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "telemetry");
+        /* The same envelope as the overflow path below, and as every other endpoint:
+           a client that parses errors as JSON must not meet plain text on one branch
+           of one handler. */
+        ESP_LOGE(TAG, "/status could not render its telemetry fields");
+        return api_reply_error(req, "500 Internal Server Error", "", "telemetry unavailable");
     }
     const char *fw = esp_app_get_description()->version;
     char buf[416];
+    /* The same three keys the hello reply carries, spelled from the same schema: one
+       wire value must not have two spellings, or a rename presents as "wrong car". */
     int n = snprintf(buf, sizeof(buf),
-                     "{\"device\":\"" CAR_DEVICE_ID "\",\"fw\":\"%s\",%s,"
-                     "\"radio\":{\"fw\":\"%s\",\"expected\":\"" BOARD_RADIO_SLAVE_FW "\",\"ok\":%s}}",
-                     fw, fields, s_radio_fw, s_radio_ok ? "true" : "false");
-    if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
+                     "{\"" RT_KEY_DEVICE "\":\"" CAR_DEVICE_ID "\",\"" RT_KEY_FW "\":\"%s\","
+                     "\"" RT_KEY_PROTO "\":%d,%s,"
+                     "\"radio\":{\"" RT_KEY_FW "\":\"%s\",\"expected\":\"" BOARD_RADIO_SLAVE_FW "\",\"ok\":%s}}",
+                     fw, RT_PROTO, fields, s_radio_fw, s_radio_ok ? "true" : "false");
+    if (n < 0 || n >= (int)sizeof(buf)) {
+        /* Same rule as the hello reply: truncated identity JSON parses as a different
+           car (or as nothing), and shipping it under a 200 hides exactly that. Only
+           reachable if a future field outgrows the buffer — then this is the symptom. */
+        ESP_LOGE(TAG, "/status does not fit its buffer");
+        return api_reply_error(req, "500 Internal Server Error", "", "status too long");
+    }
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, n);
 }

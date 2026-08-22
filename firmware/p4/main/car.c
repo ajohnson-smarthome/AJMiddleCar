@@ -98,10 +98,10 @@ int8_t car_get_trim(void) {
 }
 
 // JSON string in NVS under "trim": {"trim_pct":..}
-void car_save_trim(void) {
+esp_err_t car_save_trim(void) {
     char buf[32];
     snprintf(buf, sizeof(buf), "{\"trim_pct\":%d}", car_get_trim());
-    cfg_json_save("trim", buf);
+    return cfg_json_save("trim", buf);
 }
 
 bool car_spin_pair(uint8_t pair, bool forward) {
@@ -131,5 +131,5 @@ void car_init(void) {
     }
 
     car_stop(LINK_SRC_SAFE);       /* safety stop */
-    link_release(LINK_SRC_SAFE);   /* boot is over; leave the actuator free */
+    link_release_must(LINK_SRC_SAFE);   /* boot is over; leave the actuator free */
 }

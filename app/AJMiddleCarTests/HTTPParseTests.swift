@@ -5,11 +5,13 @@ final class HTTPParseTests: XCTestCase {
     private func bytes(_ s: String) -> [UInt8] { Array(s.utf8) }
 
     func testStatusAndContentLength() {
-        let raw = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 17\r\n\r\n{\"calibrated\":true}"
-        let h = HTTPParse.head(bytes(raw))
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 17\r\n\r\n"
+        let h = HTTPParse.head(bytes(head + "{\"calibrated\":true}"))
         XCTAssertEqual(h?.status, 200)
         XCTAssertEqual(h?.contentLength, 17)
-        XCTAssertEqual(h?.bodyOffset, raw.distance(from: raw.startIndex, to: raw.range(of: "\r\n\r\n")!.upperBound))
+        // In bytes, not Characters: Swift treats "\r\n" as one grapheme, so measuring the head
+        // as a String undercounts every line break in it.
+        XCTAssertEqual(h?.bodyOffset, head.utf8.count)
     }
 
     func testHeaderNameIsCaseInsensitive() {

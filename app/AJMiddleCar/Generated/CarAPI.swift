@@ -9,10 +9,54 @@ public enum CarContract {
     public static let password = "drive1234"
     public static let host = "192.168.4.1"
     public static let rtPort: UInt16 = 4210
-    public static let maxDatagram = 96
+    public static let maxDatagram = 320
+    public static let maxCommand = 96
+    public static let protoField = "proto"
+    public static let deviceField = "device"
+    public static let fwField = "fw"
+    public static let throttleField = "t"
+    public static let yawField = "y"
     public static let commandHz = 10
     public static let telemetryHz = 5
     public static let watchdogMs = 300
+    public static let sessionIdleMs = 10000
+    public static let helloField = "hello"
+    public static let seqField = "seq"
+    public static let byeField = "bye"
+}
+
+/// The fields the car sends in every telemetry datagram.
+public enum TelemetryKey {
+    /// monotonic frame counter from the car
+    public static let seq = "seq"
+    /// control frames the car received per second
+    public static let rxFps = "rx_fps"
+    /// AP-side signal for the station, 0 when unavailable
+    public static let rssi = "rssi"
+    /// control-watchdog trips since boot
+    public static let wdtTrips = "wdt_trips"
+    /// seconds since boot
+    public static let uptimeS = "uptime_s"
+    /// free heap in bytes
+    public static let heap = "heap"
+    /// a valid calibration is loaded
+    public static let calibrated = "calibrated"
+    /// the motor driver is answering
+    public static let busOk = "bus_ok"
+    /// which source owns the actuator
+    public static let ctl = "ctl"
+}
+
+/// The values the car reports in telemetry's `ctl` field.
+public enum CtlOwner {
+    public static let none = "none"
+    public static let recover = "recover"
+    public static let console = "console"
+    public static let rt = "rt"
+    public static let calib = "calib"
+    public static let ota = "ota"
+    public static let safe = "safe"
+    public static let all = ["none", "recover", "console", "rt", "calib", "ota", "safe"]
 }
 
 /// Slew-rate limit on acceleration. Rise is bounded, fall is instant, so stopping is never delayed.

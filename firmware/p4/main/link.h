@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "contract.h"   /* RT_WATCHDOG_MS, RT_COMMAND_HZ, the CTL_* vocabulary */
+#include "ramp.h"
 
 /* Who may command the actuator.
  *
@@ -13,11 +15,12 @@
  *                        wheels back immediately. If the retreat outranked it, control
  *                        would be refused while a frame was arriving.
  *   CONSOLE above RECOVER — a bench command is not silently killed by a retreat. The
- *                        retreat can only run after real /ws traffic armed the watchdog,
- *                        so this costs nothing in a console-only session.
+ *                        retreat can only run after real traffic on the real-time
+ *                        channel armed the watchdog, so this costs nothing in a
+ *                        console-only session.
  *   RT above CONSOLE   — a live pilot outranks a command typed minutes ago.
- *   CALIB above RT     — the wizard's spin pulse must not be overwritten ~100 ms later
- *                        by the app's own 10 Hz zero-stream.
+ *   CALIB above RT     — the wizard's spin pulse must not be overwritten one
+ *                        RT_COMMAND_HZ period later by the app's own zero-stream.
  *   OTA, SAFE on top   — flashing and an explicit stop answer to nobody.
  */
 typedef enum {
@@ -66,39 +69,85 @@ static inline void link_arb_release(link_arb_t *a, link_src_t src) {
     a->sticky   = false;
 }
 
-/* Pure: the name telemetry reports in "ctl", and logs use. */
+/* Pure: the name telemetry reports in "ctl", and logs use. The spellings are the
+ * schema's ctl_values, so the app and the mock read the same words this returns. */
 static inline const char *link_src_name(link_src_t s) {
     switch (s) {
-        case LINK_SRC_NONE:    return "none";
-        case LINK_SRC_RECOVER: return "recover";
-        case LINK_SRC_CONSOLE: return "console";
-        case LINK_SRC_RT:      return "rt";
-        case LINK_SRC_CALIB:   return "calib";
-        case LINK_SRC_OTA:     return "ota";
-        case LINK_SRC_SAFE:    return "safe";
+        case LINK_SRC_NONE:    return CTL_NONE;
+        case LINK_SRC_RECOVER: return CTL_RECOVER;
+        case LINK_SRC_CONSOLE: return CTL_CONSOLE;
+        case LINK_SRC_RT:      return CTL_RT;
+        case LINK_SRC_CALIB:   return CTL_CALIB;
+        case LINK_SRC_OTA:     return CTL_OTA;
+        case LINK_SRC_SAFE:    return CTL_SAFE;
         default:               return "?";
     }
+}
+
+/* One enumerator per word in the schema's ctl_values (LINK_SRC_NONE included): a value
+ * added to the contract must break this build rather than surface as "?" on the wire. */
+_Static_assert(LINK_SRC_SAFE + 2 == CTL_COUNT, "link_src_t and ctl_values disagree");
+
+/* The actuator task's beat, public because the RT hold is defined against it. */
+#define LINK_TICK_MS 20u
+
+/* How long each source's grant holds without being refreshed. The RT hold is one
+ * actuator tick PAST the control watchdog's deadline, and necessarily so: the trip
+ * must be declared before the grant lapses, or the car coasts to a stop before the
+ * loss is noticed and the retreat starts from rest instead of from the path it was
+ * on. rt_link checks silence on a beat of its own, so one tick of slack covers the
+ * scheduling gap; the RT_COMMAND_HZ stream refreshes the grant far inside it. */
+#define LINK_HOLD_RT_MS     ((uint32_t)RT_WATCHDOG_MS + LINK_TICK_MS)
+#define LINK_HOLD_CALIB_MS  600u   /* one identification pulse */
+
+/* Pure: plan one actuator tick. next[] receives every channel's post-ramp duty;
+ * order[] receives the channels that need writing — every falling channel first, then
+ * the rises — and the count is returned. Channel pairs are (0,1)(2,3)(4,5)(6,7), one
+ * BTS7960 each (motors.h): a single ascending pass wrote a reversal's rise before its
+ * pair-mate's fall, driving both bridge inputs for the I2C gap between them. */
+static inline uint8_t link_plan_writes(const uint16_t cur[8], const uint16_t tgt[8],
+                                       uint16_t max_up, uint16_t next[8],
+                                       uint8_t order[8]) {
+    uint8_t n = 0;
+    for (uint8_t ch = 0; ch < 8; ch++) {
+        next[ch] = ramp_step(cur[ch], tgt[ch], max_up);
+        if (next[ch] < cur[ch]) order[n++] = ch;
+    }
+    for (uint8_t ch = 0; ch < 8; ch++) {
+        if (next[ch] > cur[ch]) order[n++] = ch;
+    }
+    return n;
+}
+
+/* Pure: may a channel be driven to `duty` while its pair-mate's last-written duty is
+ * `mate_cur`? Writing zero is always safe; a nonzero rise needs the mate at zero on
+ * the chip. The boot shadow's unknown value is nonzero, so it counts as driving. */
+static inline bool link_rise_safe(uint16_t mate_cur, uint16_t duty) {
+    return duty == 0 || mate_cur == 0;
 }
 
 #ifndef LINK_HOST_TEST
 #include "esp_err.h"
 
-/* How long each source's grant holds without being refreshed. */
-#define LINK_HOLD_RT_MS     300u   /* the watchdog deadline; the 10 Hz stream refreshes it */
-#define LINK_HOLD_CALIB_MS  600u   /* one identification pulse */
-
 /* Start the 50 Hz actuator task. The sole writer to the PCA9685 after this call. */
 esp_err_t link_init(void);
 
 /* Ask to set the eight duties. Returns false when a higher-priority source holds the
- * actuator, in which case nothing is written and the caller must not treat the command
- * as applied — the control watchdog is fed only on a true return. */
+ * actuator: nothing was written, and the caller must not treat the command as applied.
+ * (Only the breadcrumb recorder keys on this return; the control watchdog is fed
+ * upstream on every parsed in-session command, refused ones included — see car.h.) */
 bool link_set(link_src_t src, const uint16_t duty[8], uint32_t hold_ms, bool sticky);
 
 /* Give up ownership held by `src`. Harmless if `src` does not hold it. Returns false
  * only when the lock could not be taken — the caller still does not own the actuator,
  * but the safe target was not written either, so a safety caller should say so. */
 bool link_release(link_src_t src);
+
+/* link_release, insisted upon: one retry a tick later, then a loud log. A false
+ * return leaves `src`'s grant standing — for a sticky top-rank source (SAFE after a
+ * goodbye) that is an actuator nothing else can ever take, so no caller may drop the
+ * result on the floor. */
+bool link_release_must(link_src_t src);
 
 /* Who owns the actuator right now, for telemetry and logs. */
 link_src_t link_owner(void);

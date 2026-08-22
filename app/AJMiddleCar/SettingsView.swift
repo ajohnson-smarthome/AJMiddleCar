@@ -2,7 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     let palette: Palette
-    @ObservedObject var status: CarStatus
+    @ObservedObject var link: CarLink
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -71,7 +71,7 @@ struct SettingsView: View {
                     }
                     Section {
                         NavigationLink {
-                            FirmwareView(palette: palette, status: status)
+                            FirmwareView(palette: palette, link: link)
                         } label: {
                             Label(L.settingsFirmware, systemImage: "arrow.down.circle")
                                 .foregroundStyle(palette.text)
@@ -86,11 +86,11 @@ struct SettingsView: View {
                 HStack(spacing: 12) {
                     HStack(spacing: 4) {
                         Image(systemName: "clock")
-                        Text(status.uptimeS.map { L.uptime($0) } ?? "—")
+                        Text(link.lastTelemetry?.uptimeS.map { L.uptime($0) } ?? "—")
                     }
                     HStack(spacing: 4) {
                         Image(systemName: "cpu")
-                        Text(status.fw ?? "—")
+                        Text(link.fw ?? "—")
                     }
                 }
                 .font(.system(size: 11))

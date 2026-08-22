@@ -130,17 +130,22 @@ final class UpdateClient: NSObject, ObservableObject {
         } catch { return nil }
     }
 
-    /// Uploads over `CarHTTP`, not `URLSession`: the car's network is one iOS will not route
-    /// general traffic over, so this has to be bound to the Wi-Fi interface like every other
-    /// request to the car. Progress comes from the chunked body rather than a session delegate.
+    /// Uploads over `CarTransport`, not `URLSession`: the car's network is one iOS will not
+    /// route general traffic over, so this has to be bound to the Wi-Fi interface like every
+    /// other request to the car. Progress comes from the chunked body rather than a session
+    /// delegate.
     func upload(_ binURL: URL) async -> Bool {
         guard let data = try? Data(contentsOf: binURL) else { return false }
-        let r = await CarHTTP.post("/ota", body: data,
-                                   contentType: "application/octet-stream",
-                                   timeout: 180) { [weak self] p in
-            Task { @MainActor in self?.uploadProgress = p }
+        do {
+            _ = try await CarTransport.shared.post("/ota", body: data,
+                                                   contentType: "application/octet-stream",
+                                                   timeout: 180) { [weak self] p in
+                Task { @MainActor in self?.uploadProgress = p }
+            }
+            return true
+        } catch {
+            return false
         }
-        return r?.status == 200
     }
 }
 

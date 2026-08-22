@@ -4,15 +4,18 @@ import SwiftUI
 /// Two uses: a Settings menu item (wizard == false, back chevron) and step 1 of the mandatory
 /// calibration wizard (wizard == true, "Далее" → WheelParamsView). No system nav bar (matches
 /// SplitScreen siblings) — draws its own header. The track feeds the donut/simulation math.
+///
+/// The diagram and the steppers appear only once the car's own dimensions have been read: drawing
+/// the app's fallback as if it were the car's measurement is what invites a tap that writes it.
 struct CarDimensionsView: View {
     let palette: Palette
     var wizard: Bool = false
     @Environment(\.dismiss) private var dismiss
     private var p: Palette { palette }
 
-    @State private var trackMm = 130
-    @State private var wheelbaseMm = 210
-    @State private var lastSaved: DimsClient.Params?
+    @ObservedObject private var store = ConfigStore.shared.dims
+    @State private var trackMm = Dims.default.track_mm
+    @State private var wheelbaseMm = Dims.default.wheelbase_mm
 
     var body: some View {
         ZStack {
@@ -21,9 +24,17 @@ struct CarDimensionsView: View {
                 header
                 ScrollView {
                     VStack(spacing: 18) {
-                        CarDimsDiagram(trackMm: trackMm, wheelbaseMm: wheelbaseMm, palette: p)
-                            .padding(.top, 4)
-                        card
+                        if store.value != nil {
+                            CarDimsDiagram(trackMm: trackMm, wheelbaseMm: wheelbaseMm, palette: p)
+                                .padding(.top, 4)
+                            card
+                        } else {
+                            ConfigNotice(palette: p, error: store.error) {
+                                Task { await store.reload(); adopt() }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 20)
+                        }
                     }
                     .frame(maxWidth: 560)
                     .frame(maxWidth: .infinity)
@@ -32,11 +43,13 @@ struct CarDimensionsView: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
-        .task {
-            if let d = await DimsClient().get() {
-                trackMm = d.trackMm; wheelbaseMm = d.wheelbaseMm; lastSaved = d
-            }
-        }
+        .task { await store.loadIfNeeded(); adopt() }
+    }
+
+    private func adopt() {
+        guard let d = store.value else { return }
+        trackMm = d.track_mm
+        wheelbaseMm = d.wheelbase_mm
     }
 
     private var header: some View {
@@ -70,9 +83,9 @@ struct CarDimensionsView: View {
 
     private var card: some View {
         VStack(spacing: 0) {
-            stepperRow(L.dimsTrack, L.dimsTrackHint, value: $trackMm, range: 60...300)
+            stepperRow(L.dimsTrack, L.dimsTrackHint, value: $trackMm, range: Dims.track_mmRange)
             Rectangle().fill(p.metal.opacity(0.25)).frame(height: 1)
-            stepperRow(L.dimsBase, L.dimsBaseHint, value: $wheelbaseMm, range: 90...360)
+            stepperRow(L.dimsBase, L.dimsBaseHint, value: $wheelbaseMm, range: Dims.wheelbase_mmRange)
         }
         .background(p.panel)
         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -105,10 +118,8 @@ struct CarDimensionsView: View {
         .buttonStyle(.plain)
     }
 
+    /// Save-dedup and the "never write what we did not read" rule both live in the store.
     private func save() {
-        let pms = DimsClient.Params(trackMm: trackMm, wheelbaseMm: wheelbaseMm)
-        guard pms != lastSaved else { return }
-        lastSaved = pms
-        Task { await DimsClient().set(pms) }
+        Task { await store.save(Dims(track_mm: trackMm, wheelbase_mm: wheelbaseMm)) }
     }
 }

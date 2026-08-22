@@ -1,59 +1,70 @@
 import SwiftUI
 
-/// Link-loss auto-return: toggle + history-window slider (1–10 s). Split layout like RampView.
+/// Link-loss auto-return: toggle + history-window slider. Split layout like RampView. The
+/// controls appear only once the car's own configuration has been read.
 struct RecoverView: View {
     let palette: Palette
-    @State private var enabled = true
-    @State private var windowSec = 5         // live slider value
+    @ObservedObject private var store = ConfigStore.shared.recover
+    @State private var enabled = Recover.default.enabled
+    @State private var windowSec = Recover.default.window_ms / 1000
     @Environment(\.dismiss) private var dismiss
     private var p: Palette { palette }
 
+    private static let secRange = Recover.window_msRange.lowerBound / 1000 ... Recover.window_msRange.upperBound / 1000
+
     var body: some View {
         SplitScreen(palette: p, title: L.recoverTitle, onBack: { dismiss() }) {
-            RecoverCarView(active: enabled, palette: p)
+            RecoverCarView(active: store.value != nil && enabled, palette: p)
         } right: {
             rightPanel
         }
-        .task {
-            if let c = await RecoverClient().get() {
-                enabled = c.enabled
-                windowSec = max(1, min(10, c.windowMs / 1000))
-            }
-        }
+        .task { await store.loadIfNeeded(); adopt() }
+    }
+
+    private func adopt() {
+        guard let v = store.value else { return }
+        enabled = v.enabled
+        windowSec = max(Self.secRange.lowerBound, min(Self.secRange.upperBound, v.window_ms / 1000))
     }
 
     private func save() {
-        Task { await RecoverClient().set(enabled: enabled, windowMs: windowSec * 1000) }
+        Task { await store.save(Recover(enabled: enabled, window_ms: windowSec * 1000)) }
     }
 
     private var rightPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(L.recoverHeadline).font(.system(size: 20, weight: .semibold)).foregroundStyle(p.text)
-            Toggle(L.recoverEnable, isOn: $enabled)
-                .tint(p.accent)
+            if store.value != nil {
+                Toggle(L.recoverEnable, isOn: $enabled)
+                    .tint(p.accent)
+                    .frame(width: 230)
+                    .onChange(of: enabled) { _, _ in save() }
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack {
+                        Text(L.recoverWindow).font(.system(size: 12)).foregroundStyle(p.muted)
+                        Spacer()
+                        Text(L.recoverWindowValue(windowSec)).font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(enabled ? p.accent : p.muted).monospacedDigit()
+                    }
+                    Slider(value: Binding(
+                        get: { Double(windowSec) },
+                        set: { windowSec = Int($0.rounded()) }
+                    ), in: Double(Self.secRange.lowerBound)...Double(Self.secRange.upperBound), step: 1) { editing in
+                        if !editing { save() }
+                    }
+                    .tint(p.accent)
+                    .disabled(!enabled)
+                }
                 .frame(width: 230)
-                .onChange(of: enabled) { _ in save() }
-            VStack(alignment: .leading, spacing: 5) {
-                HStack {
-                    Text(L.recoverWindow).font(.system(size: 12)).foregroundStyle(p.muted)
-                    Spacer()
-                    Text(L.recoverWindowValue(windowSec)).font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(enabled ? p.accent : p.muted).monospacedDigit()
+                .opacity(enabled ? 1 : 0.4)
+                Text(enabled ? L.recoverSubOn : L.recoverSubOff)
+                    .font(.system(size: 12)).foregroundStyle(p.muted)
+                    .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 250, alignment: .leading)
+            } else {
+                ConfigNotice(palette: p, error: store.error) {
+                    Task { await store.reload(); adopt() }
                 }
-                Slider(value: Binding(
-                    get: { Double(windowSec) },
-                    set: { windowSec = Int($0.rounded()) }
-                ), in: 1...10, step: 1) { editing in
-                    if !editing { save() }
-                }
-                .tint(p.accent)
-                .disabled(!enabled)
             }
-            .frame(width: 230)
-            .opacity(enabled ? 1 : 0.4)
-            Text(enabled ? L.recoverSubOn : L.recoverSubOff)
-                .font(.system(size: 12)).foregroundStyle(p.muted)
-                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 250, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
