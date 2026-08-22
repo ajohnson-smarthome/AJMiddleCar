@@ -140,7 +140,7 @@ actor CarTransport {
     /// screen naming the problem is not a flicker between radar sweeps, but abortable the
     /// moment the user asks for another look.
     private func holdIdentity() async {
-        let hold = Task { try await Task.sleep(for: .seconds(10)) }
+        let hold = Task { try await Task.sleep(for: .seconds(SessionPolicy.identityHoldSeconds)) }
         identityHold = hold
         // Outer cancellation (stop()) must not wait out the unstructured hold.
         await withTaskCancellationHandler {
@@ -192,9 +192,13 @@ actor CarTransport {
     /// for hello "repeated at ~5 Hz until answered", and a five-second sleep earned by a car that
     /// was not switched on yet is a car found five seconds after it was ready.
     private func backoff(_ attempt: Int, pathBlocked: Bool) -> Duration {
-        let cap = (everAdopted || pathBlocked) ? Self.backoffCap : Self.discoveryCap
-        let raw = min(cap, Self.backoffBase * pow(2, Double(max(0, attempt - 1))))
-        return .seconds(raw * Double.random(in: 0.75...1.25))
+        .seconds(SessionPolicy.backoffBase(attempt: attempt,
+                                           pathBlocked: pathBlocked,
+                                           everAdopted: everAdopted,
+                                           base: Self.backoffBase,
+                                           cap: Self.backoffCap,
+                                           discoveryCap: Self.discoveryCap)
+                 * Double.random(in: 0.75...1.25))
     }
 
     /// One session, start to finish. It ends only by failing — which is why reaching the car is
@@ -289,12 +293,12 @@ actor CarTransport {
             guard let text = try await receiveOne() else { continue }
             // A reply for another session id is a leftover from the previous socket; ignoring it
             // is what makes ownership non-resumable rather than accidentally inherited.
-            switch RTFrame.parse(text) {
-            case .helloReply(let replySid, let device, let fw) where replySid == sid:
+            switch SessionPolicy.handshakeOutcome(RTFrame.parse(text), sid: sid) {
+            case .identity(let device, let fw):
                 return .identity(Identity(device: device, fw: fw))
-            case .protoMismatch(let replySid, let theirs) where replySid == sid:
+            case .protoMismatch(let theirs):
                 return .protoMismatch(theirs: theirs)
-            default:
+            case .ignore:
                 continue
             }
         }
