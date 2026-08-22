@@ -12,6 +12,7 @@
     "command_hz": 10,
     "telemetry_hz": 5,
     "watchdog_ms": 300,
+    "session_idle_ms": 10000,
     "hello_field": "hello",
     "seq_field": "seq",
     "bye_field": "bye",

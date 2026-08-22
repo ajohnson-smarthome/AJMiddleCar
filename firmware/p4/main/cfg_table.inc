@@ -55,6 +55,7 @@ static const cfg_domain_t CFG_DOMAINS[] = {
 #define RT_COMMAND_HZ 10
 #define RT_TELEMETRY_HZ 5
 #define RT_WATCHDOG_MS 300
+#define RT_SESSION_IDLE_MS 10000
 #define RT_PROTO 1
 
 #define CFG_DOMAIN_COUNT 5

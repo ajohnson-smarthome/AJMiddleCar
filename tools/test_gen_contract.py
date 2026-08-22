@@ -33,6 +33,13 @@ class TestSchema(unittest.TestCase):
         self.assertEqual(rt["telemetry_hz"], 5)
         self.assertEqual(rt["watchdog_ms"], 300)
 
+    def test_session_idle(self):
+        rt = load()["rt"]
+        self.assertEqual(rt["session_idle_ms"], 10000)
+        # Mortality must be far outside the watchdog's world: a slow trip is a
+        # trip, not a death.
+        self.assertGreater(rt["session_idle_ms"], rt["watchdog_ms"] * 10)
+
     def test_domains_are_unique(self):
         s = load()
         paths = [d["path"] for d in s["domains"]]
@@ -153,6 +160,7 @@ class TestCEmitter(unittest.TestCase):
         # the mock read, so the port and the deadline cannot drift between the three.
         self.assertIn("#define RT_PORT 4210", out)
         self.assertIn("#define RT_WATCHDOG_MS 300", out)
+        self.assertIn("#define RT_SESSION_IDLE_MS 10000", out)
         # Two caps, deliberately different: the car accepts at most RT_MAX_COMMAND, but a
         # telemetry frame is 119-156 bytes, so a receive buffer sized from the command cap
         # would truncate every one of them.
@@ -190,6 +198,7 @@ class TestSwiftEmitter(unittest.TestCase):
         self.assertIn("public static let proto = 1", out)
         self.assertIn('public static let seqField = "seq"', out)
         self.assertIn('public static let byeField = "bye"', out)
+        self.assertIn("public static let sessionIdleMs = 10000", out)
         self.assertIn("public enum TelemetryKey {", out)
         self.assertIn('public static let rxFps = "rx_fps"', out)
         self.assertIn('public static let busOk = "bus_ok"', out)
@@ -222,6 +231,7 @@ class TestPythonEmitter(unittest.TestCase):
         self.assertEqual(self.ns["PROTO"], 1)
         self.assertEqual(self.ns["DEVICE"], "ajmiddlecar")
         self.assertEqual(self.ns["RT"]["port"], 4210)
+        self.assertEqual(self.ns["RT"]["session_idle_ms"], 10000)
         self.assertEqual(set(self.ns["DOMAINS"]),
                          {"/ramp", "/trim", "/recover", "/wheel", "/dims"})
         self.assertEqual(self.ns["DOMAINS"]["/recover"]["defaults"],

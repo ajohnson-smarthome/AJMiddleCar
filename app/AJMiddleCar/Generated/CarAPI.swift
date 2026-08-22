@@ -19,6 +19,7 @@ public enum CarContract {
     public static let commandHz = 10
     public static let telemetryHz = 5
     public static let watchdogMs = 300
+    public static let sessionIdleMs = 10000
     public static let helloField = "hello"
     public static let seqField = "seq"
     public static let byeField = "bye"

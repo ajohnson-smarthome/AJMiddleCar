@@ -106,6 +106,7 @@ def emit_c(schema):
     out.append(f'#define RT_COMMAND_HZ {rt["command_hz"]}')
     out.append(f'#define RT_TELEMETRY_HZ {rt["telemetry_hz"]}')
     out.append(f'#define RT_WATCHDOG_MS {rt["watchdog_ms"]}')
+    out.append(f'#define RT_SESSION_IDLE_MS {rt["session_idle_ms"]}')
     out.append(f'#define RT_PROTO {schema["proto"]}')
     out.append("")
     out.append(f"#define CFG_DOMAIN_COUNT {len(schema['domains'])}")
@@ -142,6 +143,7 @@ def emit_swift(schema):
            f"    public static let commandHz = {rt['command_hz']}",
            f"    public static let telemetryHz = {rt['telemetry_hz']}",
            f"    public static let watchdogMs = {rt['watchdog_ms']}",
+           f"    public static let sessionIdleMs = {rt['session_idle_ms']}",
            f'    public static let helloField = "{rt["hello_field"]}"',
            f'    public static let seqField = "{rt["seq_field"]}"',
            f'    public static let byeField = "{rt["bye_field"]}"',
