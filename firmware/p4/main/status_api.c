@@ -13,8 +13,18 @@
 #include "esp_hosted.h"
 #include "esp_ota_ops.h"
 #include "api_util.h"
+#include "eh_common_fw_version.h"   /* esp_hosted's own version macros — the single source */
 
 static const char *TAG = "status_api";
+
+/* The expected slave version is the HOST library's version: esp_hosted requires the pair
+ * matched, and deriving the string from the component's own macros makes drift between
+ * idf_component.yml and this check impossible — the hand-copied board.h pin the audit
+ * caught could lie in both directions. */
+#define RADIO_STR2(x) #x
+#define RADIO_STR(x)  RADIO_STR2(x)
+#define RADIO_EXPECTED_FW \
+    RADIO_STR(PROJECT_VERSION_MAJOR_1) "." RADIO_STR(PROJECT_VERSION_MINOR_1) "." RADIO_STR(PROJECT_VERSION_PATCH_1)
 
 // The radio co-processor's firmware version, read once at boot. Reading it per request would put
 // SDIO traffic on the app's 1.5 s status poll for a value that cannot change without a reboot.
@@ -52,12 +62,12 @@ static void read_radio_version(void) {
     }
     snprintf(s_radio_fw, sizeof(s_radio_fw), "%u.%u.%u",
              (unsigned)v.major1, (unsigned)v.minor1, (unsigned)v.patch1);
-    s_radio_ok = (strcmp(s_radio_fw, BOARD_RADIO_SLAVE_FW) == 0);
+    s_radio_ok = (strcmp(s_radio_fw, RADIO_EXPECTED_FW) == 0);
     if (s_radio_ok) {
         ESP_LOGI(TAG, "radio firmware %s", s_radio_fw);
     } else {
         ESP_LOGW(TAG, "radio firmware %s, expected %s — reflash the C6 (firmware/c6/README.md)",
-                 s_radio_fw, BOARD_RADIO_SLAVE_FW);
+                 s_radio_fw, RADIO_EXPECTED_FW);
     }
 }
 
@@ -80,7 +90,7 @@ static esp_err_t status_get(httpd_req_t *req) {
                      "{\"" RT_KEY_DEVICE "\":\"" CAR_DEVICE_ID "\",\"" RT_KEY_FW "\":\"%s\","
                      "\"" RT_KEY_PROTO "\":%d,%s,"
                      "\"rollback\":%s,\"nvs_wiped\":%s,"
-                     "\"radio\":{\"" RT_KEY_FW "\":\"%s\",\"expected\":\"" BOARD_RADIO_SLAVE_FW "\",\"ok\":%s}}",
+                     "\"radio\":{\"" RT_KEY_FW "\":\"%s\",\"expected\":\"" RADIO_EXPECTED_FW "\",\"ok\":%s}}",
                      fw, RT_PROTO, fields,
                      s_rollback ? "true" : "false", s_nvs_wiped ? "true" : "false",
                      s_radio_fw, s_radio_ok ? "true" : "false");
