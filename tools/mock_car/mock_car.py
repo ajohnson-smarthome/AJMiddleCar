@@ -134,7 +134,7 @@ async def status(request):
         RT["proto_field"]: PROTO,
         # A poll is not a push: `bump=False` keeps the real-time stream's `seq`
         # continuous however often something reads /status.
-        **car.telemetry(link.rx_fps(now), bump=False),
+        **car.telemetry(link.rx_fps(now, "status"), bump=False),
         # `radio` is a /status-only object the schema does not describe, but the
         # version inside it is spelled with the contract's key, as status_api.c
         # spells it (`RT_KEY_FW`).

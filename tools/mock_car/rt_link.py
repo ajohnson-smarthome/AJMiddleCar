@@ -89,7 +89,9 @@ class RTLink(asyncio.DatagramProtocol):
         # must not evict the live driver. Capacity mirrors the firmware's ring of 4.
         self.dead_sids = deque(maxlen=4)
         self._last_activity = None   # last accepted command, or the adoption itself
-        self._rx = deque()         # timestamps of accepted commands, for rx_fps
+        self._rx = deque()         # timestamps of accepted commands, for _window_fps
+        self._frames = 0           # total accepted commands, the counter fps deltas read
+        self._fps_last = {}        # per-consumer (frames, at) — telemetry.c's fps_now
         self._dropped = 0
         self._last_drop_log = 0.0
         self._last_cmd_log = 0.0
@@ -161,6 +163,7 @@ class RTLink(asyncio.DatagramProtocol):
 
         if self.car.note_command(frame[RT["throttle_field"]], frame[RT["yaw_field"]], now):
             self._last_activity = now
+            self._frames += 1
             self._rx.append(now)
             self._log_command(now, seq)
 
@@ -257,11 +260,30 @@ class RTLink(asyncio.DatagramProtocol):
     def push_telemetry(self, now):
         if self.owner is None or self.impair.stalled(now):
             return
-        self._send(self.car.telemetry(self.rx_fps(now)), self.owner)
+        self._send(self.car.telemetry(self.rx_fps(now, "push")), self.owner)
 
     # ---- measurement and logging -----------------------------------------------
 
-    def rx_fps(self, now):
+    def rx_fps(self, now, who):
+        """telemetry.c's fps_now: a delta against this consumer's previous read.
+
+        0 on the first read and after a >=10 s gap — a stale delta is not a rate —
+        and the accumulator updates either way, so the next prompt read measures.
+        `who` is "push" or "status"; each consumer deltas against its own history,
+        which is why a 1 Hz /status poll cannot perturb the pushed stream's number.
+        """
+        fps = 0
+        prev = self._fps_last.get(who)
+        if prev is not None:
+            frames, at = prev
+            dt = now - at
+            if 0 < dt < 10.0:
+                fps = int((self._frames - frames) / dt)
+        self._fps_last[who] = (self._frames, now)
+        return fps
+
+    def _window_fps(self, now):
+        """The old 1-second window, kept only for the human log line."""
         while self._rx and now - self._rx[0] > 1.0:
             self._rx.popleft()
         return len(self._rx)
@@ -279,7 +301,7 @@ class RTLink(asyncio.DatagramProtocol):
         if self.verbose or now - self._last_cmd_log > 1.0:
             self._last_cmd_log = now
             t, y = self.car.command
-            print(f"rt: seq={seq} t={t:.2f} y={y:.2f} rx={self.rx_fps(now)}/s "
+            print(f"rt: seq={seq} t={t:.2f} y={y:.2f} rx={self._window_fps(now)}/s "
                   f"ctl={self.car.ctl}")
 
 

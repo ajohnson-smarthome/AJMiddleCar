@@ -207,7 +207,9 @@ class TestOwnedTraffic(Quiet):
             send(rt, cmd(k + 1, 0.5, -0.25))
         self.assertEqual(car.command, (0.5, -0.25))
         self.assertEqual(car.ctl, CTL_RT)
-        self.assertEqual(rt.rx_fps(loop.t), 10)
+        # rx_fps is now a per-consumer delta (needs priming); the 1 s window count
+        # this line used to read through it still exists, as _window_fps.
+        self.assertEqual(rt._window_fps(loop.t), 10)
 
     def test_a_stranger_is_dropped_without_touching_anything(self):
         rt, car, _ = link()
@@ -492,7 +494,8 @@ class TestTelemetry(Quiet):
         frame, addr, size = rt.transport.sent[-1]
         self.assertEqual(addr, APP)
         self.assertEqual(frame["ctl"], CTL_RT)
-        self.assertEqual(frame["rx_fps"], 1)
+        # first read of the push consumer — fps_now answers 0 until it has a delta
+        self.assertEqual(frame["rx_fps"], 0)
         self.assertLessEqual(size, RT["max_datagram"])
 
     def test_pushed_seq_is_gapless(self):
@@ -503,6 +506,48 @@ class TestTelemetry(Quiet):
             rt.push_telemetry(loop.t)
         seqs = [f[0]["seq"] for f in rt.transport.sent]
         self.assertEqual(seqs, list(range(1, 6)))
+
+
+class TestRxFps(Quiet):
+    """rx_fps semantics = firmware's fps_now (telemetry.c): per-consumer delta."""
+
+    def stream(self, rt, loop, start, count, first_seq=1):
+        for k in range(count):
+            loop.t = start + k * 0.1
+            send(rt, cmd(first_seq + k, 0.5))
+
+    def test_the_first_status_read_is_zero(self):
+        rt, _, loop = link()
+        send(rt, hello())
+        self.stream(rt, loop, 1.0, 10)
+        self.assertEqual(rt.rx_fps(loop.t, "status"), 0,
+                         "no previous poll to delta against — the car answers 0")
+
+    def test_a_prompt_second_read_measures_the_stream(self):
+        rt, _, loop = link()
+        send(rt, hello())
+        rt.rx_fps(1.0, "status")                       # primes the accumulator
+        self.stream(rt, loop, 1.0, 10)                 # 10 frames over 0.9 s
+        self.assertEqual(rt.rx_fps(2.0, "status"), 10)
+
+    def test_a_gap_of_ten_seconds_reads_zero(self):
+        rt, _, loop = link()
+        send(rt, hello())
+        rt.rx_fps(1.0, "status")
+        self.stream(rt, loop, 1.0, 10)
+        self.assertEqual(rt.rx_fps(12.0, "status"), 0, "a stale delta is not a rate")
+        self.stream(rt, loop, 12.0, 10, first_seq=11)
+        self.assertEqual(rt.rx_fps(13.0, "status"), 10, "and the next prompt read works")
+
+    def test_status_reads_do_not_perturb_the_push_consumer(self):
+        rt, _, loop = link()
+        send(rt, hello())
+        rt.rx_fps(1.0, "push")
+        self.stream(rt, loop, 1.0, 10)
+        rt.rx_fps(1.5, "status")
+        rt.rx_fps(1.7, "status")
+        self.assertEqual(rt.rx_fps(2.0, "push"), 10,
+                         "each consumer deltas against its own last read")
 
 
 class TestImpairment(Quiet):
