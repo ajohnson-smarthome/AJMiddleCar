@@ -123,6 +123,32 @@ class TestWireShapes(unittest.TestCase):
         self.assertIsNotNone(parse_frame(b'{"seq":1,"t":0,"y":0,"z":"%s"}' % (b"x" * pad)))
         self.assertIsNone(parse_frame(b'{"seq":1,"t":0,"y":0,"z":"%s"}' % (b"x" * (pad + 1))))
 
+    def test_a_duplicate_key_drops_the_whole_datagram(self):
+        """Rule 5: the car takes the first duplicate, json.loads keeps the last —
+        the only shared answer is to drop the frame on both sides."""
+        self.assertIsNone(parse_frame(b'{"seq":9,"t":0.5,"y":0,"t":0.9}'))
+        self.assertIsNone(parse_frame(b'{"proto":1,"hello":"ab","proto":1}'))
+
+    def test_the_shared_pinned_frames(self):
+        """The spec's rule-6 table, verbatim. The firmware host tests pin the same
+        eight bytes with the same outcomes; a change here without a change there
+        is wire drift."""
+        dropped = [
+            b'{"seq":5,"junk":{"t":0.9},"y":0.5}',   # no top-level t
+            b'{"seq":7,"t":.5,"y":0}',               # bare . mantissa
+            b'{"seq":8,"t":+1,"y":0}',               # leading +
+            b'{"seq":9,"t":0.5,"y":0,"t":0.9}',      # duplicate key
+            b'{"proto":1.5,"hello":"abcd1234"}',     # fractional proto
+        ]
+        for frame in dropped:
+            self.assertIsNone(parse_frame(frame), frame)
+        self.assertEqual(parse_frame(b'{"seq":10,"t":0.50,"y":-0.25}'),
+                         {"seq": 10, "t": 0.50, "y": -0.25})
+        self.assertEqual(parse_frame(b'{"proto":1,"hello":"7f3a91c2"}'),
+                         {"proto": 1, "hello": "7f3a91c2"})
+        self.assertEqual(parse_frame(b'{"proto":2,"hello":"7f3a91c2"}'),
+                         {"proto": 2, "hello": "7f3a91c2"})
+
 
 class TestConfig(unittest.TestCase):
     def test_defaults_come_from_the_schema(self):

@@ -101,6 +101,24 @@ def valid_seq(v):
     return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 0xFFFFFFFF
 
 
+def _no_duplicates(pairs):
+    """json.loads object_pairs_hook: a key spelled twice drops the datagram.
+
+    The car's scanner takes the *first* duplicate, json.loads keeps the *last* —
+    byte-identical datagrams driving two implementations differently, in the worst
+    case at different speeds. The shared rule (spec 2026-08-22, rule 5) is that a
+    duplicate drops the frame. This hook fires at every nesting level, one notch
+    stricter than the car's top-level-only detection — strictness in the mock is
+    the safe direction, as with valid_seq.
+    """
+    d = {}
+    for k, v in pairs:
+        if k in d:
+            raise ValueError(f"duplicate key {k!r}")
+        d[k] = v
+    return d
+
+
 def parse_frame(data, max_command=None):
     """One inbound datagram -> a dict of the fields it carried, or None to drop it.
 
@@ -126,7 +144,7 @@ def parse_frame(data, max_command=None):
     if not data or len(data) > cap:
         return None
     try:
-        frame = json.loads(data)
+        frame = json.loads(data, object_pairs_hook=_no_duplicates)
     except (ValueError, UnicodeDecodeError):
         return None
     if not isinstance(frame, dict):
