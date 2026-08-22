@@ -326,11 +326,17 @@ actor CarTransport {
                         once.resume(.success(()))
                     case .failed(let e):
                         once.resume(.failure(CarError.from(e, path: socket.currentPath)))
+                        // A socket that never became `conn` is nobody else's to cancel. Without
+                        // this the handler↔connection retain cycle leaks one NWConnection per
+                        // failed attempt — and a `.waiting` one keeps path-watching and later
+                        // goes `.ready` as an open socket nothing observes.
+                        socket.cancel()
                     case .waiting(let e):
                         // With the interface pinned, waiting means the Wi-Fi path is not there
                         // yet. Fail now and let the backoff retry rather than sit in a state
                         // that may never resolve.
                         once.resume(.failure(CarError.from(e, path: socket.currentPath)))
+                        socket.cancel()
                     case .cancelled:
                         once.resume(.failure(CancellationError()))
                     default:
