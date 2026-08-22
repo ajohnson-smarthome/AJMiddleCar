@@ -236,7 +236,11 @@ class RTLink(asyncio.DatagramProtocol):
 
         While the watchdog is not armed, a session strictly more than
         RT["session_idle_ms"] past its last activity — last accepted command, or
-        the adoption itself — expires: rule 4. The sid joins dead_sids.
+        the adoption itself — expires: rule 4. The sid joins dead_sids, and the
+        breadcrumb path goes with it — `car.forget_path` aborts a retreat still in
+        flight, exactly as the firmware's rt_glue_idle does by bumping
+        recovery_forget()'s liveness seq: a dead driver's path must never keep
+        replaying.
         """
         line = self.car.tick(now)
         if (self.owner is not None and not self.car.armed
@@ -244,6 +248,7 @@ class RTLink(asyncio.DatagramProtocol):
                 and (now - self._last_activity) * 1000.0 > RT["session_idle_ms"]):
             print(f"rt: session {self.session} expired — more than "
                   f"{RT['session_idle_ms']} ms past its last activity")
+            self.car.forget_path(now)
             self.dead_sids.append(self.session)
             self.owner, self.session, self.last_seq = None, None, None
             self._last_activity = None

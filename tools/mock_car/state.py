@@ -260,7 +260,8 @@ class CarState:
 
     @property
     def armed(self):
-        """The control watchdog is armed — a command was accepted since adopt/trip."""
+        """The control watchdog is armed — a command was accepted since the last
+        adopt, trip, goodbye or flash."""
         return self._armed
 
     # ---- configuration ---------------------------------------------------------
@@ -387,6 +388,28 @@ class CarState:
         self._retreating = False
         self._release(CTL_SAFE)
         self._release(CTL_RECOVER)
+
+    def forget_path(self, now):
+        """Throw away the breadcrumb path — `recovery_forget()` on the car, whose
+        liveness bump is what aborts recovery.c's `retreat_task` the next time it
+        checks, mid-replay or not. A retreat still in flight loses CTL_RECOVER's
+        grant right here: the firmware's task calls
+        `link_release_must(LINK_SRC_RECOVER)` unconditionally once its abort check
+        trips, and only while it still holds the actuator — so the release is what
+        silently zeroes the wheels. There is no explicit stop on this path, unlike a
+        trip with nothing to retrace (`_stop`): forgetting the path is not the same
+        event as deciding to stop.
+
+        A session's idle expiry uses this (rule 4, amended: a dead driver's path
+        must never keep replaying, in flight or not). `adopt_session` inlines the
+        same three lines for the same reason — a new driver has no path to retrace
+        either.
+        """
+        self._now = now
+        self._history.clear()
+        if self._retreating:
+            self._retreating = False
+            self._release(CTL_RECOVER)
 
     def tick(self, now):
         """Advance time. Returns a log line at the moments worth printing, else None."""

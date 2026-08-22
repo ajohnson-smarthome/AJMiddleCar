@@ -41,7 +41,9 @@
    accepted command, or the adoption itself when none was ever accepted. (Anchor is last
    activity, NOT the trip: the same clock the watchdog feeds; at exactly 10000 ms the
    session is still alive, strictly greater ends it.) On expiry: ownership cleared,
-   telemetry push stops, the sid is recorded dead (rule 3). A resuming stream must
+   telemetry push stops, the sid is recorded dead (rule 3), and the breadcrumb path is
+   forgotten — which also aborts a retreat still in flight, exactly as the firmware's
+   rt_glue_idle does (a dead driver's path must never keep replaying). A resuming stream must
    re-hello — the app already does after its 3 s stall. The constant joins
    `contract/car-api.json`'s `rt` section as `session_idle_ms` and is generated into all
    four artifacts; no implementation writes 10000 as a literal.

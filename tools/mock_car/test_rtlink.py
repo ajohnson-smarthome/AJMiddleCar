@@ -434,6 +434,39 @@ class TestWatchdog(Quiet):
         self.assertIsNone(rt.owner, "a handshake that never commanded ages out")
         self.assertIn("ghost001", rt.dead_sids)
 
+    def test_expiry_aborts_a_retreat_still_in_flight(self):
+        """Rule 4's amendment: expiry forgets the path too, exactly as the firmware's
+        rt_glue_idle calls recovery_forget() — whose liveness bump is what aborts
+        recovery.c's retreat_task mid-replay. Without it a dead driver's retreat kept
+        retracing after the session that started it was already gone.
+
+        A wide recover window (10 s, the contract's max) makes the retrace long
+        enough to still be running when the idle clock — anchored at the same last
+        command — runs out, so this exercises the abort-while-retreating path rather
+        than a retreat that had already finished on its own.
+        """
+        idle_s = RT["session_idle_ms"] / 1000.0
+        rt, car, loop = link()
+        ok, _ = car.apply_config("/recover", {"enabled": True, "window_ms": 10000})
+        self.assertTrue(ok)
+        loop.t = 0.0
+        send(rt, hello("longtrip"))
+        loop.t = 0.1
+        send(rt, cmd(1, 0.9, 0.0))                            # oldest breadcrumb
+        loop.t = 9.9
+        send(rt, cmd(2, 0.9, 0.0))                            # last activity: t = 9.9
+        loop.t = 9.9 + DEADLINE_S + 0.05
+        self.assertIsNotNone(rt.tick(loop.t), "the trip starts the retrace")
+        self.assertTrue(car.retreating, "a wide window keeps the retrace running")
+        self.assertGreater(car.history_len, 0)
+        loop.t = 9.9 + idle_s + 0.05                          # past idle, retrace still due
+        rt.tick(loop.t)
+        self.assertIsNone(rt.owner, "the session itself expired")
+        self.assertIn("longtrip", rt.dead_sids)
+        self.assertFalse(car.retreating, "a dead driver's retrace must not keep replaying")
+        self.assertEqual(car.history_len, 0, "the path is forgotten, not just the session")
+        self.assertEqual(car.command, (0.0, 0.0), "the released grant zeroes the actuator")
+
 
 class TestTelemetry(Quiet):
     def test_nothing_is_pushed_without_a_session(self):
