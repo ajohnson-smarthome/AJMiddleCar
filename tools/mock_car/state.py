@@ -196,7 +196,7 @@ class CarState:
     # the file named beside each one. See the report for the schema additions that would
     # let them be generated instead.
     MOVE_EPS = 0.02        # firmware/p4/main/recovery.c: below this a sample is stationary
-    TAIL_MS = 400          # firmware/p4/main/recovery.c: cap on the newest segment
+    SEG_MAX_MS = 250       # firmware/p4/main/recovery.h RECOVER_SEG_MAX_MS: per-segment cap
     CALIB_HOLD_MS = 600    # firmware/p4/main/link.h LINK_HOLD_CALIB_MS: one pulse
 
     def __init__(self, device=DEVICE, fw="v1.0+9000", now=0.0):
@@ -308,6 +308,13 @@ class CarState:
             # the retreat exists to reach the driver, so hearing from them ends it.
             self._retreating = False
             self._release(CTL_RECOVER)
+        # The firmware holds RT for one actuator tick PAST this deadline
+        # (link.h LINK_HOLD_RT_MS = RT_WATCHDOG_MS + LINK_TICK_MS) so a lapse can
+        # never zero the wheels before the trip is declared; the audit-fix spec files
+        # that margin as firmware-local. It is moot here: `tick` runs `_trip` — which
+        # takes CTL_RECOVER and sets the reversed command — before `_expire` ever
+        # looks at the lapsed grant, so there is no window to cover and no invented
+        # tick in a mock that has none.
         if self._take(CTL_RT, now, RT["watchdog_ms"] / 1000.0):
             self._t, self._y = t, y
             self._history.append((t, y, now))
@@ -452,14 +459,20 @@ class CarState:
     def _retreat_duration(self, now):
         """How long the reverse replay takes, as recovery.c computes it.
 
-        Each sample is held for the gap to the next-newer one, and the newest for the
-        time it was held until the link went quiet, capped at TAIL_MS. Summed, all the
-        inner gaps telescope into the span of the history.
+        Each sample is held for the gap to the next-newer one — the newest for the
+        time it was held until the link went quiet — and **every** one of those
+        segments is capped at SEG_MAX_MS, which is what `recovery_seg_ms` does to
+        each `dur` in retreat_task's loop. Capping only the newest segment credited
+        the retrace with dead air: a stream that stuttered for four seconds mid-drive
+        replayed that pause in full, reversing long after it had retraced the ground
+        it actually covered.
         """
-        newest = self._history[-1][2]
-        oldest = self._history[0][2]
-        tail = min(now - newest, self.TAIL_MS / 1000.0)
-        return tail + (newest - oldest)
+        ts = [s[2] for s in self._history]
+        cap = self.SEG_MAX_MS / 1000.0
+        total = min(now - ts[-1], cap)
+        for older, newer in zip(ts, ts[1:]):
+            total += min(newer - older, cap)
+        return total
 
     def _any_motion(self):
         return any(abs(t) > self.MOVE_EPS or abs(y) > self.MOVE_EPS

@@ -321,6 +321,31 @@ class TestRetreat(unittest.TestCase):
         self.assertEqual(car.ctl, CTL_RT)
         self.assertEqual(car.command, (0.4, 0.0))
 
+    def test_every_replay_segment_is_capped_not_just_the_tail(self):
+        """recovery.h's RECOVER_SEG_MAX_MS caps EVERY segment, not only the newest.
+
+        `recovery_seg_ms` is applied to each `dur` in retreat_task's loop, so dead air
+        inside the path is never credited to the replay. This history has a 4.9 s
+        stutter in the middle — a stream that froze and came back, which is exactly what
+        a phone locking its screen mid-drive looks like. Capping only the tail (what the
+        mock did while it mirrored a `TAIL_MS` that the firmware had already replaced)
+        made the retrace 5.41 s long: 0.31 s of tail plus the whole 5.1 s span. Capped
+        per segment it is 0.70 s — 0.25 tail + 0.1 + 0.25 (the stutter, capped) + 0.1 —
+        which is the ground the car actually covered.
+        """
+        car = CarState(now=0.0)
+        ok, _ = car.apply_config("/recover", {"enabled": True, "window_ms": 10000})
+        self.assertTrue(ok)
+        for ts in (0.0, 0.1, 5.0, 5.1):
+            car.note_command(0.9, 0.0, ts)
+        trip = 5.1 + DEADLINE_S + 0.01                   # t = 5.41
+        self.assertIn("retracing", car.tick(trip))
+        self.assertIsNone(car.tick(trip + 0.60), "0.70 s of replay is not over at 0.60")
+        self.assertIn("exhausted", car.tick(trip + 0.75),
+                      "the 4.9 s stutter is worth 250 ms of retrace, not 4.9 s of it")
+        self.assertFalse(car.retreating)
+        self.assertEqual(car.command, (0.0, 0.0))
+
     def test_it_ends_on_its_own_when_the_history_runs_out(self):
         car = CarState(now=0.0)
         last = stream(car, 0.6, 0.0, 0.0, 20)        # 1.9 s of history

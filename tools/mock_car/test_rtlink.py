@@ -443,17 +443,29 @@ class TestWatchdog(Quiet):
         retracing after the session that started it was already gone.
 
         Timed so the retrace genuinely outlives the idle deadline rather than merely
-        outliving the trip: `_trip` evicts breadcrumbs older than the recover window
-        *before* snapshotting the retrace, so the oldest sample (t=0.4) must still be
-        within window_ms (10 s, the contract's max) of the trip (t=10.25) — a span of
-        9.85 s, inside the window with room to spare. That keeps both samples, so the
-        retrace spans close to the full 9.5 s between them plus its tail and is still
-        running (retreat_until ≈ 20.1) when the idle clock — anchored at the same last
-        command, t=9.9 — runs out at 19.95. A retrace collapsed to its tail alone (the
-        first version of this test, oldest sample at t=0.1, evicted at the trip) would
-        exhaust naturally around t=10.6, long before expiry ever ran, and the
-        grant-release branch below would never fire — this shape is why that failed
-        review.
+        outliving the trip, and shaped so it still does under the per-segment cap
+        (`CarState.SEG_MAX_MS`, recovery.h's RECOVER_SEG_MAX_MS): a long retrace has
+        to be built from *many* short segments, because no single one can be credited
+        with more than 250 ms. Two samples 9.5 s apart — the shape this test used
+        while the mock capped only its newest segment — now collapse to 0.5 s:
+        a capped tail plus one capped gap, and expiry would never find a retrace
+        left to abort.
+
+        The timeline, and why every number is where it is:
+
+          t=0.3 … 9.9   49 commands, one every 200 ms (48 gaps, each inside the cap,
+                        so each is credited in full: 48 × 0.2 s = 9.6 s)
+          t=9.9         last activity — the anchor for BOTH clocks below
+          t=10.25       the trip (last command + watchdog 300 ms + 50 ms). `_trip`
+                        evicts breadcrumbs older than window_ms (10 s, the contract's
+                        max) first, and the oldest sample is 9.95 s old here, so all
+                        49 survive and the retrace replays the whole path.
+          retrace       9.6 s of gaps + a 250 ms tail (capped from the 350 ms of
+                        silence) = 9.85 s → still running until t=20.10
+          t=19.95       the idle clock, anchored at t=9.9, runs out (10 s + 50 ms) —
+                        150 ms before the retrace would have exhausted on its own,
+                        which is the whole point: the branch under test is expiry
+                        killing a live retrace, not a retrace ending by itself.
         """
         idle_s = RT["session_idle_ms"] / 1000.0
         rt, car, loop = link()
@@ -461,14 +473,15 @@ class TestWatchdog(Quiet):
         self.assertTrue(ok)
         loop.t = 0.0
         send(rt, hello("longtrip"))
-        loop.t = 0.4
-        send(rt, cmd(1, 0.9, 0.0))                            # oldest breadcrumb: survives eviction
-        loop.t = 9.9
-        send(rt, cmd(2, 0.9, 0.0))                            # last activity: t = 9.9
+        seq, loop.t = 1, 0.3
+        while loop.t <= 9.9 + 1e-9:                           # 49 samples, 200 ms apart
+            send(rt, cmd(seq, 0.9, 0.0))
+            seq, loop.t = seq + 1, round(loop.t + 0.2, 10)
+        self.assertEqual(seq - 1, 49, "48 gaps of 200 ms, each credited under the cap")
         loop.t = 9.9 + DEADLINE_S + 0.05                      # t = 10.25: the trip
         self.assertIsNotNone(rt.tick(loop.t), "the trip starts the retrace")
         self.assertTrue(car.retreating, "a wide window keeps the retrace running")
-        self.assertEqual(car.history_len, 2, "the oldest sample survives the trip's own eviction")
+        self.assertEqual(car.history_len, 49, "the oldest sample survives the trip's own eviction")
         loop.t = 9.9 + idle_s + 0.05                          # t = 19.95: past idle
         line = rt.tick(loop.t)
         self.assertIsNone(line, "not a natural exhaustion — the retrace was still due to run")
