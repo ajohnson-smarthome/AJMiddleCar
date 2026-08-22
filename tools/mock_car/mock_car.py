@@ -184,7 +184,15 @@ async def ota(request):
     # answers 500 when something outranks the flash.
     if not car.begin_ota(now):
         return json_error(500, "actuator busy")
-    data = await request.read()
+    try:
+        data = await request.read()
+    except Exception:
+        # A client that aborts mid-upload (aiohttp sets the payload exception on
+        # connection loss) must not leave CTL_OTA held forever — ota_api.c's own
+        # recv-error path is esp_ota_abort + link_release_must + 400 "recv error".
+        # hold_s is None (sticky), so nothing else times this grant out.
+        car.end_ota(flashed=False)
+        raise
     if len(data) < OTA_MIN_BYTES:
         car.end_ota(flashed=False)
         return json_error(400, "image too small")
@@ -210,7 +218,11 @@ async def root(request):
 
 
 def build_app(car, link):
-    app = web.Application(middlewares=[one_at_a_time])
+    # aiohttp's default client_max_size is 1 MB. A real image is already ~0.75 MB
+    # (firmware/p4/build/ajmiddlecar.bin) and growing, so the default would 413 a
+    # legitimate upload — and, without the read() guard above, wedge the actuator
+    # on the way. The P4 has 16 MB of flash; set the cap generously above that.
+    app = web.Application(middlewares=[one_at_a_time], client_max_size=17 * 1024 * 1024)
     app["car"] = car
     app["link"] = link
     app["lock"] = asyncio.Lock()
