@@ -83,6 +83,11 @@ class RTLink(asyncio.DatagramProtocol):
         self.owner = None          # (host, port) of the adopted session
         self.session = None        # its hello id
         self.last_seq = None
+        # Sids of sessions that ended — by goodbye, eviction, expiry or the mock's
+        # simulated reboot. A hello carrying one is answered but never re-adopted
+        # (audit-fix spec rule 3): a network-duplicated handshake of a dead session
+        # must not evict the live driver. Capacity mirrors the firmware's ring of 4.
+        self.dead_sids = deque(maxlen=4)
         self._rx = deque()         # timestamps of accepted commands, for rx_fps
         self._dropped = 0
         self._last_drop_log = 0.0
@@ -148,6 +153,7 @@ class RTLink(asyncio.DatagramProtocol):
                 # goodbye still ended the session and cleared the history.
                 print(f"rt: bye from session {self.session} — history cleared, "
                       f"{self.car.ctl} keeps the actuator")
+            self.dead_sids.append(self.session)
             # Ownership is not resumable: the next session says hello again.
             self.owner, self.session, self.last_seq = None, None, None
             return
@@ -168,8 +174,18 @@ class RTLink(asyncio.DatagramProtocol):
                   f"this car speaks {PROTO}")
             self._send(reply, addr)
             return
+        if self.owner is not None and sid in self.dead_sids:
+            # A dead session's hello — usually a duplicate the network held onto.
+            # Answered, so a client retrying a lost reply is not left hanging, but
+            # never adopted over whoever is driving now. Only over someone: with no
+            # live session any hello adopts (rule 3's refinement), or a client whose
+            # session idled out mid-handshake could never get back in.
+            self._send(reply, addr)
+            return
         if self.owner != addr or self.session != sid:
             evicted = self.owner if self.owner and self.owner != addr else None
+            if self.session is not None and self.session != sid:
+                self.dead_sids.append(self.session)
             # Step 3 of the plan's adoption sequence: the sequence gate is the link's
             # state, so it is reset here; `adopt_session` does the other three. A repeat
             # hello from the same peer and sid reaches neither, which is what stops a

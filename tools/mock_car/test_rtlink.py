@@ -144,6 +144,59 @@ class TestAdoption(Quiet):
         self.assertEqual(rt.transport.sent[-1][0][RT["proto_field"]], PROTO,
                          "the reply names our version so the app can stop searching")
 
+    def test_a_dead_sessions_hello_is_answered_but_not_adopted(self):
+        """Rule 3: a network-duplicated hello of a session that already ended must
+        not evict the live driver. Session 1 dies by bye; its delayed hello
+        duplicate arrives while session 2 is driving."""
+        rt, car, _ = link()
+        send(rt, hello("dead0001"))
+        send(rt, cmd(1, 0.5))
+        send(rt, cmd(2, 0.0, 0.0, **{BYE: 1}))            # session 1 ends itself
+        send(rt, hello("beef0002"), addr=OTHER)           # session 2 adopts
+        send(rt, cmd(1, 0.7), addr=OTHER)
+        answered = len(rt.transport.sent)
+        send(rt, hello("dead0001"))                       # the delayed duplicate
+        self.assertEqual(rt.owner, OTHER, "the live driver keeps the session")
+        self.assertEqual(rt.session, "beef0002")
+        self.assertEqual(len(rt.transport.sent), answered + 1,
+                         "the dead hello is answered — a lost-reply retry must not hang")
+        self.assertEqual(rt.transport.sent[-1][1], APP)
+        send(rt, cmd(2, -0.3), addr=OTHER)
+        self.assertEqual(car.command, (-0.3, 0.0), "the live stream still drives")
+
+    def test_an_evicted_sid_is_dead_too(self):
+        rt, car, _ = link()
+        send(rt, hello("evict001"))
+        send(rt, cmd(1, 0.5))
+        send(rt, hello("beef0002"), addr=OTHER)           # evicts evict001
+        send(rt, hello("evict001"))                       # a stale duplicate returns
+        self.assertEqual(rt.owner, OTHER, "an evicted sid cannot re-adopt")
+
+    def test_the_dead_ring_is_bounded(self):
+        rt, car, _ = link()
+        for i in range(6):              # each hello evicts the last: 5 dead sids recorded
+            send(rt, hello(f"sid{i:05d}"))
+        # The ring keeps the last 4 dead (sid00001..sid00004); sid00000 fell off.
+        # A live session (sid00005) exists throughout, so refusal is in force.
+        send(rt, hello("sid00000"), addr=OTHER)
+        self.assertEqual(rt.session, "sid00000",
+                         "a sid old enough to leave the ring may live again")
+        send(rt, hello("sid00004"), addr=APP)             # still remembered
+        self.assertEqual(rt.session, "sid00000", "and still refused while someone is live")
+
+    def test_with_no_live_session_even_a_dead_sid_adopts(self):
+        """Rule 3's refinement: refusing a dead sid when nobody is live would wedge
+        a client whose session idled out mid-handshake, and adopting a stale
+        duplicate displaces nobody — the phantom dies again by rule 4."""
+        rt, car, _ = link()
+        send(rt, hello("phoenix1"))
+        send(rt, cmd(1, 0.5))
+        send(rt, cmd(2, 0.0, 0.0, **{BYE: 1}))            # dies; nobody else arrives
+        self.assertIsNone(rt.owner)
+        send(rt, hello("phoenix1"))                       # the same sid returns
+        self.assertEqual(rt.owner, APP, "with no live session, any hello adopts")
+        self.assertEqual(rt.session, "phoenix1")
+
 
 class TestOwnedTraffic(Quiet):
     def test_a_command_drives_and_counts(self):
