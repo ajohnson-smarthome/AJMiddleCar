@@ -49,6 +49,7 @@ static volatile uint32_t s_trips;
    is `rt_session_t` in rt_link.h, pure and host-tested. */
 static struct sockaddr_in s_owner;
 static rt_session_t       s_ses;
+static rt_dead_sids_t     s_dead;
 
 uint32_t rt_link_frames(void)    { return s_frames; }
 uint32_t rt_link_wdt_trips(void) { return s_trips; }
@@ -91,7 +92,7 @@ static void adopt(const struct sockaddr_in *from, const char *sid) {
     /* The sequence gate restarts and the watchdog stays disarmed — see
        rt_session_adopt: it arms on the first accepted command, which is the thing it
        measures. */
-    rt_session_adopt(&s_ses, sid);
+    rt_session_adopt(&s_ses, sid, now_ms());
     /* A previous session may have left SAFE holding zero. It must not outlive the
        session that asked for it, or the console, the wizard and OTA stay locked out. */
     link_release(LINK_SRC_SAFE);
@@ -157,7 +158,7 @@ static void on_datagram(int sock, const char *buf, int n, const struct sockaddr_
     /* Every rule about who this datagram is from, whether it can be ordered and what it
        asks for is in rt_session_classify — pure, and host-tested in test_rt_session.c.
        What is left here is the part that needs a socket and an actuator. */
-    switch (rt_session_classify(&s_ses, s_ses.have_owner && same_peer(&s_owner, from), &f)) {
+    switch (rt_session_classify(&s_ses, &s_dead, s_ses.have_owner && same_peer(&s_owner, from), &f)) {
     case RT_ADOPT:
         adopt(from, f.sid);
         send_hello_reply(sock, f.sid, from);
