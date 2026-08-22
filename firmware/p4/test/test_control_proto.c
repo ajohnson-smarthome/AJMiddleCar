@@ -182,6 +182,23 @@ int main(void) {
     assert(control_parse_frame(raw, sizeof(first) - 1, RT_MAX_COMMAND, &part) == 0);
     assert(part.has_ty && approx(part.t, 0.5f) && approx(part.y, 0.0f) && part.seq == 1);
 
+    /* --- the audit's shared pinned frames (decisions spec, rule 6) ------------
+       The mock pins these same bytes with these same outcomes; byte-identical
+       datagrams drove the car and the mock differently before. */
+    bad("{\"seq\":5,\"junk\":{\"t\":0.9},\"y\":0.5}"); /* nested t is not top-level t */
+    bad("{\"seq\":7,\"t\":.5,\"y\":0}");               /* bare mantissa */
+    bad("{\"seq\":8,\"t\":+1,\"y\":0}");               /* leading plus */
+    bad("{\"seq\":9,\"t\":0.5,\"y\":0,\"t\":0.9}");    /* duplicate key: two commands */
+    bad("{\"proto\":1.5,\"hello\":\"abcd1234\"}");     /* fractional proto, not v1 */
+    bad("{\"seq\":01,\"t\":0,\"y\":0}");               /* leading zero */
+    bad("{\"seq\":12,\"t\":0.5x,\"y\":0}");            /* trailing junk on a number */
+    bad("{\"seq\":13,\"t\":0,\"y\":0,\"bye\":truex}"); /* trailing junk on a bool */
+    ok("{\"seq\":10,\"t\":0.50,\"y\":-0.25}", 0.50f, -0.25f);
+    control_frame_t pf = parse("{\"proto\":1,\"hello\":\"7f3a91c2\"}");
+    assert(pf.has_proto && pf.proto == 1);
+    control_frame_t p2 = parse("{\"proto\":2,\"hello\":\"7f3a91c2\"}");
+    assert(p2.has_proto && p2.proto == 2);             /* integer future proto parses */
+
     printf("test_control_proto: all passed\n");
     return 0;
 }
