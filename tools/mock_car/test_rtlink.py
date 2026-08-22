@@ -372,6 +372,68 @@ class TestWatchdog(Quiet):
         self.assertIsNotNone(rt.tick(loop.t), "the first command arms it")
         self.assertEqual(car.wdt_trips, 1)
 
+    def test_a_tripped_session_expires_past_the_idle_window(self):
+        """Amended rule 4: sessions are mortal, anchored at their LAST ACTIVITY —
+        the last accepted command — not at the trip. Without this the car pushed
+        telemetry to a vanished owner forever, and the kept seq gate (rule 1)
+        would hold state for a peer that will never return. At exactly
+        session_idle_ms the session is still alive; strictly past it, it ends."""
+        idle_s = RT["session_idle_ms"] / 1000.0
+        rt, car, loop = link()
+        loop.t = 1.0
+        send(rt, hello("mortal01"))
+        send(rt, cmd(10, 0.5))                                # last activity: t = 1.0
+        loop.t = 1.0 + DEADLINE_S + 0.05
+        self.assertIsNotNone(rt.tick(loop.t))                 # the trip disarms
+        loop.t = 1.0 + idle_s                                 # exactly the window
+        rt.tick(loop.t)
+        self.assertEqual(rt.owner, APP, "at exactly idle_ms the session still lives")
+        rt.transport.sent.clear()
+        rt.push_telemetry(loop.t)
+        self.assertEqual(len(rt.transport.sent), 1, "telemetry still flows")
+        loop.t = 1.0 + idle_s + 0.05                          # strictly past it
+        rt.tick(loop.t)
+        self.assertIsNone(rt.owner, "the session expired, watchdog_ms earlier than trip+idle")
+        self.assertIn("mortal01", rt.dead_sids)
+        rt.transport.sent.clear()
+        rt.push_telemetry(loop.t)
+        self.assertEqual(rt.transport.sent, [], "no more telemetry to a dead peer")
+        send(rt, hello("fresh002"))
+        self.assertEqual(rt.owner, APP, "a fresh hello starts over")
+
+    def test_activity_moves_the_expiry_deadline(self):
+        idle_s = RT["session_idle_ms"] / 1000.0
+        rt, car, loop = link()
+        loop.t = 1.0
+        send(rt, hello("mortal02"))
+        send(rt, cmd(10, 0.5))                                # activity at 1.0
+        loop.t = 1.0 + DEADLINE_S + 0.05
+        rt.tick(loop.t)                                       # trip
+        loop.t = 5.0
+        send(rt, cmd(11, 0.5))                                # activity moves to 5.0
+        loop.t = 1.0 + idle_s + 0.05                          # past the OLD deadline
+        rt.tick(loop.t)                                       # (trips again — fine)
+        self.assertEqual(rt.owner, APP, "the resumed command moved the deadline")
+        loop.t = 5.0 + idle_s + 0.05                          # past the new one
+        rt.tick(loop.t)
+        self.assertIsNone(rt.owner, "which then passes in its own time")
+
+    def test_a_hello_only_session_expires_too(self):
+        """A session that never commanded has its adoption as its last activity —
+        the watchdog never armed, so the idle clock runs from the handshake. The
+        firmware behaves the same; without this the phantom lives forever."""
+        idle_s = RT["session_idle_ms"] / 1000.0
+        rt, car, loop = link()
+        loop.t = 1.0
+        send(rt, hello("ghost001"))
+        loop.t = 1.0 + idle_s
+        rt.tick(loop.t)
+        self.assertEqual(rt.owner, APP, "at exactly the window it still lives")
+        loop.t = 1.0 + idle_s + 0.05
+        rt.tick(loop.t)
+        self.assertIsNone(rt.owner, "a handshake that never commanded ages out")
+        self.assertIn("ghost001", rt.dead_sids)
+
 
 class TestTelemetry(Quiet):
     def test_nothing_is_pushed_without_a_session(self):

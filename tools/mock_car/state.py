@@ -258,6 +258,11 @@ class CarState:
     def history_len(self):
         return len(self._history)
 
+    @property
+    def armed(self):
+        """The control watchdog is armed — a command was accepted since adopt/trip."""
+        return self._armed
+
     # ---- configuration ---------------------------------------------------------
 
     def apply_config(self, path, body):

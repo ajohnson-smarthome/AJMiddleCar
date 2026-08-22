@@ -88,6 +88,7 @@ class RTLink(asyncio.DatagramProtocol):
         # (audit-fix spec rule 3): a network-duplicated handshake of a dead session
         # must not evict the live driver. Capacity mirrors the firmware's ring of 4.
         self.dead_sids = deque(maxlen=4)
+        self._last_activity = None   # last accepted command, or the adoption itself
         self._rx = deque()         # timestamps of accepted commands, for rx_fps
         self._dropped = 0
         self._last_drop_log = 0.0
@@ -158,9 +159,10 @@ class RTLink(asyncio.DatagramProtocol):
             self.owner, self.session, self.last_seq = None, None, None
             return
 
-        self.car.note_command(frame[RT["throttle_field"]], frame[RT["yaw_field"]], now)
-        self._rx.append(now)
-        self._log_command(now, seq)
+        if self.car.note_command(frame[RT["throttle_field"]], frame[RT["yaw_field"]], now):
+            self._last_activity = now
+            self._rx.append(now)
+            self._log_command(now, seq)
 
     def _adopt(self, frame, addr, now):
         sid = frame[RT["hello_field"]]
@@ -193,6 +195,7 @@ class RTLink(asyncio.DatagramProtocol):
             self.owner, self.session, self.last_seq = addr, sid, None
             self.car.adopt_session(now)
             self._rx.clear()
+            self._last_activity = now
             print(f"rt: adopted session {sid} from {addr[0]}:{addr[1]}"
                   + (f" (evicting {evicted[0]}:{evicted[1]})" if evicted else ""))
         # Reply to every hello, not only to the one that adopted: the app repeats it
@@ -230,8 +233,21 @@ class RTLink(asyncio.DatagramProtocol):
         Channel ownership survives too: a stream that resumes after a dropout is
         the same session, and evicting it would ignore the driver until the app
         noticed.
+
+        While the watchdog is not armed, a session strictly more than
+        RT["session_idle_ms"] past its last activity — last accepted command, or
+        the adoption itself — expires: rule 4. The sid joins dead_sids.
         """
-        return self.car.tick(now)
+        line = self.car.tick(now)
+        if (self.owner is not None and not self.car.armed
+                and self._last_activity is not None
+                and (now - self._last_activity) * 1000.0 > RT["session_idle_ms"]):
+            print(f"rt: session {self.session} expired — more than "
+                  f"{RT['session_idle_ms']} ms past its last activity")
+            self.dead_sids.append(self.session)
+            self.owner, self.session, self.last_seq = None, None, None
+            self._last_activity = None
+        return line
 
     def push_telemetry(self, now):
         if self.owner is None or self.impair.stalled(now):
