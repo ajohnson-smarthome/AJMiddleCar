@@ -47,7 +47,11 @@ static esp_err_t status_get(httpd_req_t *req) {
     telemetry_gather(&t, TELEM_STATUS);
     char fields[224];
     if (telemetry_fields(fields, sizeof(fields), &t) < 0) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "telemetry");
+        /* The same envelope as the overflow path below, and as every other endpoint:
+           a client that parses errors as JSON must not meet plain text on one branch
+           of one handler. */
+        ESP_LOGE(TAG, "/status could not render its telemetry fields");
+        return api_reply_error(req, "500 Internal Server Error", "", "telemetry unavailable");
     }
     const char *fw = esp_app_get_description()->version;
     char buf[416];

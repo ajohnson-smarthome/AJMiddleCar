@@ -25,10 +25,14 @@ accepts an app→car datagram of at most **96 bytes** (`max_command`) and drops 
 a receiver must be sized for **320 bytes** (`max_datagram`), because a telemetry frame
 runs up to ~160 bytes and a buffer sized from the command cap would not fit one.
 
-Datagrams are parsed strictly, and identically on both implementations: keys are read at the
-top level only, numbers follow JSON grammar (no leading `+`, no bare `.` mantissa, no leading
-zeros), and a datagram that spells the same top-level key twice is dropped whole. The car scans
-flat, the mock runs `json.loads` — anything looser than JSON would drive one and not the other.
+Datagrams are parsed strictly: keys are read at the top level only, numbers follow JSON
+grammar (no leading `+`, no bare `.` mantissa, no leading zeros), and a datagram that spells
+the same **recognised** top-level key twice is dropped whole. The two implementations get
+there by different routes and are strict to different depths — the car scans flat, so it
+detects a repeat only of the keys it reads and never looks at the rest of the object; the
+mock runs `json.loads`, so it rejects any duplicate key and anything that is not JSON at
+all. Write only well-formed JSON: the mock is the strict side, and a datagram the car
+happens to accept beyond it is a divergence, not a licence.
 
 ### Session open — `hello`, app → car, repeated ~5 Hz until answered
 

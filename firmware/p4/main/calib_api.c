@@ -61,7 +61,7 @@ static esp_err_t calib_spin(httpd_req_t *req) {
     return api_reply_ok(req);
 }
 
-// POST /calib/save  body "<p>:<s>,<p>:<s>,<p>:<s>,<p>:<s>" for FL,FR,RL,RR.
+// POST /calib/save  body {"wheels":[{"pair":0..3,"sign":-1|1} x4]} in FL,FR,RL,RR order.
 static esp_err_t calib_save(httpd_req_t *req) {
     char b[128];
     if (api_read_body(req, b, sizeof(b)) < 0) {
