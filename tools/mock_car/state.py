@@ -552,6 +552,18 @@ class CarState:
         try:
             if not isinstance(wheels, list) or len(wheels) != 4:
                 return False
+            for w in wheels:
+                for key in ("pair", "sign"):
+                    v = w[key]
+                    # cJSON_IsNumber: a JSON number, never a bool or a string —
+                    # and rule 7 has both sides reject fractions. int("0") and
+                    # int(True) coerced here while the car answered 400, the
+                    # works-in-sim/fails-on-car trap on the one endpoint that
+                    # guards the calibration table.
+                    if isinstance(v, bool) or not isinstance(v, (int, float)):
+                        return False
+                    if float(v) != int(v):
+                        return False
             pairs = {int(w["pair"]) for w in wheels}
             signs = [int(w["sign"]) for w in wheels]
         except (TypeError, ValueError, KeyError):

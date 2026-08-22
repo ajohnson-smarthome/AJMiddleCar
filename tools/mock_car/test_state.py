@@ -617,9 +617,22 @@ class TestCalibration(unittest.TestCase):
                        [{"pair": 0, "sign": 1}] * 4,                     # not unique
                        [{"pair": p, "sign": 0} for p in range(4)],       # sign not ±1
                        [{"pair": p} for p in range(4)],                  # missing key
-                       "wheels"):
+                       "wheels",
+                       [{"pair": "0", "sign": "1"},                      # strings
+                        {"pair": "1", "sign": "1"},
+                        {"pair": "2", "sign": "1"},
+                        {"pair": "3", "sign": "1"}],
+                       [{"pair": p, "sign": True} for p in range(4)],    # booleans
+                       [{"pair": p + 0.5, "sign": 1} for p in range(4)],  # fractions
+                       ):
             self.assertFalse(car.save_calibration(wheels), wheels)
         self.assertFalse(car.calibrated)
+
+    def test_integral_floats_are_numbers(self):
+        """cJSON sees 1.0 as a number with valueint 1; so does the car."""
+        car = CarState()
+        wheels = [{"pair": float(p), "sign": 1.0} for p in range(4)]
+        self.assertTrue(car.save_calibration(wheels))
 
 
 class TestOwnershipVocabulary(unittest.TestCase):
