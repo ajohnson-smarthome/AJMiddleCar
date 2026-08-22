@@ -76,6 +76,7 @@ else
     fi
 
     python3 tools/conformance.py "http://127.0.0.1:$PORT"
+    python3 tools/conformance_rt.py "127.0.0.1:$RT_PORT"
     kill "$MOCK_PID" 2>/dev/null || true
     wait "$MOCK_PID" 2>/dev/null || true
     rm -f "$LOG"
