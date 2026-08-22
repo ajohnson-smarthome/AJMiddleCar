@@ -607,5 +607,25 @@ class TestReboot(Quiet):
                          "and the hello reply carries the bumped fw")
 
 
+class TestTwoPhones(Quiet):
+    def test_last_hello_wins_and_nobody_is_told(self):
+        """Rule 11: the audit flagged silent hijack and the ~3 s two-phone
+        ownership oscillation; the spec defers the eviction notice and pins the
+        behaviour instead. If a notice is ever added, this is the test to rewrite."""
+        rt, car, _ = link()
+        send(rt, hello("phoneaaa"), addr=APP)
+        send(rt, cmd(1, 0.5), addr=APP)
+        sent_before = len(rt.transport.sent)
+        send(rt, hello("phonebbb"), addr=OTHER)      # B silently steals the session
+        self.assertEqual(rt.owner, OTHER)
+        to_a = [d for d in rt.transport.sent[sent_before:] if d[1] == APP]
+        self.assertEqual(to_a, [], "the displaced phone is told nothing")
+        send(rt, cmd(2, 0.9), addr=APP)              # A keeps streaming, unheard
+        self.assertEqual(car.command, (0.5, 0.0), "A's frames no longer land")
+        self.assertEqual(car.history_len, 0, "adoption wiped A's breadcrumbs")
+        send(rt, hello("phoneaa2"), addr=APP)        # A's stall guard re-hellos
+        self.assertEqual(rt.owner, APP, "and the theft works both ways, forever")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
