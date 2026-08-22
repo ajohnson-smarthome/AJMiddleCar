@@ -440,10 +440,18 @@ class TestWatchdog(Quiet):
         recovery.c's retreat_task mid-replay. Without it a dead driver's retreat kept
         retracing after the session that started it was already gone.
 
-        A wide recover window (10 s, the contract's max) makes the retrace long
-        enough to still be running when the idle clock — anchored at the same last
-        command — runs out, so this exercises the abort-while-retreating path rather
-        than a retreat that had already finished on its own.
+        Timed so the retrace genuinely outlives the idle deadline rather than merely
+        outliving the trip: `_trip` evicts breadcrumbs older than the recover window
+        *before* snapshotting the retrace, so the oldest sample (t=0.4) must still be
+        within window_ms (10 s, the contract's max) of the trip (t=10.25) — a span of
+        9.85 s, inside the window with room to spare. That keeps both samples, so the
+        retrace spans close to the full 9.5 s between them plus its tail and is still
+        running (retreat_until ≈ 20.1) when the idle clock — anchored at the same last
+        command, t=9.9 — runs out at 19.95. A retrace collapsed to its tail alone (the
+        first version of this test, oldest sample at t=0.1, evicted at the trip) would
+        exhaust naturally around t=10.6, long before expiry ever ran, and the
+        grant-release branch below would never fire — this shape is why that failed
+        review.
         """
         idle_s = RT["session_idle_ms"] / 1000.0
         rt, car, loop = link()
@@ -451,16 +459,17 @@ class TestWatchdog(Quiet):
         self.assertTrue(ok)
         loop.t = 0.0
         send(rt, hello("longtrip"))
-        loop.t = 0.1
-        send(rt, cmd(1, 0.9, 0.0))                            # oldest breadcrumb
+        loop.t = 0.4
+        send(rt, cmd(1, 0.9, 0.0))                            # oldest breadcrumb: survives eviction
         loop.t = 9.9
         send(rt, cmd(2, 0.9, 0.0))                            # last activity: t = 9.9
-        loop.t = 9.9 + DEADLINE_S + 0.05
+        loop.t = 9.9 + DEADLINE_S + 0.05                      # t = 10.25: the trip
         self.assertIsNotNone(rt.tick(loop.t), "the trip starts the retrace")
         self.assertTrue(car.retreating, "a wide window keeps the retrace running")
-        self.assertGreater(car.history_len, 0)
-        loop.t = 9.9 + idle_s + 0.05                          # past idle, retrace still due
-        rt.tick(loop.t)
+        self.assertEqual(car.history_len, 2, "the oldest sample survives the trip's own eviction")
+        loop.t = 9.9 + idle_s + 0.05                          # t = 19.95: past idle
+        line = rt.tick(loop.t)
+        self.assertIsNone(line, "not a natural exhaustion — the retrace was still due to run")
         self.assertIsNone(rt.owner, "the session itself expired")
         self.assertIn("longtrip", rt.dead_sids)
         self.assertFalse(car.retreating, "a dead driver's retrace must not keep replaying")
