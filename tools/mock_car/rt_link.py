@@ -25,6 +25,12 @@ from state import parse_frame, seq_is_newer
 TICK_S = 0.020
 PUSH_EVERY = round((1.0 / RT["telemetry_hz"]) / TICK_S)
 
+# How long the mock is deaf and mute after a "flash", simulating the reboot.
+# Hand-mirrored against the app: CarTransport.swift's stallTimeout is 3 s, and the
+# gap must exceed it so the app tears down, re-hellos, and reads the new fw from
+# the hello reply — which is the only place it learns fw.
+REBOOT_QUIET_S = 4.0
+
 
 class Impairment:
     """Packet loss, latency and stalls, seeded rather than clocked."""
@@ -83,10 +89,19 @@ class RTLink(asyncio.DatagramProtocol):
         self.owner = None          # (host, port) of the adopted session
         self.session = None        # its hello id
         self.last_seq = None
-        self._rx = deque()         # timestamps of accepted commands, for rx_fps
+        # Sids of sessions that ended — by goodbye, eviction, expiry or the mock's
+        # simulated reboot. A hello carrying one is answered but never re-adopted
+        # (audit-fix spec rule 3): a network-duplicated handshake of a dead session
+        # must not evict the live driver. Capacity mirrors the firmware's ring of 4.
+        self.dead_sids = deque(maxlen=4)
+        self._last_activity = None   # last accepted command, or the adoption itself
+        self._rx = deque()         # timestamps of accepted commands, for _window_fps
+        self._frames = 0           # total accepted commands, the counter fps deltas read
+        self._fps_last = {}        # per-consumer (frames, at) — telemetry.c's fps_now
         self._dropped = 0
         self._last_drop_log = 0.0
         self._last_cmd_log = 0.0
+        self._quiet_until = None
 
     # ---- receive ---------------------------------------------------------------
 
@@ -95,6 +110,8 @@ class RTLink(asyncio.DatagramProtocol):
 
     def datagram_received(self, data, addr):
         now = self.loop.time()
+        if self._quiet_until is not None and now < self._quiet_until:
+            return                                  # "rebooting": deaf
         if self.impair.stalled(now):
             return                                  # a stalled car services nothing
         if self.impair.drops_rx():
@@ -143,18 +160,21 @@ class RTLink(asyncio.DatagramProtocol):
             if self.car.note_bye(now):
                 print(f"rt: bye from session {self.session} — stopped, history cleared")
             else:
-                # `car_stop(LINK_SRC_SAFE)` refused. Nothing outranks SAFE, so this is
-                # unreachable today — but the car checks the same return, and a stop
-                # that was not applied must never be silent.
-                print(f"rt: bye from session {self.session} — stop REFUSED, "
-                      f"{self.car.ctl} holds the actuator")
+                # A sticky holder (an OTA flash, a calibration pulse) keeps the
+                # actuator through a goodbye — rule 2 of the audit-fix spec. The
+                # goodbye still ended the session and cleared the history.
+                print(f"rt: bye from session {self.session} — history cleared, "
+                      f"{self.car.ctl} keeps the actuator")
+            self.dead_sids.append(self.session)
             # Ownership is not resumable: the next session says hello again.
             self.owner, self.session, self.last_seq = None, None, None
             return
 
-        self.car.note_command(frame[RT["throttle_field"]], frame[RT["yaw_field"]], now)
-        self._rx.append(now)
-        self._log_command(now, seq)
+        if self.car.note_command(frame[RT["throttle_field"]], frame[RT["yaw_field"]], now):
+            self._last_activity = now
+            self._frames += 1
+            self._rx.append(now)
+            self._log_command(now, seq)
 
     def _adopt(self, frame, addr, now):
         sid = frame[RT["hello_field"]]
@@ -168,8 +188,18 @@ class RTLink(asyncio.DatagramProtocol):
                   f"this car speaks {PROTO}")
             self._send(reply, addr)
             return
+        if self.owner is not None and sid in self.dead_sids:
+            # A dead session's hello — usually a duplicate the network held onto.
+            # Answered, so a client retrying a lost reply is not left hanging, but
+            # never adopted over whoever is driving now. Only over someone: with no
+            # live session any hello adopts (rule 3's refinement), or a client whose
+            # session idled out mid-handshake could never get back in.
+            self._send(reply, addr)
+            return
         if self.owner != addr or self.session != sid:
             evicted = self.owner if self.owner and self.owner != addr else None
+            if self.session is not None and self.session != sid:
+                self.dead_sids.append(self.session)
             # Step 3 of the plan's adoption sequence: the sequence gate is the link's
             # state, so it is reset here; `adopt_session` does the other three. A repeat
             # hello from the same peer and sid reaches neither, which is what stops a
@@ -177,6 +207,7 @@ class RTLink(asyncio.DatagramProtocol):
             self.owner, self.session, self.last_seq = addr, sid, None
             self.car.adopt_session(now)
             self._rx.clear()
+            self._last_activity = now
             print(f"rt: adopted session {sid} from {addr[0]}:{addr[1]}"
                   + (f" (evicting {evicted[0]}:{evicted[1]})" if evicted else ""))
         # Reply to every hello, not only to the one that adopted: the app repeats it
@@ -202,33 +233,82 @@ class RTLink(asyncio.DatagramProtocol):
             self.transport.sendto(data, addr)
 
     def tick(self, now):
-        """One service tick of the car's clock, plus the state a trip invalidates here.
+        """One service tick of the car's clock.
 
-        `rt_link.c` clears `s_have_seq` in the same breath as `s_armed` when the deadline
-        passes: silence past it already proves the stream is dead, so there is nothing
-        left to replay-protect — and a gate left desynchronised (a spoofed frame far in
-        the future, a counter bug) would drop every genuine frame for the rest of the
-        session while telemetry kept flowing and the app showed a healthy link. The car's
-        gate lives beside its watchdog; the mock's lives here, so the trip has to be
-        carried across.
+        The sequence gate deliberately survives a trip (audit-fix spec rule 1):
+        silence proves the stream is dead, but the gate is what stops a
+        network-delayed duplicate of a pre-dropout command from being accepted as
+        the resumed stream — driving the car at stale stick values and aborting
+        the retreat. A same-session stream that resumes carries newer seqs and
+        passes; the gate resets only on adopt and on bye.
 
-        Channel ownership deliberately survives: a stream that resumes after a dropout is
-        the same session, and evicting it would ignore the driver until the app noticed.
+        Channel ownership survives too: a stream that resumes after a dropout is
+        the same session, and evicting it would ignore the driver until the app
+        noticed.
+
+        While the watchdog is not armed, a session strictly more than
+        RT["session_idle_ms"] past its last activity — last accepted command, or
+        the adoption itself — expires: rule 4. The sid joins dead_sids, and the
+        breadcrumb path goes with it — `car.forget_path` aborts a retreat still in
+        flight, exactly as the firmware's rt_glue_idle does by bumping
+        recovery_forget()'s liveness seq: a dead driver's path must never keep
+        replaying.
         """
-        trips = self.car.wdt_trips
         line = self.car.tick(now)
-        if self.car.wdt_trips != trips:
-            self.last_seq = None
+        if (self.owner is not None and not self.car.armed
+                and self._last_activity is not None
+                and (now - self._last_activity) * 1000.0 > RT["session_idle_ms"]):
+            print(f"rt: session {self.session} expired — more than "
+                  f"{RT['session_idle_ms']} ms past its last activity")
+            self.car.forget_path(now)
+            self.dead_sids.append(self.session)
+            self.owner, self.session, self.last_seq = None, None, None
+            self._last_activity = None
         return line
+
+    def simulate_reboot(self, now):
+        """The flash ended: the car reboots. Session dead, link silent for a while.
+
+        What the app observes on hardware — a telemetry gap past its stall guard,
+        then a fresh handshake answering with the new fw — must be observable in
+        the simulator too, or the OTA screen's success detector can never fire.
+        """
+        if self.session is not None:
+            self.dead_sids.append(self.session)
+        self.owner, self.session, self.last_seq = None, None, None
+        self._last_activity = None
+        self._quiet_until = now + REBOOT_QUIET_S
+        print(f"rt: 'rebooting' — deaf and mute for {REBOOT_QUIET_S:g} s")
 
     def push_telemetry(self, now):
         if self.owner is None or self.impair.stalled(now):
             return
-        self._send(self.car.telemetry(self.rx_fps(now)), self.owner)
+        if self._quiet_until is not None and now < self._quiet_until:
+            return                                  # "rebooting": mute
+        self._send(self.car.telemetry(self.rx_fps(now, "push")), self.owner)
 
     # ---- measurement and logging -----------------------------------------------
 
-    def rx_fps(self, now):
+    def rx_fps(self, now, who):
+        """telemetry.c's fps_now: a delta against this consumer's previous read.
+
+        0 on the first read and after a >=10 s gap — a stale delta is not a rate —
+        and the accumulator updates either way, so the next prompt read measures.
+        `who` is "push" or "status"; each consumer deltas against its own history,
+        which is why a 1 Hz /status poll cannot perturb the pushed stream's number.
+        """
+        fps = 0
+        prev = self._fps_last.get(who)
+        if prev is not None:
+            frames, at = prev
+            dt = now - at
+            if 0 < dt < 10.0:
+                fps = int((self._frames - frames) / dt)
+        self._fps_last[who] = (self._frames, now)
+        return fps
+
+    def _window_fps(self, now):
+        """The old 1-second window, kept only for the human log line."""
         while self._rx and now - self._rx[0] > 1.0:
             self._rx.popleft()
         return len(self._rx)
@@ -246,7 +326,7 @@ class RTLink(asyncio.DatagramProtocol):
         if self.verbose or now - self._last_cmd_log > 1.0:
             self._last_cmd_log = now
             t, y = self.car.command
-            print(f"rt: seq={seq} t={t:.2f} y={y:.2f} rx={self.rx_fps(now)}/s "
+            print(f"rt: seq={seq} t={t:.2f} y={y:.2f} rx={self._window_fps(now)}/s "
                   f"ctl={self.car.ctl}")
 
 

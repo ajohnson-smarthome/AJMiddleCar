@@ -76,6 +76,11 @@ else
     fi
 
     python3 tools/conformance.py "http://127.0.0.1:$PORT"
+    # Latent coupling: if conformance.py ever grows a valid-image OTA case, note
+    # that the mock's simulated reboot (rt_link.py's REBOOT_QUIET_S, 4 s) outlasts
+    # this tool's ~3 s hello-retry budget — a run started right after would see
+    # "unreachable" instead of the fresh post-reboot handshake.
+    python3 tools/conformance_rt.py "127.0.0.1:$RT_PORT"
     kill "$MOCK_PID" 2>/dev/null || true
     wait "$MOCK_PID" 2>/dev/null || true
     rm -f "$LOG"

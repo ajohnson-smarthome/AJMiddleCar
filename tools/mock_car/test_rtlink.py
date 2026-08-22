@@ -18,7 +18,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from generated import PROTO, RT                        # noqa: E402
-from rt_link import Impairment, RTLink                 # noqa: E402
+from rt_link import Impairment, REBOOT_QUIET_S, RTLink  # noqa: E402
 from state import CTL_NONE, CTL_RT, CarState           # noqa: E402
 
 APP = ("192.168.4.2", 50000)
@@ -144,6 +144,59 @@ class TestAdoption(Quiet):
         self.assertEqual(rt.transport.sent[-1][0][RT["proto_field"]], PROTO,
                          "the reply names our version so the app can stop searching")
 
+    def test_a_dead_sessions_hello_is_answered_but_not_adopted(self):
+        """Rule 3: a network-duplicated hello of a session that already ended must
+        not evict the live driver. Session 1 dies by bye; its delayed hello
+        duplicate arrives while session 2 is driving."""
+        rt, car, _ = link()
+        send(rt, hello("dead0001"))
+        send(rt, cmd(1, 0.5))
+        send(rt, cmd(2, 0.0, 0.0, **{BYE: 1}))            # session 1 ends itself
+        send(rt, hello("beef0002"), addr=OTHER)           # session 2 adopts
+        send(rt, cmd(1, 0.7), addr=OTHER)
+        answered = len(rt.transport.sent)
+        send(rt, hello("dead0001"))                       # the delayed duplicate
+        self.assertEqual(rt.owner, OTHER, "the live driver keeps the session")
+        self.assertEqual(rt.session, "beef0002")
+        self.assertEqual(len(rt.transport.sent), answered + 1,
+                         "the dead hello is answered — a lost-reply retry must not hang")
+        self.assertEqual(rt.transport.sent[-1][1], APP)
+        send(rt, cmd(2, -0.3), addr=OTHER)
+        self.assertEqual(car.command, (-0.3, 0.0), "the live stream still drives")
+
+    def test_an_evicted_sid_is_dead_too(self):
+        rt, car, _ = link()
+        send(rt, hello("evict001"))
+        send(rt, cmd(1, 0.5))
+        send(rt, hello("beef0002"), addr=OTHER)           # evicts evict001
+        send(rt, hello("evict001"))                       # a stale duplicate returns
+        self.assertEqual(rt.owner, OTHER, "an evicted sid cannot re-adopt")
+
+    def test_the_dead_ring_is_bounded(self):
+        rt, car, _ = link()
+        for i in range(6):              # each hello evicts the last: 5 dead sids recorded
+            send(rt, hello(f"sid{i:05d}"))
+        # The ring keeps the last 4 dead (sid00001..sid00004); sid00000 fell off.
+        # A live session (sid00005) exists throughout, so refusal is in force.
+        send(rt, hello("sid00000"), addr=OTHER)
+        self.assertEqual(rt.session, "sid00000",
+                         "a sid old enough to leave the ring may live again")
+        send(rt, hello("sid00004"), addr=APP)             # still remembered
+        self.assertEqual(rt.session, "sid00000", "and still refused while someone is live")
+
+    def test_with_no_live_session_even_a_dead_sid_adopts(self):
+        """Rule 3's refinement: refusing a dead sid when nobody is live would wedge
+        a client whose session idled out mid-handshake, and adopting a stale
+        duplicate displaces nobody — the phantom dies again by rule 4."""
+        rt, car, _ = link()
+        send(rt, hello("phoenix1"))
+        send(rt, cmd(1, 0.5))
+        send(rt, cmd(2, 0.0, 0.0, **{BYE: 1}))            # dies; nobody else arrives
+        self.assertIsNone(rt.owner)
+        send(rt, hello("phoenix1"))                       # the same sid returns
+        self.assertEqual(rt.owner, APP, "with no live session, any hello adopts")
+        self.assertEqual(rt.session, "phoenix1")
+
 
 class TestOwnedTraffic(Quiet):
     def test_a_command_drives_and_counts(self):
@@ -154,7 +207,9 @@ class TestOwnedTraffic(Quiet):
             send(rt, cmd(k + 1, 0.5, -0.25))
         self.assertEqual(car.command, (0.5, -0.25))
         self.assertEqual(car.ctl, CTL_RT)
-        self.assertEqual(rt.rx_fps(loop.t), 10)
+        # rx_fps is now a per-consumer delta (needs priming); the 1 s window count
+        # this line used to read through it still exists, as _window_fps.
+        self.assertEqual(rt._window_fps(loop.t), 10)
 
     def test_a_stranger_is_dropped_without_touching_anything(self):
         rt, car, _ = link()
@@ -276,13 +331,14 @@ class TestGoodbye(Quiet):
 
 
 class TestWatchdog(Quiet):
-    def test_a_trip_clears_the_sequence_gate(self):
-        """rt_link.c clears `s_have_seq` with `s_armed`, and for a reason.
+    def test_a_trip_keeps_the_sequence_gate(self):
+        """Rule 1 of the 2026-08-22 audit-fix spec: the gate survives a trip.
 
-        Silence past the deadline already proves the stream is dead, so there is nothing
-        left to replay-protect. Keeping the gate is how a mock ends up dropping every
-        frame of a stream that resumed with a counter of its own while telemetry kept
-        flowing and the app showed a healthy link.
+        Clearing it opened the window the audit confirmed: one network-delayed
+        duplicate of a pre-dropout command was accepted as the resumed stream,
+        drove the car at stale stick values and aborted the retreat. A genuinely
+        resuming same-session stream carries monotonically newer seqs and passes
+        the kept gate; only adopt and bye reset it.
         """
         rt, car, loop = link()
         send(rt, hello())
@@ -291,11 +347,13 @@ class TestWatchdog(Quiet):
         loop.t = 1.0 + DEADLINE_S + 0.05
         self.assertIsNotNone(rt.tick(loop.t))
         self.assertEqual(car.wdt_trips, 1)
-        self.assertIsNone(rt.last_seq)
-        # Channel ownership survives, as it does on the car: a stream that comes back is
-        # the same session, and the app would otherwise be ignored until it said hello.
+        self.assertEqual(rt.last_seq, 500, "the gate survives the trip")
+        # Channel ownership survives too: a stream that comes back is the same
+        # session, and the app would otherwise be ignored until it said hello.
         self.assertEqual(rt.owner, APP)
-        send(rt, cmd(1, -0.5))
+        send(rt, cmd(499, -0.5))                 # the delayed pre-dropout duplicate
+        self.assertEqual(car.command, (-0.9, 0.0), "a stale frame cannot drive the car; the retreat continues")
+        send(rt, cmd(501, -0.5))                 # the genuinely resumed stream
         self.assertEqual(car.command, (-0.5, 0.0), "the resumed stream is heard")
 
     def test_a_handshake_that_goes_quiet_does_not_trip(self):
@@ -316,6 +374,123 @@ class TestWatchdog(Quiet):
         self.assertIsNotNone(rt.tick(loop.t), "the first command arms it")
         self.assertEqual(car.wdt_trips, 1)
 
+    def test_a_tripped_session_expires_past_the_idle_window(self):
+        """Amended rule 4: sessions are mortal, anchored at their LAST ACTIVITY —
+        the last accepted command — not at the trip. Without this the car pushed
+        telemetry to a vanished owner forever, and the kept seq gate (rule 1)
+        would hold state for a peer that will never return. At exactly
+        session_idle_ms the session is still alive; strictly past it, it ends."""
+        idle_s = RT["session_idle_ms"] / 1000.0
+        rt, car, loop = link()
+        loop.t = 1.0
+        send(rt, hello("mortal01"))
+        send(rt, cmd(10, 0.5))                                # last activity: t = 1.0
+        loop.t = 1.0 + DEADLINE_S + 0.05
+        self.assertIsNotNone(rt.tick(loop.t))                 # the trip disarms
+        loop.t = 1.0 + idle_s                                 # exactly the window
+        rt.tick(loop.t)
+        self.assertEqual(rt.owner, APP, "at exactly idle_ms the session still lives")
+        rt.transport.sent.clear()
+        rt.push_telemetry(loop.t)
+        self.assertEqual(len(rt.transport.sent), 1, "telemetry still flows")
+        loop.t = 1.0 + idle_s + 0.05                          # strictly past it
+        rt.tick(loop.t)
+        self.assertIsNone(rt.owner, "the session expired, watchdog_ms earlier than trip+idle")
+        self.assertIn("mortal01", rt.dead_sids)
+        rt.transport.sent.clear()
+        rt.push_telemetry(loop.t)
+        self.assertEqual(rt.transport.sent, [], "no more telemetry to a dead peer")
+        send(rt, hello("fresh002"))
+        self.assertEqual(rt.owner, APP, "a fresh hello starts over")
+
+    def test_activity_moves_the_expiry_deadline(self):
+        idle_s = RT["session_idle_ms"] / 1000.0
+        rt, car, loop = link()
+        loop.t = 1.0
+        send(rt, hello("mortal02"))
+        send(rt, cmd(10, 0.5))                                # activity at 1.0
+        loop.t = 1.0 + DEADLINE_S + 0.05
+        rt.tick(loop.t)                                       # trip
+        loop.t = 5.0
+        send(rt, cmd(11, 0.5))                                # activity moves to 5.0
+        loop.t = 1.0 + idle_s + 0.05                          # past the OLD deadline
+        rt.tick(loop.t)                                       # (trips again — fine)
+        self.assertEqual(rt.owner, APP, "the resumed command moved the deadline")
+        loop.t = 5.0 + idle_s + 0.05                          # past the new one
+        rt.tick(loop.t)
+        self.assertIsNone(rt.owner, "which then passes in its own time")
+
+    def test_a_hello_only_session_expires_too(self):
+        """A session that never commanded has its adoption as its last activity —
+        the watchdog never armed, so the idle clock runs from the handshake. The
+        firmware behaves the same; without this the phantom lives forever."""
+        idle_s = RT["session_idle_ms"] / 1000.0
+        rt, car, loop = link()
+        loop.t = 1.0
+        send(rt, hello("ghost001"))
+        loop.t = 1.0 + idle_s
+        rt.tick(loop.t)
+        self.assertEqual(rt.owner, APP, "at exactly the window it still lives")
+        loop.t = 1.0 + idle_s + 0.05
+        rt.tick(loop.t)
+        self.assertIsNone(rt.owner, "a handshake that never commanded ages out")
+        self.assertIn("ghost001", rt.dead_sids)
+
+    def test_expiry_aborts_a_retreat_still_in_flight(self):
+        """Rule 4's amendment: expiry forgets the path too, exactly as the firmware's
+        rt_glue_idle calls recovery_forget() — whose liveness bump is what aborts
+        recovery.c's retreat_task mid-replay. Without it a dead driver's retreat kept
+        retracing after the session that started it was already gone.
+
+        Timed so the retrace genuinely outlives the idle deadline rather than merely
+        outliving the trip, and shaped so it still does under the per-segment cap
+        (`CarState.SEG_MAX_MS`, recovery.h's RECOVER_SEG_MAX_MS): a long retrace has
+        to be built from *many* short segments, because no single one can be credited
+        with more than 250 ms. Two samples 9.5 s apart — the shape this test used
+        while the mock capped only its newest segment — now collapse to 0.5 s:
+        a capped tail plus one capped gap, and expiry would never find a retrace
+        left to abort.
+
+        The timeline, and why every number is where it is:
+
+          t=0.3 … 9.9   49 commands, one every 200 ms (48 gaps, each inside the cap,
+                        so each is credited in full: 48 × 0.2 s = 9.6 s)
+          t=9.9         last activity — the anchor for BOTH clocks below
+          t=10.25       the trip (last command + watchdog 300 ms + 50 ms). `_trip`
+                        evicts breadcrumbs older than window_ms (10 s, the contract's
+                        max) first, and the oldest sample is 9.95 s old here, so all
+                        49 survive and the retrace replays the whole path.
+          retrace       9.6 s of gaps + a 250 ms tail (capped from the 350 ms of
+                        silence) = 9.85 s → still running until t=20.10
+          t=19.95       the idle clock, anchored at t=9.9, runs out (10 s + 50 ms) —
+                        150 ms before the retrace would have exhausted on its own,
+                        which is the whole point: the branch under test is expiry
+                        killing a live retrace, not a retrace ending by itself.
+        """
+        idle_s = RT["session_idle_ms"] / 1000.0
+        rt, car, loop = link()
+        ok, _ = car.apply_config("/recover", {"enabled": True, "window_ms": 10000})
+        self.assertTrue(ok)
+        loop.t = 0.0
+        send(rt, hello("longtrip"))
+        seq, loop.t = 1, 0.3
+        while loop.t <= 9.9 + 1e-9:                           # 49 samples, 200 ms apart
+            send(rt, cmd(seq, 0.9, 0.0))
+            seq, loop.t = seq + 1, round(loop.t + 0.2, 10)
+        self.assertEqual(seq - 1, 49, "48 gaps of 200 ms, each credited under the cap")
+        loop.t = 9.9 + DEADLINE_S + 0.05                      # t = 10.25: the trip
+        self.assertIsNotNone(rt.tick(loop.t), "the trip starts the retrace")
+        self.assertTrue(car.retreating, "a wide window keeps the retrace running")
+        self.assertEqual(car.history_len, 49, "the oldest sample survives the trip's own eviction")
+        loop.t = 9.9 + idle_s + 0.05                          # t = 19.95: past idle
+        line = rt.tick(loop.t)
+        self.assertIsNone(line, "not a natural exhaustion — the retrace was still due to run")
+        self.assertIsNone(rt.owner, "the session itself expired")
+        self.assertIn("longtrip", rt.dead_sids)
+        self.assertFalse(car.retreating, "a dead driver's retrace must not keep replaying")
+        self.assertEqual(car.history_len, 0, "the path is forgotten, not just the session")
+        self.assertEqual(car.command, (0.0, 0.0), "the released grant zeroes the actuator")
+
 
 class TestTelemetry(Quiet):
     def test_nothing_is_pushed_without_a_session(self):
@@ -332,7 +507,8 @@ class TestTelemetry(Quiet):
         frame, addr, size = rt.transport.sent[-1]
         self.assertEqual(addr, APP)
         self.assertEqual(frame["ctl"], CTL_RT)
-        self.assertEqual(frame["rx_fps"], 1)
+        # first read of the push consumer — fps_now answers 0 until it has a delta
+        self.assertEqual(frame["rx_fps"], 0)
         self.assertLessEqual(size, RT["max_datagram"])
 
     def test_pushed_seq_is_gapless(self):
@@ -343,6 +519,48 @@ class TestTelemetry(Quiet):
             rt.push_telemetry(loop.t)
         seqs = [f[0]["seq"] for f in rt.transport.sent]
         self.assertEqual(seqs, list(range(1, 6)))
+
+
+class TestRxFps(Quiet):
+    """rx_fps semantics = firmware's fps_now (telemetry.c): per-consumer delta."""
+
+    def stream(self, rt, loop, start, count, first_seq=1):
+        for k in range(count):
+            loop.t = start + k * 0.1
+            send(rt, cmd(first_seq + k, 0.5))
+
+    def test_the_first_status_read_is_zero(self):
+        rt, _, loop = link()
+        send(rt, hello())
+        self.stream(rt, loop, 1.0, 10)
+        self.assertEqual(rt.rx_fps(loop.t, "status"), 0,
+                         "no previous poll to delta against — the car answers 0")
+
+    def test_a_prompt_second_read_measures_the_stream(self):
+        rt, _, loop = link()
+        send(rt, hello())
+        rt.rx_fps(1.0, "status")                       # primes the accumulator
+        self.stream(rt, loop, 1.0, 10)                 # 10 frames over 0.9 s
+        self.assertEqual(rt.rx_fps(2.0, "status"), 10)
+
+    def test_a_gap_of_ten_seconds_reads_zero(self):
+        rt, _, loop = link()
+        send(rt, hello())
+        rt.rx_fps(1.0, "status")
+        self.stream(rt, loop, 1.0, 10)
+        self.assertEqual(rt.rx_fps(12.0, "status"), 0, "a stale delta is not a rate")
+        self.stream(rt, loop, 12.0, 10, first_seq=11)
+        self.assertEqual(rt.rx_fps(13.0, "status"), 10, "and the next prompt read works")
+
+    def test_status_reads_do_not_perturb_the_push_consumer(self):
+        rt, _, loop = link()
+        send(rt, hello())
+        rt.rx_fps(1.0, "push")
+        self.stream(rt, loop, 1.0, 10)
+        rt.rx_fps(1.5, "status")
+        rt.rx_fps(1.7, "status")
+        self.assertEqual(rt.rx_fps(2.0, "push"), 10,
+                         "each consumer deltas against its own last read")
 
 
 class TestImpairment(Quiet):
@@ -372,6 +590,54 @@ class TestImpairment(Quiet):
             return [rt.owner is not None] + [
                 (send(rt, cmd(k + 1, 0.1 * k)), rt.last_seq)[1] for k in range(20)]
         self.assertEqual(run(), run())
+
+
+class TestReboot(Quiet):
+    def test_a_simulated_reboot_is_deaf_mute_and_forgets_the_session(self):
+        """After a real flash the car reboots: telemetry gaps past the app's 3 s
+        stall, the session dies, and the reconnect's hello reply carries the new
+        fw. The mock's OTA used to keep the session alive through the flash, so
+        the app's success detector could never fire in the simulator."""
+        rt, car, loop = link()
+        send(rt, hello("flasher1"))
+        send(rt, cmd(1, 0.2))
+        car.begin_ota(0.0)
+        car.end_ota()                             # bumps car.fw
+        rt.simulate_reboot(10.0)
+        self.assertIsNone(rt.owner)
+        self.assertIn("flasher1", rt.dead_sids)
+        rt.transport.sent.clear()
+        loop.t = 11.0                             # inside the quiet window
+        send(rt, hello("fresh003"))
+        self.assertIsNone(rt.owner, "a rebooting car hears nothing")
+        self.assertEqual(rt.transport.sent, [])
+        rt.push_telemetry(loop.t)
+        self.assertEqual(rt.transport.sent, [], "and says nothing")
+        loop.t = 10.0 + REBOOT_QUIET_S + 0.1
+        send(rt, hello("fresh003"))
+        self.assertEqual(rt.owner, APP, "the reconnect adopts")
+        self.assertEqual(rt.transport.sent[-1][0][RT["fw_field"]], car.fw,
+                         "and the hello reply carries the bumped fw")
+
+
+class TestTwoPhones(Quiet):
+    def test_last_hello_wins_and_nobody_is_told(self):
+        """Rule 11: the audit flagged silent hijack and the ~3 s two-phone
+        ownership oscillation; the spec defers the eviction notice and pins the
+        behaviour instead. If a notice is ever added, this is the test to rewrite."""
+        rt, car, _ = link()
+        send(rt, hello("phoneaaa"), addr=APP)
+        send(rt, cmd(1, 0.5), addr=APP)
+        sent_before = len(rt.transport.sent)
+        send(rt, hello("phonebbb"), addr=OTHER)      # B silently steals the session
+        self.assertEqual(rt.owner, OTHER)
+        to_a = [d for d in rt.transport.sent[sent_before:] if d[1] == APP]
+        self.assertEqual(to_a, [], "the displaced phone is told nothing")
+        send(rt, cmd(2, 0.9), addr=APP)              # A keeps streaming, unheard
+        self.assertEqual(car.command, (0.5, 0.0), "A's frames no longer land")
+        self.assertEqual(car.history_len, 0, "adoption wiped A's breadcrumbs")
+        send(rt, hello("phoneaa2"), addr=APP)        # A's stall guard re-hellos
+        self.assertEqual(rt.owner, APP, "and the theft works both ways, forever")
 
 
 if __name__ == "__main__":

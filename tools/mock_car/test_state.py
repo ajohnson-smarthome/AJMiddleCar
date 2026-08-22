@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from generated import CTL_VALUES, DOMAINS, RT, TELEMETRY_FIELDS   # noqa: E402
 from state import (CTL_CALIB, CTL_NONE, CTL_OTA, CTL_RECOVER,     # noqa: E402
-                   CTL_RT, CarState, clamp_axis, number, parse_frame,
+                   CTL_RT, CTL_SAFE, CarState, clamp_axis, number, parse_frame,
                    seq_is_newer, valid_seq, valid_sid)
 
 DEADLINE_S = RT["watchdog_ms"] / 1000.0
@@ -122,6 +122,32 @@ class TestWireShapes(unittest.TestCase):
         pad = RT["max_command"] - len('{"seq":1,"t":0,"y":0,"z":""}')
         self.assertIsNotNone(parse_frame(b'{"seq":1,"t":0,"y":0,"z":"%s"}' % (b"x" * pad)))
         self.assertIsNone(parse_frame(b'{"seq":1,"t":0,"y":0,"z":"%s"}' % (b"x" * (pad + 1))))
+
+    def test_a_duplicate_key_drops_the_whole_datagram(self):
+        """Rule 5: the car takes the first duplicate, json.loads keeps the last —
+        the only shared answer is to drop the frame on both sides."""
+        self.assertIsNone(parse_frame(b'{"seq":9,"t":0.5,"y":0,"t":0.9}'))
+        self.assertIsNone(parse_frame(b'{"proto":1,"hello":"ab","proto":1}'))
+
+    def test_the_shared_pinned_frames(self):
+        """The spec's rule-6 table, verbatim. The firmware host tests pin the same
+        eight bytes with the same outcomes; a change here without a change there
+        is wire drift."""
+        dropped = [
+            b'{"seq":5,"junk":{"t":0.9},"y":0.5}',   # no top-level t
+            b'{"seq":7,"t":.5,"y":0}',               # bare . mantissa
+            b'{"seq":8,"t":+1,"y":0}',               # leading +
+            b'{"seq":9,"t":0.5,"y":0,"t":0.9}',      # duplicate key
+            b'{"proto":1.5,"hello":"abcd1234"}',     # fractional proto
+        ]
+        for frame in dropped:
+            self.assertIsNone(parse_frame(frame), frame)
+        self.assertEqual(parse_frame(b'{"seq":10,"t":0.50,"y":-0.25}'),
+                         {"seq": 10, "t": 0.50, "y": -0.25})
+        self.assertEqual(parse_frame(b'{"proto":1,"hello":"7f3a91c2"}'),
+                         {"proto": 1, "hello": "7f3a91c2"})
+        self.assertEqual(parse_frame(b'{"proto":2,"hello":"7f3a91c2"}'),
+                         {"proto": 2, "hello": "7f3a91c2"})
 
 
 class TestConfig(unittest.TestCase):
@@ -295,6 +321,31 @@ class TestRetreat(unittest.TestCase):
         self.assertEqual(car.ctl, CTL_RT)
         self.assertEqual(car.command, (0.4, 0.0))
 
+    def test_every_replay_segment_is_capped_not_just_the_tail(self):
+        """recovery.h's RECOVER_SEG_MAX_MS caps EVERY segment, not only the newest.
+
+        `recovery_seg_ms` is applied to each `dur` in retreat_task's loop, so dead air
+        inside the path is never credited to the replay. This history has a 4.9 s
+        stutter in the middle — a stream that froze and came back, which is exactly what
+        a phone locking its screen mid-drive looks like. Capping only the tail (what the
+        mock did while it mirrored a `TAIL_MS` that the firmware had already replaced)
+        made the retrace 5.41 s long: 0.31 s of tail plus the whole 5.1 s span. Capped
+        per segment it is 0.70 s — 0.25 tail + 0.1 + 0.25 (the stutter, capped) + 0.1 —
+        which is the ground the car actually covered.
+        """
+        car = CarState(now=0.0)
+        ok, _ = car.apply_config("/recover", {"enabled": True, "window_ms": 10000})
+        self.assertTrue(ok)
+        for ts in (0.0, 0.1, 5.0, 5.1):
+            car.note_command(0.9, 0.0, ts)
+        trip = 5.1 + DEADLINE_S + 0.01                   # t = 5.41
+        self.assertIn("retracing", car.tick(trip))
+        self.assertIsNone(car.tick(trip + 0.60), "0.70 s of replay is not over at 0.60")
+        self.assertIn("exhausted", car.tick(trip + 0.75),
+                      "the 4.9 s stutter is worth 250 ms of retrace, not 4.9 s of it")
+        self.assertFalse(car.retreating)
+        self.assertEqual(car.command, (0.0, 0.0))
+
     def test_it_ends_on_its_own_when_the_history_runs_out(self):
         car = CarState(now=0.0)
         last = stream(car, 0.6, 0.0, 0.0, 20)        # 1.9 s of history
@@ -435,13 +486,33 @@ class TestActuatorOwnership(unittest.TestCase):
         self.assertTrue(car.begin_spin(0.1, 0, 1))
         self.assertEqual(car.ctl, CTL_CALIB)
 
-    def test_a_goodbye_during_an_ota_does_not_wedge_the_mock(self):
+    def test_a_goodbye_during_an_ota_leaves_the_flash_its_grant(self):
+        """Rule 2: bye must not steal-and-release a sticky hold. Before this rule
+        the SAFE grab displaced OTA and released to NONE, so anything could drive
+        the motors for the rest of the flash — and the restart could land mid-drive."""
         car = CarState(now=0.0)
-        car.begin_ota(0.0)
-        car.note_bye(0.1)            # SAFE outranks OTA on the car too
+        stream(car, 0.5, 0.0, 0.0, 5)
+        car.begin_ota(1.0)
+        self.assertFalse(car.note_bye(1.1), "no stop was issued; the flash holds")
+        self.assertEqual(car.ctl, CTL_OTA, "the goodbye did not touch the grant")
+        self.assertEqual(car.history_len, 0, "the retreat is still suppressed")
+        self.assertFalse(car.begin_spin(1.2, 0, 1), "still flashing; a spin is refused")
+        for k in range(50):
+            self.assertIsNone(car.tick(1.2 + k * 0.05))
+        self.assertEqual(car.wdt_trips, 0, "the watchdog was still disarmed")
         car.end_ota()
-        self.assertEqual(car.ctl, CTL_NONE)
-        self.assertTrue(car.begin_spin(0.2, 0, 1))
+        self.assertEqual(car.ctl, CTL_NONE, "not wedged: the flash's own end releases")
+        self.assertTrue(car.begin_spin(5.0, 0, 1))
+
+    def test_a_goodbye_during_a_spin_leaves_the_pulse_alone(self):
+        car = CarState(now=0.0)
+        self.assertTrue(car.begin_spin(0.0, 1, 1))
+        self.assertFalse(car.note_bye(0.1))
+        self.assertEqual(car.ctl, CTL_CALIB)
+        self.assertEqual(car.command, (1.0, 0.0), "the pulse is not flattened")
+        car.tick(CarState.CALIB_HOLD_MS / 1000.0 + 0.01)
+        self.assertEqual(car.ctl, CTL_NONE, "the pulse lapses on its own schedule")
+        self.assertEqual(car.command, (0.0, 0.0))
 
     def test_ota_bumps_the_build(self):
         car = CarState(fw="v1.0+9000", now=0.0)
@@ -529,6 +600,33 @@ class TestActuatorOwnership(unittest.TestCase):
         self.assertIsNone(car.tick(last + 1.0))
         self.assertEqual(car.wdt_trips, 0)
 
+    def test_end_spin_releases_the_pulse_and_only_the_pulse(self):
+        """calib_api.c sleeps the pulse out and releases before replying, so the
+        200 lands after the wheel has stopped — the wizard's next step assumes it."""
+        car = CarState(now=0.0)
+        self.assertTrue(car.begin_spin(0.0, 1, 1))
+        car.end_spin()
+        self.assertEqual(car.ctl, CTL_NONE)
+        self.assertEqual(car.command, (0.0, 0.0), "the release is the stop")
+        car.begin_ota(1.0)
+        car.end_spin()
+        self.assertEqual(car.ctl, CTL_OTA, "end_spin never releases someone else's grant")
+
+    def test_ota_goes_through_the_arbiter(self):
+        """ota_api.c takes the actuator through the checked car_stop(LINK_SRC_OTA)
+        and answers 500 when refused; the mock used to seize it unconditionally,
+        so the simulator never exhibited that 500."""
+        car = CarState(now=0.0)
+        # SAFE is only ever held transiently by note_bye, so stage it directly.
+        self.assertTrue(car._take(CTL_SAFE, 0.0, None))
+        self.assertFalse(car.begin_ota(0.1), "SAFE outranks a flash, as on the car")
+        car._release(CTL_SAFE)
+        self.assertTrue(car.begin_ota(0.2))
+        fw = car.fw
+        car.end_ota(flashed=False)
+        self.assertEqual(car.ctl, CTL_NONE, "an aborted flash releases the grant")
+        self.assertEqual(car.fw, fw, "and does not bump the build")
+
 
 class TestCalibration(unittest.TestCase):
     def test_a_valid_table_is_accepted(self):
@@ -544,9 +642,30 @@ class TestCalibration(unittest.TestCase):
                        [{"pair": 0, "sign": 1}] * 4,                     # not unique
                        [{"pair": p, "sign": 0} for p in range(4)],       # sign not ±1
                        [{"pair": p} for p in range(4)],                  # missing key
-                       "wheels"):
+                       "wheels",
+                       [{"pair": "0", "sign": "1"},                      # strings
+                        {"pair": "1", "sign": "1"},
+                        {"pair": "2", "sign": "1"},
+                        {"pair": "3", "sign": "1"}],
+                       [{"pair": p, "sign": True} for p in range(4)],    # booleans
+                       [{"pair": p + 0.5, "sign": 1} for p in range(4)],  # fractions
+                       [{"pair": 10**400, "sign": 1},                    # huge integer
+                        {"pair": 1, "sign": 1},
+                        {"pair": 2, "sign": 1},
+                        {"pair": 3, "sign": 1}],
+                       [{"pair": float('inf'), "sign": 1},               # non-finite
+                        {"pair": 1, "sign": 1},
+                        {"pair": 2, "sign": 1},
+                        {"pair": 3, "sign": 1}],
+                       ):
             self.assertFalse(car.save_calibration(wheels), wheels)
         self.assertFalse(car.calibrated)
+
+    def test_integral_floats_are_numbers(self):
+        """cJSON sees 1.0 as a number with valueint 1; so does the car."""
+        car = CarState()
+        wheels = [{"pair": float(p), "sign": 1.0} for p in range(4)]
+        self.assertTrue(car.save_calibration(wheels))
 
 
 class TestOwnershipVocabulary(unittest.TestCase):
@@ -570,6 +689,10 @@ class TestOwnershipVocabulary(unittest.TestCase):
         seen.add(car.ctl)
         self.assertTrue(seen <= set(CTL_VALUES), seen)
         self.assertIn(CTL_RECOVER, seen)
+
+    def test_the_symbols_spell_the_wire_values(self):
+        self.assertEqual((CTL_NONE, CTL_RECOVER, CTL_RT, CTL_OTA),
+                         ("none", "recover", "rt", "ota"))
 
 
 class TestTelemetry(unittest.TestCase):

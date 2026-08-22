@@ -3,6 +3,12 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#ifdef ESP_PLATFORM
+#  include "esp_err.h"
+#else
+   typedef int esp_err_t;
+#  define ESP_OK 0
+#endif
 
 // Param bounds (validated by wheel_set + the /wheel API).
 #define WHEEL_D_MIN_MM        20
@@ -27,8 +33,9 @@ void wheel_init(void);
 void wheel_get(wheel_params_t *out);
 // Validate/clamp and store in RAM (the /wheel API persists to NVS).
 void wheel_set(const wheel_params_t *in);
-// Serialize the current params to a JSON string and persist to NVS (one key).
-void wheel_save(void);
+// Serialize the current params to a JSON string and persist to NVS (one key), and
+// say whether it landed.
+esp_err_t wheel_save(void);
 
 // Pure (host-tested): counts per OUTPUT-shaft revolution = ppr × gear × quad.
 // Laid in for the future on-board speed calc (v = π·D·ticks_per_s / cpr); unused for now.

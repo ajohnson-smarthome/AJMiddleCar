@@ -33,6 +33,13 @@ class TestSchema(unittest.TestCase):
         self.assertEqual(rt["telemetry_hz"], 5)
         self.assertEqual(rt["watchdog_ms"], 300)
 
+    def test_session_idle(self):
+        rt = load()["rt"]
+        self.assertEqual(rt["session_idle_ms"], 10000)
+        # Mortality must be far outside the watchdog's world: a slow trip is a
+        # trip, not a death.
+        self.assertGreater(rt["session_idle_ms"], rt["watchdog_ms"] * 10)
+
     def test_domains_are_unique(self):
         s = load()
         paths = [d["path"] for d in s["domains"]]
@@ -68,8 +75,17 @@ class TestSchema(unittest.TestCase):
         # generated table, so a range literal no longer appears in any handler. What
         # remains are the setters' own clamps, which are the C-side constants this
         # test exists to keep the schema honest against.
-        src = "\n".join((main / n).read_text()
-                        for n in ("wheel.h", "dims.h", "recovery.h", "ramp.c", "car.c"))
+        #
+        # Each domain's file is checked in isolation rather than as one concatenated
+        # blob: a corpus-wide search let /recover window_ms's 1000 floor hide behind
+        # /wheel ppr's unrelated 1000 ceiling in wheel.h, so a genuine floor drift in
+        # recovery.h went undetected. Scoping per file closes that cross-domain
+        # collision.
+        file_for_path = {
+            "/wheel": "wheel.h", "/dims": "dims.h", "/recover": "recovery.h",
+            "/ramp": "ramp.c", "/trim": "car.c",
+        }
+        src_by_file = {n: (main / n).read_text() for n in set(file_for_path.values())}
         expected = {
             ("/wheel", "diameter_mm"): (20, 150), ("/wheel", "ppr"): (1, 1000),
             ("/wheel", "gear_x100"): (100, 30000),
@@ -83,8 +99,22 @@ class TestSchema(unittest.TestCase):
                 if f["type"] == "int":
                     got[(d["path"], f["name"])] = (f["min"], f["max"])
         self.assertEqual(got, expected)
-        for lo, hi in expected.values():
-            self.assertIn(str(hi), src, f"{hi} is not in the firmware sources")
+        for (path, name), (lo, hi) in expected.items():
+            fname = file_for_path[path]
+            src = src_by_file[fname]
+            for bound in (lo, hi):
+                # Word-bounded: "2000" must not be satisfied by "12000", and "30"
+                # must not be found inside "-30". The min bounds were entirely
+                # unchecked before — a firmware floor drifting from the schema is
+                # exactly what this test exists to catch. Scoped to the one file that
+                # owns this domain's clamps, so an identical literal in another
+                # domain's file (e.g. wheel.h's WHEEL_PPR_MAX 1000) cannot mask a
+                # drift here. Not bulletproof within a single file, though: 0 (the
+                # /ramp floor) is common enough that another unrelated 0 in ramp.c
+                # could still mask a real drift there — a residual, one-file risk.
+                pat = rf"(?<![\w.-]){re.escape(str(bound))}(?![\w.])"
+                self.assertRegex(src, pat,
+                                 f"{path} {name}: bound {bound} not in {fname}")
 
 
 import filecmp
@@ -153,6 +183,7 @@ class TestCEmitter(unittest.TestCase):
         # the mock read, so the port and the deadline cannot drift between the three.
         self.assertIn("#define RT_PORT 4210", out)
         self.assertIn("#define RT_WATCHDOG_MS 300", out)
+        self.assertIn("#define RT_SESSION_IDLE_MS 10000", out)
         # Two caps, deliberately different: the car accepts at most RT_MAX_COMMAND, but a
         # telemetry frame is 119-156 bytes, so a receive buffer sized from the command cap
         # would truncate every one of them.
@@ -190,6 +221,7 @@ class TestSwiftEmitter(unittest.TestCase):
         self.assertIn("public static let proto = 1", out)
         self.assertIn('public static let seqField = "seq"', out)
         self.assertIn('public static let byeField = "bye"', out)
+        self.assertIn("public static let sessionIdleMs = 10000", out)
         self.assertIn("public enum TelemetryKey {", out)
         self.assertIn('public static let rxFps = "rx_fps"', out)
         self.assertIn('public static let busOk = "bus_ok"', out)
@@ -222,6 +254,7 @@ class TestPythonEmitter(unittest.TestCase):
         self.assertEqual(self.ns["PROTO"], 1)
         self.assertEqual(self.ns["DEVICE"], "ajmiddlecar")
         self.assertEqual(self.ns["RT"]["port"], 4210)
+        self.assertEqual(self.ns["RT"]["session_idle_ms"], 10000)
         self.assertEqual(set(self.ns["DOMAINS"]),
                          {"/ramp", "/trim", "/recover", "/wheel", "/dims"})
         self.assertEqual(self.ns["DOMAINS"]["/recover"]["defaults"],
@@ -272,6 +305,14 @@ class TestPythonEmitter(unittest.TestCase):
         ok, why = v("/ramp", {"ramp_ms": True})
         self.assertFalse(ok)
         self.assertIn("ramp_ms", why)
+
+    def test_ctl_symbols_are_name_keyed(self):
+        """Reordering ctl_values in the schema must not silently re-rank the
+        mock's arbiter against the car's hand-written link_src_t (whose build
+        guard checks only the count). Name-keyed symbols make state.py immune
+        to position, as C's CTL_RT and Swift's CtlOwner.rt already are."""
+        for v in load()["ctl_values"]:
+            self.assertEqual(self.ns[f"CTL_{v.upper()}"], v)
 
 
 class TestDriftCheck(unittest.TestCase):

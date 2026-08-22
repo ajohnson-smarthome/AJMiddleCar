@@ -19,20 +19,15 @@ import math
 import re
 from collections import deque
 
-from generated import CTL_VALUES, DEVICE, DOMAINS, RT, TELEMETRY_FIELDS, validate
+from generated import (CTL_CALIB, CTL_CONSOLE, CTL_NONE, CTL_OTA, CTL_RECOVER,
+                       CTL_RT, CTL_SAFE, CTL_VALUES, DEVICE, DOMAINS, RT,
+                       TELEMETRY_FIELDS, validate)
 
 # Ownership of the actuator, lowest priority first. `link_src_t` in
-# firmware/p4/main/link.h is generated from the same list, and these names are what
-# telemetry reports in `ctl`.
+# firmware/p4/main/link.h is generated from the same list, and these names are
+# what telemetry reports in `ctl`. Position is rank on all three sides, and the
+# per-name symbols come from the generator, same as C's and Swift's.
 PRIORITY = tuple(CTL_VALUES)
-
-# The vocabulary, named. Unpacked from the list rather than written out, because the
-# generator emits per-name symbols for the other two implementations (C's `CTL_RT`,
-# Swift's `CtlOwner.rt`) and for Python only the flat list — so this is the nearest
-# thing to a generated symbol until `emit_python` catches up. Position is rank on all
-# three sides, and a schema that adds or drops a value fails here, at import, instead
-# of at the first `PRIORITY.index()` deep inside the arbiter.
-CTL_NONE, CTL_RECOVER, CTL_CONSOLE, CTL_RT, CTL_CALIB, CTL_OTA, CTL_SAFE = PRIORITY
 
 # The session id, as `parse_sid` in firmware/p4/main/control_proto.c accepts it:
 # non-empty, alphanumeric, and short enough to fit that file's CONTROL_SID_MAX with its
@@ -92,13 +87,31 @@ def seq_is_newer(seq, last):
 def valid_seq(v):
     """A `seq` is a uint32. A JSON boolean is an int in Python and is not one here.
 
-    Deliberately stricter than the car in one place: `control_proto.c`'s `parse_u32`
-    tokenises `1.5` down to `1` and accepts it. Strictness in the mock is the safe
-    direction — a client that works here works there, and the reverse is the trap this
-    file exists to close — so the mock rejects it and the car's coercion is a firmware
-    nit, not something to copy.
+    Used to be deliberately stricter than the car here: `control_proto.c`'s old
+    `parse_u32` tokenised `1.5` down to `1` and accepted it. It no longer does —
+    `json_int_shape` there now rejects a non-integer token exactly as this does,
+    so the two sides are equally strict and this function is no longer the safe
+    direction against a gap, just the shared rule stated twice.
     """
     return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 0xFFFFFFFF
+
+
+def _no_duplicates(pairs):
+    """json.loads object_pairs_hook: a key spelled twice drops the datagram.
+
+    The car's scanner takes the *first* duplicate, json.loads keeps the *last* —
+    byte-identical datagrams driving two implementations differently, in the worst
+    case at different speeds. The shared rule (spec 2026-08-22, rule 5) is that a
+    duplicate drops the frame. This hook fires at every nesting level, one notch
+    stricter than the car's top-level-only detection — strictness in the mock is
+    the safe direction, as with valid_seq.
+    """
+    d = {}
+    for k, v in pairs:
+        if k in d:
+            raise ValueError(f"duplicate key {k!r}")
+        d[k] = v
+    return d
 
 
 def parse_frame(data, max_command=None):
@@ -126,7 +139,7 @@ def parse_frame(data, max_command=None):
     if not data or len(data) > cap:
         return None
     try:
-        frame = json.loads(data)
+        frame = json.loads(data, object_pairs_hook=_no_duplicates)
     except (ValueError, UnicodeDecodeError):
         return None
     if not isinstance(frame, dict):
@@ -183,7 +196,7 @@ class CarState:
     # the file named beside each one. See the report for the schema additions that would
     # let them be generated instead.
     MOVE_EPS = 0.02        # firmware/p4/main/recovery.c: below this a sample is stationary
-    TAIL_MS = 400          # firmware/p4/main/recovery.c: cap on the newest segment
+    SEG_MAX_MS = 250       # firmware/p4/main/recovery.h RECOVER_SEG_MAX_MS: per-segment cap
     CALIB_HOLD_MS = 600    # firmware/p4/main/link.h LINK_HOLD_CALIB_MS: one pulse
 
     def __init__(self, device=DEVICE, fw="v1.0+9000", now=0.0):
@@ -240,6 +253,12 @@ class CarState:
     def history_len(self):
         return len(self._history)
 
+    @property
+    def armed(self):
+        """The control watchdog is armed — a command was accepted since the last
+        adopt, trip, goodbye or flash."""
+        return self._armed
+
     # ---- configuration ---------------------------------------------------------
 
     def apply_config(self, path, body):
@@ -289,6 +308,13 @@ class CarState:
             # the retreat exists to reach the driver, so hearing from them ends it.
             self._retreating = False
             self._release(CTL_RECOVER)
+        # The firmware holds RT for one actuator tick PAST this deadline
+        # (link.h LINK_HOLD_RT_MS = RT_WATCHDOG_MS + LINK_TICK_MS) so a lapse can
+        # never zero the wheels before the trip is declared; the audit-fix spec files
+        # that margin as firmware-local. It is moot here: `tick` runs `_trip` — which
+        # takes CTL_RECOVER and sets the reversed command — before `_expire` ever
+        # looks at the lapsed grant, so there is no window to cover and no invented
+        # tick in a mock that has none.
         if self._take(CTL_RT, now, RT["watchdog_ms"] / 1000.0):
             self._t, self._y = t, y
             self._history.append((t, y, now))
@@ -317,6 +343,9 @@ class CarState:
              rather than retraces. The mechanism is the empty history, not the grant.
           4. Disarm the watchdog — silence that was announced is not a loss.
 
+        A sticky holder (OTA, CALIB) is exempt from steps 1-2: see rule 2 of
+        docs/superpowers/specs/2026-08-22-audit-fix-decisions.md.
+
         Ownership of the channel is dropped by the caller: `bye` is not resumable, and
         the next session arrives with a fresh `hello`.
         """
@@ -327,6 +356,13 @@ class CarState:
         self._history.clear()
         self._retreating = False
         self._armed = False
+        if self._owner in (CTL_OTA, CTL_CALIB):
+            # Rule 2 (audit-fix spec): a sticky hold is not stolen and not released.
+            # The motors are already stopped (OTA) or under the wizard's pulse; the
+            # goodbye's other duties — history, watchdog, session — are done above
+            # and by the caller. Grabbing SAFE here displaced OTA's grant and then
+            # released it to NONE, unlocking the motors for the rest of the flash.
+            return False
         stopped = self._take(CTL_SAFE, now, None)
         if stopped:
             self._t = self._y = 0.0
@@ -354,6 +390,28 @@ class CarState:
         self._retreating = False
         self._release(CTL_SAFE)
         self._release(CTL_RECOVER)
+
+    def forget_path(self, now):
+        """Throw away the breadcrumb path — `recovery_forget()` on the car, whose
+        liveness bump is what aborts recovery.c's `retreat_task` the next time it
+        checks, mid-replay or not. A retreat still in flight loses CTL_RECOVER's
+        grant right here: the firmware's task calls
+        `link_release_must(LINK_SRC_RECOVER)` unconditionally once its abort check
+        trips, and only while it still holds the actuator — so the release is what
+        silently zeroes the wheels. There is no explicit stop on this path, unlike a
+        trip with nothing to retrace (`_stop`): forgetting the path is not the same
+        event as deciding to stop.
+
+        A session's idle expiry uses this (rule 4, amended: a dead driver's path
+        must never keep replaying, in flight or not). `adopt_session` inlines the
+        same three lines for the same reason — a new driver has no path to retrace
+        either.
+        """
+        self._now = now
+        self._history.clear()
+        if self._retreating:
+            self._retreating = False
+            self._release(CTL_RECOVER)
 
     def tick(self, now):
         """Advance time. Returns a log line at the moments worth printing, else None."""
@@ -401,14 +459,20 @@ class CarState:
     def _retreat_duration(self, now):
         """How long the reverse replay takes, as recovery.c computes it.
 
-        Each sample is held for the gap to the next-newer one, and the newest for the
-        time it was held until the link went quiet, capped at TAIL_MS. Summed, all the
-        inner gaps telescope into the span of the history.
+        Each sample is held for the gap to the next-newer one — the newest for the
+        time it was held until the link went quiet — and **every** one of those
+        segments is capped at SEG_MAX_MS, which is what `recovery_seg_ms` does to
+        each `dur` in retreat_task's loop. Capping only the newest segment credited
+        the retrace with dead air: a stream that stuttered for four seconds mid-drive
+        replayed that pause in full, reversing long after it had retraced the ground
+        it actually covered.
         """
-        newest = self._history[-1][2]
-        oldest = self._history[0][2]
-        tail = min(now - newest, self.TAIL_MS / 1000.0)
-        return tail + (newest - oldest)
+        ts = [s[2] for s in self._history]
+        cap = self.SEG_MAX_MS / 1000.0
+        total = min(now - ts[-1], cap)
+        for older, newer in zip(ts, ts[1:]):
+            total += min(newer - older, cap)
+        return total
 
     def _any_motion(self):
         return any(abs(t) > self.MOVE_EPS or abs(y) > self.MOVE_EPS
@@ -483,14 +547,34 @@ class CarState:
         self._y = 0.0
         return True
 
+    def end_spin(self):
+        """The pulse is over: release CALIB, which zeroes if the pulse still owns.
+
+        calib_api.c does exactly this after its vTaskDelay, *before* replying, so
+        the wizard's 200 arrives with the wheel already stopped and the grant gone.
+        """
+        self._release(CTL_CALIB)
+
     def save_calibration(self, wheels):
         """Mirrors calibration_valid: four entries, unique pairs 0..3, signs ±1."""
         try:
             if not isinstance(wheels, list) or len(wheels) != 4:
                 return False
+            for w in wheels:
+                for key in ("pair", "sign"):
+                    v = w[key]
+                    # cJSON_IsNumber: a JSON number, never a bool or a string —
+                    # and rule 7 has both sides reject fractions. int("0") and
+                    # int(True) coerced here while the car answered 400, the
+                    # works-in-sim/fails-on-car trap on the one endpoint that
+                    # guards the calibration table.
+                    if isinstance(v, bool) or not isinstance(v, (int, float)):
+                        return False
+                    if float(v) != int(v):
+                        return False
             pairs = {int(w["pair"]) for w in wheels}
             signs = [int(w["sign"]) for w in wheels]
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, OverflowError, KeyError):
             return False
         if pairs != {0, 1, 2, 3} or any(s not in (-1, 1) for s in signs):
             return False
@@ -498,12 +582,21 @@ class CarState:
         return True
 
     def begin_ota(self, now):
-        """Nothing commands the motors during a flash; the grant is sticky."""
+        """Nothing commands the motors during a flash; the grant is sticky.
+
+        Through the arbiter, as ota_api.c goes through car_stop(LINK_SRC_OTA):
+        a refusal is the firmware's 500 "actuator busy", and the simulator must
+        be able to exhibit it. Returns False without touching anything when a
+        higher-priority holder refuses.
+        """
         self._now = now
+        self._expire(now)
+        if not self._take(CTL_OTA, now, None):
+            return False
         self._t = self._y = 0.0
         self._armed = False
         self._retreating = False
-        self._owner, self._owner_until = CTL_OTA, None
+        return True
 
     def end_ota(self, flashed=True):
         if flashed:

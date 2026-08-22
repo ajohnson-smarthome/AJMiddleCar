@@ -214,6 +214,12 @@ void       link_release(link_src_t src);
 link_src_t link_owner(void);
 ```
 
+> **Superseded (2026-08-22):** the sketch above is not the shipped order. `link.h` ships
+> `LINK_SRC_NONE = -1, LINK_SRC_RECOVER = 0, LINK_SRC_CONSOLE, LINK_SRC_RT, LINK_SRC_CALIB,
+> LINK_SRC_OTA, LINK_SRC_SAFE` — recover ranks *below* a returning driver and below the
+> console, and `link.h`'s comments argue each neighbouring pair. The schema's `ctl_values`
+> and the mock agree with `link.h`, not with this sketch.
+
 `ramp_set_target` becomes `static` inside `link.c`; no external writer remains. A request from a
 source below the current owner is **rejected and logged** (rate-limited), and the owner is published
 as telemetry's `ctl`.

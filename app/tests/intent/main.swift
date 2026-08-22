@@ -63,4 +63,10 @@ check(ControlModel.signalLevel(online: true, rssi: nil, rxFps: nil, expectedFps:
 check(ControlModel.signalLevel(online: false, rssi: -45, rxFps: 10, expectedFps: fps) == 0,
       "zero is reserved for no link")
 
+// The same rule at the intent layer: a trick formula dividing by a runtime zero must not
+// become a held full-reverse command.
+check(ControlModel.clamp(.nan) == 0, "clamp(NaN) is 0")
+check(ControlModel.clamp(.infinity) == 0, "clamp(+inf) is 0 (non-finite)")
+check(ControlModel.clamp(-.infinity) == 0, "clamp(-inf) is 0 (non-finite)")
+
 if failures == 0 { print("test_intent: OK") } else { exit(1) }

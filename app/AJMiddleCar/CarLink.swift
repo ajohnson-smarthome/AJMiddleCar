@@ -35,7 +35,13 @@ final class CarLink: ObservableObject {
     private var lastFrame: ContinuousClock.Instant?
     private var pump: Task<Void, Never>?
     private var decay: Task<Void, Never>?
+    private var radioFetch: Task<Void, Never>?
     private var pathSub: AnyCancellable?
+    /// Lifecycle operations run strictly in call order. `start()` and `requestStop()` enqueue
+    /// synchronously on the main actor, so the order the scene handler calls them in is the
+    /// order they execute in — the unstructured stop task racing a later start() is how the
+    /// link used to die until the next background/foreground cycle.
+    private var lifecycle: Task<Void, Never>?
     private var pathState: PathState = .noWifi(.notAvailable)
     #if DEBUG
     /// Set by the debug gallery: hold the seeded state, with no transport and no path behind it.
@@ -57,10 +63,39 @@ final class CarLink: ObservableObject {
 
     var isLive: Bool { state.isLive }
 
+    private func enqueue(_ op: @escaping @MainActor () async -> Void) {
+        let prev = lifecycle
+        lifecycle = Task { await prev?.value; await op() }
+    }
+
     /// Open the channel. Idempotent; the transport owns the reconnect loop.
     func start() {
+        enqueue { [weak self] in await self?.beginPumping() }
+    }
+
+    /// Leaving the app is a goodbye said in words — the car is told to stop rather than left
+    /// to notice. Synchronous enqueue: callers in view handlers must not need an await for
+    /// the ordering guarantee to hold.
+    func requestStop(graceful: Bool) {
+        enqueue { [weak self] in await self?.shutDown(graceful: graceful) }
+    }
+
+    func stop(graceful: Bool) async {
+        requestStop(graceful: graceful)
+        await lifecycle?.value
+    }
+
+    private func beginPumping() async {
         guard pump == nil else { return }
-        pump = Task { [weak self] in await self?.consume() }
+        // Acquire the streams before starting the transport (rather than inside `consume()`,
+        // after the pump task is merely spawned): `events()`/`telemetryFrames()` install this
+        // session's listeners on the actor by finishing whatever the previous consumer held, and
+        // that install must be visible to the actor before `transport.start()` can possibly emit
+        // into it — otherwise a `.sessionOpened` racing the still-unscheduled pump task would
+        // land in a stream nobody is reading and be lost for good.
+        let events = await transport.events()
+        let frames = await transport.telemetryFrames()
+        pump = Task { [weak self] in await self?.consume(events: events, frames: frames) }
         // Liveness has to expire on its own: telemetry stopping is silence, and silence
         // generates no event to react to.
         decay = Task { [weak self] in
@@ -69,14 +104,25 @@ final class CarLink: ObservableObject {
                 self?.recompute()
             }
         }
-        Task { [transport] in await transport.start() }
+        await transport.start()
     }
 
-    /// Leaving the app is `graceful: true` — the car is told to stop rather than left to notice.
-    func stop(graceful: Bool) async {
+    private func shutDown(graceful: Bool) async {
+        // Idempotent: the scene path can enqueue two stops back to back (.inactive, then
+        // .background), and the second must be a no-op rather than a second goodbye.
+        guard pump != nil else { return }
         pump?.cancel(); pump = nil
         decay?.cancel(); decay = nil
-        await transport.stop(graceful: graceful)
+        radioFetch?.cancel(); radioFetch = nil
+        // Bounded: a goodbye stuck on a dead path (Wi-Fi gone while the socket was still
+        // `.waiting`) must not dam the lifecycle chain forever — every later start/stop queues
+        // behind an unbounded await otherwise. 300 ms covers 3 sends at 10 Hz spacing with
+        // margin; `transport.stop` is cancel-safe mid-goodbye (`send`'s `onCancel` resolves the
+        // pending send, `sayGoodbye`'s `try?` swallows it, and `socket.cancel()` still runs).
+        let stop = Task { await transport.stop(graceful: graceful) }
+        let deadline = Task { try? await Task.sleep(for: .milliseconds(300)); stop.cancel() }
+        await stop.value
+        deadline.cancel()
         telemetry = nil
         lastFrame = nil
         lastTelemetrySeq = nil
@@ -94,55 +140,86 @@ final class CarLink: ObservableObject {
         session = .none
         device = nil
         recompute()
+        // The transport is mid-hold on the session that discovered the identity; abort it so
+        // the next hello goes out now, not after the remainder of the ten seconds.
+        Task { [transport] in await transport.retryNow() }
     }
 
-    private func consume() async {
-        for await event in await transport.events() {
-            switch event {
-            case .sessionOpened(let device, let fw):
-                self.device = device
-                lastTelemetrySeq = nil
-                if device == CarContract.device {
-                    // The firmware version is published only for our own car. It feeds the launch
-                    // gate, and a foreign car's build number there can force an OTA onto a car
-                    // that is not ours — routing straight around the wrong-car screen.
-                    self.fw = fw
-                    session = .adopted(device: device, fw: fw)
-                    fetchRadio()
-                    // The car is reachable exactly now. Prefetching from `onAppear` ran while the
-                    // gate was still talking to GitHub, so both GETs timed out and every trick
-                    // spent the session on the fallback geometry the `/dims` work replaced.
-                    config?.prefetchDriveGeometry()
-                } else {
-                    self.fw = nil
-                    session = .foreign(device: device)
+    private func consume(events: AsyncStream<CarTransport.Event>, frames: AsyncStream<Telemetry>) async {
+        // Two streams, one consumer. Ordering between them is not guaranteed; a frame from the
+        // previous session can land after this session's `.sessionOpened` (or after
+        // `.sessionClosed`) — `apply(_:)` gates on an adopted session, so a late frame from the
+        // wrong session is simply dropped rather than re-seeding `lastTelemetrySeq` with a stale
+        // counter or resurrecting a link that `LinkRule.compose` has already retired.
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { @MainActor [weak self] in
+                for await e in events {
+                    self?.handle(e)
+                    self?.recompute()
                 }
-            case .protoMismatch(let theirs):
-                self.fw = nil
-                self.device = nil
-                session = .protoMismatch(theirs: theirs)
-            case .telemetry(let t):
-                // Ordered by the car's own counter: a reordered datagram walks uptime, the trip
-                // count and the calibration flag backwards, and the mandatory-calibration sheet
-                // keys on that flag.
-                if let seq = t.seq, let last = lastTelemetrySeq, !RTFrame.seqNewer(seq, than: last) {
-                    break
-                }
-                if let seq = t.seq { lastTelemetrySeq = seq }
-                telemetry = t
-                lastTelemetry = t
-                lastFrame = ContinuousClock.now
-            case .sessionClosed:
-                // A foreign identity — or a protocol we cannot speak — survives the session that
-                // discovered it: the transport reopens every few seconds and would otherwise
-                // flicker the screen naming the problem back to a radar.
-                session = session.survivingSessionEnd
-                telemetry = nil
-                lastFrame = nil
-                lastTelemetrySeq = nil
             }
-            recompute()
+            group.addTask { @MainActor [weak self] in
+                for await t in frames {
+                    self?.apply(t)
+                    self?.recompute()
+                }
+            }
+            await group.waitForAll()
         }
+    }
+
+    private func handle(_ event: CarTransport.Event) {
+        switch event {
+        case .sessionOpened(let device, let fw):
+            self.device = device
+            lastTelemetrySeq = nil
+            if device == CarContract.device {
+                // The firmware version is published only for our own car. It feeds the launch
+                // gate, and a foreign car's build number there can force an OTA onto a car
+                // that is not ours — routing straight around the wrong-car screen.
+                self.fw = fw
+                session = .adopted(device: device, fw: fw)
+                fetchRadio()
+                // The car is reachable exactly now. Prefetching from `onAppear` ran while the
+                // gate was still talking to GitHub, so both GETs timed out and every trick
+                // spent the session on the fallback geometry the `/dims` work replaced.
+                config?.prefetchDriveGeometry()
+            } else {
+                self.fw = nil
+                session = .foreign(device: device)
+            }
+        case .protoMismatch(let theirs):
+            self.fw = nil
+            self.device = nil
+            session = .protoMismatch(theirs: theirs)
+        case .sessionClosed:
+            // A foreign identity — or a protocol we cannot speak — survives the session that
+            // discovered it: the transport reopens every few seconds and would otherwise
+            // flicker the screen naming the problem back to a radar.
+            session = session.survivingSessionEnd
+            telemetry = nil
+            lastFrame = nil
+            lastTelemetrySeq = nil
+        }
+    }
+
+    private func apply(_ t: Telemetry) {
+        // Telemetry only flows inside an adopted session (the transport's `receiveLoop` starts
+        // after adoption). Gating here means a frame the previous session's buffer was still
+        // holding — and that lands after this session's `.sessionOpened` reset
+        // `lastTelemetrySeq` to nil — cannot re-seed it with a stale, free-running counter from
+        // the car's old boot and lock every fresh frame out as "not newer" forever.
+        guard case .adopted = session else { return }
+        // Ordered by the car's own counter: a reordered datagram walks uptime, the trip
+        // count and the calibration flag backwards, and the mandatory-calibration sheet
+        // keys on that flag.
+        if let seq = t.seq, let last = lastTelemetrySeq, !RTFrame.seqNewer(seq, than: last) {
+            return
+        }
+        if let seq = t.seq { lastTelemetrySeq = seq }
+        telemetry = t
+        if lastTelemetry != t { lastTelemetry = t }
+        lastFrame = ContinuousClock.now
     }
 
     private func recompute() {
@@ -150,18 +227,36 @@ final class CarLink: ObservableObject {
         if frozen { return }
         #endif
         let age = lastFrame.map { (ContinuousClock.now - $0).seconds }
-        state = LinkRule.compose(path: pathState, session: session, telemetry: telemetry, age: age)
+        let next = LinkRule.compose(path: pathState, session: session, telemetry: telemetry, age: age)
+        // Only on a real change: the decay tick re-asks five times a second, and `@Published`
+        // emits on assignment whether or not the value moved.
+        if state != next { state = next }
     }
 
+    /// `/status` is one GET against a single-request server that is busy with the geometry
+    /// prefetch fired in the same instant — one miss must not hide a radio mismatch for the
+    /// whole session. Four tries, backing off; the task is replaced on refetch and cancelled
+    /// when the link stops.
     private func fetchRadio() {
-        Task { [weak self, transport] in
-            guard let data = try? await transport.get("/status", timeout: 2),
-                  let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let r = j["radio"] as? [String: Any],
-                  let fw = r[CarContract.fwField] as? String else { return }
-            self?.radio = Radio(fw: fw, ok: r["ok"] as? Bool ?? true)
+        radioFetch?.cancel()
+        radioFetch = Task { [weak self, transport] in
+            for delay: Double in [0, 1, 2, 4] {
+                if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+                if Task.isCancelled { return }
+                if let data = try? await transport.get("/status", timeout: 2),
+                   let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let r = j["radio"] as? [String: Any],
+                   let fw = r[CarContract.fwField] as? String {
+                    self?.radio = Radio(fw: fw, ok: r["ok"] as? Bool ?? true)
+                    return
+                }
+            }
         }
     }
+
+    /// FirmwareView calls this on appear: the radio line is that screen's reason to exist,
+    /// and an OTA just behind us may have changed the answer.
+    func refreshRadio() { fetchRadio() }
 
     #if DEBUG
     /// One screen's worth of link, for the gallery. Nothing runs behind it.

@@ -21,7 +21,6 @@ actor CarTransport {
         /// A car answered in a protocol version this app does not speak. Reported by name: the
         /// car replies to a mismatched hello precisely so this is sayable.
         case protoMismatch(theirs: Int)
-        case telemetry(Telemetry)
         case sessionClosed
     }
 
@@ -59,6 +58,7 @@ actor CarTransport {
     private var seq: UInt32 = 0
     private var lastRx = ContinuousClock.now
     private var listener: AsyncStream<Event>.Continuation?
+    private var telemetryListener: AsyncStream<Telemetry>.Continuation?
     private var httpTail: [String: Task<Void, Never>] = [:]
     /// Whether the car adopted the session that is running now. A session only ever ends by
     /// failing, so this — not the return of `session()` — is what says the car was reachable.
@@ -66,12 +66,28 @@ actor CarTransport {
     /// Whether any session has ever been adopted, which is what separates "searching for a car
     /// that is not switched on yet" from "the link we had went away".
     private var everAdopted = false
+    /// The wrong-car / wrong-proto hold. Stored so the retry button can abort it: without
+    /// that the transport sleeps out its ten seconds while the user watches a radar that
+    /// claims to be retrying.
+    private var identityHold: Task<Void, Error>?
 
-    /// The event stream feeding `CarLink`. One consumer by design; a second call replaces it.
+    /// Session lifecycle, lossless. Its rate is bounded by the session loop itself — a
+    /// handful of events per reconnect — so `.unbounded` cannot grow. What must never happen
+    /// is `.sessionOpened` being evicted by a telemetry backlog: it is emitted once per
+    /// session, and losing it leaves the app on the radar behind a live, streaming session.
     func events() -> AsyncStream<Event> {
-        let (stream, cont) = AsyncStream<Event>.makeStream(bufferingPolicy: .bufferingNewest(8))
+        let (stream, cont) = AsyncStream<Event>.makeStream(bufferingPolicy: .unbounded)
         listener?.finish()
         listener = cont
+        return stream
+    }
+
+    /// Telemetry, latest-wins. One slot: a consumer that falls behind skips straight to the
+    /// newest frame instead of replaying a queue of stale ones.
+    func telemetryFrames() -> AsyncStream<Telemetry> {
+        let (stream, cont) = AsyncStream<Telemetry>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        telemetryListener?.finish()
+        telemetryListener = cont
         return stream
     }
 
@@ -120,6 +136,24 @@ actor CarTransport {
         }
     }
 
+    /// Hold the session after a car identified itself as undriveable — long enough that the
+    /// screen naming the problem is not a flicker between radar sweeps, but abortable the
+    /// moment the user asks for another look.
+    private func holdIdentity() async {
+        let hold = Task { try await Task.sleep(for: .seconds(SessionPolicy.identityHoldSeconds)) }
+        identityHold = hold
+        // Outer cancellation (stop()) must not wait out the unstructured hold.
+        await withTaskCancellationHandler {
+            _ = try? await hold.value
+        } onCancel: {
+            hold.cancel()
+        }
+        identityHold = nil
+    }
+
+    /// The retry button on the wrong-car and wrong-protocol screens.
+    func retryNow() { identityHold?.cancel() }
+
     private func tearDown() {
         conn?.cancel()
         conn = nil
@@ -158,9 +192,13 @@ actor CarTransport {
     /// for hello "repeated at ~5 Hz until answered", and a five-second sleep earned by a car that
     /// was not switched on yet is a car found five seconds after it was ready.
     private func backoff(_ attempt: Int, pathBlocked: Bool) -> Duration {
-        let cap = (everAdopted || pathBlocked) ? Self.backoffCap : Self.discoveryCap
-        let raw = min(cap, Self.backoffBase * pow(2, Double(max(0, attempt - 1))))
-        return .seconds(raw * Double.random(in: 0.75...1.25))
+        .seconds(SessionPolicy.backoffBase(attempt: attempt,
+                                           pathBlocked: pathBlocked,
+                                           everAdopted: everAdopted,
+                                           base: Self.backoffBase,
+                                           cap: Self.backoffCap,
+                                           discoveryCap: Self.discoveryCap)
+                 * Double.random(in: 0.75...1.25))
     }
 
     /// One session, start to finish. It ends only by failing — which is why reaching the car is
@@ -188,7 +226,7 @@ actor CarTransport {
             // not a flicker between radar sweeps.
             emit(.protoMismatch(theirs: theirs))
             await sayGoodbye(on: socket)
-            try await Task.sleep(for: .seconds(10))
+            await holdIdentity()
             throw CarError.malformed("protocol \(theirs), not \(CarContract.proto)")
         }
         emit(.sessionOpened(device: identity.device, fw: identity.fw))
@@ -198,7 +236,7 @@ actor CarTransport {
             // we say goodbye — the other car drops ownership and stops — and hold the session
             // long enough that the wrong-car screen is not a flicker.
             await sayGoodbye(on: socket)
-            try await Task.sleep(for: .seconds(10))
+            await holdIdentity()
             throw CarError.malformed("foreign device \(identity.device)")
         }
 
@@ -255,12 +293,12 @@ actor CarTransport {
             guard let text = try await receiveOne() else { continue }
             // A reply for another session id is a leftover from the previous socket; ignoring it
             // is what makes ownership non-resumable rather than accidentally inherited.
-            switch RTFrame.parse(text) {
-            case .helloReply(let replySid, let device, let fw) where replySid == sid:
+            switch SessionPolicy.handshakeOutcome(RTFrame.parse(text), sid: sid) {
+            case .identity(let device, let fw):
                 return .identity(Identity(device: device, fw: fw))
-            case .protoMismatch(let replySid, let theirs) where replySid == sid:
+            case .protoMismatch(let theirs):
                 return .protoMismatch(theirs: theirs)
-            default:
+            case .ignore:
                 continue
             }
         }
@@ -287,7 +325,7 @@ actor CarTransport {
     private func receiveLoop() async throws {
         while !Task.isCancelled {
             guard let text = try await receiveOne() else { continue }
-            if case .telemetry(let t) = RTFrame.parse(text) { emit(.telemetry(t)) }
+            if case .telemetry(let t) = RTFrame.parse(text) { telemetryListener?.yield(t) }
         }
     }
 
@@ -314,11 +352,17 @@ actor CarTransport {
                         once.resume(.success(()))
                     case .failed(let e):
                         once.resume(.failure(CarError.from(e, path: socket.currentPath)))
+                        // A socket that never became `conn` is nobody else's to cancel. Without
+                        // this the handler↔connection retain cycle leaks one NWConnection per
+                        // failed attempt — and a `.waiting` one keeps path-watching and later
+                        // goes `.ready` as an open socket nothing observes.
+                        socket.cancel()
                     case .waiting(let e):
                         // With the interface pinned, waiting means the Wi-Fi path is not there
                         // yet. Fail now and let the backoff retry rather than sit in a state
                         // that may never resolve.
                         once.resume(.failure(CarError.from(e, path: socket.currentPath)))
+                        socket.cancel()
                     case .cancelled:
                         once.resume(.failure(CancellationError()))
                     default:

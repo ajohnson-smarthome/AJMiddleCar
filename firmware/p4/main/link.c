@@ -10,7 +10,6 @@
 
 static const char *TAG = "link";
 
-#define TICK_MS 20                 /* 50 Hz */
 #define SHADOW_UNKNOWN 0xFFFFu     /* forces a real write on the first tick */
 
 static SemaphoreHandle_t s_lock;   /* guards s_arb and s_target */
@@ -73,6 +72,15 @@ bool link_release(link_src_t src) {
     return true;
 }
 
+bool link_release_must(link_src_t src) {
+    if (link_release(src)) return true;
+    vTaskDelay(1);   /* the lock is held across a memcpy, never across a wait */
+    if (link_release(src)) return true;
+    ESP_LOGE(TAG, "%s could not release the actuator — the grant is stuck",
+             link_src_name(src));
+    return false;
+}
+
 static void link_task(void *arg) {
     (void)arg;
     /* The only writer to the PCA9685: if this task stops running, the motors keep
@@ -83,11 +91,11 @@ static void link_task(void *arg) {
 
     TickType_t last = xTaskGetTickCount();
     for (;;) {
-        vTaskDelayUntil(&last, pdMS_TO_TICKS(TICK_MS));
+        vTaskDelayUntil(&last, pdMS_TO_TICKS(LINK_TICK_MS));
         if (twdt) esp_task_wdt_reset();
 
         uint16_t tgt[8];
-        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(TICK_MS)) != pdTRUE) continue;
+        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(LINK_TICK_MS)) != pdTRUE) continue;
         /* An expired grant means nobody is driving: fall to zero rather than holding
            the last command, which is what "ownership lapses" has to mean physically. */
         if (link_arb_lapsed(&s_arb, now_ms())) {
@@ -98,16 +106,22 @@ static void link_task(void *arg) {
         memcpy(tgt, s_target, sizeof(tgt));
         xSemaphoreGive(s_lock);
 
-        uint16_t up = ramp_max_up_per_tick(ramp_get_ms(), TICK_MS);
+        uint16_t up = ramp_max_up_per_tick(ramp_get_ms(), LINK_TICK_MS);
+        uint16_t next[8];
+        uint8_t  order[8];
+        uint8_t  writes = link_plan_writes(s_current, tgt, up, next, order);
         bool wrote = false, failed = false;
         esp_err_t last_err = ESP_OK;
-        for (uint8_t ch = 0; ch < 8; ch++) {
-            uint16_t next = ramp_step(s_current[ch], tgt[ch], up);
-            if (next == s_current[ch]) continue;
+        for (uint8_t k = 0; k < writes; k++) {
+            uint8_t ch = order[k];
+            /* The mate's fall is ordered before this rise; if that write failed the
+               mate still shows its old duty here, and the rise waits with it rather
+               than driving both inputs of one bridge. */
+            if (!link_rise_safe(s_current[ch ^ 1], next[ch])) continue;
             wrote = true;
-            esp_err_t e = pca9685_set_pwm(ch, next);
+            esp_err_t e = pca9685_set_pwm(ch, next[ch]);
             if (e == ESP_OK) {
-                s_current[ch] = next;          /* shadow follows the chip, not our intent */
+                s_current[ch] = next[ch];      /* shadow follows the chip, not our intent */
             } else {
                 /* Deliberately leave s_current alone. It still differs from the target,
                    so the next tick retries — where updating it first would have left the
@@ -122,21 +136,26 @@ static void link_task(void *arg) {
         if (failed)      s_bus_ok = false;
         else if (wrote)  s_bus_ok = true;
 
-        /* A wedged bus fails eight channels fifty times a second. Logging every one
-           saturates a 115200 console so completely that the "boot into the network so
-           it is diagnosable" trade buys nothing — so speak once a second, and use that
-           same beat to try clocking the bus free. Retrying forever without escalating
-           leaves the motors at their last duty until the battery comes off. */
-        static uint32_t s_fail_ticks;
+        /* A wedged bus fails eight channels fifty times a second — but each failing
+           write BLOCKS for up to two 50 ms I2C timeouts, so a "tick" under the exact
+           fault pca9685_bus_recover exists for (SDA held low) runs 100-800 ms, and
+           pacing by tick count turned "speak and recover once a second" into once
+           per 10-40 s while the motors held their last duty. Pace by the clock. */
+        static bool     s_failing;
+        static uint32_t s_recover_at;
         if (failed) {
-            s_fail_ticks++;
-            if (s_fail_ticks % 50 == 0) {
+            uint32_t fnow = now_ms();
+            if (!s_failing) {
+                s_failing = true;
+                s_recover_at = fnow + 1000;      /* first attempt after ~1 s of failure */
+            } else if ((int32_t)(fnow - s_recover_at) >= 0) {
                 ESP_LOGE(TAG, "PCA9685 write failing (%s) — resetting the I2C bus",
                          esp_err_to_name(last_err));
                 pca9685_bus_recover();
+                s_recover_at = fnow + 1000;
             }
         } else {
-            s_fail_ticks = 0;
+            s_failing = false;
         }
     }
 }

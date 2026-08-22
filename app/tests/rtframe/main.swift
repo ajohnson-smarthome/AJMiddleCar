@@ -101,4 +101,12 @@ check(RTFrame.parse(#"{"uptime_s":1,"rssi":0}"#).flatMap { if case .telemetry(le
 check(RTFrame.parse("nope") == nil, "non-JSON refused")
 check(RTFrame.parse(#"{"foo":1}"#) == nil, "unrecognisable object refused")
 
+// A non-finite axis must serialise as a stop, not as full reverse: max(-1, .nan) is -1, and
+// a NaN formatted raw would not even be JSON. The audit filed this as latent — no current
+// input path produces NaN — and latent is exactly when to pin it.
+check(RTFrame.command(seq: 1, t: .nan, y: .nan) == #"{"seq":1,"t":0.00,"y":0.00}"#,
+      "NaN axes serialise as zero")
+check(RTFrame.command(seq: 2, t: .infinity, y: -.infinity) == #"{"seq":2,"t":0.00,"y":0.00}"#,
+      "infinite axes serialise as zero")
+
 if failures == 0 { print("test_rtframe: OK") } else { exit(1) }

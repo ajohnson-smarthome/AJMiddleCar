@@ -51,7 +51,11 @@ enum RTFrame {
         String(format: "%08x", value)
     }
 
-    private static func clamp(_ v: Double) -> Double { Swift.min(1, Swift.max(-1, v)) }
+    /// Non-finite input is a stop, not a direction: max(-1, .nan) is -1, so an unguarded NaN
+    /// would stream as sustained full reverse — and formatted raw it would not even be JSON.
+    private static func clamp(_ v: Double) -> Double {
+        v.isFinite ? Swift.min(1, Swift.max(-1, v)) : 0
+    }
 
     // MARK: - car → app
 

@@ -27,7 +27,8 @@ command cap would truncate every one of them.
 ```json
 {"proto":1,"hello":"7f3a91c2"}
 ```
-`hello` is a per-session id, 8 hex characters. The car adopts this sender as its owner and drops
+`hello` is a per-session id: the app sends 8 hex characters, and an acceptor takes 1–15
+alphanumerics. The car adopts this sender as its owner and drops
 datagrams from every other address until it adopts a different `hello`.
 
 **Command**, 10 Hz:
@@ -87,7 +88,7 @@ after the driver says stop, and every other actuator source still reachable afte
 
 ### Car → app
 
-**Hello reply**, once per adopted session:
+**Hello reply**, sent in answer to every hello — repeats included, adopted or not:
 ```json
 {"proto":1,"hello":"7f3a91c2","device":"ajmiddlecar","fw":"v1.0+517"}
 ```
@@ -200,3 +201,30 @@ reaches it. `AccessorySetupKit` joining is **not** in this cutover: it needs the
 configured and a device to test against, and it is not on the path between here and driving. It
 stays as the next piece of work, with `NEHotspotConfiguration` as the fallback if ASK turns out to
 require a Bluetooth rule for discovery.
+
+---
+
+## Post-audit amendments (2026-08-22)
+
+The 2026-08-22 audit of this wire confirmed 51 defects; four changed the session rules above,
+and one deferral is recorded so it reads as a decision rather than a gap. The decisions spec is
+`docs/superpowers/specs/2026-08-22-audit-fix-decisions.md`.
+
+1. **The sequence gate survives a trip.** "Reset the sequence gate" happens on adopt and on
+   `bye` only. Clearing it on a trip let one network-delayed pre-dropout duplicate re-arm the
+   watchdog, drive the car at stale stick values, and abort a retreat in progress.
+2. **A goodbye during a sticky hold (OTA, calibration) neither steals nor releases that
+   hold.** The `bye` still clears the breadcrumbs, disarms the watchdog and ends the session —
+   but `car_stop(LINK_SRC_SAFE)` over a sticky owner handed the motors back mid-flash.
+3. **Dead sids are remembered.** While a session is live, a hello carrying the sid of a
+   recently ended one is answered but not re-adopted, so a duplicated old handshake cannot
+   evict a live driver. With no live session, any hello adopts — refusing there would wedge a
+   client whose session idled out mid-handshake, and a stale duplicate displaces nobody.
+4. **Sessions are mortal.** Strictly more than `session_idle_ms` (schema, 10000) after its
+   last activity — the last accepted command, or the adoption when none ever followed — a
+   session whose watchdog is not armed ends: ownership clears, telemetry stops, the sid joins
+   the dead list. Before this, a car whose driver vanished pushed telemetry to the dead
+   address forever and held the stale-frame window open with it.
+5. **Deferred: an eviction notice to a displaced owner.** Last hello still wins silently;
+   two live pults oscillate on their ~3 s stall guards (pinned by a mock test). The one-datagram
+   notice is in `docs/IDEAS.md`; it changes the wire, so it waits for a protocol bump.

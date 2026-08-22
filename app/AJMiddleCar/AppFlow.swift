@@ -16,6 +16,16 @@ final class AppFlow: ObservableObject {
         case updateRequired
         /// The gate is satisfied. `CarLink` decides whether that means the drive screen.
         case ready
+
+        /// The phases whose screens open the link — the same set `root` switches on. The
+        /// scene handler restarts the link on `.active` and must not open a session behind
+        /// a gate screen that says there is nothing to talk to.
+        var opensLink: Bool {
+            switch self {
+            case .updateRequired, .awaitingCar, .ready: return true
+            case .checkInternet, .noInternet, .checkUpdate, .checkFailed, .downloading: return false
+            }
+        }
     }
 
     @Published var phase: Phase = .checkInternet
@@ -25,9 +35,15 @@ final class AppFlow: ObservableObject {
     /// Run the pre-connect gate (internet probe → latest release → download if needed).
     func startupCheck() async {
         phase = .checkInternet
-        guard await UpdateClient.internetReachable() else { phase = .noInternet; return }
+        guard await UpdateClient.internetReachable() else {
+            phase = offlineFallback(or: .noInternet)
+            return
+        }
         phase = .checkUpdate
-        guard let rel = await client.latestRelease() else { phase = .checkFailed; return }
+        guard let rel = await client.latestRelease() else {
+            phase = offlineFallback(or: .checkFailed)
+            return
+        }
         latestTag = rel.tag
         let latestBuild = UpdateClient.buildNumber(rel.tag)
         if UpdateClient.needsDownload(latestBuild: latestBuild,
@@ -40,6 +56,13 @@ final class AppFlow: ObservableObject {
             if let b = latestBuild { UpdateClient.recordCache(build: b, tag: rel.tag) }
         }
         phase = .awaitingCar
+    }
+
+    /// GitHub unreachable or unusable: a cached image is enough to drive — the gate exists
+    /// to force updates when it can know about them, not to require the internet.
+    private func offlineFallback(or failure: Phase) -> Phase {
+        GateRule.canProceedOffline(hasCachedFile: UpdateClient.hasCachedFile,
+                                   cachedBuild: UpdateClient.cachedBuild) ? .awaitingCar : failure
     }
 
     /// The car said who it is, in its hello reply. Re-evaluated every time, not once: a car that

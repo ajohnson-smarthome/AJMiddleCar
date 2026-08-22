@@ -67,11 +67,15 @@ static int fps_now(telem_consumer_t who) {
     return fps;
 }
 
+/* Bumped on the rt_link task, read by the httpd task through /status. volatile like
+   s_frames/s_trips beside it: aligned u32 loads are atomic on this target, but the
+   cross-task access is a fact worth declaring, not an ISA accident worth inheriting. */
+static volatile uint32_t s_push_seq;
+
 void telemetry_gather(telemetry_t *out, telem_consumer_t who) {
     /* Counts datagrams the car pushed, so it advances for the push and is merely
        reported to a /status poll — a reader of one channel must be able to order that
        channel's frames without a second reader's reads perturbing the count. */
-    static uint32_t s_push_seq;
     if (who == TELEM_PUSH) s_push_seq++;
 
     out->seq        = s_push_seq;

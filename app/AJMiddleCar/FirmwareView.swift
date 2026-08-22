@@ -24,6 +24,7 @@ struct FirmwareView: View {
         }
         .task {
             if let dp = debugPhase { phase = dp; return }
+            link.refreshRadio()
             await check()
         }
     }

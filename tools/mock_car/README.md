@@ -49,12 +49,15 @@ them are most of what breaks on a device — so drive it from a real phone when 
   run `tools/gen_contract.py`.
 
 `tools/conformance.py http://<host>:<port>` runs the REST request matrix against this mock
-or against a real car, and `tools/test-all.sh` runs it against a mock it starts itself
-(skipped when `.venv` is missing, unless `CONFORMANCE=required`). It asserts the
-`{"error","field"}` / `{"ok":true}` envelope only for the five config domains, which are
-the endpoints the schema describes; `/calib*` and `/ota` are checked by status code,
-because the firmware answers those with `ok` and `httpd_resp_send_err` text while this
-mock answers JSON, and the contract picks neither.
+or against a real car, and `tools/conformance_rt.py <host>:<port>` does the same for the
+UDP channel with real datagrams. `tools/test-all.sh` runs both against a mock it starts
+itself (skipped when `.venv` is missing, unless `CONFORMANCE=required`). Since the
+2026-08-22 unification (rule 8 of the audit-fix spec) there is one reply shape to assert:
+`{"ok":true}` on success, `{"error":"…","field":"…"}` on a rejection, `application/json`
+either way — for `/calib*` and `/ota` as well as for the five config domains, so
+conformance asserts their bodies and not merely their status codes. The firmware's
+plain-text `ok` and `httpd_resp_send_err` bodies are gone; `field` is `""` when the fault
+is the body as a whole.
 
 ## The two caps
 
@@ -83,10 +86,25 @@ short, and as `state.py` implements it:
   immediately, clears the breadcrumb history, disarms the watchdog and drops ownership.
   The empty history is what suppresses the retreat; a sticky SAFE grant would do it too,
   but it would also lock OTA, the wizard and the console out of the car until an app
-  reconnected.
-- A watchdog trip clears the sequence gate along with the arm flag: silence past the
-  deadline proves the stream is dead, and a gate left desynchronised drops every genuine
-  frame for the rest of the session while telemetry keeps flowing.
+  reconnected. A *sticky* holder is the exception (rule 2): while OTA or the calibration
+  wizard owns the actuator, the goodbye neither steals nor releases that grant — the
+  motors are already stopped, or under the wizard's pulse — and does only its other
+  three duties.
+- **A watchdog trip clears the arm flag and nothing else — the sequence gate survives**
+  (rule 1). Silence proves the stream is dead, but the gate is what stops a
+  network-delayed duplicate of a pre-dropout command from being accepted as the resumed
+  stream, driving the car at stale stick values and aborting the retreat. A same-session
+  stream that resumes carries newer seqs and passes; the gate resets only on adopt and
+  on bye.
+- **Sessions are mortal** (rule 4). While the watchdog is not armed — after a trip, or
+  for a handshake that never commanded — a session more than `session_idle_ms` past its
+  last activity ends: ownership cleared, telemetry stopped, sid remembered dead, and the
+  breadcrumb path forgotten, which aborts a retreat still in flight. A resuming stream
+  says `hello` again.
+- **A dead session's sid is remembered** (rule 3), in a ring of four. A hello carrying
+  one is answered but not adopted *while a live session exists*, so a network-duplicated
+  handshake cannot evict whoever is driving now; with no live session any hello adopts,
+  or a client whose session idled out mid-handshake could never get back in.
 
 ## Talking to it by hand
 

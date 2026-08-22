@@ -4,7 +4,7 @@ LDLIBS = -lm
 # The schema itself, for the two wire values the C generator emits no symbol for.
 CONTRACT = $(abspath ../../../contract/car-api.json)
 
-all: test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel test_cfg_table test_link test_rt_session test_contract_wire
+all: test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel test_cfg_table test_link test_rt_session test_rt_glue test_contract_wire
 
 test_mixer: test_mixer.c ../main/mixer.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
@@ -50,8 +50,13 @@ test_rt_session: test_rt_session.c ../main/rt_link.h ../main/control_proto.c
 test_contract_wire: test_contract_wire.c ../main/telemetry.h ../main/identity.h $(CONTRACT)
 	$(CC) $(CFLAGS) -DCONTRACT_JSON='"$(CONTRACT)"' -o $@ $< $(LDLIBS)
 
+# The lifecycle's side effects over a recording effects table — the impure orderings
+# rt_link.c executes, pinned the way test_state.py pins them on the mock.
+test_rt_glue: test_rt_glue.c ../main/rt_glue.h ../main/rt_link.h ../main/link.h
+	$(CC) $(CFLAGS) -o $@ test_rt_glue.c $(LDLIBS)
+
 run: all
-	./test_mixer && ./test_motors && ./test_control_proto && ./test_watchdog && ./test_calibration && ./test_ramp && ./test_trim && ./test_telemetry && ./test_recovery && ./test_wheel && ./test_cfg_table && ./test_link && ./test_rt_session && ./test_contract_wire
+	./test_mixer && ./test_motors && ./test_control_proto && ./test_watchdog && ./test_calibration && ./test_ramp && ./test_trim && ./test_telemetry && ./test_recovery && ./test_wheel && ./test_cfg_table && ./test_link && ./test_rt_session && ./test_rt_glue && ./test_contract_wire
 
 clean:
-	rm -f test_contract_wire test_rt_session test_link test_cfg_table test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel
+	rm -f test_contract_wire test_rt_session test_rt_glue test_link test_cfg_table test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel
