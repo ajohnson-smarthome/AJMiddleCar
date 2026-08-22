@@ -136,21 +136,26 @@ static void link_task(void *arg) {
         if (failed)      s_bus_ok = false;
         else if (wrote)  s_bus_ok = true;
 
-        /* A wedged bus fails eight channels fifty times a second. Logging every one
-           saturates a 115200 console so completely that the "boot into the network so
-           it is diagnosable" trade buys nothing — so speak once a second, and use that
-           same beat to try clocking the bus free. Retrying forever without escalating
-           leaves the motors at their last duty until the battery comes off. */
-        static uint32_t s_fail_ticks;
+        /* A wedged bus fails eight channels fifty times a second — but each failing
+           write BLOCKS for up to two 50 ms I2C timeouts, so a "tick" under the exact
+           fault pca9685_bus_recover exists for (SDA held low) runs 100-800 ms, and
+           pacing by tick count turned "speak and recover once a second" into once
+           per 10-40 s while the motors held their last duty. Pace by the clock. */
+        static bool     s_failing;
+        static uint32_t s_recover_at;
         if (failed) {
-            s_fail_ticks++;
-            if (s_fail_ticks % 50 == 0) {
+            uint32_t fnow = now_ms();
+            if (!s_failing) {
+                s_failing = true;
+                s_recover_at = fnow + 1000;      /* first attempt after ~1 s of failure */
+            } else if ((int32_t)(fnow - s_recover_at) >= 0) {
                 ESP_LOGE(TAG, "PCA9685 write failing (%s) — resetting the I2C bus",
                          esp_err_to_name(last_err));
                 pca9685_bus_recover();
+                s_recover_at = fnow + 1000;
             }
         } else {
-            s_fail_ticks = 0;
+            s_failing = false;
         }
     }
 }
