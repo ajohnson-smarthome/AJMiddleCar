@@ -25,6 +25,12 @@ from state import parse_frame, seq_is_newer
 TICK_S = 0.020
 PUSH_EVERY = round((1.0 / RT["telemetry_hz"]) / TICK_S)
 
+# How long the mock is deaf and mute after a "flash", simulating the reboot.
+# Hand-mirrored against the app: CarTransport.swift's stallTimeout is 3 s, and the
+# gap must exceed it so the app tears down, re-hellos, and reads the new fw from
+# the hello reply — which is the only place it learns fw.
+REBOOT_QUIET_S = 4.0
+
 
 class Impairment:
     """Packet loss, latency and stalls, seeded rather than clocked."""
@@ -95,6 +101,7 @@ class RTLink(asyncio.DatagramProtocol):
         self._dropped = 0
         self._last_drop_log = 0.0
         self._last_cmd_log = 0.0
+        self._quiet_until = None
 
     # ---- receive ---------------------------------------------------------------
 
@@ -103,6 +110,8 @@ class RTLink(asyncio.DatagramProtocol):
 
     def datagram_received(self, data, addr):
         now = self.loop.time()
+        if self._quiet_until is not None and now < self._quiet_until:
+            return                                  # "rebooting": deaf
         if self.impair.stalled(now):
             return                                  # a stalled car services nothing
         if self.impair.drops_rx():
@@ -257,9 +266,25 @@ class RTLink(asyncio.DatagramProtocol):
             self._last_activity = None
         return line
 
+    def simulate_reboot(self, now):
+        """The flash ended: the car reboots. Session dead, link silent for a while.
+
+        What the app observes on hardware — a telemetry gap past its stall guard,
+        then a fresh handshake answering with the new fw — must be observable in
+        the simulator too, or the OTA screen's success detector can never fire.
+        """
+        if self.session is not None:
+            self.dead_sids.append(self.session)
+        self.owner, self.session, self.last_seq = None, None, None
+        self._last_activity = None
+        self._quiet_until = now + REBOOT_QUIET_S
+        print(f"rt: 'rebooting' — deaf and mute for {REBOOT_QUIET_S:g} s")
+
     def push_telemetry(self, now):
         if self.owner is None or self.impair.stalled(now):
             return
+        if self._quiet_until is not None and now < self._quiet_until:
+            return                                  # "rebooting": mute
         self._send(self.car.telemetry(self.rx_fps(now, "push")), self.owner)
 
     # ---- measurement and logging -----------------------------------------------

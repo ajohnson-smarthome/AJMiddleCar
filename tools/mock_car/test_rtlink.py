@@ -18,7 +18,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from generated import PROTO, RT                        # noqa: E402
-from rt_link import Impairment, RTLink                 # noqa: E402
+from rt_link import Impairment, REBOOT_QUIET_S, RTLink  # noqa: E402
 from state import CTL_NONE, CTL_RT, CarState           # noqa: E402
 
 APP = ("192.168.4.2", 50000)
@@ -577,6 +577,34 @@ class TestImpairment(Quiet):
             return [rt.owner is not None] + [
                 (send(rt, cmd(k + 1, 0.1 * k)), rt.last_seq)[1] for k in range(20)]
         self.assertEqual(run(), run())
+
+
+class TestReboot(Quiet):
+    def test_a_simulated_reboot_is_deaf_mute_and_forgets_the_session(self):
+        """After a real flash the car reboots: telemetry gaps past the app's 3 s
+        stall, the session dies, and the reconnect's hello reply carries the new
+        fw. The mock's OTA used to keep the session alive through the flash, so
+        the app's success detector could never fire in the simulator."""
+        rt, car, loop = link()
+        send(rt, hello("flasher1"))
+        send(rt, cmd(1, 0.2))
+        car.begin_ota(0.0)
+        car.end_ota()                             # bumps car.fw
+        rt.simulate_reboot(10.0)
+        self.assertIsNone(rt.owner)
+        self.assertIn("flasher1", rt.dead_sids)
+        rt.transport.sent.clear()
+        loop.t = 11.0                             # inside the quiet window
+        send(rt, hello("fresh003"))
+        self.assertIsNone(rt.owner, "a rebooting car hears nothing")
+        self.assertEqual(rt.transport.sent, [])
+        rt.push_telemetry(loop.t)
+        self.assertEqual(rt.transport.sent, [], "and says nothing")
+        loop.t = 10.0 + REBOOT_QUIET_S + 0.1
+        send(rt, hello("fresh003"))
+        self.assertEqual(rt.owner, APP, "the reconnect adopts")
+        self.assertEqual(rt.transport.sent[-1][0][RT["fw_field"]], car.fw,
+                         "and the hello reply carries the bumped fw")
 
 
 if __name__ == "__main__":

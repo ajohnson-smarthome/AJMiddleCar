@@ -562,12 +562,21 @@ class CarState:
         return True
 
     def begin_ota(self, now):
-        """Nothing commands the motors during a flash; the grant is sticky."""
+        """Nothing commands the motors during a flash; the grant is sticky.
+
+        Through the arbiter, as ota_api.c goes through car_stop(LINK_SRC_OTA):
+        a refusal is the firmware's 500 "actuator busy", and the simulator must
+        be able to exhibit it. Returns False without touching anything when a
+        higher-priority holder refuses.
+        """
         self._now = now
+        self._expire(now)
+        if not self._take(CTL_OTA, now, None):
+            return False
         self._t = self._y = 0.0
         self._armed = False
         self._retreating = False
-        self._owner, self._owner_until = CTL_OTA, None
+        return True
 
     def end_ota(self, flashed=True):
         if flashed:

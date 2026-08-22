@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from generated import CTL_VALUES, DOMAINS, RT, TELEMETRY_FIELDS   # noqa: E402
 from state import (CTL_CALIB, CTL_NONE, CTL_OTA, CTL_RECOVER,     # noqa: E402
-                   CTL_RT, CarState, clamp_axis, number, parse_frame,
+                   CTL_RT, CTL_SAFE, CarState, clamp_axis, number, parse_frame,
                    seq_is_newer, valid_seq, valid_sid)
 
 DEADLINE_S = RT["watchdog_ms"] / 1000.0
@@ -586,6 +586,21 @@ class TestActuatorOwnership(unittest.TestCase):
         car.begin_ota(1.0)
         car.end_spin()
         self.assertEqual(car.ctl, CTL_OTA, "end_spin never releases someone else's grant")
+
+    def test_ota_goes_through_the_arbiter(self):
+        """ota_api.c takes the actuator through the checked car_stop(LINK_SRC_OTA)
+        and answers 500 when refused; the mock used to seize it unconditionally,
+        so the simulator never exhibited that 500."""
+        car = CarState(now=0.0)
+        # SAFE is only ever held transiently by note_bye, so stage it directly.
+        self.assertTrue(car._take(CTL_SAFE, 0.0, None))
+        self.assertFalse(car.begin_ota(0.1), "SAFE outranks a flash, as on the car")
+        car._release(CTL_SAFE)
+        self.assertTrue(car.begin_ota(0.2))
+        fw = car.fw
+        car.end_ota(flashed=False)
+        self.assertEqual(car.ctl, CTL_NONE, "an aborted flash releases the grant")
+        self.assertEqual(car.fw, fw, "and does not bump the build")
 
 
 class TestCalibration(unittest.TestCase):

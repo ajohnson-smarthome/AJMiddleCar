@@ -88,17 +88,10 @@ def json_error(status, message, field=""):
 
 @web.middleware
 async def one_at_a_time(request, handler):
-    """The firmware serves REST from a single httpd task, so requests queue behind each
-    other. A mock that answers four at once teaches a client the car is more responsive
-    than it is.
-
-    /ota manages the lock itself: it holds it while the image is arriving, which is when
-    the car is genuinely occupied, and drops it for the flash, which is when the actuator
-    is held but the socket is not — the window in which a client that presses Spin must
-    be told 409 rather than left hanging.
-    """
-    if request.path == "/ota":
-        return await handler(request)
+    """The firmware serves REST from a single httpd task, so requests queue behind
+    each other — including behind the whole of an OTA upload and flash. A mock
+    that answers /status mid-flash teaches a client the car can do that; the car
+    holds its one task from the first body byte to the reboot."""
     async with request.app["lock"]:
         return await handler(request)
 
@@ -184,17 +177,29 @@ async def calib_save(request):
 
 
 async def ota(request):
-    car = request.app["car"]
-    async with request.app["lock"]:
-        data = await request.read()
-    if len(data) < OTA_MIN_BYTES:
-        return json_error(400, "image too small")
+    car, link = request.app["car"], request.app["link"]
     now = asyncio.get_running_loop().time()
-    car.begin_ota(now)
+    # The car stops the motors and takes the sticky grant before reading a single
+    # body byte (car_stop(LINK_SRC_OTA) is ota_api.c's first statement), and
+    # answers 500 when something outranks the flash.
+    if not car.begin_ota(now):
+        return json_error(500, "actuator busy")
+    data = await request.read()
+    if len(data) < OTA_MIN_BYTES:
+        car.end_ota(flashed=False)
+        return json_error(400, "image too small")
+    if data[0] != 0xE9:
+        # esp_ota_write validates the ESP image magic on the first write, and
+        # ota_api.c answers 500 "ota write failed". Any 4 KB blob used to flash
+        # here and bump fw — the exact wrong-release-asset path the app could
+        # never rehearse.
+        car.end_ota(flashed=False)
+        return json_error(500, "ota write failed")
     print(f"ota: {len(data)} bytes — motors stopped, flashing")
     await asyncio.sleep(OTA_SECONDS)
     car.end_ota()
-    print(f"ota: done, now running {car.fw}")
+    print(f"ota: done, now running {car.fw} — 'rebooting'")
+    link.simulate_reboot(asyncio.get_running_loop().time())
     return web.json_response({"ok": True})
 
 
