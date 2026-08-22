@@ -202,24 +202,20 @@ class RTLink(asyncio.DatagramProtocol):
             self.transport.sendto(data, addr)
 
     def tick(self, now):
-        """One service tick of the car's clock, plus the state a trip invalidates here.
+        """One service tick of the car's clock.
 
-        `rt_link.c` clears `s_have_seq` in the same breath as `s_armed` when the deadline
-        passes: silence past it already proves the stream is dead, so there is nothing
-        left to replay-protect — and a gate left desynchronised (a spoofed frame far in
-        the future, a counter bug) would drop every genuine frame for the rest of the
-        session while telemetry kept flowing and the app showed a healthy link. The car's
-        gate lives beside its watchdog; the mock's lives here, so the trip has to be
-        carried across.
+        The sequence gate deliberately survives a trip (audit-fix spec rule 1):
+        silence proves the stream is dead, but the gate is what stops a
+        network-delayed duplicate of a pre-dropout command from being accepted as
+        the resumed stream — driving the car at stale stick values and aborting
+        the retreat. A same-session stream that resumes carries newer seqs and
+        passes; the gate resets only on adopt and on bye.
 
-        Channel ownership deliberately survives: a stream that resumes after a dropout is
-        the same session, and evicting it would ignore the driver until the app noticed.
+        Channel ownership survives too: a stream that resumes after a dropout is
+        the same session, and evicting it would ignore the driver until the app
+        noticed.
         """
-        trips = self.car.wdt_trips
-        line = self.car.tick(now)
-        if self.car.wdt_trips != trips:
-            self.last_seq = None
-        return line
+        return self.car.tick(now)
 
     def push_telemetry(self, now):
         if self.owner is None or self.impair.stalled(now):

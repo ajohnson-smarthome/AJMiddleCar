@@ -276,13 +276,14 @@ class TestGoodbye(Quiet):
 
 
 class TestWatchdog(Quiet):
-    def test_a_trip_clears_the_sequence_gate(self):
-        """rt_link.c clears `s_have_seq` with `s_armed`, and for a reason.
+    def test_a_trip_keeps_the_sequence_gate(self):
+        """Rule 1 of the 2026-08-22 audit-fix spec: the gate survives a trip.
 
-        Silence past the deadline already proves the stream is dead, so there is nothing
-        left to replay-protect. Keeping the gate is how a mock ends up dropping every
-        frame of a stream that resumed with a counter of its own while telemetry kept
-        flowing and the app showed a healthy link.
+        Clearing it opened the window the audit confirmed: one network-delayed
+        duplicate of a pre-dropout command was accepted as the resumed stream,
+        drove the car at stale stick values and aborted the retreat. A genuinely
+        resuming same-session stream carries monotonically newer seqs and passes
+        the kept gate; only adopt and bye reset it.
         """
         rt, car, loop = link()
         send(rt, hello())
@@ -291,11 +292,13 @@ class TestWatchdog(Quiet):
         loop.t = 1.0 + DEADLINE_S + 0.05
         self.assertIsNotNone(rt.tick(loop.t))
         self.assertEqual(car.wdt_trips, 1)
-        self.assertIsNone(rt.last_seq)
-        # Channel ownership survives, as it does on the car: a stream that comes back is
-        # the same session, and the app would otherwise be ignored until it said hello.
+        self.assertEqual(rt.last_seq, 500, "the gate survives the trip")
+        # Channel ownership survives too: a stream that comes back is the same
+        # session, and the app would otherwise be ignored until it said hello.
         self.assertEqual(rt.owner, APP)
-        send(rt, cmd(1, -0.5))
+        send(rt, cmd(499, -0.5))                 # the delayed pre-dropout duplicate
+        self.assertEqual(car.command, (-0.9, 0.0), "a stale frame cannot drive the car; the retreat continues")
+        send(rt, cmd(501, -0.5))                 # the genuinely resumed stream
         self.assertEqual(car.command, (-0.5, 0.0), "the resumed stream is heard")
 
     def test_a_handshake_that_goes_quiet_does_not_trip(self):
