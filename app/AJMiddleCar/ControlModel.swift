@@ -10,7 +10,9 @@ enum DiagramState { case idle, drive, spin }
 /// Pure mapping from joystick axes to the firmware's (throttle, yaw) in [-1,1].
 /// Screen Y is positive downward, so "up" is a negative stick Y.
 enum ControlModel {
-    static func clamp(_ v: Double) -> Double { min(1, max(-1, v)) }
+    /// Non-finite input is a stop, not a direction — same rule as `RTFrame.clamp`, because a
+    /// NaN that reaches either becomes a held command.
+    static func clamp(_ v: Double) -> Double { v.isFinite ? min(1, max(-1, v)) : 0 }
 
     /// One stick: up = throttle, left/right = yaw.
     static func arcade(stickX: Double, stickY: Double) -> (t: Double, y: Double) {
