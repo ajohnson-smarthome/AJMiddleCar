@@ -75,8 +75,17 @@ class TestSchema(unittest.TestCase):
         # generated table, so a range literal no longer appears in any handler. What
         # remains are the setters' own clamps, which are the C-side constants this
         # test exists to keep the schema honest against.
-        src = "\n".join((main / n).read_text()
-                        for n in ("wheel.h", "dims.h", "recovery.h", "ramp.c", "car.c"))
+        #
+        # Each domain's file is checked in isolation rather than as one concatenated
+        # blob: a corpus-wide search let /recover window_ms's 1000 floor hide behind
+        # /wheel ppr's unrelated 1000 ceiling in wheel.h, so a genuine floor drift in
+        # recovery.h went undetected. Scoping per file closes that cross-domain
+        # collision.
+        file_for_path = {
+            "/wheel": "wheel.h", "/dims": "dims.h", "/recover": "recovery.h",
+            "/ramp": "ramp.c", "/trim": "car.c",
+        }
+        src_by_file = {n: (main / n).read_text() for n in set(file_for_path.values())}
         expected = {
             ("/wheel", "diameter_mm"): (20, 150), ("/wheel", "ppr"): (1, 1000),
             ("/wheel", "gear_x100"): (100, 30000),
@@ -91,14 +100,21 @@ class TestSchema(unittest.TestCase):
                     got[(d["path"], f["name"])] = (f["min"], f["max"])
         self.assertEqual(got, expected)
         for (path, name), (lo, hi) in expected.items():
+            fname = file_for_path[path]
+            src = src_by_file[fname]
             for bound in (lo, hi):
                 # Word-bounded: "2000" must not be satisfied by "12000", and "30"
                 # must not be found inside "-30". The min bounds were entirely
                 # unchecked before — a firmware floor drifting from the schema is
-                # exactly what this test exists to catch.
+                # exactly what this test exists to catch. Scoped to the one file that
+                # owns this domain's clamps, so an identical literal in another
+                # domain's file (e.g. wheel.h's WHEEL_PPR_MAX 1000) cannot mask a
+                # drift here. Not bulletproof within a single file, though: 0 (the
+                # /ramp floor) is common enough that another unrelated 0 in ramp.c
+                # could still mask a real drift there — a residual, one-file risk.
                 pat = rf"(?<![\w.-]){re.escape(str(bound))}(?![\w.])"
                 self.assertRegex(src, pat,
-                                 f"{path} {name}: bound {bound} not in the firmware sources")
+                                 f"{path} {name}: bound {bound} not in {fname}")
 
 
 import filecmp
