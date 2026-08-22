@@ -16,19 +16,17 @@ rejected, an enum refusing a value outside its set, a missing field rejected rat
 partially written, and a rejection carrying `{"error","field"}` — the envelope
 `cfg_api.c` and the mock both emit.
 
-`/calib*` and `/ota` are **asserted by status code only**, plus the JSON `calibrated`
-flag that `GET /calib` returns on both. Their reply bodies are where the two
-implementations genuinely differ: the firmware answers `ok` and `httpd_resp_send_err`
-text, the mock answers JSON. The contract says nothing about either, so this suite
-asserts the intersection rather than picking a winner — a suite only the mock can pass
-would be worse than no suite, because the first real-car run would drown a reviewer in
-failures that are not regressions. Unifying those bodies is a firmware change, and it
-belongs in a plan, not smuggled in here.
+`/calib*` and `/ota` are asserted against the same `{"ok":true}` / `{"error","field"}`
+envelope as the config domains — unified on 2026-08-22 (audit-fix spec rule 8). A
+firmware older than that unification fails exactly those lines; that is the point.
+The spin's 200 is also held to land only after the pulse, the timing calib_api.c
+documents the wizard as assuming.
 
 It restores every config value it found. Three things it does anyway, unavoidably:
 it POSTs each domain about ten times, and on a real car every accepted POST is an NVS
 write; it spins a wheel once (`/calib/spin`), so put the car on a stand; and it never
-POSTs a valid `/calib/save`, because a calibration cannot be put back.
+POSTs a valid `/calib/save`, because a calibration cannot be put back — and the two
+rejected `/ota` bodies stop the motors and briefly take the actuator on a real car.
 
 Stdlib only — no venv needed to run it against a car.
 """
@@ -36,11 +34,13 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "mock_car"))
 from generated import DOMAINS, PROTO, RT, TELEMETRY_FIELDS   # noqa: E402
+from state import CarState   # noqa: E402
 
 JSON_TYPES = {"int": int, "bool": bool, "str": str}
 TIMEOUT_S = 10
@@ -101,14 +101,13 @@ class Conformance:
         if self.expect_json(where, status, ctype, parsed, 200):
             self.check(parsed.get("ok") is True, f"{where}: body {parsed}, want {{'ok':true}}")
 
-    def expect_rejected(self, where, path, body, field=None, raw=None):
-        """A config-domain rejection: 400 carrying `{"error","field"}`.
+    def expect_rejected(self, where, path, body, field=None, raw=None, status=400):
+        """A rejection carrying the `{"error","field"}` envelope.
 
-        Config only. `/calib*` and `/ota` reject with a bare text body on the car, and
-        `expect_status` is what holds them to account.
-        """
-        status, ctype, parsed, _ = self.call("POST", path, body, raw=raw)
-        if not self.expect_json(where, status, ctype, parsed, 400):
+        Since the 2026-08-22 unification (spec rule 8) this covers /calib* and
+        /ota too, not only the config domains."""
+        got, ctype, parsed, _ = self.call("POST", path, body, raw=raw)
+        if not self.expect_json(where, got, ctype, parsed, status):
             return
         self.check(isinstance(parsed.get("error"), str) and parsed["error"] != "",
                    f"{where}: no 'error' in {parsed}")
@@ -151,9 +150,14 @@ class Conformance:
 
     def identity(self):
         print("/")
+        _, _, parsed, _ = self.call("GET", "/status")
+        device = (parsed or {}).get(RT["device_field"], "")
         status, _, _, payload = self.call("GET", "/")
         self.check(status == 200, f"/: status {status}, want 200")
-        self.check(bool(payload.strip()), "/: empty identity line")
+        line = payload.decode(errors="replace").strip()
+        self.check(bool(line), "/: empty identity line")
+        self.check(bool(device) and line.split()[:1] == [device],
+                   f"/: {line!r} does not lead with the device id {device!r}")
 
     def unknown_path(self):
         print("/nosuchthing")
@@ -231,7 +235,7 @@ class Conformance:
         self.expect_rejected(f"POST {path} (JSON array)", path, [1, 2])
 
     def calibration(self):
-        """The wizard's three calls. Bodies are not asserted — see the module docstring.
+        """The wizard's three calls, all asserted against the unified envelope.
 
         `GET /calib` is the exception: both sides answer `{"calibrated": <bool>}` as
         JSON, and the app reads it to decide whether to open the wizard at all, so it is
@@ -243,37 +247,55 @@ class Conformance:
             self.check(isinstance(parsed.get("calibrated"), bool),
                        f"GET /calib: calibrated is {parsed.get('calibrated')!r}, want a bool")
 
-        self.expect_status("POST /calib/spin pair=9", "POST", "/calib/spin",
-                           {"pair": 9, "dir": 1})
-        self.expect_status("POST /calib/spin dir=7", "POST", "/calib/spin",
-                           {"pair": 0, "dir": 7})
-        self.expect_status("POST /calib/spin (empty body)", "POST", "/calib/spin", {})
-        self.expect_status("POST /calib/spin (malformed JSON)", "POST", "/calib/spin",
-                           None, raw=b"{not json")
+        self.expect_rejected("POST /calib/spin pair=9", "/calib/spin",
+                             {"pair": 9, "dir": 1}, "pair")
+        self.expect_rejected("POST /calib/spin dir=7", "/calib/spin",
+                             {"pair": 0, "dir": 7}, "dir")
+        self.expect_rejected("POST /calib/spin (empty body)", "/calib/spin", {})
+        self.expect_rejected("POST /calib/spin (malformed JSON)", "/calib/spin",
+                             None, raw=b"{not json")
 
-        # A spin either turns a wheel (200) or is refused because something outranks the
-        # wizard (409). Both are conformant; a 200 that did not spin is what the app's
-        # calibration used to believe, and what the wizard must now be able to tell apart.
-        # This is the one call in the suite that moves the car.
-        self.expect_status("POST /calib/spin pair=0 dir=1", "POST", "/calib/spin",
-                           {"pair": 0, "dir": 1}, want=(200, 409))
+        # The one call that moves the car. 200 (it span) and 409 (something
+        # outranks the wizard) are both conformant — but a 200 must land AFTER
+        # the pulse: calib_api.c sleeps it out so the wizard's "which wheel
+        # turned?" prompt appears with the wheel already stopped, and a client
+        # paced against an instant reply mispaces on hardware.
+        t0 = time.monotonic()
+        status, ctype, parsed, _ = self.call("POST", "/calib/spin", {"pair": 0, "dir": 1})
+        elapsed = time.monotonic() - t0
+        self.check(status in (200, 409), f"spin: status {status}, want 200 or 409")
+        self.check(ctype.startswith("application/json"),
+                   f"spin: Content-Type {ctype!r}, want application/json")
+        if status == 200:
+            self.check(parsed == {"ok": True}, f"spin: body {parsed}, want {{'ok':true}}")
+            floor = CarState.CALIB_HOLD_MS / 1000.0 * 0.8
+            self.check(elapsed >= floor,
+                       f"spin: 200 in {elapsed:.2f}s, want >= {floor:.2f}s (after the pulse)")
+        else:
+            self.check(isinstance(parsed, dict) and isinstance(parsed.get("error"), str),
+                       f"spin 409: body {parsed}, want the error envelope")
 
-        # Only rejections: a valid table cannot be un-saved, and this suite restores
-        # what it found.
-        self.expect_status("POST /calib/save (three wheels)", "POST", "/calib/save",
-                           {"wheels": [{"pair": p, "sign": 1} for p in range(3)]})
-        self.expect_status("POST /calib/save (duplicate pairs)", "POST", "/calib/save",
-                           {"wheels": [{"pair": 0, "sign": 1}] * 4})
-        self.expect_status("POST /calib/save (sign 0)", "POST", "/calib/save",
-                           {"wheels": [{"pair": p, "sign": 0} for p in range(4)]})
-        self.expect_status("POST /calib/save (no wheels)", "POST", "/calib/save", {})
+        # Only rejections: a valid table cannot be un-saved.
+        self.expect_rejected("POST /calib/save (three wheels)", "/calib/save",
+                             {"wheels": [{"pair": p, "sign": 1} for p in range(3)]}, "wheels")
+        self.expect_rejected("POST /calib/save (duplicate pairs)", "/calib/save",
+                             {"wheels": [{"pair": 0, "sign": 1}] * 4}, "wheels")
+        self.expect_rejected("POST /calib/save (sign 0)", "/calib/save",
+                             {"wheels": [{"pair": p, "sign": 0} for p in range(4)]}, "wheels")
+        self.expect_rejected("POST /calib/save (string pairs)", "/calib/save",
+                             {"wheels": [{"pair": str(p), "sign": 1} for p in range(4)]},
+                             "wheels")
+        self.expect_rejected("POST /calib/save (no wheels)", "/calib/save", {}, "wheels")
 
     def ota(self):
         print("/ota")
-        # Deliberately tiny: a conformance run must never flash anything. Status only —
-        # ota_api.c answers `httpd_resp_send_err`, which is text/html.
-        self.expect_status("POST /ota (32 bytes)", "POST", "/ota", None,
-                           raw=b"\xe9" + b"\x00" * 31)
+        # Neither body flashes anything: the first is under the size floor, the
+        # second fails the ESP image magic on the first write. On a real car both
+        # do stop the motors and briefly take the actuator, like the spin above.
+        self.expect_rejected("POST /ota (32 bytes)", "/ota", None,
+                             raw=b"\xe9" + b"\x00" * 31)
+        self.expect_rejected("POST /ota (4 KB, bad magic)", "/ota", None,
+                             raw=b"\x00" * 4096, status=500)
 
     def run(self):
         self.status()
