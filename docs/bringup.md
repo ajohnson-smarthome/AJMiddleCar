@@ -243,3 +243,26 @@ Two things worth knowing for next time:
 After the update: versions match, `SDIO SW_AGGR negotiated (e2h=15872B h2e=15872B)` — so the
 ESP-IDF patch this project carries finally earns its keep, where the old image had forced a
 fallback to `compatible streaming mode` — and boot reaches `Ready` in 3.7 s instead of 8.7 s.
+
+### A loaded motor ignores small duty, so the firmware now cheats (2026-08-24)
+
+The JGB37-520B has real stiction: a stopped motor under even minimal load never starts on a
+small command — it hums at 15% duty and stays put — while the very same duty keeps an
+already-spinning motor spinning happily. The linear command→duty map had no answer to this:
+the bottom of the stick was a band of commands the car physically could not act on from rest.
+
+The crutch is two-part, and both constants live in `board.h` where tuning belongs:
+
+- **A duty floor** (`BOARD_DUTY_FLOOR`): commands above the deadzone now land in
+  `[floor..4095]` instead of `[0..4095]` — the smallest driven command is one the motor can
+  actually respond to (`motors.c`).
+- **A start kick** (`BOARD_KICK_DUTY` × `BOARD_KICK_TICKS`): a channel leaving standstill on
+  a command below the kick duty gets a short burst at the kick duty with the ramp bypassed,
+  then falls to what was commanded (`link.h`). A stop is never kicked — target zero disarms
+  instantly, so the instant fall stays instant.
+
+Both numbers are un-measured bench guesses; the encoders are not wired yet, so they cannot be
+anything else. The real fix is per-wheel: the calibration wizard should measure each wheel's
+actual start duty — loaded, on the floor — once encoders can report "it moved", and the
+guessed constants retire into per-wheel calibration the same way `sign` and `channel_pair`
+already work.

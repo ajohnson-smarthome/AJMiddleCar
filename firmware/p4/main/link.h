@@ -104,19 +104,37 @@ _Static_assert(LINK_SRC_SAFE + 2 == CTL_COUNT, "link_src_t and ctl_values disagr
  * order[] receives the channels that need writing — every falling channel first, then
  * the rises — and the count is returned. Channel pairs are (0,1)(2,3)(4,5)(6,7), one
  * BTS7960 each (motors.h): a single ascending pass wrote a reversal's rise before its
- * pair-mate's fall, driving both bridge inputs for the I2C gap between them. */
+ * pair-mate's fall, driving both bridge inputs for the I2C gap between them.
+ * The rise bound is per channel because a kicked channel bypasses the ramp for its
+ * kick ticks while its neighbours keep theirs (link_kick_plan). */
 static inline uint8_t link_plan_writes(const uint16_t cur[8], const uint16_t tgt[8],
-                                       uint16_t max_up, uint16_t next[8],
+                                       const uint16_t up[8], uint16_t next[8],
                                        uint8_t order[8]) {
     uint8_t n = 0;
     for (uint8_t ch = 0; ch < 8; ch++) {
-        next[ch] = ramp_step(cur[ch], tgt[ch], max_up);
+        next[ch] = ramp_step(cur[ch], tgt[ch], up[ch]);
         if (next[ch] < cur[ch]) order[n++] = ch;
     }
     for (uint8_t ch = 0; ch < 8; ch++) {
         if (next[ch] > cur[ch]) order[n++] = ch;
     }
     return n;
+}
+
+/* Pure: start-assist for stiction. A channel leaving standstill (cur==0, tgt>0)
+   on a command below kick_duty gets kick_ticks ticks at kick_duty with the ramp
+   bypassed for those ticks. tgt==0 disarms instantly: a stop is never kicked,
+   the instant fall stays instant. */
+static inline void link_kick_plan(const uint16_t cur[8], uint16_t tgt[8],
+                                  uint16_t up[8], uint8_t kick[8],
+                                  uint16_t ramp_up, uint16_t kick_duty,
+                                  uint8_t kick_ticks) {
+    for (uint8_t ch = 0; ch < 8; ch++) {
+        up[ch] = ramp_up;
+        if (tgt[ch] == 0) { kick[ch] = 0; continue; }
+        if (cur[ch] == 0 && kick[ch] == 0 && tgt[ch] < kick_duty) kick[ch] = kick_ticks;
+        if (kick[ch]) { kick[ch]--; if (tgt[ch] < kick_duty) tgt[ch] = kick_duty; up[ch] = 4095; }
+    }
 }
 
 /* Pure: may a channel be driven to `duty` while its pair-mate's last-written duty is

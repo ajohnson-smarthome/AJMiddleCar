@@ -26,6 +26,35 @@ static void ctl_vocabulary(void) {
     assert(strcmp(link_src_name((link_src_t)99), "?") == 0);
 }
 
+static void up_fill(uint16_t up[8], uint16_t v) {
+    for (int ch = 0; ch < 8; ch++) up[ch] = v;
+}
+
+/* The kick constants the scenarios below use — literals, not board.h's, so retuning
+   the bench guesses does not rewrite this file's arithmetic. 273 is a real ramp bound:
+   ramp_max_up_per_tick(300, 20) = 4095*20/300. */
+#define KD 2600u   /* kick duty */
+#define KT 3u      /* kick ticks */
+#define RU 273u    /* ramped rise per tick */
+
+/* One actuator tick over the pure planners, the way link_task runs them: kick, plan,
+   then apply the ordered writes to the chip shadow behind the rise_safe gate — with
+   the shoot-through invariant checked after every landed write. */
+static void tick(uint16_t cur[8], const uint16_t cmd[8], uint8_t kick[8],
+                 uint16_t next[8]) {
+    uint16_t tgt[8], up[8];
+    uint8_t  order[8];
+    memcpy(tgt, cmd, 8 * sizeof(uint16_t));
+    link_kick_plan(cur, tgt, up, kick, RU, KD, (uint8_t)KT);
+    uint8_t n = link_plan_writes(cur, tgt, up, next, order);
+    for (uint8_t k = 0; k < n; k++) {
+        uint8_t ch = order[k];
+        if (!link_rise_safe(cur[ch ^ 1], next[ch])) continue;
+        cur[ch] = next[ch];
+        assert(!(cur[ch & ~1] && cur[ch | 1]));   /* never both bridge inputs driven */
+    }
+}
+
 int main(void) {
     ctl_vocabulary();
 
@@ -90,11 +119,13 @@ int main(void) {
        still held the old duty on the chip — both BTS7960 inputs driven for the I2C
        gap, and for >=20 ms per tick while the fall's write kept failing. */
     {
+        uint16_t up[8];
+        up_fill(up, 4095);
         uint16_t cur[8] = { 2000, 0, 0, 1500, 0, 0, 0, 0 };
         uint16_t tgt[8] = { 0, 4095, 0, 1500, 0, 0, 300, 0 };
         uint16_t next[8];
         uint8_t  order[8];
-        uint8_t  n = link_plan_writes(cur, tgt, 4095, next, order);
+        uint8_t  n = link_plan_writes(cur, tgt, up, next, order);
         assert(n == 3);
         assert(order[0] == 0);                    /* the fall (ch0: 2000 -> 0) first */
         assert(order[1] == 1 && order[2] == 6);   /* rises after, ascending */
@@ -104,15 +135,25 @@ int main(void) {
         /* Bounded rise still ramps; fall is instant. */
         uint16_t cur2[8] = { 0, 1000, 0, 0, 0, 0, 0, 0 };
         uint16_t tgt2[8] = { 500, 0, 0, 0, 0, 0, 0, 0 };
-        n = link_plan_writes(cur2, tgt2, 100, next, order);
+        up_fill(up, 100);
+        n = link_plan_writes(cur2, tgt2, up, next, order);
         assert(n == 2 && order[0] == 1 && order[1] == 0);
         assert(next[1] == 0 && next[0] == 100);
+
+        /* The bound is per channel now (the kick needs one channel unbounded while
+           its neighbours ramp): ch0 keeps the 100 bound, ch2 rises freely. */
+        uint16_t cur4[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+        uint16_t tgt4[8] = { 500, 0, 500, 0, 0, 0, 0, 0 };
+        up[2] = 4095;
+        n = link_plan_writes(cur4, tgt4, up, next, order);
+        assert(n == 2 && next[0] == 100 && next[2] == 500);
 
         /* At boot the shadow is SHADOW-unknown (0xFFFF): everything "falls" to its
            target, so the zeroing writes are ordered first by construction. */
         uint16_t cur3[8] = { 0xFFFF, 0xFFFF, 0, 0, 0, 0, 0, 0 };
         uint16_t tgt3[8] = { 0 };
-        n = link_plan_writes(cur3, tgt3, 4095, next, order);
+        up_fill(up, 4095);
+        n = link_plan_writes(cur3, tgt3, up, next, order);
         assert(n == 2 && order[0] == 0 && order[1] == 1 && next[0] == 0);
     }
     /* A rise may not land while the pair-mate holds ANY duty on the chip — the
@@ -121,6 +162,93 @@ int main(void) {
     assert(link_rise_safe(2000, 0));      /* writing a zero is always safe */
     assert(!link_rise_safe(2000, 4095));
     assert(!link_rise_safe(0xFFFF, 1));
+
+    /* --- the start kick: a channel leaving standstill on a small command ---------
+       Stiction crutch (board.h): a stopped brushed motor under load ignores small
+       duty, so the first KT ticks run at KD with the ramp bypassed, then the duty
+       falls — instantly, falls are never ramped — to what was commanded. */
+    {
+        uint16_t cur[8] = {0}, next[8], cmd[8] = {0};
+        uint8_t  kick[8] = {0};
+
+        /* Standstill + small target: KD for exactly KT ticks, then the command. */
+        cmd[0] = 1200;                    /* below KD -> eligible */
+        tick(cur, cmd, kick, next);
+        assert(next[0] == KD);            /* tick 1: straight to KD, ramp bypassed (RU=273) */
+        assert(cur[0] == KD && kick[0] == KT - 1);
+        tick(cur, cmd, kick, next);
+        assert(next[0] == KD);            /* tick 2: held */
+        tick(cur, cmd, kick, next);
+        assert(next[0] == KD && kick[0] == 0);   /* tick 3: last kick tick */
+        tick(cur, cmd, kick, next);
+        assert(next[0] == 1200 && cur[0] == 1200);  /* tick 4: instant fall to the command */
+        tick(cur, cmd, kick, next);
+        assert(next[0] == 1200 && kick[0] == 0);    /* moving now — never re-kicked */
+
+        /* Target 0 mid-kick: the stop lands this tick and the kick state clears. */
+        memset(cur, 0, sizeof(cur)); memset(kick, 0, sizeof(kick));
+        cmd[0] = 1200;
+        tick(cur, cmd, kick, next);
+        assert(cur[0] == KD && kick[0] == KT - 1);
+        cmd[0] = 0;
+        tick(cur, cmd, kick, next);
+        assert(next[0] == 0 && cur[0] == 0 && kick[0] == 0);
+
+        /* An already-moving channel never kicks: it just ramps. */
+        memset(cur, 0, sizeof(cur)); memset(kick, 0, sizeof(kick));
+        cur[0] = 500;
+        cmd[0] = 1200;
+        tick(cur, cmd, kick, next);
+        assert(kick[0] == 0 && next[0] == 500 + RU);
+
+        /* A target at or above KD needs no assist: no kick, normal ramp from zero. */
+        memset(cur, 0, sizeof(cur)); memset(kick, 0, sizeof(kick));
+        cmd[0] = 3000;
+        tick(cur, cmd, kick, next);
+        assert(kick[0] == 0 && next[0] == RU);
+        memset(cur, 0, sizeof(cur));
+        cmd[0] = KD;                      /* the boundary itself: < is strict */
+        tick(cur, cmd, kick, next);
+        assert(kick[0] == 0 && next[0] == RU);
+    }
+
+    /* --- a kicked rise still waits for its pair-mate's fall ----------------------
+       Reversal under kick: ch1 held 2000 on the chip, the new command is a small
+       forward on ch0 — kicked to KD. The fall is ordered first; while its write
+       keeps failing, rise_safe defers the kick, and at no written state are both
+       bridge inputs nonzero. */
+    {
+        uint16_t chip[8] = { 0, 2000, 0, 0, 0, 0, 0, 0 };   /* the shadow: chip truth */
+        uint16_t cmd[8]  = { 1200, 0, 0, 0, 0, 0, 0, 0 };
+        uint8_t  kick[8] = {0};
+        uint16_t tgt[8], up[8], next[8];
+        uint8_t  order[8];
+
+        /* Tick 1, and ch1's fall write FAILS (the shadow keeps the old duty). */
+        memcpy(tgt, cmd, sizeof(tgt));
+        link_kick_plan(chip, tgt, up, kick, RU, KD, (uint8_t)KT);
+        assert(tgt[0] == KD && up[0] == 4095 && kick[0] == KT - 1);
+        uint8_t n = link_plan_writes(chip, tgt, up, next, order);
+        assert(n == 2 && order[0] == 1 && order[1] == 0);   /* mate's fall first */
+        /* order[0]: the write fails — chip[1] stays 2000. order[1]: the kicked rise
+           must now be refused by the gate, exactly as link_task's loop refuses it. */
+        assert(!link_rise_safe(chip[0 ^ 1], next[0]));
+        assert(!(chip[0] && chip[1]));                      /* still only ch1 driven */
+
+        /* Tick 2, and the fall now lands: zero first, then the kick — never both. */
+        memcpy(tgt, cmd, sizeof(tgt));
+        link_kick_plan(chip, tgt, up, kick, RU, KD, (uint8_t)KT);
+        assert(kick[0] == KT - 2 && tgt[0] == KD);          /* still kicking, no re-arm */
+        n = link_plan_writes(chip, tgt, up, next, order);
+        assert(n == 2 && order[0] == 1 && order[1] == 0);
+        for (uint8_t k = 0; k < n; k++) {
+            uint8_t ch = order[k];
+            if (!link_rise_safe(chip[ch ^ 1], next[ch])) continue;
+            chip[ch] = next[ch];
+            assert(!(chip[0] && chip[1]));                  /* after every landed write */
+        }
+        assert(chip[1] == 0 && chip[0] == KD);              /* reversed, kick applied */
+    }
 
     printf("test_link: all passed\n");
     return 0;

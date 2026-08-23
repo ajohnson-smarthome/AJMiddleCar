@@ -1,6 +1,20 @@
 #include "motors.h"
+#include "board.h"   /* BOARD_DUTY_FLOOR — all #defines, so this stays host-compilable */
 
 static float absf(float x) { return x < 0.0f ? -x : x; }
+
+// Command magnitude -> PWM duty. Not the old linear mag*4095: commands above the
+// deadzone are remapped onto [BOARD_DUTY_FLOOR..4095], because a loaded brushed motor
+// ignores small duty — it hums below the floor and never turns. The floor is a crutch
+// with a hand-guessed constant (board.h) until per-wheel measurement replaces it.
+// Only called with mag > dz, so k lands in (0..1]; the clamps guard float edge cases.
+static uint16_t duty_for(float mag, float dz) {
+    float span = 1.0f - dz;
+    float k = span > 0.0f ? (mag - dz) / span : 1.0f;  // mag > dz guaranteed by the branch
+    if (k > 1.0f) k = 1.0f;
+    if (k < 0.0f) k = 0.0f;
+    return (uint16_t)(BOARD_DUTY_FLOOR + k * (4095.0f - BOARD_DUTY_FLOOR) + 0.5f);
+}
 
 static float side_for(wheel_pos_t pos, float left, float right) {
     switch (pos) {
@@ -27,14 +41,13 @@ motor_outputs_t motors_plan(float left, float right, const motors_config_t *cfg)
 
         float mag = absf(s);
         if (mag > 1.0f) mag = 1.0f;
-        uint16_t duty = (uint16_t)(mag * 4095.0f + 0.5f);
 
         if (s > cfg->deadzone) {          // forward
-            out.duty[ch_a] = duty;
+            out.duty[ch_a] = duty_for(mag, cfg->deadzone);
             out.duty[ch_b] = 0;
         } else if (s < -cfg->deadzone) {  // reverse
             out.duty[ch_a] = 0;
-            out.duty[ch_b] = duty;
+            out.duty[ch_b] = duty_for(mag, cfg->deadzone);
         } else {                          // stop
             out.duty[ch_a] = 0;
             out.duty[ch_b] = 0;

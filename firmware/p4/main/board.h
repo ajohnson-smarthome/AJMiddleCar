@@ -38,6 +38,17 @@
 #define BOARD_PCA_ADDR_REAR   0x60
 #define BOARD_PCA_CH_PER_CHIP 4
 
+// Stiction crutch for the JGB37-520B on a BTS7960: a stopped motor under even minimal
+// load ignores small duty — it hums and stays put, while the same duty keeps a spinning
+// motor spinning. So commands above the deadzone land at a duty floor (motors.c), and a
+// channel leaving standstill gets a short burst of start-assist duty past the ramp
+// (link.h). These numbers are UN-MEASURED bench guesses (encoders not wired, 2026-08-24)
+// and are THE tuning knobs — turn them here, not in the code that uses them. The real fix
+// is a per-wheel start duty measured by the calibration wizard once encoders land.
+#define BOARD_DUTY_FLOOR  1100   /* ~27%: smallest duty commanded above the deadzone */
+#define BOARD_KICK_DUTY   2600   /* ~63%: start-assist duty for a channel leaving standstill */
+#define BOARD_KICK_TICKS  3      /* x LINK_TICK_MS (20 ms) = 60 ms of kick */
+
 // The C6 runs esp_hosted's slave image, delivered out of band (firmware/c6/README.md) —
 // over SDIO from the host is the recorded route, the UART header the fallback. The
 // EXPECTED slave version is no longer pinned here by hand: status_api derives it at
