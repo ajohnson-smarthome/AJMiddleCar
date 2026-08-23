@@ -181,5 +181,4 @@ Two things are known and unfinished — the motors are not wired yet, so `board.
 still unverified — a stock build boots anyway with `bus_ok:false` (network and OTA up, motors
 inert, by design); and the native USB port stopped enumerating, so bench work runs with a local
 override putting the console on UART0. Both are written up in `docs/bringup.md`, which is the
-live record of what the board
-has and has not answered.
+live record of what the board has and has not answered.
