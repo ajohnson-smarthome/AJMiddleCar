@@ -72,6 +72,10 @@ enum L {
     static func fwVersionLine(_ v: String) -> String { s("fw.versionLine", v) }
     static func fwTransition(_ a: String, _ b: String) -> String { s("fw.transition", a, b) }
     static func fwDoneSub(_ v: String) -> String { s("fw.doneSub", v) }
+    static var fwFlashedTitle: String { s("fw.flashedTitle") }
+    static var fwFlashedSub: String { s("fw.flashedSub") }
+    static var fwRollbackSub: String { s("fw.rollbackSub") }
+    static var fwSkip: String { s("fw.skip") }
     static var driveConnected: String { s("drive.connected") }
     static var rampTitle: String { s("ramp.title") }
     static var rampHeadline: String { s("ramp.headline") }

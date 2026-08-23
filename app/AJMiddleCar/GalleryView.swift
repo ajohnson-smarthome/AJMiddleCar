@@ -88,6 +88,8 @@ struct GalleryView: View {
                 palette: p, debugPhase: .upToDate,
                 link: CarLink.preview(.live(Telemetry()), fw: "v1.0+584",
                                       radio: .unavailable)) })),
+            ("Firmware flashed",         fw(.flashed)),
+            ("Firmware failed forced",   fw(.failed, forced: true)),
             ("Drive arcade",            AnyView(DriveView(link: mockLink(), intent: intent, preview: true).onAppear { UserDefaults.standard.set(Scheme.arcade.rawValue, forKey: "scheme") })),
             ("Drive tank",              AnyView(DriveView(link: mockLink(), intent: intent, preview: true).onAppear { UserDefaults.standard.set(Scheme.tank.rawValue, forKey: "scheme") })),
             ("Drive warning",           AnyView(DriveView(link: mockLink(wdtTrips: 3), intent: intent, preview: true))),

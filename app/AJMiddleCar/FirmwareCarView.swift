@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Phases of the firmware-update screen, shared by FirmwareView and its car image.
-enum FwPhase { case checking, upToDate, available, downloading, downloaded, uploading, rebooting, done, failed }
+enum FwPhase { case checking, upToDate, available, downloading, downloaded, uploading, rebooting, flashed, done, failed }
 
 /// Top-down car + center chip + OTA rings, drawn 1:1 from the reference mockup.
 /// Rings sit behind the opaque car (so they ring around/under it). They pulse while waiting,
@@ -19,13 +19,13 @@ struct FirmwareCarView: View {
         case .checking, .downloading, .downloaded: return .wait
         case .uploading: return .active
         case .rebooting: return .ping
-        case .upToDate: return .deco
+        case .upToDate, .flashed: return .deco
         case .available, .done, .failed: return .none
         }
     }
     private var chipIcon: String {
         switch phase {
-        case .upToDate, .done: return "checkmark"
+        case .upToDate, .done, .flashed: return "checkmark"
         case .failed: return "exclamationmark"
         default: return "cpu"
         }

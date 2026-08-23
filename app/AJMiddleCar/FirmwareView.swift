@@ -11,6 +11,8 @@ struct FirmwareView: View {
     @State private var release: UpdateClient.Release?
     @State private var binURL: URL?
     @State private var phase: FwPhase = .checking
+    @State private var flashAttempted = false
+    @State private var rolledBack = false
     @Environment(\.dismiss) private var dismiss
 
     private var current: String { link.fw ?? "—" }
@@ -23,7 +25,7 @@ struct FirmwareView: View {
             stateBlock
         }
         .task {
-            if let dp = debugPhase { phase = dp; return }
+            if let dp = debugPhase { phase = dp; flashAttempted = true; return }
             link.refreshRadio()
             await check()
         }
@@ -56,12 +58,17 @@ struct FirmwareView: View {
                 ProgressView(value: client.uploadProgress).tint(p.accent).frame(width: 160)
             case .rebooting:
                 title(L.fwRebootTitle); sub(L.fwRebootWait)
+            case .flashed:
+                title(L.fwFlashedTitle); sub(L.fwFlashedSub)
+                if forced { skipButton }
             case .done:
                 title(L.fwDoneTitle); sub(L.fwDoneSub(current))
                 if forced { Color.clear.frame(width: 0, height: 0).onAppear { onDone?() } }
             case .failed:
-                title(L.fwFailTitle); sub(L.fwFailSub)
+                title(L.fwFailTitle)
+                sub(rolledBack && link.rollback != false ? L.fwRollbackSub : L.fwFailSub)
                 fwButton(L.fwRetry, prominent: true) { Task { await check() } }
+                if forced && flashAttempted { skipButton }
             }
             radioLine
         }
@@ -109,6 +116,13 @@ struct FirmwareView: View {
         .padding(.top, 3)
     }
 
+    /// Decision 5's escape hatch: a forced gate that failed (or could not confirm) a flash
+    /// must not be a locked room. Ghost styling — continuing unupdated is the fallback, not
+    /// the offer.
+    private var skipButton: some View {
+        fwButton(L.fwSkip, prominent: false) { onDone?() }
+    }
+
     private func check() async {
         phase = .checking
         let r = await client.latestRelease()
@@ -129,21 +143,33 @@ struct FirmwareView: View {
     }
     private func flash() async {
         guard let url = binURL else { return }
+        flashAttempted = true
+        rolledBack = false
         phase = .uploading
         guard await client.upload(url) else { phase = .failed; return }
+        // The car acknowledged the upload: the image is written, set as boot target, and the
+        // reboot is unconditional. From here the flash is COMMITTED — the question is only
+        // whether this phone gets to watch the confirmation.
         phase = .rebooting
         let oldFw = link.fw
         var sawOffline = false
         let deadline = Date.now.addingTimeInterval(25)
         while Date.now < deadline {
             try? await Task.sleep(nanoseconds: 500_000_000)
-            // Success = the firmware version changed (reboot confirmed) OR the classic
-            // offline→online bounce. The version check also catches a fast reboot that never
-            // tripped the offline debounce.
             if let nf = link.fw, oldFw != nil, nf != oldFw { phase = .done; return }
             if !link.isLive { sawOffline = true }
-            else if sawOffline { phase = .done; return }
+            else if sawOffline {
+                // The car came back — with the SAME firmware. That is a bootloader rollback
+                // (or a flash that never took), never success: calling it done is what looped
+                // the forced gate forever against a rolling-back release.
+                rolledBack = true
+                phase = .failed
+                return
+            }
         }
-        phase = .failed
+        // Deadline without a reconnect: iOS routinely hops to another known network when the
+        // softAP vanishes and does not come back on its own. The flash is committed either
+        // way — report that, not failure.
+        phase = .flashed
     }
 }
