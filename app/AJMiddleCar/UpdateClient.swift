@@ -189,6 +189,8 @@ final class UpdateClient: NSObject, ObservableObject {
             // `CarError` (`.noWiFi`, `.denied`, `.refused`, `.timeout`, `.malformed`,
             // `.truncated`) or anything else unexpected: none of these are the car speaking,
             // they're the transport never reaching it — generic copy, not a fabricated quote.
+            // Nothing on screen names the reason, so it goes to the log instead.
+            print("upload failed: \((error as? CarError)?.logDescription ?? String(describing: error))")
             return .failed(nil)
         }
     }

@@ -137,13 +137,22 @@ void app_main(void) {
     telemetry_start();                     // 1 Hz RSSI sampler, off the control task
     recovery_init();                       // breadcrumb buffer; the watchdog trips into it
     /* Driving comes up before the API: rt_link carries control, the watchdog and
-       telemetry, and none of it depends on the HTTP server being there. */
-    ESP_ERROR_CHECK(rt_link_start());
-    ESP_ERROR_CHECK(http_server_start());
-    ESP_ERROR_CHECK(calib_api_start());
-    ESP_ERROR_CHECK(status_api_start());
-    ESP_ERROR_CHECK(ota_api_start());
-    ESP_ERROR_CHECK(cfg_api_start());   // all five config domains, from the generated table
+       telemetry, and none of it depends on the HTTP server being there.
+       Post-mark-valid: a failure here must NOT panic — rollback is already waived, so a
+       panic is a permanent boot-loop on a car with no cable. Log loudly and keep what runs. */
+    esp_err_t err;
+    if ((err = rt_link_start()) != ESP_OK)
+        ESP_LOGE(TAG, "rt_link_start failed: %s — control channel is down", esp_err_to_name(err));
+    if ((err = http_server_start()) != ESP_OK)
+        ESP_LOGE(TAG, "http_server_start failed: %s — HTTP API is down", esp_err_to_name(err));
+    if ((err = calib_api_start()) != ESP_OK)
+        ESP_LOGE(TAG, "calib_api_start failed: %s — calibration endpoint is down", esp_err_to_name(err));
+    if ((err = status_api_start()) != ESP_OK)
+        ESP_LOGE(TAG, "status_api_start failed: %s — /status endpoint is down", esp_err_to_name(err));
+    if ((err = ota_api_start()) != ESP_OK)
+        ESP_LOGE(TAG, "ota_api_start failed: %s — OTA endpoint is down, this car cannot be updated over the air", esp_err_to_name(err));
+    if ((err = cfg_api_start()) != ESP_OK)
+        ESP_LOGE(TAG, "cfg_api_start failed: %s — config endpoints are down, all five domains", esp_err_to_name(err));
 
     console_init();
     ESP_LOGI(TAG, "Ready. Enter 'mix <throttle> <yaw>' (each -1..1), e.g. 'mix 0.5 0.2':");
