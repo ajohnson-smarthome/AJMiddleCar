@@ -5,6 +5,7 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_task_wdt.h"
+#include "board.h"     /* BOARD_KICK_DUTY, BOARD_KICK_TICKS, BOARD_KICK_IDLE_TICKS */
 #include "pca9685.h"
 #include "ramp.h"
 
@@ -106,7 +107,16 @@ static void link_task(void *arg) {
         memcpy(tgt, s_target, sizeof(tgt));
         xSemaphoreGive(s_lock);
 
-        uint16_t up = ramp_max_up_per_tick(ramp_get_ms(), LINK_TICK_MS);
+        /* Start-assist state: one kick countdown per channel, and one idle streak
+           per bridge pair (link_kick_plan's per-pair standstill latch). Lives with
+           the task because only this loop, the sole writer, knows when a channel
+           truly left standstill. */
+        static uint8_t s_kick[8] = {0};
+        static uint8_t s_kick_idle[4] = {0};
+        uint16_t up[8];
+        link_kick_plan(s_current, tgt, up, s_kick, s_kick_idle,
+                       ramp_max_up_per_tick(ramp_get_ms(), LINK_TICK_MS),
+                       BOARD_KICK_DUTY, BOARD_KICK_TICKS, BOARD_KICK_IDLE_TICKS);
         uint16_t next[8];
         uint8_t  order[8];
         uint8_t  writes = link_plan_writes(s_current, tgt, up, next, order);

@@ -51,12 +51,36 @@ int main(void) {
     expect("tank FR A", o.duty[2], 0);    expect("tank FR B", o.duty[3], 4095);
     expect("tank RR A", o.duty[6], 0);    expect("tank RR B", o.duty[7], 4095);
 
-    // Half throttle: duty ~ 2048.
+    // Half throttle, under the duty floor's remap (BOARD_DUTY_FLOOR=1100):
+    // k = (0.5-0.05)/0.95 = 0.47368; 1100 + 0.47368*(4095-1100) + 0.5 = 2519.18 -> 2519.
+    // The old linear map said 2048 — the floor compresses [dz..1] into [1100..4095].
     o = motors_plan(0.5f, 0.5f, &cfg);
-    expect("half ch0", o.duty[0], 2048); expect("half ch1", o.duty[1], 0);
-    expect("half ch2", o.duty[2], 2048); expect("half ch3", o.duty[3], 0);
-    expect("half ch4", o.duty[4], 2048); expect("half ch5", o.duty[5], 0);
-    expect("half ch6", o.duty[6], 2048); expect("half ch7", o.duty[7], 0);
+    expect("half ch0", o.duty[0], 2519); expect("half ch1", o.duty[1], 0);
+    expect("half ch2", o.duty[2], 2519); expect("half ch3", o.duty[3], 0);
+    expect("half ch4", o.duty[4], 2519); expect("half ch5", o.duty[5], 0);
+    expect("half ch6", o.duty[6], 2519); expect("half ch7", o.duty[7], 0);
+
+    // Just above the deadzone: the smallest driven command lands at ~the floor, not at
+    // the hum-and-stay-put duty the linear map gave (0.06*4095 = 246).
+    // k = (0.06-0.05)/0.95 = 0.010526; 1100 + 0.010526*2995 + 0.5 = 1132.0 -> 1132.
+    o = motors_plan(0.06f, 0.0f, &cfg);
+    expect("floor FL A", o.duty[0], 1132); expect("floor FL B", o.duty[1], 0);
+    expect("floor RL A", o.duty[4], 1132); expect("floor RL B", o.duty[5], 0);
+
+    // Barely above: mag 0.051 -> k = 0.001/0.95 = 0.0010526;
+    // 1100 + 0.0010526*2995 + 0.5 = 1103.7 -> 1103. Right at the floor's doorstep.
+    o = motors_plan(0.051f, 0.0f, &cfg);
+    expect("doorstep FL A", o.duty[0], 1103); expect("doorstep FL B", o.duty[1], 0);
+
+    // Full still reaches the top: k = (1-0.05)/0.95 = 1; 1100 + 2995 + 0.5 -> 4095.
+    // (Asserted above too — this is the remap's other endpoint, spelled out.)
+    o = motors_plan(1.0f, 0.0f, &cfg);
+    expect("top FL A", o.duty[0], 4095);
+
+    // Reverse mirror of the floor: -0.06 lands at 1132 on CH_B.
+    o = motors_plan(-0.06f, 0.0f, &cfg);
+    expect("floor rev FL A", o.duty[0], 0); expect("floor rev FL B", o.duty[1], 1132);
+    expect("floor rev RL A", o.duty[4], 0); expect("floor rev RL B", o.duty[5], 1132);
 
     // Deadzone: tiny speed -> stop.
     o = motors_plan(0.02f, 0.0f, &cfg);
