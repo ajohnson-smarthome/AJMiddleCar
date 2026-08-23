@@ -23,41 +23,28 @@ final class UpdateClient: NSObject, ObservableObject {
     static let assetName = "ajmiddlecar.bin"
 
     /// Normalize a version like "v1.2" / "v1.2-3-gabc" → "1.2" for comparison.
-    static func normalize(_ v: String?) -> String {
-        guard let v else { return "" }
-        var s = v
-        if s.hasPrefix("v") { s.removeFirst() }
-        if let dash = s.firstIndex(of: "-") { s = String(s[s.startIndex..<dash]) }
-        return s
-    }
+    static func normalize(_ v: String?) -> String { UpdateRules.normalize(v) }
 
     /// Build number after the first "+" (e.g. "v1.2+246" -> 246); nil if absent/non-numeric.
-    static func buildNumber(_ version: String?) -> Int? {
-        guard let version, let plus = version.firstIndex(of: "+") else { return nil }
-        let digits = version[version.index(after: plus)...].prefix { $0.isNumber }
-        return digits.isEmpty ? nil : Int(digits)
-    }
+    static func buildNumber(_ version: String?) -> Int? { UpdateRules.buildNumber(version) }
 
     /// Update available iff both versions carry a build number and latest > running.
     /// Falls back to normalized string inequality when a build number is missing (legacy firmware/releases).
     static func isUpdateAvailable(running: String?, latest: String?) -> Bool {
-        if let r = buildNumber(running), let l = buildNumber(latest) { return l > r }
-        return normalize(latest) != normalize(running)
+        UpdateRules.isUpdateAvailable(running: running, latest: latest)
     }
 
     /// Need to (re)download the .bin: only when there IS a versioned latest release, and the
     /// cached file is missing or its build differs from the latest.
     static func needsDownload(latestBuild: Int?, cachedBuild: Int?, hasCachedFile: Bool) -> Bool {
-        guard let latestBuild else { return false }   // no versioned release → nothing to fetch
-        return !hasCachedFile || cachedBuild != latestBuild
+        UpdateRules.needsDownload(latestBuild: latestBuild, cachedBuild: cachedBuild,
+                                  hasCachedFile: hasCachedFile)
     }
 
     /// Forced update required iff the latest release carries a build number AND either the running
     /// firmware predates versioning (no build number) or its build is lower.
     static func mustUpdate(carFw: String?, latestTag: String?) -> Bool {
-        guard let latest = buildNumber(latestTag) else { return false }  // no versioned release → gate inert
-        guard let car = buildNumber(carFw) else { return true }          // pre-versioning firmware → must update
-        return latest > car
+        UpdateRules.mustUpdate(carFw: carFw, latestTag: latestTag)
     }
 
     // MARK: - Internet reachability + firmware cache
