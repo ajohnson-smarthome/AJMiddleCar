@@ -13,6 +13,7 @@ struct FirmwareView: View {
     @State private var phase: FwPhase = .checking
     @State private var flashAttempted = false
     @State private var rolledBack = false
+    @State private var offlineCache = false
     @Environment(\.dismiss) private var dismiss
 
     private var current: String { link.fw ?? "—" }
@@ -42,7 +43,10 @@ struct FirmwareView: View {
                 else { fwButton(L.fwRecheck, prominent: false) { Task { await check() } } }
             case .available:
                 title(forced ? L.gateUpdateTitle : L.fwAvailable)
-                sub(forced ? L.gateUpdateSub : L.fwTransition(current, release?.tag ?? "—"))
+                let target = offlineCache ? (UpdateClient.cachedTag ?? "—") : (release?.tag ?? "—")
+                sub(forced ? L.gateUpdateSub
+                           : L.fwTransition(current, target)
+                             + (offlineCache ? " · " + L.fwFromCache : ""))
                 fwButton(L.fwUpdate, prominent: true) { Task { await download() } }
             case .downloading:
                 title(L.fwDownloadTitle)
@@ -54,7 +58,7 @@ struct FirmwareView: View {
                 fwButton(L.fwFlash, prominent: true, disabled: !link.isLive) { Task { await flash() } }
             case .uploading:
                 title(L.fwUploadTitle)
-                sub("\(release?.tag ?? "") · \(Int(client.uploadProgress * 100))%")
+                sub("\(offlineCache ? (UpdateClient.cachedTag ?? "") : (release?.tag ?? "")) · \(Int(client.uploadProgress * 100))%")
                 ProgressView(value: client.uploadProgress).tint(p.accent).frame(width: 160)
             case .rebooting:
                 title(L.fwRebootTitle); sub(L.fwRebootWait)
@@ -125,12 +129,36 @@ struct FirmwareView: View {
 
     private func check() async {
         phase = .checking
-        let r = await client.latestRelease()
-        release = r
-        guard let r else { phase = .failed; return }
-        phase = UpdateClient.isUpdateAvailable(running: link.fw, latest: r.tag) ? .available : .upToDate
+        offlineCache = false
+        if let r = await client.latestRelease() {
+            release = r
+            phase = UpdateClient.isUpdateAvailable(running: link.fw, latest: r.tag)
+                ? .available : .upToDate
+            return
+        }
+        release = nil
+        // GitHub unreachable — the normal state on the car's internet-less AP. The launch
+        // gate already downloaded the release it knew about; a cached image NEWER than the
+        // car is flashable without any network (decision 4b). The car's build must be known:
+        // with no car identity there is nothing to compare against.
+        if UpdateClient.hasCachedFile,
+           let cached = UpdateClient.cachedBuild,
+           let car = UpdateRules.buildNumber(link.fw),
+           cached > car {
+            offlineCache = true
+            binURL = UpdateClient.cachedBinURL
+            phase = .available
+            return
+        }
+        phase = .failed
     }
     private func download() async {
+        if offlineCache {
+            // The image is already on disk, validated at download time (decision 6); the
+            // download phase would be a fetch of what we are standing on.
+            phase = .downloaded
+            return
+        }
         guard let r = release else { return }
         phase = .downloading
         let t0 = Date()

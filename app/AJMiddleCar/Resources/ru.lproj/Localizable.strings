@@ -47,6 +47,7 @@
 "fw.recheck"        = "Проверить снова";
 "fw.available"      = "Доступно обновление";
 "fw.transition"     = "%@ → %@";
+"fw.fromCache"      = "из кэша — GitHub недоступен";
 "fw.update"         = "Обновить";
 "fw.downloadTitle"  = "Скачивание";
 "fw.connectTitle"   = "Подключись к машинке";

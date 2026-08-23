@@ -71,6 +71,7 @@ enum L {
     static func fwCurrent(_ v: String) -> String { s("fw.current", v) }
     static func fwVersionLine(_ v: String) -> String { s("fw.versionLine", v) }
     static func fwTransition(_ a: String, _ b: String) -> String { s("fw.transition", a, b) }
+    static var fwFromCache: String { s("fw.fromCache") }
     static func fwDoneSub(_ v: String) -> String { s("fw.doneSub", v) }
     static var fwFlashedTitle: String { s("fw.flashedTitle") }
     static var fwFlashedSub: String { s("fw.flashedSub") }
