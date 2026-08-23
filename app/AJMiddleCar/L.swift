@@ -68,6 +68,8 @@ enum L {
     static var fwFailTitle: String { s("fw.failTitle") }
     static var fwFailSub: String { s("fw.failSub") }
     static var fwRetry: String { s("fw.retry") }
+    static var fwCancel: String { s("fw.cancel") }
+    static func fwFailReason(_ r: String) -> String { s("fw.failReason", r) }
     static func fwCurrent(_ v: String) -> String { s("fw.current", v) }
     static func fwVersionLine(_ v: String) -> String { s("fw.versionLine", v) }
     static func fwTransition(_ a: String, _ b: String) -> String { s("fw.transition", a, b) }

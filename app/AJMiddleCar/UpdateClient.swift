@@ -131,8 +131,10 @@ final class UpdateClient: NSObject, ObservableObject {
 
     /// Decision 6: nothing enters the firmware cache unvalidated. URLSession does not throw
     /// on 404/403/5xx, so an error page used to be cached as firmware and recorded as the
-    /// latest build — poisoning the cache until a strictly newer release existed. On any
-    /// failure the existing cache and its metadata are left untouched.
+    /// latest build — poisoning the cache until a strictly newer release existed. A failed
+    /// download never installs an invalid image; a failed move can drop the old cache (the
+    /// remove happens before the move), which every consumer tolerates by re-checking
+    /// `hasCachedFile` live rather than trusting a cached boolean.
     func download(_ url: URL, recordAs: (build: Int, tag: String)? = nil) async -> URL? {
         downloadProgress = 0
         let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
@@ -156,21 +158,30 @@ final class UpdateClient: NSObject, ObservableObject {
         } catch { return nil }
     }
 
-    /// Uploads over `CarTransport`, not `URLSession`: the car's network is one iOS will not
-    /// route general traffic over, so this has to be bound to the Wi-Fi interface like every
-    /// other request to the car. Progress comes from the chunked body rather than a session
-    /// delegate.
-    func upload(_ binURL: URL) async -> Bool {
-        guard let data = try? Data(contentsOf: binURL) else { return false }
+    enum UploadOutcome: Equatable { case ok, cancelled, failed(String) }
+
+    /// Uploads over `CarTransport`, WiFi-pinned like every request to the car. 45 s, not
+    /// 180: the car itself abandons a stalled upload after ~30 s, so anything beyond that
+    /// is the phone watching a corpse (decision 15). The car's error envelope is surfaced,
+    /// not swallowed (decision 14).
+    func upload(_ binURL: URL) async -> UploadOutcome {
+        guard let data = try? Data(contentsOf: binURL) else { return .failed("нет файла прошивки") }
         do {
             _ = try await CarTransport.shared.post("/ota", body: data,
                                                    contentType: "application/octet-stream",
-                                                   timeout: 180) { [weak self] p in
+                                                   timeout: 45) { [weak self] p in
                 Task { @MainActor in self?.uploadProgress = p }
             }
-            return true
+            return .ok
+        } catch is CancellationError {
+            return .cancelled
+        } catch let CarError.http(status, body) {
+            let msg = ((try? JSONSerialization.jsonObject(with: body)) as? [String: Any])?["error"] as? String
+            return .failed(msg ?? "HTTP \(status)")
+        } catch let e as CarError {
+            return .failed(e.logDescription)
         } catch {
-            return false
+            return .failed(String(describing: error))
         }
     }
 }

@@ -457,7 +457,16 @@ actor CarTransport {
             return r.body
         }
         httpTail[path] = Task { _ = try? await mine.value }
-        return try await mine.value
+        // `mine` is unstructured — Swift does not propagate this call's task cancellation into
+        // it on its own (verified: a bare `try await mine.value` here would let an upload run
+        // to completion, untouched, after the caller cancels). `withTaskCancellationHandler`
+        // is what actually forwards the cancel, which is what lets HTTPRequest.perform's own
+        // handler (inside `mine`) ever fire for an external cancelExternally().
+        return try await withTaskCancellationHandler {
+            try await mine.value
+        } onCancel: {
+            mine.cancel()
+        }
     }
 }
 
@@ -518,10 +527,15 @@ private final class HTTPRequest: @unchecked Sendable {
                         contentType: String?,
                         timeout: TimeInterval,
                         progress: (@Sendable (Double) -> Void)?) async throws -> (status: Int, body: Data) {
-        try await withCheckedThrowingContinuation { cont in
-            HTTPRequest(method: method, path: path, body: body, contentType: contentType,
-                        timeout: timeout, progress: progress) { cont.resume(with: $0) }
-                .start()
+        let req = HTTPRequest(method: method, path: path, body: body, contentType: contentType,
+                              timeout: timeout, progress: progress)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { cont in
+                req.attach { cont.resume(with: $0) }
+                req.start()
+            }
+        } onCancel: {
+            req.cancelExternally()
         }
     }
 
@@ -531,7 +545,8 @@ private final class HTTPRequest: @unchecked Sendable {
     private let contentType: String?
     private let timeout: TimeInterval
     private let progress: (@Sendable (Double) -> Void)?
-    private let done: (Result<(status: Int, body: Data), Error>) -> Void
+    private var completion: ((Result<(status: Int, body: Data), Error>) -> Void)?
+    private var pendingResult: Result<(status: Int, body: Data), Error>?
 
     private let queue = DispatchQueue(label: "car.http")
     private var conn: NWConnection?
@@ -540,15 +555,33 @@ private final class HTTPRequest: @unchecked Sendable {
     private var selfRetain: HTTPRequest?
 
     private init(method: String, path: String, body: Data?, contentType: String?,
-                 timeout: TimeInterval, progress: (@Sendable (Double) -> Void)?,
-                 done: @escaping (Result<(status: Int, body: Data), Error>) -> Void) {
+                 timeout: TimeInterval, progress: (@Sendable (Double) -> Void)?) {
         self.method = method
         self.path = path
         self.body = body
         self.contentType = contentType
         self.timeout = timeout
         self.progress = progress
-        self.done = done
+    }
+
+    /// Attach the continuation's resume. If the request already finished (external cancel
+    /// racing start), deliver the stored result immediately — same idempotence contract as
+    /// OneShot above.
+    func attach(_ c: @escaping (Result<(status: Int, body: Data), Error>) -> Void) {
+        queue.async {
+            if let r = self.pendingResult {
+                self.pendingResult = nil
+                c(r)
+            } else {
+                self.completion = c
+            }
+        }
+    }
+
+    /// External (task) cancellation: finish with CancellationError. `finish` is idempotent
+    /// and cancels the connection, so a cancel that races completion is a no-op.
+    func cancelExternally() {
+        queue.async { self.finish(.failure(CancellationError())) }
     }
 
     private func start() {
@@ -658,7 +691,11 @@ private final class HTTPRequest: @unchecked Sendable {
         finished = true
         conn?.cancel()
         conn = nil
-        done(result)
+        if let completion {
+            completion(result)
+        } else {
+            pendingResult = result
+        }
         selfRetain = nil
     }
 }

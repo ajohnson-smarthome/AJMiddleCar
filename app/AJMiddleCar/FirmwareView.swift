@@ -14,6 +14,8 @@ struct FirmwareView: View {
     @State private var flashAttempted = false
     @State private var rolledBack = false
     @State private var offlineCache = false
+    @State private var uploadTask: Task<UpdateClient.UploadOutcome, Never>?
+    @State private var failReason: String?
     @Environment(\.dismiss) private var dismiss
 
     private var current: String { link.fw ?? "—" }
@@ -60,6 +62,7 @@ struct FirmwareView: View {
                 title(L.fwUploadTitle)
                 sub("\(offlineCache ? (UpdateClient.cachedTag ?? "") : (release?.tag ?? "")) · \(Int(client.uploadProgress * 100))%")
                 ProgressView(value: client.uploadProgress).tint(p.accent).frame(width: 160)
+                fwButton(L.fwCancel, prominent: false) { uploadTask?.cancel() }
             case .rebooting:
                 title(L.fwRebootTitle); sub(L.fwRebootWait)
             case .flashed:
@@ -70,7 +73,8 @@ struct FirmwareView: View {
                 if forced { Color.clear.frame(width: 0, height: 0).onAppear { onDone?() } }
             case .failed:
                 title(L.fwFailTitle)
-                sub(rolledBack && link.rollback != false ? L.fwRollbackSub : L.fwFailSub)
+                sub(rolledBack && link.rollback != false ? L.fwRollbackSub
+                    : failReason.map { L.fwFailReason($0) } ?? L.fwFailSub)
                 fwButton(L.fwRetry, prominent: true) { Task { await check() } }
                 if forced && flashAttempted { skipButton }
             }
@@ -130,6 +134,10 @@ struct FirmwareView: View {
     private func check() async {
         phase = .checking
         offlineCache = false
+        // A rolledBack from an earlier bounce must not decorate a later, unrelated failure
+        // with rollback copy (Task 6 review finding) — this is the only re-entry point for a
+        // fresh check, whether from .upToDate's recheck or .failed's retry.
+        rolledBack = false
         if let r = await client.latestRelease() {
             release = r
             phase = UpdateClient.isUpdateAvailable(running: link.fw, latest: r.tag)
@@ -174,7 +182,23 @@ struct FirmwareView: View {
         flashAttempted = true
         rolledBack = false
         phase = .uploading
-        guard await client.upload(url) else { phase = .failed; return }
+        failReason = nil
+        let task = Task { await client.upload(url) }
+        uploadTask = task
+        let outcome = await task.value
+        uploadTask = nil
+        switch outcome {
+        case .cancelled:
+            // Back to flash-ready, not to failure: the user changed their mind, nothing broke.
+            phase = .downloaded
+            return
+        case .failed(let reason):
+            failReason = reason
+            phase = .failed
+            return
+        case .ok:
+            break
+        }
         // The car acknowledged the upload: the image is written, set as boot target, and the
         // reboot is unconditional. From here the flash is COMMITTED — the question is only
         // whether this phone gets to watch the confirmation.
