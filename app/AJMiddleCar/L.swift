@@ -10,6 +10,7 @@ enum L {
     static var wrongCarTitle: String { s("wrongCar.title") }
     static func fwRadio(_ v: String) -> String { s("fw.radio", v) }
     static func fwRadioMismatch(_ v: String) -> String { s("fw.radioMismatch", v) }
+    static var fwRadioUnknown: String { s("fw.radioUnknown") }
     static func wrongCarSub(_ found: String, _ ours: String) -> String { s("wrongCar.sub", found, ours) }
     static var wrongProtoTitle: String { s("wrongProto.title") }
     static func wrongProtoSub(_ theirs: Int, _ ours: Int) -> String { s("wrongProto.sub", theirs, ours) }

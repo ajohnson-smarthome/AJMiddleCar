@@ -42,7 +42,7 @@ struct GalleryView: View {
         var t = Telemetry()
         t.calibrated = calibrated; t.rssi = rssi; t.wdtTrips = wdtTrips
         t.uptimeS = 3847; t.rxFps = 10; t.busOk = busOk; t.ctl = ctl
-        return CarLink.preview(.live(t), fw: fw, radio: CarLink.Radio(fw: "3.0.6", ok: true))
+        return CarLink.preview(.live(t), fw: fw, radio: .known(fw: "3.0.6", ok: true))
     }
 
     @MainActor private func makeFrames(_ p: Palette) -> [(label: String, view: AnyView)] {

@@ -10,7 +10,14 @@ import Combine
 /// drive screen that swallowed every touch, and there was no single place to look to find out why.
 @MainActor
 final class CarLink: ObservableObject {
-    struct Radio: Equatable { let fw: String; let ok: Bool }
+    /// The radio co-processor's firmware, from `/status`. Three states: unknown (still
+    /// fetching), known, and unavailable — every `/status` attempt failed. Unavailable is a
+    /// state of its own because hiding the line made silence indistinguishable from health
+    /// on the one screen that exists to surface a mismatch.
+    enum RadioStatus: Equatable {
+        case known(fw: String, ok: Bool)
+        case unavailable
+    }
 
     @Published private(set) var state: Link = .searching
     /// The car's identity, from the hello reply — this is what the version gate compares.
@@ -18,7 +25,11 @@ final class CarLink: ObservableObject {
     @Published private(set) var device: String?
     /// The radio co-processor's firmware, from `/status`. Not carried by telemetry and not part
     /// of the app image, so a pinned-version mismatch is invisible unless it is surfaced.
-    @Published private(set) var radio: Radio?
+    @Published private(set) var radio: RadioStatus?
+    /// The car's report that the bootloader reverted the last update (decision 1): `/status`
+    /// `rollback`, nil until a fresh post-adoption fetch answers (or on firmware that
+    /// predates the key). Reset on every adoption so a pre-reboot value cannot leak forward.
+    @Published private(set) var rollback: Bool?
     /// The newest numbers we ever saw, live or not. `state` is the truth about the link; this is
     /// for screens that legitimately show the last known reading (uptime, firmware, trips).
     @Published private(set) var lastTelemetry: Telemetry?
@@ -179,6 +190,7 @@ final class CarLink: ObservableObject {
                 // that is not ours — routing straight around the wrong-car screen.
                 self.fw = fw
                 session = .adopted(device: device, fw: fw)
+                rollback = nil
                 fetchRadio()
                 // The car is reachable exactly now. Prefetching from `onAppear` ran while the
                 // gate was still talking to GitHub, so both GETs timed out and every trick
@@ -235,8 +247,10 @@ final class CarLink: ObservableObject {
 
     /// `/status` is one GET against a single-request server that is busy with the geometry
     /// prefetch fired in the same instant — one miss must not hide a radio mismatch for the
-    /// whole session. Four tries, backing off; the task is replaced on refetch and cancelled
-    /// when the link stops.
+    /// whole session. Four tries, backing off; if every try fails the status becomes
+    /// `.unavailable` rather than silence. `rollback` is parsed independently of the radio
+    /// object: it must survive a malformed radio block, and its absence (older firmware)
+    /// stays nil.
     private func fetchRadio() {
         radioFetch?.cancel()
         radioFetch = Task { [weak self, transport] in
@@ -244,13 +258,18 @@ final class CarLink: ObservableObject {
                 if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
                 if Task.isCancelled { return }
                 if let data = try? await transport.get("/status", timeout: 2),
-                   let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let r = j["radio"] as? [String: Any],
-                   let fw = r[CarContract.fwField] as? String {
-                    self?.radio = Radio(fw: fw, ok: r["ok"] as? Bool ?? true)
-                    return
+                   let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    if let rb = j["rollback"] as? Bool { self?.rollback = rb }
+                    if let r = j["radio"] as? [String: Any],
+                       let fw = r[CarContract.fwField] as? String {
+                        // Missing/malformed `ok` is NOT health (decision 17): unknown means
+                        // the one flag this line exists for could not be read.
+                        self?.radio = .known(fw: fw, ok: r["ok"] as? Bool ?? false)
+                        return
+                    }
                 }
             }
+            if self?.radio == nil { self?.radio = .unavailable }
         }
     }
 
@@ -260,7 +279,7 @@ final class CarLink: ObservableObject {
 
     #if DEBUG
     /// One screen's worth of link, for the gallery. Nothing runs behind it.
-    static func preview(_ state: Link, fw: String? = "v1.0+517", radio: Radio? = nil) -> CarLink {
+    static func preview(_ state: Link, fw: String? = "v1.0+517", radio: RadioStatus? = nil) -> CarLink {
         let l = CarLink(monitorsPath: false)
         l.frozen = true
         l.state = state

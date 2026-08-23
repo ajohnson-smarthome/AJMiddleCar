@@ -70,13 +70,16 @@ struct FirmwareView: View {
     /// The radio co-processor's firmware. Shown on every phase because it is the only place a
     /// pinned-version mismatch can be noticed: nothing else in the app reports it.
     @ViewBuilder private var radioLine: some View {
-        if let radio = link.radio {
-            if !radio.ok {
-                Text(L.fwRadioMismatch(radio.fw)).font(.system(size: 12)).foregroundStyle(p.warn)
-                    .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 260, alignment: .leading)
-            } else {
-                Text(L.fwRadio(radio.fw)).font(.system(size: 12)).foregroundStyle(p.muted)
-            }
+        switch link.radio {
+        case .known(let fw, true):
+            Text(L.fwRadio(fw)).font(.system(size: 12)).foregroundStyle(p.muted)
+        case .known(let fw, false):
+            Text(L.fwRadioMismatch(fw)).font(.system(size: 12)).foregroundStyle(p.warn)
+                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 260, alignment: .leading)
+        case .unavailable:
+            Text(L.fwRadioUnknown).font(.system(size: 12)).foregroundStyle(p.muted)
+        case nil:
+            EmptyView()
         }
     }
 
