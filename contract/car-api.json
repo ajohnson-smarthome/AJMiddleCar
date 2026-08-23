@@ -106,8 +106,8 @@
           "type": "int",
           "min": 100,
           "max": 30000,
-          "default": 2100,
-          "doc": "gear ratio times 100; 1:21 is 2100"
+          "default": 900,
+          "doc": "gear ratio times 100; 1:9 is 900"
         },
         {
           "name": "quad",

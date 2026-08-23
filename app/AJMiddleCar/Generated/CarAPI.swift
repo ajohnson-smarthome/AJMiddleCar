@@ -106,7 +106,7 @@ public struct Wheel: Codable, Equatable, Sendable {
     public var diameter_mm: Int
     /// encoder pulses per motor-shaft revolution, one channel
     public var ppr: Int
-    /// gear ratio times 100; 1:21 is 2100
+    /// gear ratio times 100; 1:9 is 900
     public var gear_x100: Int
     /// quadrature edge multiplier
     public var quad: Int
@@ -115,7 +115,7 @@ public struct Wheel: Codable, Equatable, Sendable {
 
 public extension Wheel {
     static let path = "/wheel"
-    static let `default` = Wheel(diameter_mm: 65, ppr: 11, gear_x100: 2100, quad: 4)
+    static let `default` = Wheel(diameter_mm: 65, ppr: 11, gear_x100: 900, quad: 4)
     static let diameter_mmRange: ClosedRange<Int> = 20...150
     static let pprRange: ClosedRange<Int> = 1...1000
     static let gear_x100Range: ClosedRange<Int> = 100...30000

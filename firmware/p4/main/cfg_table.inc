@@ -17,7 +17,7 @@ static const cfg_field_t CFG_RECOVER_FIELDS[] = {
 static const cfg_field_t CFG_WHEEL_FIELDS[] = {
     { "diameter_mm", CFG_INT, 20, 150, 65, NULL, 0 },
     { "ppr", CFG_INT, 1, 1000, 11, NULL, 0 },
-    { "gear_x100", CFG_INT, 100, 30000, 2100, NULL, 0 },
+    { "gear_x100", CFG_INT, 100, 30000, 900, NULL, 0 },
     { "quad", CFG_ENUM, 1, 4, 4, CFG_WHEEL_QUAD_ALLOWED, 3 },
 };
 static const cfg_field_t CFG_DIMS_FIELDS[] = {

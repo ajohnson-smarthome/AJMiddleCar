@@ -61,7 +61,7 @@ final class TrickSimTests: XCTestCase {
     func testDonutDurationGuards() {
         let T = Tricks.donutTrackFallbackM
         let y50 = Tricks.donutSides(diameterCm: 50, trackM: T).y
-        XCTAssertEqual(Tricks.donutDurationMs(circles: 2, y: y50, vmaxMS: Tricks.donutNominalVmaxMS, trackM: T), 6848)
+        XCTAssertEqual(Tricks.donutDurationMs(circles: 2, y: y50, vmaxMS: 0.578, trackM: T), 6848)
         XCTAssertEqual(Tricks.donutDurationMs(circles: 2, y: 0.2, vmaxMS: 0, trackM: T), 0)
         XCTAssertEqual(Tricks.donutDurationMs(circles: 2, y: 0, vmaxMS: 0.5, trackM: T), 0)
         XCTAssertEqual(Tricks.donutDurationMs(circles: 1, y: 0.2, vmaxMS: 0.5, trackM: 0.26),
@@ -76,7 +76,7 @@ final class TrickSimTests: XCTestCase {
                        Tricks.donutDurationMs(circles: 2, y: t.steps[0].y, vmaxMS: 0.578, trackM: T))
     }
     func testSpinSpeedFormula() {
-        let T = Tricks.donutTrackFallbackM, V = Tricks.donutNominalVmaxMS
+        let T = Tricks.donutTrackFallbackM, V = 0.578
         XCTAssertEqual(Tricks.spinSpeed(turns: 1, durationMs: 5000, vmaxMS: V, trackM: T), 0.141, accuracy: 0.005)
         XCTAssertEqual(Tricks.spinSpeed(turns: 2, durationMs: 5000, vmaxMS: V, trackM: T),
                        2 * Tricks.spinSpeed(turns: 1, durationMs: 5000, vmaxMS: V, trackM: T), accuracy: 1e-9)

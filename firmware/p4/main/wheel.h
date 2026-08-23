@@ -18,7 +18,7 @@
 #define WHEEL_GEAR_X100_MIN   100      // 1:1
 #define WHEEL_GEAR_X100_MAX   30000    // 1:300
 
-// Wheel + encoder geometry. gear_x100 = gear ratio × 100 (1:21 → 2100; 1:9.6 → 960).
+// Wheel + encoder geometry. gear_x100 = gear ratio × 100 (1:9 → 900; 1:9.6 → 960).
 // quad = quadrature edge multiplier (1, 2, or 4). diameter in mm.
 typedef struct {
     uint16_t diameter_mm;
@@ -27,7 +27,7 @@ typedef struct {
     uint8_t  quad;
 } wheel_params_t;
 
-// Load params from NVS (or defaults: 65 mm, 11 PPR, 1:21, ×4). Call once at boot.
+// Load params from NVS (or defaults: 65 mm, 11 PPR, 1:9, ×4). Call once at boot.
 void wheel_init(void);
 // Copy current params out.
 void wheel_get(wheel_params_t *out);

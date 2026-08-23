@@ -7,7 +7,7 @@ func check(_ ok: Bool, _ what: String) {
 }
 
 // Defaults match the schema.
-check(Wheel.default == Wheel(diameter_mm: 65, ppr: 11, gear_x100: 2100, quad: 4),
+check(Wheel.default == Wheel(diameter_mm: 65, ppr: 11, gear_x100: 900, quad: 4),
       "Wheel.default")
 check(Recover.default == Recover(enabled: true, window_ms: 5000), "Recover.default")
 check(Dims.default == Dims(track_mm: 130, wheelbase_mm: 210), "Dims.default")
