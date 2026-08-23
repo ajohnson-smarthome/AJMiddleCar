@@ -48,6 +48,7 @@
 #define BOARD_DUTY_FLOOR  1100   /* ~27%: smallest duty commanded above the deadzone */
 #define BOARD_KICK_DUTY   2600   /* ~63%: start-assist duty for a channel leaving standstill */
 #define BOARD_KICK_TICKS  3      /* x LINK_TICK_MS (20 ms) = 60 ms of kick */
+#define BOARD_KICK_IDLE_TICKS 10  /* 200 ms of a fully idle bridge before a start counts as standstill — a reversal never does */
 
 // The C6 runs esp_hosted's slave image, delivered out of band (firmware/c6/README.md) —
 // over SDIO from the host is the recorded route, the UART header the fallback. The

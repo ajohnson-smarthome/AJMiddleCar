@@ -256,10 +256,16 @@ The crutch is two-part, and both constants live in `board.h` where tuning belong
 - **A duty floor** (`BOARD_DUTY_FLOOR`): commands above the deadzone now land in
   `[floor..4095]` instead of `[0..4095]` — the smallest driven command is one the motor can
   actually respond to (`motors.c`).
-- **A start kick** (`BOARD_KICK_DUTY` × `BOARD_KICK_TICKS`): a channel leaving standstill on
-  a command below the kick duty gets a short burst at the kick duty with the ramp bypassed,
-  then falls to what was commanded (`link.h`). A stop is never kicked — target zero disarms
-  instantly, so the instant fall stays instant.
+- **A start kick** (`BOARD_KICK_DUTY` × `BOARD_KICK_TICKS`): a channel leaving GENUINE
+  standstill — its whole bridge pair reading zero on the chip for `BOARD_KICK_IDLE_TICKS`
+  straight, not just the one channel — gets a short burst at the kick duty with the ramp
+  bypassed, then falls to what was commanded (`link.h`). A reversal never qualifies: the
+  pair-mate is still driving, so the idle streak is zero and the reversing channel just
+  ramps. A stop is never kicked — target zero disarms instantly, so the instant fall stays
+  instant. A slow-down inside the kick window (a new command that is still below the kick
+  duty) is held at the kick duty for whatever remains of the window instead of taking effect
+  at once — deliberate, since the window is short (at most `BOARD_KICK_TICKS` x 20 ms) — but
+  a STOP never waits.
 
 Both numbers are un-measured bench guesses; the encoders are not wired yet, so they cannot be
 anything else. The real fix is per-wheel: the calibration wizard should measure each wheel's

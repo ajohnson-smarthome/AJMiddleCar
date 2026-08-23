@@ -121,19 +121,49 @@ static inline uint8_t link_plan_writes(const uint16_t cur[8], const uint16_t tgt
     return n;
 }
 
-/* Pure: start-assist for stiction. A channel leaving standstill (cur==0, tgt>0)
-   on a command below kick_duty gets kick_ticks ticks at kick_duty with the ramp
-   bypassed for those ticks. tgt==0 disarms instantly: a stop is never kicked,
-   the instant fall stays instant. */
+/* Pure: start-assist for stiction. A channel may kick only out of GENUINE
+   standstill: idle[] tracks, per bridge pair (ch/2), how many consecutive
+   planning calls have shown BOTH the pair's channels at zero on the chip
+   shadow. A channel arms its kick only once its pair's idle streak reaches
+   idle_ticks, and only on a command below kick_duty. That is what keeps a
+   direction reversal from kicking — the reversing channel's own shadow reads
+   zero too, but its pair-mate is still driving when the reversal lands, so the
+   pair's idle streak is zero and the reversing channel gets the ordinary ramp
+   instead of an unramped kick_duty, which against a mate still spinning the
+   other way is plugging, not start-assist.
+
+   Once armed, kick[ch] counts down only on a LANDED tick — cur[ch] already
+   reading kick_duty means last tick's write reached the chip — so a tick whose
+   write was deferred (the pair-mate's fall hadn't landed yet, see
+   link_rise_safe, or the bus itself failed) does not burn the burst: the
+   channel still delivers exactly kick_ticks ticks landed at kick_duty, however
+   many ticks that takes.
+
+   tgt==0 disarms instantly: a stop is never kicked, the instant fall stays
+   instant. A mid-kick REDUCTION that is still below kick_duty is held at
+   kick_duty for whatever remains of the window (at most kick_ticks landed
+   ticks, i.e. kick_ticks x LINK_TICK_MS) rather than taking effect at once —
+   deliberate, since a genuine stop still overrides it on the spot via tgt==0
+   above; only a slow-down waits out the burst. */
 static inline void link_kick_plan(const uint16_t cur[8], uint16_t tgt[8],
-                                  uint16_t up[8], uint8_t kick[8],
+                                  uint16_t up[8], uint8_t kick[8], uint8_t idle[4],
                                   uint16_t ramp_up, uint16_t kick_duty,
-                                  uint8_t kick_ticks) {
+                                  uint8_t kick_ticks, uint8_t idle_ticks) {
+    for (uint8_t pair = 0; pair < 4; pair++) {
+        uint8_t a = (uint8_t)(pair * 2), b = (uint8_t)(a + 1);
+        if (cur[a] == 0 && cur[b] == 0) {
+            if (idle[pair] < 255) idle[pair]++;
+        } else {
+            idle[pair] = 0;
+        }
+    }
     for (uint8_t ch = 0; ch < 8; ch++) {
         up[ch] = ramp_up;
         if (tgt[ch] == 0) { kick[ch] = 0; continue; }
-        if (cur[ch] == 0 && kick[ch] == 0 && tgt[ch] < kick_duty) kick[ch] = kick_ticks;
-        if (kick[ch]) { kick[ch]--; if (tgt[ch] < kick_duty) tgt[ch] = kick_duty; up[ch] = 4095; }
+        if (cur[ch] == 0 && kick[ch] == 0 && tgt[ch] < kick_duty
+            && idle[ch / 2] >= idle_ticks) kick[ch] = kick_ticks;
+        if (kick[ch] && cur[ch] >= kick_duty) kick[ch]--;
+        if (kick[ch] && tgt[ch] < kick_duty) { tgt[ch] = kick_duty; up[ch] = 4095; }
     }
 }
 
