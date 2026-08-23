@@ -158,14 +158,21 @@ final class UpdateClient: NSObject, ObservableObject {
         } catch { return nil }
     }
 
-    enum UploadOutcome: Equatable { case ok, cancelled, failed(String) }
+    /// `failed`'s payload is the reason the CAR gave, when it gave one — only the
+    /// `CarError.http` envelope branch below populates it. Every transport-level failure (no
+    /// firmware file on disk, no wifi, timeout, refused, malformed/truncated stream) carries
+    /// `nil`: the car never answered, so there is no car-authored reason to quote, and
+    /// `fw.failReason`'s "Машинка ответила: …" framing would be a lie for those.
+    enum UploadOutcome: Equatable { case ok, cancelled, failed(String?) }
 
     /// Uploads over `CarTransport`, WiFi-pinned like every request to the car. 45 s, not
     /// 180: the car itself abandons a stalled upload after ~30 s, so anything beyond that
     /// is the phone watching a corpse (decision 15). The car's error envelope is surfaced,
-    /// not swallowed (decision 14).
+    /// not swallowed (decision 14) — but only when it really is the car's own envelope; see
+    /// `UploadOutcome`.
     func upload(_ binURL: URL) async -> UploadOutcome {
-        guard let data = try? Data(contentsOf: binURL) else { return .failed("нет файла прошивки") }
+        uploadProgress = 0
+        guard let data = try? Data(contentsOf: binURL) else { return .failed(nil) }
         do {
             _ = try await CarTransport.shared.post("/ota", body: data,
                                                    contentType: "application/octet-stream",
@@ -178,10 +185,11 @@ final class UpdateClient: NSObject, ObservableObject {
         } catch let CarError.http(status, body) {
             let msg = ((try? JSONSerialization.jsonObject(with: body)) as? [String: Any])?["error"] as? String
             return .failed(msg ?? "HTTP \(status)")
-        } catch let e as CarError {
-            return .failed(e.logDescription)
         } catch {
-            return .failed(String(describing: error))
+            // `CarError` (`.noWiFi`, `.denied`, `.refused`, `.timeout`, `.malformed`,
+            // `.truncated`) or anything else unexpected: none of these are the car speaking,
+            // they're the transport never reaching it — generic copy, not a fabricated quote.
+            return .failed(nil)
         }
     }
 }

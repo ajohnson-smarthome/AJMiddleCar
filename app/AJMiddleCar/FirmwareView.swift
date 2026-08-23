@@ -136,8 +136,11 @@ struct FirmwareView: View {
         offlineCache = false
         // A rolledBack from an earlier bounce must not decorate a later, unrelated failure
         // with rollback copy (Task 6 review finding) — this is the only re-entry point for a
-        // fresh check, whether from .upToDate's recheck or .failed's retry.
+        // fresh check, whether from .upToDate's recheck or .failed's retry. Same for a stale
+        // failReason: a previous upload's car-named reason must not survive to caption a
+        // later, unrelated failure (e.g. GitHub unreachable with no usable cache).
         rolledBack = false
+        failReason = nil
         if let r = await client.latestRelease() {
             release = r
             phase = UpdateClient.isUpdateAvailable(running: link.fw, latest: r.tag)

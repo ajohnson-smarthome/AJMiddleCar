@@ -48,10 +48,12 @@ final class CarLink: ObservableObject {
     private var decay: Task<Void, Never>?
     private var radioFetch: Task<Void, Never>?
     /// Bumped on every `fetchRadio()` call (including `refreshRadio()`'s). A fetch
-    /// whose captured generation no longer matches has been superseded by a newer one —
-    /// cancelling `radioFetch` cannot abort an in-flight `transport.get` (the transport
-    /// serializes through its own task), so this is the authoritative guard against a
-    /// stale response landing after a newer session already asked again.
+    /// whose captured generation no longer matches has been superseded by a newer one.
+    /// Cancelling `radioFetch` does now abort an in-flight `transport.get` (task
+    /// cancellation propagates all the way into HTTPRequest, which tears the connection
+    /// down), but that abort races a response that may already be on the wire — so this
+    /// generation check remains the authoritative guard against a stale response landing
+    /// after a newer session already asked again, cancellation or not.
     private var radioFetchGen = 0
     private var pathSub: AnyCancellable?
     /// Lifecycle operations run strictly in call order. `start()` and `requestStop()` enqueue
@@ -258,8 +260,8 @@ final class CarLink: ObservableObject {
     /// object: it must survive a malformed radio block, and its absence (older firmware)
     /// stays nil. Every write is guarded by `radioFetchGen`: a fetch superseded by a newer
     /// `.sessionOpened` (e.g. the reconnect right after an OTA reboot) must not let its
-    /// in-flight response — which cancellation alone cannot stop — overwrite the newer
-    /// session's fresh values.
+    /// in-flight response — which cancellation now usually aborts, but can still lose the
+    /// race to a response already in flight — overwrite the newer session's fresh values.
     private func fetchRadio() {
         radioFetch?.cancel()
         radioFetchGen += 1
@@ -270,10 +272,12 @@ final class CarLink: ObservableObject {
                 if Task.isCancelled { return }
                 guard let self, gen == self.radioFetchGen else { return }
                 let data = try? await transport.get("/status", timeout: 2)
-                // Authoritative recheck: the await above is exactly where a supersede can land
-                // unnoticed by `Task.isCancelled` (the transport's own task keeps running it).
-                // `self` is already the non-optional bound above (still in scope, same
-                // iteration) — only the generation can have moved.
+                // Authoritative recheck: cancelling `radioFetch` now aborts this call's
+                // in-flight connection too (the cancellation reaches HTTPRequest), but a
+                // response that beat the cancel to the wire still completes normally — so the
+                // await above is exactly where a supersede can still land. `self` is already
+                // the non-optional bound above (still in scope, same iteration) — only the
+                // generation can have moved.
                 guard gen == self.radioFetchGen else { return }
                 if let data, let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                     if let rb = j["rollback"] as? Bool { self.rollback = rb }

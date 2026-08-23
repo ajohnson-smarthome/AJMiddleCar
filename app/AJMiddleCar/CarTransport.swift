@@ -585,31 +585,45 @@ private final class HTTPRequest: @unchecked Sendable {
     }
 
     private func start() {
-        selfRetain = self                    // stay alive until finish(); nobody else holds us
-        let c = NWConnection(to: CarNet.endpoint(), using: CarNet.tcpParams())
-        conn = c
-        c.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
-            switch state {
-            case .ready:
-                self.write()
-            case .failed(let e):
-                self.finish(.failure(CarError.from(e, path: c.currentPath)))
-            case .cancelled:
-                self.finish(.failure(CancellationError()))
-            case .waiting:
-                // A path that never becomes available is exactly the failure this class exists
-                // to survive, so waiting is left to the deadline rather than treated as progress.
-                break
-            default:
-                break
+        // Everything here has to run ON `queue`, not inline from perform's continuation body:
+        // if the task was already cancelled on entry, `withTaskCancellationHandler` can run
+        // `onCancel` (-> cancelExternally -> finish, on queue) before `operation` (-> start,
+        // previously off queue) even gets to `attach`. Off queue, `start` used to win that
+        // race and set `conn`/`selfRetain` AFTER `finish` had already set `finished = true` —
+        // permanently leaking the request and streaming the whole body to the car after a
+        // user-visible cancel, and touching `conn`/`selfRetain`/`finished` off queue besides.
+        // Wrapped here, the two possible orderings both land correctly: cancel-then-start finds
+        // `finished` already true and never opens a connection; start-then-cancel opens the
+        // connection and `cancelExternally`'s later `finish` tears it down as before.
+        queue.async {
+            guard !self.finished else { return }
+            self.selfRetain = self               // stay alive until finish(); nobody else holds us
+            let c = NWConnection(to: CarNet.endpoint(), using: CarNet.tcpParams())
+            self.conn = c
+            c.stateUpdateHandler = { [weak self] state in
+                guard let self else { return }
+                switch state {
+                case .ready:
+                    self.write()
+                case .failed(let e):
+                    self.finish(.failure(CarError.from(e, path: c.currentPath)))
+                case .cancelled:
+                    self.finish(.failure(CancellationError()))
+                case .waiting:
+                    // A path that never becomes available is exactly the failure this class
+                    // exists to survive, so waiting is left to the deadline rather than treated
+                    // as progress.
+                    break
+                default:
+                    break
+                }
             }
+            self.queue.asyncAfter(deadline: .now() + self.timeout) { [weak self] in
+                guard let self else { return }
+                self.finish(.failure(CarError.timeout(self.timeout)))
+            }
+            c.start(queue: self.queue)
         }
-        queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
-            guard let self else { return }
-            self.finish(.failure(CarError.timeout(self.timeout)))
-        }
-        c.start(queue: queue)
     }
 
     private func headBytes() -> Data {
@@ -693,6 +707,8 @@ private final class HTTPRequest: @unchecked Sendable {
         conn = nil
         if let completion {
             completion(result)
+            self.completion = nil            // idempotence rides on `finished`; this just
+                                              // stops holding a used continuation past its use
         } else {
             pendingResult = result
         }
