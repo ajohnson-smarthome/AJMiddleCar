@@ -51,18 +51,31 @@ final class AppFlow: ObservableObject {
                                       hasCachedFile: UpdateClient.hasCachedFile) {
             phase = .downloading
             let t0 = Date()
-            guard await client.download(rel.assetURL) != nil else { phase = .checkFailed; return }
+            guard await client.download(rel.assetURL) != nil else {
+                // The two failure paths above fall back to the cache; a failed download of a
+                // NEWER release must not strand a phone that still holds the previous one.
+                phase = offlineFallback(or: .checkFailed)
+                return
+            }
             await UpdateClient.holdAtLeast(UpdateClient.downloadMinDisplay, since: t0)
             if let b = latestBuild { UpdateClient.recordCache(build: b, tag: rel.tag) }
         }
         phase = .awaitingCar
     }
 
-    /// GitHub unreachable or unusable: a cached image is enough to drive — the gate exists
-    /// to force updates when it can know about them, not to require the internet.
+    /// GitHub unreachable or unusable: a cached image is enough to drive — and enough to
+    /// force with. Seeding `latestTag` from the cache is what keeps the forced gate armed
+    /// offline (decision 4a); without it `mustUpdate` compared against nil and every car,
+    /// pre-versioning ones included, drove unforced whenever the launch had no internet.
     private func offlineFallback(or failure: Phase) -> Phase {
-        GateRule.canProceedOffline(hasCachedFile: UpdateClient.hasCachedFile,
-                                   cachedBuild: UpdateClient.cachedBuild) ? .awaitingCar : failure
+        guard GateRule.canProceedOffline(hasCachedFile: UpdateClient.hasCachedFile,
+                                         cachedBuild: UpdateClient.cachedBuild) else {
+            return failure
+        }
+        latestTag = GateRule.offlineLatestTag(cachedTag: UpdateClient.cachedTag,
+                                              hasCachedFile: UpdateClient.hasCachedFile,
+                                              cachedBuild: UpdateClient.cachedBuild)
+        return .awaitingCar
     }
 
     /// The car said who it is, in its hello reply. Re-evaluated every time, not once: a car that
@@ -71,9 +84,13 @@ final class AppFlow: ObservableObject {
     /// A nil `fw` is "we have not met the car yet", which is not the same as "the car is behind"
     /// — forcing an update against a car that never answered would be a screen with nothing to
     /// flash.
+    ///
+    /// `.updateRequired` is in the set so the gate can CLEAR: a car that reboots into the
+    /// required build must release the forced screen even if FirmwareView's own confirmation
+    /// window missed the reconnect (decision 4c).
     func carIdentified(fw: String?) {
         guard let fw else { return }
-        guard phase == .awaitingCar || phase == .ready else { return }
+        guard phase == .awaitingCar || phase == .ready || phase == .updateRequired else { return }
         let next: Phase = UpdateClient.mustUpdate(carFw: fw, latestTag: latestTag) ? .updateRequired : .ready
         // Only on a real change: this is re-asked on every telemetry frame, and `@Published`
         // emits on assignment whether or not the value moved — five root-tree invalidations a
