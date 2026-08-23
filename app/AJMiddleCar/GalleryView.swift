@@ -80,6 +80,14 @@ struct GalleryView: View {
             ("Firmware done",           fw(.done)),
             ("Firmware failed",         fw(.failed)),
             ("Firmware forced",         fw(.available, forced: true)),
+            ("Firmware radio mismatch",  AnyView(NavigationStack { FirmwareView(
+                palette: p, debugPhase: .upToDate,
+                link: CarLink.preview(.live(Telemetry()), fw: "v1.0+584",
+                                      radio: .known(fw: "2.11.7", ok: false))) })),
+            ("Firmware radio unknown",   AnyView(NavigationStack { FirmwareView(
+                palette: p, debugPhase: .upToDate,
+                link: CarLink.preview(.live(Telemetry()), fw: "v1.0+584",
+                                      radio: .unavailable)) })),
             ("Drive arcade",            AnyView(DriveView(link: mockLink(), intent: intent, preview: true).onAppear { UserDefaults.standard.set(Scheme.arcade.rawValue, forKey: "scheme") })),
             ("Drive tank",              AnyView(DriveView(link: mockLink(), intent: intent, preview: true).onAppear { UserDefaults.standard.set(Scheme.tank.rawValue, forKey: "scheme") })),
             ("Drive warning",           AnyView(DriveView(link: mockLink(wdtTrips: 3), intent: intent, preview: true))),
