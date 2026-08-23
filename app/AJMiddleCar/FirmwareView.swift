@@ -117,7 +117,8 @@ struct FirmwareView: View {
         guard let r = release else { return }
         phase = .downloading
         let t0 = Date()
-        if let url = await client.download(r.assetURL) {
+        let recordAs = UpdateRules.buildNumber(r.tag).map { (build: $0, tag: r.tag) }
+        if let url = await client.download(r.assetURL, recordAs: recordAs) {
             binURL = url
             await UpdateClient.holdAtLeast(UpdateClient.downloadMinDisplay, since: t0)
             phase = .downloaded

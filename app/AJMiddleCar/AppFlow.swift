@@ -34,6 +34,7 @@ final class AppFlow: ObservableObject {
 
     /// Run the pre-connect gate (internet probe → latest release → download if needed).
     func startupCheck() async {
+        UpdateClient.migrateCacheIfNeeded()
         phase = .checkInternet
         guard await UpdateClient.internetReachable() else {
             phase = offlineFallback(or: .noInternet)
@@ -51,14 +52,14 @@ final class AppFlow: ObservableObject {
                                       hasCachedFile: UpdateClient.hasCachedFile) {
             phase = .downloading
             let t0 = Date()
-            guard await client.download(rel.assetURL) != nil else {
+            let recordAs = latestBuild.map { (build: $0, tag: rel.tag) }
+            guard await client.download(rel.assetURL, recordAs: recordAs) != nil else {
                 // The two failure paths above fall back to the cache; a failed download of a
                 // NEWER release must not strand a phone that still holds the previous one.
                 phase = offlineFallback(or: .checkFailed)
                 return
             }
             await UpdateClient.holdAtLeast(UpdateClient.downloadMinDisplay, since: t0)
-            if let b = latestBuild { UpdateClient.recordCache(build: b, tag: rel.tag) }
         }
         phase = .awaitingCar
     }

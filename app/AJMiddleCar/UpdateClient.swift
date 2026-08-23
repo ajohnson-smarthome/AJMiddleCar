@@ -77,9 +77,34 @@ final class UpdateClient: NSObject, ObservableObject {
     private static let kBuild = "cachedLatestBuild"
     private static let kTag   = "cachedLatestTag"
 
+    /// Application Support, not Caches: this file is the offline gate's lifeline (GateRule),
+    /// and iOS may purge Caches under storage pressure — evaporating the one thing that lets
+    /// a phone in the field proceed without internet. Excluded from backup: it is a cache in
+    /// spirit, just not one the OS may unilaterally delete.
     static var cachedBinURL: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory,
+                                           in: .userDomainMask)[0]
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("firmware-latest.bin")
+    }
+
+    /// One-time move of a pre-existing cache from the old Caches location. Called at launch;
+    /// a no-op when there is nothing to migrate or the new file already exists.
+    static func migrateCacheIfNeeded() {
+        let old = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("firmware-latest.bin")
+        let new = cachedBinURL
+        guard FileManager.default.fileExists(atPath: old.path),
+              !FileManager.default.fileExists(atPath: new.path) else { return }
+        try? FileManager.default.moveItem(at: old, to: new)
+        excludeFromBackup(new)
+    }
+
+    private static func excludeFromBackup(_ url: URL) {
+        var u = url
+        var rv = URLResourceValues()
+        rv.isExcludedFromBackup = true
+        try? u.setResourceValues(rv)
     }
     static var cachedBuild: Int? {
         let v = UserDefaults.standard.integer(forKey: kBuild); return v == 0 ? nil : v
@@ -104,15 +129,27 @@ final class UpdateClient: NSObject, ObservableObject {
         } catch { return nil }
     }
 
-    func download(_ url: URL) async -> URL? {
+    /// Decision 6: nothing enters the firmware cache unvalidated. URLSession does not throw
+    /// on 404/403/5xx, so an error page used to be cached as firmware and recorded as the
+    /// latest build — poisoning the cache until a strictly newer release existed. On any
+    /// failure the existing cache and its metadata are left untouched.
+    func download(_ url: URL, recordAs: (build: Int, tag: String)? = nil) async -> URL? {
         downloadProgress = 0
         let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
         do {
-            let (tmp, _) = try await session.download(from: url)
+            let (tmp, resp) = try await session.download(from: url)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+            let size = (try? FileManager.default.attributesOfItem(atPath: tmp.path)[.size]
+                            as? Int) ?? 0
+            let firstByte = FileHandle(forReadingAtPath: tmp.path)
+                .flatMap { defer { try? $0.close() }; return try? $0.read(upToCount: 1)?.first }
+            guard UpdateRules.isValidImage(firstByte: firstByte, size: size) else { return nil }
             let dest = UpdateClient.cachedBinURL
             try? FileManager.default.removeItem(at: dest)
             try FileManager.default.moveItem(at: tmp, to: dest)
+            UpdateClient.excludeFromBackup(dest)
+            if let r = recordAs { UpdateClient.recordCache(build: r.build, tag: r.tag) }
             return dest
         } catch { return nil }
     }
