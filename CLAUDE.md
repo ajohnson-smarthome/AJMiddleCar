@@ -75,7 +75,8 @@ runs it alongside the tests.
 The pure modules have **zero ESP-IDF dependencies** and are host-tested with plain `cc`.
 
 - `board.h` — **every** assumption about the physical board: I2C pins, bus speed, PWM frequency,
-  expected radio version. Bring-up edits this file and nothing else.
+  the radio's delivery route (its expected version is derived from the esp_hosted component).
+  Bring-up edits this file and nothing else.
 - `identity.h` — which car this is: `CAR_DEVICE_ID`, SSID, password. Distinct from `board.h`,
   which is about which board it runs on.
 - `mixer.{c,h}` — *pure*. Tank-turn mixing: `left = t+y`, `right = t−y`, normalised to keep
@@ -177,7 +178,8 @@ Pure Swift modules are host-tested with `swiftc` directly — no XCTest runtime 
 Ported from AJPicoCar with feature parity, and **first run on hardware 2026-08-20**: the board
 boots, the softAP comes up, and the radio was updated from its shipped image to the pinned 3.0.6.
 Two things are known and unfinished — the motors are not wired yet, so `board.h`'s I2C pins are
-still unverified and a stock build aborts in `pca9685_init` with nothing on the bus; and the
-native USB port stopped enumerating, so bench work runs with a local override putting the console
-on UART0. Both are written up in `docs/bringup.md`, which is the live record of what the board
+still unverified — a stock build boots anyway with `bus_ok:false` (network and OTA up, motors
+inert, by design); and the native USB port stopped enumerating, so bench work runs with a local
+override putting the console on UART0. Both are written up in `docs/bringup.md`, which is the
+live record of what the board
 has and has not answered.

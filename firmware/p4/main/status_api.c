@@ -28,8 +28,9 @@ static const char *TAG = "status_api";
 
 // The radio co-processor's firmware version, read once at boot. Reading it per request would put
 // SDIO traffic on the app's 1.5 s status poll for a value that cannot change without a reboot.
-// It matters because the C6's image is flashed by wire and pinned in board.h: a mismatch has no
-// other symptom than the radio misbehaving in ways that look like anything else.
+// It matters because the C6's image is delivered over SDIO from the host and its expected version
+// derives from the esp_hosted component pin: a mismatch has no other symptom than the radio
+// misbehaving in ways that look like anything else.
 //
 // Written once by read_radio_version() — which status_api_start runs BEFORE registering
 // the handler — then only read, so the cross-task safety is ordering, not a lock.

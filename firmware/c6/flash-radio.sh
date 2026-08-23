@@ -17,6 +17,17 @@ fi
 # shellcheck disable=SC1091
 source "$ROOT/tools/env-p4.sh" >/dev/null 2>&1
 
+# The image about to be built must be the slave the host pins — after a pin bump with a
+# stale managed_components, this script would otherwise flash the OLD slave silently.
+PIN=$(grep -E 'espressif/esp_hosted:' "$ROOT/firmware/p4/main/idf_component.yml" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+GOT=$(grep -E '^version:' "$HOSTED/idf_component.yml" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+if [ -n "$PIN" ] && [ -n "$GOT" ] && [ "$PIN" != "$GOT" ]; then
+    echo "WARNING: fetched esp_hosted is $GOT but the host pins $PIN."
+    echo "The image you are about to build is NOT the pinned slave; run"
+    echo "  (cd firmware/p4 && source ../../tools/env-p4.sh && idf.py reconfigure)"
+    read -r -p "Continue with $GOT anyway? [y/N] " a; [ "$a" = "y" ] || exit 1
+fi
+
 # The co-processor's SDIO datapath sends frames larger than stock ESP-IDF allows. This is the
 # vendor's own patch and it is idempotent; without it the build stops with an explicit error.
 python "$HOSTED/tools/eh.py" patch-idf --idf-path "$IDF_PATH" >/dev/null
