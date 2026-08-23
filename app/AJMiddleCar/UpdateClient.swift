@@ -142,8 +142,10 @@ final class UpdateClient: NSObject, ObservableObject {
             guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
             let size = (try? FileManager.default.attributesOfItem(atPath: tmp.path)[.size]
                             as? Int) ?? 0
-            let firstByte = FileHandle(forReadingAtPath: tmp.path)
-                .flatMap { defer { try? $0.close() }; return try? $0.read(upToCount: 1)?.first }
+            let firstByte = FileHandle(forReadingAtPath: tmp.path).flatMap { fh -> UInt8? in
+                defer { try? fh.close() }
+                return try? fh.read(upToCount: 1)?.first
+            }
             guard UpdateRules.isValidImage(firstByte: firstByte, size: size) else { return nil }
             let dest = UpdateClient.cachedBinURL
             try? FileManager.default.removeItem(at: dest)
