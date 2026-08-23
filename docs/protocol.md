@@ -165,7 +165,7 @@ reply, and liveness afterwards comes from telemetry freshness, not from polling 
 ```json
 {"device":"ajmiddlecar","fw":"v1.0+517","proto":1,
  "seq":88,"rx_fps":10,"rssi":-58,"wdt_trips":0,"uptime_s":812,"heap":200000,
- "calibrated":true,"bus_ok":true,"ctl":"rt",
+ "calibrated":true,"bus_ok":true,"ctl":"rt","rollback":false,"nvs_wiped":false,
  "radio":{"fw":"3.0.6","expected":"3.0.6","ok":true}}
 ```
 
@@ -174,11 +174,18 @@ rename cannot present as a different car. One divergence to know: `/status`'s `r
 per-consumer delta — `0` on the first poll after boot and after a gap of 10 s or more — where
 the push's is continuous.
 
-`radio` reports the ESP32-C6 co-processor that provides WiFi. Its image is pinned in `board.h`
-and delivered out of band — over SDIO from the host, or over its UART header
-(`firmware/c6/README.md`) — never through `/ota`. `ok:false` means the image on the radio is
-not the one this firmware expects. Nothing else in the system reports this, so a client should
-surface it.
+`rollback` is true when the previous over-the-air update was reverted by the bootloader —
+the one signal a client has that the image it flashed did not survive its first boot; treat
+"came back on the old version" as a failed update, not a slow one. `nvs_wiped` is true for
+the first boot after an NVS format migration erased the saved config: calibration and every
+setting are gone, and a client should say so rather than let the car drive on defaults
+silently.
+
+`radio` reports the ESP32-C6 co-processor that provides WiFi. The version it must run is derived
+from the host's own `esp_hosted` component pin and delivered out of band — over SDIO from the
+host, or over its UART header (`firmware/c6/README.md`) — never through `/ota`. `ok:false` means
+the image on the radio is not the one this firmware expects. Nothing else in the system reports
+this, so a client should surface it.
 
 ## Configuration — REST
 

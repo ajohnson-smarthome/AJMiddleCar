@@ -35,7 +35,9 @@ what builds it.
 **This is the route that was actually used** (2026-08-20), and it needs no adapter, no connector
 and nothing physical — the image travels over the SDIO link that already exists. The host API is
 `esp_hosted_cp_ota_begin()` → `_write()` in chunks of at most 1536 bytes → `_end()` →
-`_activate()`, and the host must be built with `CONFIG_ESP_HOSTED_HOST_FEAT_OTA=y` (it is).
+`_activate()`, and the host must be built with `CONFIG_ESP_HOSTED_HOST_FEAT_OTA=y` — pinned
+explicitly in `firmware/p4/sdkconfig.defaults` (it used to hold only via the component's
+promptless default).
 
 It works even against a co-processor far older than the host, because the OTA calls are RPC
 `266`/`272`/`273`/`274` — the original ESP-Hosted set. Getting the image to the P4 in the first

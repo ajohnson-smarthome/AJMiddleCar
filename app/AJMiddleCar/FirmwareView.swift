@@ -11,6 +11,11 @@ struct FirmwareView: View {
     @State private var release: UpdateClient.Release?
     @State private var binURL: URL?
     @State private var phase: FwPhase = .checking
+    @State private var flashAttempted = false
+    @State private var rolledBack = false
+    @State private var offlineCache = false
+    @State private var uploadTask: Task<UpdateClient.UploadOutcome, Never>?
+    @State private var failReason: String?
     @Environment(\.dismiss) private var dismiss
 
     private var current: String { link.fw ?? "—" }
@@ -23,7 +28,7 @@ struct FirmwareView: View {
             stateBlock
         }
         .task {
-            if let dp = debugPhase { phase = dp; return }
+            if let dp = debugPhase { phase = dp; flashAttempted = true; return }
             link.refreshRadio()
             await check()
         }
@@ -40,7 +45,10 @@ struct FirmwareView: View {
                 else { fwButton(L.fwRecheck, prominent: false) { Task { await check() } } }
             case .available:
                 title(forced ? L.gateUpdateTitle : L.fwAvailable)
-                sub(forced ? L.gateUpdateSub : L.fwTransition(current, release?.tag ?? "—"))
+                let target = offlineCache ? (UpdateClient.cachedTag ?? "—") : (release?.tag ?? "—")
+                sub(forced ? L.gateUpdateSub
+                           : L.fwTransition(current, target)
+                             + (offlineCache ? " · " + L.fwFromCache : ""))
                 fwButton(L.fwUpdate, prominent: true) { Task { await download() } }
             case .downloading:
                 title(L.fwDownloadTitle)
@@ -52,16 +60,23 @@ struct FirmwareView: View {
                 fwButton(L.fwFlash, prominent: true, disabled: !link.isLive) { Task { await flash() } }
             case .uploading:
                 title(L.fwUploadTitle)
-                sub("\(release?.tag ?? "") · \(Int(client.uploadProgress * 100))%")
+                sub("\(offlineCache ? (UpdateClient.cachedTag ?? "") : (release?.tag ?? "")) · \(Int(client.uploadProgress * 100))%")
                 ProgressView(value: client.uploadProgress).tint(p.accent).frame(width: 160)
+                fwButton(L.fwCancel, prominent: false) { uploadTask?.cancel() }
             case .rebooting:
                 title(L.fwRebootTitle); sub(L.fwRebootWait)
+            case .flashed:
+                title(L.fwFlashedTitle); sub(L.fwFlashedSub)
+                if forced { skipButton }
             case .done:
                 title(L.fwDoneTitle); sub(L.fwDoneSub(current))
                 if forced { Color.clear.frame(width: 0, height: 0).onAppear { onDone?() } }
             case .failed:
-                title(L.fwFailTitle); sub(L.fwFailSub)
+                title(L.fwFailTitle)
+                sub(rolledBack && link.rollback != false ? L.fwRollbackSub
+                    : failReason.map { L.fwFailReason($0) } ?? L.fwFailSub)
                 fwButton(L.fwRetry, prominent: true) { Task { await check() } }
+                if forced && flashAttempted { skipButton }
             }
             radioLine
         }
@@ -70,13 +85,16 @@ struct FirmwareView: View {
     /// The radio co-processor's firmware. Shown on every phase because it is the only place a
     /// pinned-version mismatch can be noticed: nothing else in the app reports it.
     @ViewBuilder private var radioLine: some View {
-        if let radio = link.radio {
-            if !radio.ok {
-                Text(L.fwRadioMismatch(radio.fw)).font(.system(size: 12)).foregroundStyle(p.warn)
-                    .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 260, alignment: .leading)
-            } else {
-                Text(L.fwRadio(radio.fw)).font(.system(size: 12)).foregroundStyle(p.muted)
-            }
+        switch link.radio {
+        case .known(let fw, true):
+            Text(L.fwRadio(fw)).font(.system(size: 12)).foregroundStyle(p.muted)
+        case .known(let fw, false):
+            Text(L.fwRadioMismatch(fw)).font(.system(size: 12)).foregroundStyle(p.warn)
+                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 260, alignment: .leading)
+        case .unavailable:
+            Text(L.fwRadioUnknown).font(.system(size: 12)).foregroundStyle(p.muted)
+        case nil:
+            EmptyView()
         }
     }
 
@@ -106,18 +124,57 @@ struct FirmwareView: View {
         .padding(.top, 3)
     }
 
+    /// Decision 5's escape hatch: a forced gate that failed (or could not confirm) a flash
+    /// must not be a locked room. Ghost styling — continuing unupdated is the fallback, not
+    /// the offer.
+    private var skipButton: some View {
+        fwButton(L.fwSkip, prominent: false) { onDone?() }
+    }
+
     private func check() async {
         phase = .checking
-        let r = await client.latestRelease()
-        release = r
-        guard let r else { phase = .failed; return }
-        phase = UpdateClient.isUpdateAvailable(running: link.fw, latest: r.tag) ? .available : .upToDate
+        offlineCache = false
+        // A rolledBack from an earlier bounce must not decorate a later, unrelated failure
+        // with rollback copy (Task 6 review finding) — this is the only re-entry point for a
+        // fresh check, whether from .upToDate's recheck or .failed's retry. Same for a stale
+        // failReason: a previous upload's car-named reason must not survive to caption a
+        // later, unrelated failure (e.g. GitHub unreachable with no usable cache).
+        rolledBack = false
+        failReason = nil
+        if let r = await client.latestRelease() {
+            release = r
+            phase = UpdateClient.isUpdateAvailable(running: link.fw, latest: r.tag)
+                ? .available : .upToDate
+            return
+        }
+        release = nil
+        // GitHub unreachable — the normal state on the car's internet-less AP. The launch
+        // gate already downloaded the release it knew about; a cached image NEWER than the
+        // car is flashable without any network (decision 4b). The car's build must be known:
+        // with no car identity there is nothing to compare against.
+        if UpdateClient.hasCachedFile,
+           let cached = UpdateClient.cachedBuild,
+           let car = UpdateRules.buildNumber(link.fw),
+           cached > car {
+            offlineCache = true
+            binURL = UpdateClient.cachedBinURL
+            phase = .available
+            return
+        }
+        phase = .failed
     }
     private func download() async {
+        if offlineCache {
+            // The image is already on disk, validated at download time (decision 6); the
+            // download phase would be a fetch of what we are standing on.
+            phase = .downloaded
+            return
+        }
         guard let r = release else { return }
         phase = .downloading
         let t0 = Date()
-        if let url = await client.download(r.assetURL) {
+        let recordAs = UpdateRules.buildNumber(r.tag).map { (build: $0, tag: r.tag) }
+        if let url = await client.download(r.assetURL, recordAs: recordAs) {
             binURL = url
             await UpdateClient.holdAtLeast(UpdateClient.downloadMinDisplay, since: t0)
             phase = .downloaded
@@ -125,21 +182,49 @@ struct FirmwareView: View {
     }
     private func flash() async {
         guard let url = binURL else { return }
+        flashAttempted = true
+        rolledBack = false
         phase = .uploading
-        guard await client.upload(url) else { phase = .failed; return }
+        failReason = nil
+        let task = Task { await client.upload(url) }
+        uploadTask = task
+        let outcome = await task.value
+        uploadTask = nil
+        switch outcome {
+        case .cancelled:
+            // Back to flash-ready, not to failure: the user changed their mind, nothing broke.
+            phase = .downloaded
+            return
+        case .failed(let reason):
+            failReason = reason
+            phase = .failed
+            return
+        case .ok:
+            break
+        }
+        // The car acknowledged the upload: the image is written, set as boot target, and the
+        // reboot is unconditional. From here the flash is COMMITTED — the question is only
+        // whether this phone gets to watch the confirmation.
         phase = .rebooting
         let oldFw = link.fw
         var sawOffline = false
         let deadline = Date.now.addingTimeInterval(25)
         while Date.now < deadline {
             try? await Task.sleep(nanoseconds: 500_000_000)
-            // Success = the firmware version changed (reboot confirmed) OR the classic
-            // offline→online bounce. The version check also catches a fast reboot that never
-            // tripped the offline debounce.
             if let nf = link.fw, oldFw != nil, nf != oldFw { phase = .done; return }
             if !link.isLive { sawOffline = true }
-            else if sawOffline { phase = .done; return }
+            else if sawOffline {
+                // The car came back — with the SAME firmware. That is a bootloader rollback
+                // (or a flash that never took), never success: calling it done is what looped
+                // the forced gate forever against a rolling-back release.
+                rolledBack = true
+                phase = .failed
+                return
+            }
         }
-        phase = .failed
+        // Deadline without a reconnect: iOS routinely hops to another known network when the
+        // softAP vanishes and does not come back on its own. The flash is committed either
+        // way — report that, not failure.
+        phase = .flashed
     }
 }

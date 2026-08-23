@@ -10,6 +10,7 @@ enum L {
     static var wrongCarTitle: String { s("wrongCar.title") }
     static func fwRadio(_ v: String) -> String { s("fw.radio", v) }
     static func fwRadioMismatch(_ v: String) -> String { s("fw.radioMismatch", v) }
+    static var fwRadioUnknown: String { s("fw.radioUnknown") }
     static func wrongCarSub(_ found: String, _ ours: String) -> String { s("wrongCar.sub", found, ours) }
     static var wrongProtoTitle: String { s("wrongProto.title") }
     static func wrongProtoSub(_ theirs: Int, _ ours: Int) -> String { s("wrongProto.sub", theirs, ours) }
@@ -67,10 +68,17 @@ enum L {
     static var fwFailTitle: String { s("fw.failTitle") }
     static var fwFailSub: String { s("fw.failSub") }
     static var fwRetry: String { s("fw.retry") }
+    static var fwCancel: String { s("fw.cancel") }
+    static func fwFailReason(_ r: String) -> String { s("fw.failReason", r) }
     static func fwCurrent(_ v: String) -> String { s("fw.current", v) }
     static func fwVersionLine(_ v: String) -> String { s("fw.versionLine", v) }
     static func fwTransition(_ a: String, _ b: String) -> String { s("fw.transition", a, b) }
+    static var fwFromCache: String { s("fw.fromCache") }
     static func fwDoneSub(_ v: String) -> String { s("fw.doneSub", v) }
+    static var fwFlashedTitle: String { s("fw.flashedTitle") }
+    static var fwFlashedSub: String { s("fw.flashedSub") }
+    static var fwRollbackSub: String { s("fw.rollbackSub") }
+    static var fwSkip: String { s("fw.skip") }
     static var driveConnected: String { s("drive.connected") }
     static var rampTitle: String { s("ramp.title") }
     static var rampHeadline: String { s("ramp.headline") }

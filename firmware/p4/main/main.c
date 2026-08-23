@@ -106,8 +106,13 @@ void app_main(void) {
 
     esp_err_t nvs = nvs_flash_init();
     if (nvs == ESP_ERR_NVS_NO_FREE_PAGES || nvs == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        /* The migration erases the bench-earned calibration and every config domain.
+           There is no snapshot/restore (deferred — 2026-08-23 audit); the flag is how
+           the app tells the user the wizard must be re-run, instead of silence. */
+        ESP_LOGW(TAG, "NVS format changed — erasing (calibration and config are lost)");
         ESP_ERROR_CHECK(nvs_flash_erase());
         nvs = nvs_flash_init();
+        status_api_note_nvs_wiped();
     }
     ESP_ERROR_CHECK(nvs);
 
@@ -117,24 +122,37 @@ void app_main(void) {
     wheel_init();                          // load wheel/encoder params (NVS or defaults)
     dims_init();                           // load car dimensions (NVS or defaults)
     ESP_ERROR_CHECK(wifi_ap_start(CAR_AP_SSID, CAR_AP_PASS));
-    telemetry_start();                     // 1 Hz RSSI sampler, off the control task
-    recovery_init();                       // breadcrumb buffer; the watchdog trips into it
-    /* Driving comes up before the API: rt_link carries control, the watchdog and
-       telemetry, and none of it depends on the HTTP server being there. */
-    ESP_ERROR_CHECK(rt_link_start());
-    ESP_ERROR_CHECK(http_server_start());
-    ESP_ERROR_CHECK(calib_api_start());
-    ESP_ERROR_CHECK(status_api_start());
-    ESP_ERROR_CHECK(ota_api_start());
-    ESP_ERROR_CHECK(cfg_api_start());   // all five config domains, from the generated table
-
-    // OTA rollback: mark this freshly-flashed image valid so the bootloader won't roll back.
+    /* OTA rollback: the property rollback protects is "the car is reachable" — the AP is
+       up, so mark the image valid NOW, before the API registrations and before
+       status_api_start's radio-version RPC (up to 5 s against a mismatched slave). One
+       reset inside that window used to silently revert a good update. The tradeoff is
+       deliberate: an image that fails beyond this line boot-loops WITHOUT rollback, so
+       everything below must tolerate failure — a panic after this point is its own bug. */
     const esp_partition_t *running = esp_ota_get_running_partition();
     esp_ota_img_states_t ota_state;
     if (esp_ota_get_state_partition(running, &ota_state) == ESP_OK &&
         ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
         esp_ota_mark_app_valid_cancel_rollback();
     }
+    telemetry_start();                     // 1 Hz RSSI sampler, off the control task
+    recovery_init();                       // breadcrumb buffer; the watchdog trips into it
+    /* Driving comes up before the API: rt_link carries control, the watchdog and
+       telemetry, and none of it depends on the HTTP server being there.
+       Post-mark-valid: a failure here must NOT panic — rollback is already waived, so a
+       panic is a permanent boot-loop on a car with no cable. Log loudly and keep what runs. */
+    esp_err_t err;
+    if ((err = rt_link_start()) != ESP_OK)
+        ESP_LOGE(TAG, "rt_link_start failed: %s — control channel is down", esp_err_to_name(err));
+    if ((err = http_server_start()) != ESP_OK)
+        ESP_LOGE(TAG, "http_server_start failed: %s — HTTP API is down", esp_err_to_name(err));
+    if ((err = calib_api_start()) != ESP_OK)
+        ESP_LOGE(TAG, "calib_api_start failed: %s — calibration endpoint is down", esp_err_to_name(err));
+    if ((err = status_api_start()) != ESP_OK)
+        ESP_LOGE(TAG, "status_api_start failed: %s — /status endpoint is down", esp_err_to_name(err));
+    if ((err = ota_api_start()) != ESP_OK)
+        ESP_LOGE(TAG, "ota_api_start failed: %s — OTA endpoint is down, this car cannot be updated over the air", esp_err_to_name(err));
+    if ((err = cfg_api_start()) != ESP_OK)
+        ESP_LOGE(TAG, "cfg_api_start failed: %s — config endpoints are down, all five domains", esp_err_to_name(err));
 
     console_init();
     ESP_LOGI(TAG, "Ready. Enter 'mix <throttle> <yaw>' (each -1..1), e.g. 'mix 0.5 0.2':");

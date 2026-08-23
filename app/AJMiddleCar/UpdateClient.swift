@@ -23,41 +23,28 @@ final class UpdateClient: NSObject, ObservableObject {
     static let assetName = "ajmiddlecar.bin"
 
     /// Normalize a version like "v1.2" / "v1.2-3-gabc" → "1.2" for comparison.
-    static func normalize(_ v: String?) -> String {
-        guard let v else { return "" }
-        var s = v
-        if s.hasPrefix("v") { s.removeFirst() }
-        if let dash = s.firstIndex(of: "-") { s = String(s[s.startIndex..<dash]) }
-        return s
-    }
+    static func normalize(_ v: String?) -> String { UpdateRules.normalize(v) }
 
     /// Build number after the first "+" (e.g. "v1.2+246" -> 246); nil if absent/non-numeric.
-    static func buildNumber(_ version: String?) -> Int? {
-        guard let version, let plus = version.firstIndex(of: "+") else { return nil }
-        let digits = version[version.index(after: plus)...].prefix { $0.isNumber }
-        return digits.isEmpty ? nil : Int(digits)
-    }
+    static func buildNumber(_ version: String?) -> Int? { UpdateRules.buildNumber(version) }
 
     /// Update available iff both versions carry a build number and latest > running.
     /// Falls back to normalized string inequality when a build number is missing (legacy firmware/releases).
     static func isUpdateAvailable(running: String?, latest: String?) -> Bool {
-        if let r = buildNumber(running), let l = buildNumber(latest) { return l > r }
-        return normalize(latest) != normalize(running)
+        UpdateRules.isUpdateAvailable(running: running, latest: latest)
     }
 
     /// Need to (re)download the .bin: only when there IS a versioned latest release, and the
     /// cached file is missing or its build differs from the latest.
     static func needsDownload(latestBuild: Int?, cachedBuild: Int?, hasCachedFile: Bool) -> Bool {
-        guard let latestBuild else { return false }   // no versioned release → nothing to fetch
-        return !hasCachedFile || cachedBuild != latestBuild
+        UpdateRules.needsDownload(latestBuild: latestBuild, cachedBuild: cachedBuild,
+                                  hasCachedFile: hasCachedFile)
     }
 
     /// Forced update required iff the latest release carries a build number AND either the running
     /// firmware predates versioning (no build number) or its build is lower.
     static func mustUpdate(carFw: String?, latestTag: String?) -> Bool {
-        guard let latest = buildNumber(latestTag) else { return false }  // no versioned release → gate inert
-        guard let car = buildNumber(carFw) else { return true }          // pre-versioning firmware → must update
-        return latest > car
+        UpdateRules.mustUpdate(carFw: carFw, latestTag: latestTag)
     }
 
     // MARK: - Internet reachability + firmware cache
@@ -90,9 +77,34 @@ final class UpdateClient: NSObject, ObservableObject {
     private static let kBuild = "cachedLatestBuild"
     private static let kTag   = "cachedLatestTag"
 
+    /// Application Support, not Caches: this file is the offline gate's lifeline (GateRule),
+    /// and iOS may purge Caches under storage pressure — evaporating the one thing that lets
+    /// a phone in the field proceed without internet. Excluded from backup: it is a cache in
+    /// spirit, just not one the OS may unilaterally delete.
     static var cachedBinURL: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory,
+                                           in: .userDomainMask)[0]
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("firmware-latest.bin")
+    }
+
+    /// One-time move of a pre-existing cache from the old Caches location. Called at launch;
+    /// a no-op when there is nothing to migrate or the new file already exists.
+    static func migrateCacheIfNeeded() {
+        let old = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("firmware-latest.bin")
+        let new = cachedBinURL
+        guard FileManager.default.fileExists(atPath: old.path),
+              !FileManager.default.fileExists(atPath: new.path) else { return }
+        try? FileManager.default.moveItem(at: old, to: new)
+        excludeFromBackup(new)
+    }
+
+    private static func excludeFromBackup(_ url: URL) {
+        var u = url
+        var rv = URLResourceValues()
+        rv.isExcludedFromBackup = true
+        try? u.setResourceValues(rv)
     }
     static var cachedBuild: Int? {
         let v = UserDefaults.standard.integer(forKey: kBuild); return v == 0 ? nil : v
@@ -117,34 +129,69 @@ final class UpdateClient: NSObject, ObservableObject {
         } catch { return nil }
     }
 
-    func download(_ url: URL) async -> URL? {
+    /// Decision 6: nothing enters the firmware cache unvalidated. URLSession does not throw
+    /// on 404/403/5xx, so an error page used to be cached as firmware and recorded as the
+    /// latest build — poisoning the cache until a strictly newer release existed. A failed
+    /// download never installs an invalid image; a failed move can drop the old cache (the
+    /// remove happens before the move), which every consumer tolerates by re-checking
+    /// `hasCachedFile` live rather than trusting a cached boolean.
+    func download(_ url: URL, recordAs: (build: Int, tag: String)? = nil) async -> URL? {
         downloadProgress = 0
         let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
         do {
-            let (tmp, _) = try await session.download(from: url)
+            let (tmp, resp) = try await session.download(from: url)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+            let size = (try? FileManager.default.attributesOfItem(atPath: tmp.path)[.size]
+                            as? Int) ?? 0
+            let firstByte = FileHandle(forReadingAtPath: tmp.path).flatMap { fh -> UInt8? in
+                defer { try? fh.close() }
+                return try? fh.read(upToCount: 1)?.first
+            }
+            guard UpdateRules.isValidImage(firstByte: firstByte, size: size) else { return nil }
             let dest = UpdateClient.cachedBinURL
             try? FileManager.default.removeItem(at: dest)
             try FileManager.default.moveItem(at: tmp, to: dest)
+            UpdateClient.excludeFromBackup(dest)
+            if let r = recordAs { UpdateClient.recordCache(build: r.build, tag: r.tag) }
             return dest
         } catch { return nil }
     }
 
-    /// Uploads over `CarTransport`, not `URLSession`: the car's network is one iOS will not
-    /// route general traffic over, so this has to be bound to the Wi-Fi interface like every
-    /// other request to the car. Progress comes from the chunked body rather than a session
-    /// delegate.
-    func upload(_ binURL: URL) async -> Bool {
-        guard let data = try? Data(contentsOf: binURL) else { return false }
+    /// `failed`'s payload is the reason the CAR gave, when it gave one — only the
+    /// `CarError.http` envelope branch below populates it. Every transport-level failure (no
+    /// firmware file on disk, no wifi, timeout, refused, malformed/truncated stream) carries
+    /// `nil`: the car never answered, so there is no car-authored reason to quote, and
+    /// `fw.failReason`'s "Машинка ответила: …" framing would be a lie for those.
+    enum UploadOutcome: Equatable { case ok, cancelled, failed(String?) }
+
+    /// Uploads over `CarTransport`, WiFi-pinned like every request to the car. 45 s, not
+    /// 180: the car itself abandons a stalled upload after ~30 s, so anything beyond that
+    /// is the phone watching a corpse (decision 15). The car's error envelope is surfaced,
+    /// not swallowed (decision 14) — but only when it really is the car's own envelope; see
+    /// `UploadOutcome`.
+    func upload(_ binURL: URL) async -> UploadOutcome {
+        uploadProgress = 0
+        guard let data = try? Data(contentsOf: binURL) else { return .failed(nil) }
         do {
             _ = try await CarTransport.shared.post("/ota", body: data,
                                                    contentType: "application/octet-stream",
-                                                   timeout: 180) { [weak self] p in
+                                                   timeout: 45) { [weak self] p in
                 Task { @MainActor in self?.uploadProgress = p }
             }
-            return true
+            return .ok
+        } catch is CancellationError {
+            return .cancelled
+        } catch let CarError.http(status, body) {
+            let msg = ((try? JSONSerialization.jsonObject(with: body)) as? [String: Any])?["error"] as? String
+            return .failed(msg ?? "HTTP \(status)")
         } catch {
-            return false
+            // `CarError` (`.noWiFi`, `.denied`, `.refused`, `.timeout`, `.malformed`,
+            // `.truncated`) or anything else unexpected: none of these are the car speaking,
+            // they're the transport never reaching it — generic copy, not a fabricated quote.
+            // Nothing on screen names the reason, so it goes to the log instead.
+            print("upload failed: \((error as? CarError)?.logDescription ?? String(describing: error))")
+            return .failed(nil)
         }
     }
 }

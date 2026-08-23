@@ -42,7 +42,7 @@ struct GalleryView: View {
         var t = Telemetry()
         t.calibrated = calibrated; t.rssi = rssi; t.wdtTrips = wdtTrips
         t.uptimeS = 3847; t.rxFps = 10; t.busOk = busOk; t.ctl = ctl
-        return CarLink.preview(.live(t), fw: fw, radio: CarLink.Radio(fw: "3.0.6", ok: true))
+        return CarLink.preview(.live(t), fw: fw, radio: .known(fw: "3.0.6", ok: true))
     }
 
     @MainActor private func makeFrames(_ p: Palette) -> [(label: String, view: AnyView)] {
@@ -80,6 +80,16 @@ struct GalleryView: View {
             ("Firmware done",           fw(.done)),
             ("Firmware failed",         fw(.failed)),
             ("Firmware forced",         fw(.available, forced: true)),
+            ("Firmware radio mismatch",  AnyView(NavigationStack { FirmwareView(
+                palette: p, debugPhase: .upToDate,
+                link: CarLink.preview(.live(Telemetry()), fw: "v1.0+584",
+                                      radio: .known(fw: "2.11.7", ok: false))) })),
+            ("Firmware radio unknown",   AnyView(NavigationStack { FirmwareView(
+                palette: p, debugPhase: .upToDate,
+                link: CarLink.preview(.live(Telemetry()), fw: "v1.0+584",
+                                      radio: .unavailable)) })),
+            ("Firmware flashed",         fw(.flashed)),
+            ("Firmware failed forced",   fw(.failed, forced: true)),
             ("Drive arcade",            AnyView(DriveView(link: mockLink(), intent: intent, preview: true).onAppear { UserDefaults.standard.set(Scheme.arcade.rawValue, forKey: "scheme") })),
             ("Drive tank",              AnyView(DriveView(link: mockLink(), intent: intent, preview: true).onAppear { UserDefaults.standard.set(Scheme.tank.rawValue, forKey: "scheme") })),
             ("Drive warning",           AnyView(DriveView(link: mockLink(wdtTrips: 3), intent: intent, preview: true))),

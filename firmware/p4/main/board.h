@@ -38,9 +38,10 @@
 #define BOARD_PCA_ADDR_REAR   0x60
 #define BOARD_PCA_CH_PER_CHIP 4
 
-// Expected esp_hosted slave version on the C6. The radio is wire-flashed once and pinned,
-// so a mismatch is otherwise silent; status_api compares this against what the co-processor
-// actually reports and flags it in /status.
-#define BOARD_RADIO_SLAVE_FW "3.0.6"
+// The C6 runs esp_hosted's slave image, delivered out of band (firmware/c6/README.md) —
+// over SDIO from the host is the recorded route, the UART header the fallback. The
+// EXPECTED slave version is no longer pinned here by hand: status_api derives it at
+// compile time from the host component's own version macros (eh_common_fw_version.h),
+// so the expectation cannot drift from firmware/p4/main/idf_component.yml.
 
 #endif // BOARD_H

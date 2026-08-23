@@ -32,7 +32,7 @@ from aiohttp import web
 
 from generated import DEVICE, DOMAINS, PROTO, RT
 from rt_link import Impairment, RTLink, service_loop
-from state import CarState
+from state import CarState, parse_image_version
 
 # A flash is the one REST call that takes real time; the mock spends it so a client's
 # progress UI has something to show.
@@ -132,6 +132,9 @@ async def status(request):
         # version inside it is spelled with the contract's key, as status_api.c
         # spells it (`RT_KEY_FW`).
         "radio": {RT["fw_field"]: "mock", "expected": "mock", "ok": True},
+        # Like `radio`: /status-only diagnostics outside the generated contract.
+        "rollback": car.rollback,
+        "nvs_wiped": car.nvs_wiped,
     })
 
 
@@ -203,10 +206,19 @@ async def ota(request):
         # never rehearse.
         car.end_ota(flashed=False)
         return json_error(500, "ota write failed")
+    prev_fw = car.fw
     print(f"ota: {len(data)} bytes — motors stopped, flashing")
     await asyncio.sleep(OTA_SECONDS)
-    car.end_ota()
-    print(f"ota: done, now running {car.fw} — 'rebooting'")
+    car.end_ota(version=parse_image_version(data))
+    if request.app["rollback_mode"]:
+        # Rehearsal: the flashed image "fails its first boot" — the car comes back on
+        # the previous firmware with the rollback flag up, exactly what the app's
+        # detector must learn to call a FAILURE (decision 5).
+        car.fw = prev_fw
+        car.rollback = True
+        print(f"ota: 'rolled back' — reporting {car.fw}, rollback:true")
+    else:
+        print(f"ota: done, now running {car.fw} — 'rebooting'")
     link.simulate_reboot(asyncio.get_running_loop().time())
     return web.json_response({"ok": True})
 
@@ -217,7 +229,7 @@ async def root(request):
     return web.Response(text=f"{car.device} {car.fw}\n")
 
 
-def build_app(car, link):
+def build_app(car, link, rollback_mode=False):
     # aiohttp's default client_max_size is 1 MB. A real image is already ~0.75 MB
     # (firmware/p4/build/ajmiddlecar.bin) and growing, so the default would 413 a
     # legitimate upload — and, without the read() guard above, wedge the actuator
@@ -226,6 +238,7 @@ def build_app(car, link):
     app["car"] = car
     app["link"] = link
     app["lock"] = asyncio.Lock()
+    app["rollback_mode"] = rollback_mode
     routes = [web.get("/", root), web.get("/status", status),
               web.get("/calib", calib_get), web.post("/calib/spin", calib_spin),
               web.post("/calib/save", calib_save), web.post("/ota", ota)]
@@ -245,7 +258,7 @@ async def serve(args):
 
     _, link = await loop.create_datagram_endpoint(
         lambda: RTLink(car, impair, args.verbose), local_addr=(args.host, args.rt_port))
-    runner = web.AppRunner(build_app(car, link), access_log=None)
+    runner = web.AppRunner(build_app(car, link, rollback_mode=args.rollback), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, args.host, args.port).start()
 
@@ -283,6 +296,9 @@ def main():
                         "app renders differently from a very weak signal")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="log every frame instead of one line a second")
+    p.add_argument("--rollback", action="store_true",
+                   help="rehearsal: every successful /ota 'fails its first boot' — the mock "
+                        "comes back on the old fw with rollback:true in /status")
     args = p.parse_args()
     # Line buffering, so `mock_car.py > log &` shows the banner and the drops as they
     # happen rather than in 8 KB batches when something finally flushes.

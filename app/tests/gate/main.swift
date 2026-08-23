@@ -17,4 +17,16 @@ check(!GateRule.canProceedOffline(hasCachedFile: true, cachedBuild: nil),
 check(!GateRule.canProceedOffline(hasCachedFile: false, cachedBuild: nil),
       "nothing cached, nothing to proceed with")
 
+// Decision 4a: an offline launch seeds the forced gate with the last-known release, so
+// mustUpdate can still compare — a cached tag is only trustworthy when the cached image
+// it describes actually exists.
+check(GateRule.offlineLatestTag(cachedTag: "v1.0+584", hasCachedFile: true, cachedBuild: 584)
+        == "v1.0+584", "offline launch seeds the last-known tag")
+check(GateRule.offlineLatestTag(cachedTag: "v1.0+584", hasCachedFile: false, cachedBuild: 584)
+        == nil, "no file: the tag describes nothing flashable")
+check(GateRule.offlineLatestTag(cachedTag: "v1.0+584", hasCachedFile: true, cachedBuild: nil)
+        == nil, "no recorded build: not a known version")
+check(GateRule.offlineLatestTag(cachedTag: nil, hasCachedFile: true, cachedBuild: 584)
+        == nil, "no tag recorded, nothing to seed")
+
 if failures == 0 { print("test_gate: OK") } else { exit(1) }

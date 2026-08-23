@@ -57,3 +57,8 @@ CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D1=15
 CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D2=16
 CONFIG_ESP_HOSTED_HOST_SDIO_PIN_D3=17
 CONFIG_ESP_HOSTED_HOST_RESET_GPIO=54
+
+# Host-side OTA of the C6 co-processor (esp_hosted_cp_ota_*). Holds today only via the
+# component's promptless Kconfig default; pinned here so a vendor default change cannot
+# silently remove the only wireless path to the radio (2026-08-23 audit).
+CONFIG_ESP_HOSTED_HOST_FEAT_OTA=y

@@ -38,8 +38,15 @@ static esp_err_t ota_post(httpd_req_t *req) {
         api_reply_error(req, "500 Internal Server Error", "", "no ota partition");
         return ESP_FAIL;
     }
+    if ((uint32_t)req->content_len > part->size) {
+        link_release_must(LINK_SRC_OTA);
+        return api_reply_error(req, "400 Bad Request", "", "image too large");
+    }
     esp_ota_handle_t handle = 0;
-    if (esp_ota_begin(part, OTA_SIZE_UNKNOWN, &handle) != ESP_OK) {
+    /* The exact length is known from Content-Length: erasing only what the image needs
+       instead of OTA_SIZE_UNKNOWN's full 4 MB saves seconds of erase (and flash wear)
+       per update — and a too-large image now fails here instead of after the erase. */
+    if (esp_ota_begin(part, req->content_len, &handle) != ESP_OK) {
         link_release_must(LINK_SRC_OTA);
         api_reply_error(req, "500 Internal Server Error", "", "ota begin failed");
         return ESP_FAIL;

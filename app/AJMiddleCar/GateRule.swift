@@ -10,4 +10,16 @@ enum GateRule {
     static func canProceedOffline(hasCachedFile: Bool, cachedBuild: Int?) -> Bool {
         hasCachedFile && cachedBuild != nil
     }
+
+    /// Decision 4a: the tag the forced gate compares against when GitHub was unreachable —
+    /// the last release this phone downloaded, but only while the cached image that tag
+    /// describes still exists. Without this an offline launch left `latestTag` nil for the
+    /// whole session and the forced gate silently never fired.
+    static func offlineLatestTag(cachedTag: String?, hasCachedFile: Bool,
+                                 cachedBuild: Int?) -> String? {
+        guard canProceedOffline(hasCachedFile: hasCachedFile, cachedBuild: cachedBuild) else {
+            return nil
+        }
+        return cachedTag
+    }
 }
