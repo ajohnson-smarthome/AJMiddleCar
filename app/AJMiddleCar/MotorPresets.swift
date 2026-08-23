@@ -3,8 +3,8 @@ import Foundation
 /// One known motor configuration. `gearX100` = gear ratio × 100 (matches firmware /wheel).
 /// `rpm` is a label only (rated output speed) — it does not affect CPR.
 struct MotorPreset: Identifiable, Equatable {
-    let id: String       // stable key, e.g. "jga25-370-170"
-    let name: String     // "JGA25-370"
+    let id: String       // stable key, e.g. "jgb37-520b-1000"
+    let name: String     // "JGB37-520B"
     let rpm: Int         // rated output rpm, label only
     let ppr: Int         // encoder pulses per motor-shaft rev (one channel)
     let gearX100: Int
@@ -18,8 +18,7 @@ struct MotorPreset: Identifiable, Equatable {
 /// `match` return nil (the UI then shows «Свои параметры»).
 enum MotorPresets {
     static let all: [MotorPreset] = [
-        MotorPreset(id: "jga25-370-170",   name: "JGA25-370",  rpm: 170,  ppr: 11, gearX100: 2100, quad: 4),
-        MotorPreset(id: "jgb37-520b-1000", name: "JGB37-520B", rpm: 1000, ppr: 11, gearX100: 900,  quad: 4),
+        MotorPreset(id: "jgb37-520b-1000", name: "JGB37-520B", rpm: 1000, ppr: 11, gearX100: 900, quad: 4),
     ]
 
     /// Counts per output-shaft revolution = ppr × gear × quad.

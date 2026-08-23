@@ -232,7 +232,7 @@ class TestSwiftEmitter(unittest.TestCase):
     def test_default_uses_the_schema_values(self):
         import gen_contract
         out = gen_contract.emit_swift(load())
-        self.assertIn("Wheel(diameter_mm: 65, ppr: 11, gear_x100: 2100, quad: 4)", out)
+        self.assertIn("Wheel(diameter_mm: 65, ppr: 11, gear_x100: 900, quad: 4)", out)
         self.assertIn("Recover(enabled: true, window_ms: 5000)", out)
 
 

@@ -51,9 +51,9 @@ enum Tricks {
     // MARK: donut circle count (pure, host-tested) — duration back-solved from a target
     // number of full circles. ω = vmax·2y/track, so N circles take t = N·π·track/(vmax·y).
     static let donutCirclesMin = 1, donutCirclesMax = 10, donutCirclesDefault = 2
-    /// Nominal linear speed (default motor JGA25-370 ~170 rpm, 65 mm wheel: π·0.065·170/60)
+    /// Nominal linear speed (fleet motor JGB37-520B ~1000 rpm, 65 mm wheel: π·0.065·1000/60)
     /// used when /wheel is unavailable, so a circle count still maps to *some* duration.
-    static let donutNominalVmaxMS = 0.578
+    static let donutNominalVmaxMS = 3.403
 
     /// Streamed duration (ms) for `circles` full circles of a donut whose inner-wheel term is
     /// `y` (= (1−r)/2 from `donutSides`), at linear speed `vmaxMS`. Inverse of the simulation's

@@ -7,7 +7,7 @@
 static const char *TAG = "wheel";
 
 static wheel_params_t s_params = {
-    .diameter_mm = 65, .ppr = 11, .gear_x100 = 2100, .quad = 4,
+    .diameter_mm = 65, .ppr = 11, .gear_x100 = 900, .quad = 4,
 };
 
 static uint16_t clamp_u16(uint16_t v, uint16_t lo, uint16_t hi) {
