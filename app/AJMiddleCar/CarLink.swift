@@ -47,6 +47,12 @@ final class CarLink: ObservableObject {
     private var pump: Task<Void, Never>?
     private var decay: Task<Void, Never>?
     private var radioFetch: Task<Void, Never>?
+    /// Bumped on every `fetchRadio()` call (including `refreshRadio()`'s). A fetch
+    /// whose captured generation no longer matches has been superseded by a newer one —
+    /// cancelling `radioFetch` cannot abort an in-flight `transport.get` (the transport
+    /// serializes through its own task), so this is the authoritative guard against a
+    /// stale response landing after a newer session already asked again.
+    private var radioFetchGen = 0
     private var pathSub: AnyCancellable?
     /// Lifecycle operations run strictly in call order. `start()` and `requestStop()` enqueue
     /// synchronously on the main actor, so the order the scene handler calls them in is the
@@ -250,26 +256,38 @@ final class CarLink: ObservableObject {
     /// whole session. Four tries, backing off; if every try fails the status becomes
     /// `.unavailable` rather than silence. `rollback` is parsed independently of the radio
     /// object: it must survive a malformed radio block, and its absence (older firmware)
-    /// stays nil.
+    /// stays nil. Every write is guarded by `radioFetchGen`: a fetch superseded by a newer
+    /// `.sessionOpened` (e.g. the reconnect right after an OTA reboot) must not let its
+    /// in-flight response — which cancellation alone cannot stop — overwrite the newer
+    /// session's fresh values.
     private func fetchRadio() {
         radioFetch?.cancel()
+        radioFetchGen += 1
+        let gen = radioFetchGen
         radioFetch = Task { [weak self, transport] in
             for delay: Double in [0, 1, 2, 4] {
                 if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
                 if Task.isCancelled { return }
-                if let data = try? await transport.get("/status", timeout: 2),
-                   let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    if let rb = j["rollback"] as? Bool { self?.rollback = rb }
+                guard let self, gen == self.radioFetchGen else { return }
+                let data = try? await transport.get("/status", timeout: 2)
+                // Authoritative recheck: the await above is exactly where a supersede can land
+                // unnoticed by `Task.isCancelled` (the transport's own task keeps running it).
+                // `self` is already the non-optional bound above (still in scope, same
+                // iteration) — only the generation can have moved.
+                guard gen == self.radioFetchGen else { return }
+                if let data, let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    if let rb = j["rollback"] as? Bool { self.rollback = rb }
                     if let r = j["radio"] as? [String: Any],
                        let fw = r[CarContract.fwField] as? String {
                         // Missing/malformed `ok` is NOT health (decision 17): unknown means
                         // the one flag this line exists for could not be read.
-                        self?.radio = .known(fw: fw, ok: r["ok"] as? Bool ?? false)
+                        self.radio = .known(fw: fw, ok: r["ok"] as? Bool ?? false)
                         return
                     }
                 }
             }
-            if self?.radio == nil { self?.radio = .unavailable }
+            guard let self, gen == self.radioFetchGen else { return }
+            if self.radio == nil { self.radio = .unavailable }
         }
     }
 
