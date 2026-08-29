@@ -204,7 +204,7 @@ CONFIG_SPIRAM_MODE_OCT=y
 ```cmake
 idf_component_register(SRCS "main.c"
                        INCLUDE_DIRS "."
-                       PRIV_REQUIRES nvs_flash esp_netif esp_http_server)
+                       PRIV_REQUIRES nvs_flash)
 ```
 
 `firmware/s3/main/idf_component.yml`:
@@ -558,7 +558,7 @@ And add the new source in `firmware/s3/main/CMakeLists.txt`:
 ```cmake
 idf_component_register(SRCS "main.c" "usb_net.c"
                        INCLUDE_DIRS "."
-                       PRIV_REQUIRES nvs_flash esp_netif esp_http_server)
+                       PRIV_REQUIRES nvs_flash esp_netif)
 ```
 
 - [ ] **Step 5: Build, flash, and verify the Mac gets an address**
