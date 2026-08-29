@@ -1,5 +1,7 @@
 firmware/p4/build/
 firmware/c6/build/
+firmware/s3/build/
+firmware/s3/managed_components/
 sdkconfig
 sdkconfig.old
 *.o

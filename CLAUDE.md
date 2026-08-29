@@ -47,6 +47,7 @@ impossible: per wheel it sets exactly one of the pair nonzero, or neither.
 app/            iOS pult (XcodeGen; the .xcodeproj is generated and gitignored)
 firmware/p4/    the car's firmware — all logic
 firmware/c6/    the radio's slave image build
+firmware/s3/   the USB-Ethernet dongle — knows nothing about the car
 tools/          mock_car, release.sh, env-p4.sh
 docs/           protocol.md, bringup.md, specs/, plans/, research/
 ```
