@@ -604,7 +604,7 @@ git commit -m "feat(s3): the dongle is an endpoint — its own address, and DHCP
 
 **Interfaces:**
 - Consumes: `usb_net_start()` from Task 3.
-- Produces: `esp_err_t status_api_start(void)`, serving `GET /status` on port 80 of `192.168.7.1`. Plan 2 registers `POST /net` on the same server through `status_api_server()`.
+- Produces: `esp_err_t status_api_start(void)`, serving `GET /status` on port 80 of `192.168.7.1`. Plan 2 adds `POST /net` here, and adds an accessor for the server handle at the moment it has a caller — not before.
 
 - [ ] **Step 1: Write `status_api.h`**
 
@@ -613,17 +613,12 @@ git commit -m "feat(s3): the dongle is an endpoint — its own address, and DHCP
 #define STATUS_API_H
 
 #include "esp_err.h"
-#include "esp_http_server.h"
 
 /* Starts the HTTP server and registers GET /status.
  *
  * Bound to the USB interface only. The dongle's configuration must never be
  * reachable over the radio — from Plan 2 this endpoint carries a car's password. */
 esp_err_t status_api_start(void);
-
-/* The running server, so later plans can register their own handlers on it
- * rather than starting a second one. NULL before status_api_start succeeds. */
-httpd_handle_t status_api_server(void);
 
 #endif /* STATUS_API_H */
 ```
@@ -635,6 +630,7 @@ httpd_handle_t status_api_server(void);
 
 #include "esp_app_desc.h"
 #include "esp_check.h"
+#include "esp_http_server.h"
 #include "esp_log.h"
 
 #include "status_api.h"
@@ -658,11 +654,6 @@ static esp_err_t status_get(httpd_req_t *req)
 
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, body, n);
-}
-
-httpd_handle_t status_api_server(void)
-{
-    return s_server;
 }
 
 esp_err_t status_api_start(void)
