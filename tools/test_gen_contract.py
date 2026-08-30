@@ -125,6 +125,27 @@ import tempfile
 sys.path.insert(0, str(ROOT / "tools"))
 
 
+class TestArtifactListing(unittest.TestCase):
+    """The generator owns the list of what it writes; check_contract.sh asks rather
+    than keeping a second copy that has to be edited in step."""
+
+    def test_list_artifacts_names_every_whole_file(self):
+        out = subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "gen_contract.py"), "--list-artifacts"],
+            capture_output=True, text=True, check=True).stdout.split()
+        self.assertIn("firmware/p4/main/cfg_table.inc", out)
+        self.assertIn("app/AJMiddleCar/Generated/CarAPI.swift", out)
+        self.assertIn("tools/mock_car/generated.py", out)
+
+    def test_list_artifacts_excludes_spliced_files(self):
+        # docs/protocol.md is spliced into hand-written prose and is compared by
+        # region, so a caller that diffs whole files must not be handed it.
+        out = subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "gen_contract.py"), "--list-artifacts"],
+            capture_output=True, text=True, check=True).stdout.split()
+        self.assertNotIn("docs/protocol.md", out)
+
+
 class TestDocEmitter(unittest.TestCase):
     def test_table_has_a_row_per_domain_with_ranges(self):
         import gen_contract

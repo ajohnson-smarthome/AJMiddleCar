@@ -251,25 +251,66 @@ def emit_python(schema):
     ])
 
 
+# One entry per device. The car's four artifacts and the dongle's two are addressed the
+# same way, so adding a device is a table entry rather than another pair of literals in
+# main() — and check_contract.sh reads this list instead of keeping its own copy, which
+# was a second thing to remember to edit.
+#
+# `artifacts` are written whole and diffed whole. `spliced` are written into a marked
+# region of a hand-written file and diffed by region; the two cannot be checked the same
+# way, which is why they are separate lists rather than one with a flag.
+TARGETS = [
+    {
+        "name": "car",
+        "schema": SCHEMA,
+        "artifacts": [
+            ("firmware/p4/main/cfg_table.inc", emit_c),
+            ("app/AJMiddleCar/Generated/CarAPI.swift", emit_swift),
+            ("tools/mock_car/generated.py", emit_python),
+        ],
+        "spliced": [
+            ("docs/protocol.md", emit_doc, MARK_BEGIN, MARK_END),
+        ],
+    },
+]
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--schema", default=str(SCHEMA))
+    ap.add_argument("--schema", default=None,
+                    help="override the schema of a single-target run (tests use this)")
     ap.add_argument("--out-dir", default=None,
                     help="write every artefact under this root instead of in place")
+    ap.add_argument("--list-artifacts", action="store_true",
+                    help="print the repo-relative path of every whole-file artefact and exit")
     args = ap.parse_args(argv)
 
-    schema = load_schema(args.schema)
+    if args.list_artifacts:
+        for target in TARGETS:
+            for rel, _ in target["artifacts"]:
+                print(rel)
+        return 0
+
     root = pathlib.Path(args.out_dir) if args.out_dir else ROOT
 
-    doc_path = root / "docs" / "protocol.md"
-    if args.out_dir:
-        write(doc_path, MARK_BEGIN + "\n" + emit_doc(schema) + "\n" + MARK_END)
-    else:
-        write(doc_path, splice(doc_path.read_text(), emit_doc(schema)))
+    for target in TARGETS:
+        # --schema overrides only a single-target run; with several targets it would be
+        # ambiguous which one it names, and silently applying it to the first is the kind
+        # of helpfulness that hides a mistake.
+        schema_path = args.schema if (args.schema and len(TARGETS) == 1) else target["schema"]
+        if args.schema and len(TARGETS) > 1:
+            raise SystemExit("--schema is ambiguous with more than one target; edit TARGETS instead")
+        schema = load_schema(schema_path)
 
-    write(root / "firmware" / "p4" / "main" / "cfg_table.inc", emit_c(schema))
-    write(root / "app" / "AJMiddleCar" / "Generated" / "CarAPI.swift", emit_swift(schema))
-    write(root / "tools" / "mock_car" / "generated.py", emit_python(schema))
+        for rel, emitter in target["artifacts"]:
+            write(root / rel, emitter(schema))
+
+        for rel, emitter, begin, end in target["spliced"]:
+            path = root / rel
+            if args.out_dir:
+                write(path, begin + "\n" + emitter(schema) + "\n" + end)
+            else:
+                write(path, splice(path.read_text(), emitter(schema)))
 
     return 0
 

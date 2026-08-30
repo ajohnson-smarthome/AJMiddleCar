@@ -10,15 +10,15 @@ trap 'rm -rf "$TMP"' EXIT
 python3 "$ROOT/tools/gen_contract.py" --out-dir "$TMP"
 
 status=0
-for rel in firmware/p4/main/cfg_table.inc \
-           app/AJMiddleCar/Generated/CarAPI.swift \
-           tools/mock_car/generated.py; do
+# The artefact list comes from the generator: it was duplicated here, and a fifth
+# artefact meant editing two files in step or silently checking only some of them.
+while IFS= read -r rel; do
     if ! diff -u "$ROOT/$rel" "$TMP/$rel" > /dev/null 2>&1; then
         echo "DRIFT: $rel differs from a fresh generation" >&2
         diff -u "$ROOT/$rel" "$TMP/$rel" >&2 || true
         status=1
     fi
-done
+done < <(python3 "$ROOT/tools/gen_contract.py" --list-artifacts)
 
 # docs/protocol.md is spliced into hand-written prose, so compare only the region.
 region() { sed -n '/generated:endpoints/,/\/generated:endpoints/p' "$1"; }
