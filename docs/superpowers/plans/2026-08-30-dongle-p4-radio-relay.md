@@ -463,8 +463,15 @@ firmware needs: the state name, the RSSI, and the gateway the relays aim at.
   - `int8_t wifi_sta_rssi(void);`
   - `bool wifi_sta_gateway(uint32_t *out_be);` — the gateway as a network-order IPv4 address;
     false until connected. Tasks 4 and 5 call this to learn where to forward.
-  - `void wifi_sta_on_connected(void (*cb)(void));` — invoked once each time the state reaches
-    connected, so the relays can (re)aim without polling.
+  - ~~`void wifi_sta_on_connected(void (*cb)(void));`~~ — **not built.** One callback slot
+    cannot serve two registrants, and Tasks 4 and 5 are both registrants: whichever registered
+    second would silently overwrite the first. Both relays already run a `select()` loop that
+    wakes at least once a second, so they poll `wifi_sta_gateway()` once per pass instead of
+    being told. `wifi_sta.h` carries the reason at the point where a reader would look for the
+    callback. Every mention of it below is struck through for the same reason.
+  - `esp_err_t wifi_sta_join(...)` and `bool wifi_sta_connected(void);` were added after this
+    plan was written — see the multivector fix report: a `void` join could not report a
+    failure, and `POST /net` needs to tell "already connected" from "gave up, try again".
 
 - [ ] **Step 1: Station configuration**
 
@@ -528,9 +535,9 @@ int8_t wifi_sta_rssi(void);
  * relays' destination, and the only reason the dongle needs no compiled-in car address. */
 bool wifi_sta_gateway(uint32_t *out_be);
 
-/* Register a callback invoked each time the station reaches connected. Called from the event
- * task; keep it short. One slot, set before wifi_sta_start. */
-void wifi_sta_on_connected(void (*cb)(void));
+/* NOT BUILT — one callback slot cannot serve both relays; they poll wifi_sta_gateway()
+ * instead. The shipped wifi_sta.h says so at this spot.
+ * void wifi_sta_on_connected(void (*cb)(void)); */
 
 #endif /* WIFI_STA_H */
 ```
@@ -554,7 +561,9 @@ Create `firmware/s3/main/wifi_sta.c`. Requirements, in the order they matter:
 4. `WIFI_EVENT_STA_START` → `esp_wifi_connect()` only if the state machine is already in
    `WIFI_JOINING`.
 5. `IP_EVENT_STA_GOT_IP` → store `event->ip_info.gw`, `wifi_state_step(WIFI_EV_GOT_IP)`, log the
-   address and gateway, then invoke the connected callback **outside** the mutex.
+   address and gateway. (~~then invoke the connected callback **outside** the mutex~~ — there is
+   no connected callback; see the Produces list above. The handler simply releases the mutex and
+   logs, and the relays notice on their next `select()` pass.)
 6. `wifi_sta_join` copies the credentials into a `wifi_config_t`, calls `esp_wifi_set_config`,
    `wifi_state_step(WIFI_EV_CONFIGURED)`, then `esp_wifi_disconnect()` followed by
    `esp_wifi_connect()`. The disconnect is what makes a re-join to a *different* network work;
@@ -649,7 +658,8 @@ live car-facing one.
 - Modify: `firmware/s3/main/main.c`, `firmware/s3/main/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: `DONGLE_RELAY_RT_PORT` (Task 1); `wifi_sta_gateway` and `wifi_sta_on_connected` (Task 3).
+- Consumes: `DONGLE_RELAY_RT_PORT` (Task 1); `wifi_sta_gateway` (Task 3). ~~`wifi_sta_on_connected`~~
+  was never built — see Task 3's Produces list.
 - Produces: `esp_err_t relay_udp_start(void);`
 
 - [ ] **Step 1: Write the failing tests for the pure half**
@@ -729,11 +739,15 @@ Add `test_udp_sess` to `firmware/s3/test/Makefile` beside the other two, then
 Create `firmware/s3/main/relay_udp.{c,h}`. `relay_udp_start()` creates one task. The task:
 
 1. Waits until `wifi_sta_gateway()` succeeds — before that there is nowhere to forward. Re-reads
-   it whenever the connected callback fires, and closes every car-facing socket when it changes,
-   because a session aimed at a stale gateway is worse than no session.
-2. Binds the phone-facing socket to `DONGLE_HOST:DONGLE_RELAY_RT_PORT`. **Bind to the address,
-   not `INADDR_ANY`** — that is what keeps the relay off the car's network, and it is why the
-   relays need no guard of their own while the HTTP server does.
+   it ~~whenever the connected callback fires~~ **once per `select()` pass** (there is no
+   connected callback — see Task 3's Produces list), and closes every car-facing socket when it
+   changes, because a session aimed at a stale gateway is worse than no session.
+2. Binds the phone-facing socket to `DONGLE_HOST:DONGLE_RELAY_RT_PORT`, and — **amended after
+   review** — pins it to the USB interface with `SO_BINDTODEVICE` first. The pin is what keeps
+   the relay off the car's network; the bind alone does not, because lwIP is a weak-host stack
+   and `ip4_input` accepts on any netif whose address matches the destination. That correction
+   applies to Task 5's listener identically. It remains true that the relays need no guard of
+   their own while the HTTP server does — but for this reason, not the one originally written.
 3. `select()` over the phone-facing socket and every live car-facing socket, with a timeout no
    longer than a second so expiry runs even when nothing arrives.
 4. Phone → car: `recvfrom`, `udp_sess_touch`, create the session's car-facing socket if the slot
@@ -773,7 +787,8 @@ without letting a leaked slot starve the pool.
 - Modify: `firmware/s3/main/main.c`, `firmware/s3/main/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: `DONGLE_RELAY_HTTP_PORT` (Task 1); `wifi_sta_gateway`, `wifi_sta_on_connected` (Task 3).
+- Consumes: `DONGLE_RELAY_HTTP_PORT` (Task 1); `wifi_sta_gateway` (Task 3). ~~`wifi_sta_on_connected`~~
+  was never built — see Task 3's Produces list.
 - Produces: `esp_err_t relay_tcp_start(void);`
 
 - [ ] **Step 1: The header**

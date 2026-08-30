@@ -109,12 +109,16 @@ esp_err_t status_api_start(void)
     read_rollback_state();
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    /* 8080, not 80: port 80 belongs to the car. Plan 4 forwards it straight through to
-     * the car's own REST surface so that CarHost.port and the car's contract never move —
-     * the dongle is the new thing in the system, so the dongle takes the unusual port. */
+    /* 8080, not 80: port 80 belongs to the car. relay_tcp.c listens there and forwards
+     * straight through to the car's own REST surface, so CarHost.port and the car's contract
+     * never move — the dongle is the new thing in the system, so the dongle takes the unusual
+     * port. */
     cfg.server_port = DONGLE_PORT;
-    /* /status, GET /net, POST /net, and room for Plan 4's additions — sized so that a
-     * new endpoint is not also a config change. */
+    /* Four are registered: GET /status here, GET and POST /net (net_api.c), POST /ota
+     * (ota_api.c). Six is deliberate headroom, so adding an endpoint is not also a config
+     * change — and it is the whole story now rather than a placeholder: the relays added no
+     * URI handlers at all, being raw sockets on their own ports, and the API guard is an
+     * open_fn rather than a handler. Nothing further is pending against this number. */
     cfg.max_uri_handlers = 6;
     /* Lowered from esp_http_server's default of 7: this device's whole lwIP socket table
      * (CONFIG_LWIP_MAX_SOCKETS, sdkconfig.defaults) is shared with relay_udp.c and

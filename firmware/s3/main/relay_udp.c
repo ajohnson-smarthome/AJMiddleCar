@@ -253,7 +253,7 @@ static void relay_task(void *arg)
 
     /* Nowhere to forward until the station has joined at least once. wifi_sta_gateway() is a
      * poll, not a callback — see wifi_sta.h's own comment on why one callback slot cannot
-     * serve both this relay and Task 5's — so this is an ordinary retry loop, not a wait on
+     * serve both this relay and relay_tcp's — so this is an ordinary retry loop, not a wait on
      * anything. */
     while (!wifi_sta_gateway(&r.gateway_be)) {
         vTaskDelay(pdMS_TO_TICKS(RELAY_LOOP_MS));

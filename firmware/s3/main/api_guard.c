@@ -141,16 +141,22 @@ esp_err_t api_guard_open(httpd_handle_t hd, int sockfd)
     /* Rejected. This runs on an accept path an attacker controls, and the dongle's only
      * console is a single shared UART, so THIS file's own log line is rate-limited (same
      * last_log idiom as relay_udp.c and relay_tcp.c) — but that does not make rejection quiet
-     * on its own: esp_http_server logs unthrottled on top of it regardless. A non-ESP_OK
-     * return from open_fn makes httpd_sess_new log ESP_LOGE("session creation failed")
-     * (esp_http_server/src/httpd_sess.c) and its caller, httpd_accept_conn, log
-     * ESP_LOGW("error accepting new connection") right after
-     * (esp_http_server/src/httpd_main.c) — two more lines per rejection, both unthrottled,
-     * both printed at CONFIG_LOG_DEFAULT_LEVEL=3. This line is one of three, not the only
-     * one. Do not reach for esp_log_level_set on esp_http_server's tag to quiet the other two
-     * — that costs that tag's other diagnostics on a device whose UART is its only window, to
-     * defend against a peer that must already be on the car's WPA2 network to reach this at
-     * all.
+     * on its own: esp_http_server logs unthrottled on top of it regardless. Two more lines
+     * per rejection, and this is where they actually come from — an earlier version of this
+     * comment credited both to the wrong function:
+     *
+     *   - httpd_accept_conn logs ESP_LOGE("session creation failed") when httpd_sess_new
+     *     returns non-ESP_OK (esp_http_server/src/httpd_main.c, just before its `goto exit`).
+     *   - its caller httpd_server logs ESP_LOGW("error accepting new connection") right after
+     *     (same file, the FD_ISSET(hd->listen_fd, ...) branch).
+     *
+     * httpd_sess_new itself is silent here: its only line on this path is
+     * ESP_LOGD("open_fn failed for fd = %d") (httpd_sess.c), and D is suppressed at
+     * CONFIG_LOG_DEFAULT_LEVEL=3. So the count is three lines per rejection, two of them
+     * unthrottled — the count was right before, the attribution was not. Do not reach for
+     * esp_log_level_set on esp_http_server's tag to quiet the other two — that costs that
+     * tag's other diagnostics on a device whose UART is its only window, to defend against a
+     * peer that must already be on the car's WPA2 network to reach this at all.
      *
      * Seeded one interval in the past, not zero: a guard's very first rejections — in the
      * first second after boot — are exactly the interesting ones, and last_log starting at 0

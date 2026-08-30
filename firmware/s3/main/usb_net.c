@@ -260,11 +260,23 @@ esp_err_t usb_net_start(void)
      * Espressif OUI never starts with that bit already on; the code is written for
      * what it does, not for what happens to coincide with it today.
      *
-     * net_cfg.mac_addr — the address the host sees, above — is a different, still-open
-     * concern: it borrows the real, per-device station MAC from the efuse block.
-     * Borrowing it costs nothing today because this firmware never brings up a
-     * station. A later plan that does must revisit it — a station and this USB
-     * interface on the same MAC would be two interfaces claiming one address. */
+     * net_cfg.mac_addr — the address the host sees, above — borrows the real, per-device
+     * station MAC from the efuse block. This used to say "a later plan that brings up a
+     * station must revisit it". That plan is this one, and the answer is that the sharing
+     * is harmless: the address collision would matter only if the two interfaces could ever
+     * appear on one L2 segment, and they cannot. The USB wire and the car's Wi-Fi are
+     * separate segments with nothing bridging them — no NAPT, no forwarding, no promiscuous
+     * mode; both relays operate at the socket layer, opening their own connection toward the
+     * car rather than passing frames between netifs, which is the whole reason the relay
+     * exists (see relay_udp.h / relay_tcp.h and the design note's NAPT section). No ARP
+     * request for this MAC ever crosses from one to the other, so nothing on either side
+     * sees two devices answering to one address.
+     *
+     * Two things this does NOT claim, so they are not mistaken for settled. It is a privacy
+     * exposure, unchanged by this plan: the station's probe requests and association carry
+     * the same efuse MAC that the USB host sees, so the two are trivially correlatable. And
+     * it stops being safe the moment anything bridges the two segments — a future plan that
+     * adds forwarding must give the USB side a MAC of its own first. */
     uint8_t our_mac[6];
     memcpy(our_mac, net_cfg.mac_addr, sizeof(our_mac));
     our_mac[0] |= 0x02;

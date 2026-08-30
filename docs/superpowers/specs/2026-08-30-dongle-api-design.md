@@ -122,7 +122,7 @@ Three facts, in IDF 6.0.2:
 Our topology needs both at once: the phone's packet arrives on the USB interface addressed to the
 dongle (so USB must be unflagged, for DNAT) and leaves toward the car (so the station must be
 unflagged, for the masquerade the car's reply depends on). And the flag cannot simply be absent
-from both — `ip_napt_enable_netif` (`ip4_napt.c:245-265`) allocates the NAPT tables only while at
+from both — `ip_napt_enable_netif` (`ip4_napt.c:288-321`) allocates the NAPT tables only while at
 least one interface carries it, and `esp_netif_napt_enable` clears it from every other interface
 by design.
 
