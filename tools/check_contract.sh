@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Fail if any generated artefact differs from a fresh run of the generator.
-# The contract lives in contract/car-api.json; nothing it produces is hand-edited.
+# Each device (car, dongle, ...) has its own schema under contract/, routed through
+# tools/gen_contract.py's TARGETS table; nothing any of them produces is hand-edited.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

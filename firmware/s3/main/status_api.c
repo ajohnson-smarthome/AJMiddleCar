@@ -47,7 +47,7 @@ static esp_err_t status_get(httpd_req_t *req)
                      "{\"" DONGLE_KEY_DEVICE "\":\"" DONGLE_DEVICE "\","
                      "\"" DONGLE_KEY_FW "\":\"%s\","
                      "\"" DONGLE_KEY_IDF "\":\"%s\","
-                     "\"" DONGLE_KEY_USB "\":\"up\","
+                     "\"" DONGLE_KEY_USB "\":\"" DONGLE_USB_STATE_UP "\","
                      "\"" DONGLE_KEY_NET "\":{"
                      "\"" DONGLE_KEY_NET_SSID "\":\"%s\","
                      "\"" DONGLE_KEY_NET_STATE "\":\"" DONGLE_STATE_IDLE "\","

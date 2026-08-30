@@ -8,7 +8,10 @@ firmware/s3/main/net_cfg.{c,h} where they are host-tested rather than here where
 would only be described.
 """
 
-BANNER = "generated from contract/dongle-api.json by tools/gen_dongle.py - do not edit"
+# tools/gen_dongle.py itself has no __main__ and isn't executable — it's a pair of
+# emitters gen_contract.py imports. The banner names the entry point someone would
+# actually run to regenerate, not the file the rule they'd hand-edited lives in.
+BANNER = "generated from contract/dongle-api.json by tools/gen_contract.py - do not edit"
 
 
 def emit_dongle_c(schema):
@@ -48,6 +51,9 @@ def emit_dongle_c(schema):
     lines.append("")
     for state in schema["net_states"]:
         lines.append(f'#define DONGLE_STATE_{state.upper()} "{state}"')
+    lines.append("")
+    for state in schema["usb_states"]:
+        lines.append(f'#define DONGLE_USB_STATE_{state.upper()} "{state}"')
     lines += ["", "#endif /* DONGLE_CONTRACT_INC */", ""]
     return "\n".join(lines)
 
@@ -58,6 +64,7 @@ def emit_dongle_swift(schema):
     n, b, e = schema["network"], schema["bounds"], schema["endpoints"]
     sf, nf = schema["status_fields"], schema["net_fields"]
     states = ", ".join(f'"{s}"' for s in schema["net_states"])
+    usb_states = ", ".join(f'"{s}"' for s in schema["usb_states"])
 
     lines = [
         f"// {BANNER}",
@@ -101,6 +108,15 @@ def emit_dongle_swift(schema):
         lines.append(f'    public static let {state} = "{state}"')
     lines += [
         f"    public static let all = [{states}]",
+        "}",
+        "",
+        "/// What the dongle's USB link is doing, as `/status` reports it.",
+        "public enum DongleUsbState {",
+    ]
+    for state in schema["usb_states"]:
+        lines.append(f'    public static let {state} = "{state}"')
+    lines += [
+        f"    public static let all = [{usb_states}]",
         "}",
         "",
     ]

@@ -32,5 +32,6 @@
     "pass_max": 63,
     "doc": "WPA2's limits, not ours. A password is empty or pass_min..pass_max; net_cfg enforces that, and the character-class rule it also enforces has no expression here."
   },
-  "net_states": ["idle", "joining", "connected", "failed"]
+  "net_states": ["idle", "joining", "connected", "failed"],
+  "usb_states": ["up"]
 }

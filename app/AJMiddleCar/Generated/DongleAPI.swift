@@ -1,4 +1,4 @@
-// generated from contract/dongle-api.json by tools/gen_dongle.py - do not edit
+// generated from contract/dongle-api.json by tools/gen_contract.py - do not edit
 
 public enum DongleContract {
     public static let device = "ajdongle"
@@ -37,4 +37,10 @@ public enum DongleNetState {
     public static let connected = "connected"
     public static let failed = "failed"
     public static let all = ["idle", "joining", "connected", "failed"]
+}
+
+/// What the dongle's USB link is doing, as `/status` reports it.
+public enum DongleUsbState {
+    public static let up = "up"
+    public static let all = ["up"]
 }

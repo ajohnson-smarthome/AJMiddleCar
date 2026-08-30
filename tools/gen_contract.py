@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Emit every expression of the app<->car contract from one schema.
+"""Emit every expression of each device's app<->firmware contract from its schema.
 
-Source of truth: contract/car-api.json. Everything this writes carries a header
-saying so and must never be hand-edited; tools/check_contract.sh fails a build
-where the committed output and a fresh run disagree.
+Source of truth: one JSON schema per device under contract/ — contract/car-api.json,
+contract/dongle-api.json — routed through the TARGETS table below, so a new device is a
+table entry here rather than a new script. Everything this writes carries a header saying
+so and must never be hand-edited; tools/check_contract.sh fails a build where the
+committed output and a fresh run disagree.
 """
 import argparse
 import json
@@ -296,8 +298,6 @@ TARGETS = [
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--schema", default=None,
-                    help="override the schema of a single-target run (tests use this)")
     ap.add_argument("--out-dir", default=None,
                     help="write every artefact under this root instead of in place")
     ap.add_argument("--list-artifacts", action="store_true",
@@ -313,16 +313,7 @@ def main(argv=None):
     root = pathlib.Path(args.out_dir) if args.out_dir else ROOT
 
     for target in TARGETS:
-        # --schema overrides only a single-target run; with several targets it would be
-        # ambiguous which one it names, and silently applying it to the first is the kind
-        # of helpfulness that hides a mistake.
-        if args.schema:
-            if len(TARGETS) > 1:
-                raise SystemExit("--schema is ambiguous with more than one target; edit TARGETS instead")
-            schema_path = args.schema
-        else:
-            schema_path = target["schema"]
-        schema = load_schema(schema_path)
+        schema = load_schema(target["schema"])
 
         for rel, emitter in target["artifacts"]:
             write(root / rel, emitter(schema))

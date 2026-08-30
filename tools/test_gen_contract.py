@@ -378,6 +378,11 @@ class TestDongleSchema(unittest.TestCase):
     def test_state_vocabulary_is_the_documented_one(self):
         self.assertEqual(self.s["net_states"], ["idle", "joining", "connected", "failed"])
 
+    def test_usb_state_vocabulary_is_the_documented_one(self):
+        # usb had a key (status_fields) but no enumerated values until this fix — status_api.c
+        # hardcoded "up" with nothing here to check it against.
+        self.assertEqual(self.s["usb_states"], ["up"])
+
 
 class TestDongleEmitters(unittest.TestCase):
     def setUp(self):
@@ -404,6 +409,10 @@ class TestDongleEmitters(unittest.TestCase):
         out = self.g.emit_dongle_c(self.s)
         self.assertIn('#define DONGLE_STATE_IDLE "idle"', out)
         self.assertIn('#define DONGLE_STATE_CONNECTED "connected"', out)
+
+    def test_c_header_carries_the_usb_state_vocabulary(self):
+        out = self.g.emit_dongle_c(self.s)
+        self.assertIn('#define DONGLE_USB_STATE_UP "up"', out)
 
     def test_c_header_carries_the_paths(self):
         out = self.g.emit_dongle_c(self.s)
@@ -432,6 +441,12 @@ class TestDongleEmitters(unittest.TestCase):
         self.assertIn('public static let netPath = "/net"', out)
         self.assertIn("public static let ssidMax = 32", out)
         self.assertIn('public static let all = ["idle", "joining", "connected", "failed"]', out)
+
+    def test_swift_exposes_the_usb_state(self):
+        out = self.g.emit_dongle_swift(self.s)
+        self.assertIn("public enum DongleUsbState {", out)
+        self.assertIn('public static let up = "up"', out)
+        self.assertIn('public static let all = ["up"]', out)
 
     def test_swift_exposes_the_net_fields(self):
         out = self.g.emit_dongle_swift(self.s)

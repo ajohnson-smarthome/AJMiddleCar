@@ -1,4 +1,4 @@
-/* generated from contract/dongle-api.json by tools/gen_dongle.py - do not edit */
+/* generated from contract/dongle-api.json by tools/gen_contract.py - do not edit */
 
 #ifndef DONGLE_CONTRACT_INC
 #define DONGLE_CONTRACT_INC
@@ -32,5 +32,7 @@
 #define DONGLE_STATE_JOINING "joining"
 #define DONGLE_STATE_CONNECTED "connected"
 #define DONGLE_STATE_FAILED "failed"
+
+#define DONGLE_USB_STATE_UP "up"
 
 #endif /* DONGLE_CONTRACT_INC */
