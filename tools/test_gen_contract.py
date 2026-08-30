@@ -384,6 +384,43 @@ class TestDongleSchema(unittest.TestCase):
         self.assertEqual(self.s["usb_states"], ["up"])
 
 
+class TestDongleAgreesWithTheCar(unittest.TestCase):
+    """The two schemas are separate files, and the relay is what couples them.
+
+    contract/dongle-api.json's relay.http_port and relay.rt_port are not free numbers: they
+    are the CAR's ports, which the dongle listens on so that CarHost.port, CarHost.rtPort and
+    contract/car-api.json never have to move. The schema doc and the design note both assert
+    the two must agree, and nothing checked it. Editing one file alone is a silent failure by
+    construction — the relays parse nothing, so forwarding to a port the car does not serve
+    produces a refused connection or a dead datagram, not a diagnosable error.
+    """
+
+    def setUp(self):
+        with open(ROOT / "contract" / "dongle-api.json") as f:
+            self.dongle = json.load(f)
+        self.car = load()
+
+    def test_relay_rt_port_is_the_cars_rt_port(self):
+        self.assertEqual(self.dongle["relay"]["rt_port"], self.car["rt"]["port"],
+                         "the dongle would relay the real-time channel to a port the car "
+                         "does not listen on")
+
+    def test_relay_http_port_is_the_cars_rest_port(self):
+        # car-api.json carries no HTTP port: the car's http_server.c leaves
+        # HTTPD_DEFAULT_CONFIG's 80 alone, so the number's only other written home is
+        # CarHost.port on the device branch. Checked against that source rather than against
+        # a literal here, so that changing either one alone fails in this file instead of on
+        # a bench. Matched with its indentation, which is what distinguishes the device
+        # branch's `static let port: UInt16 = 80` from the simulator branch's launch-argument
+        # line just above it.
+        source = (ROOT / "app" / "AJMiddleCar" / "CarHost.swift").read_text()
+        want = f"    static let port: UInt16 = {self.dongle['relay']['http_port']}"
+        self.assertIn(want, source.splitlines(),
+                      "contract/dongle-api.json's relay.http_port and CarHost.port "
+                      "(the non-simulator branch) disagree; the relay would forward the "
+                      "car's REST traffic to a port the app does not use")
+
+
 class TestDongleEmitters(unittest.TestCase):
     def setUp(self):
         # No sys.path insertion here: the file already does it at module level, beside
@@ -393,13 +430,26 @@ class TestDongleEmitters(unittest.TestCase):
         with open(ROOT / "contract" / "dongle-api.json") as f:
             self.s = json.load(f)
 
+    def assertEmitsLine(self, line, out):
+        """Assert `line` is one whole emitted line, not merely a substring of one.
+
+        assertIn against the raw text is prefix matching, and every port assertion below has
+        a longer sibling it is a prefix of: "…DONGLE_RELAY_HTTP_PORT 80" sits inside
+        "…DONGLE_RELAY_HTTP_PORT 8080", and "…UInt16 = 80" inside "…UInt16 = 8080". That is
+        not hypothetical — an emitter edited to put the dongle's own port (8080) in the
+        relay's field still passed the test written to catch exactly that. Matching whole
+        lines is what makes these assertions mean what they say.
+        """
+        self.assertIn(line, out.splitlines(),
+                      f"no emitted line is exactly {line!r}")
+
     def test_c_header_is_pure_defines(self):
         out = self.g.emit_dongle_c(self.s)
         self.assertIn('#define DONGLE_DEVICE "ajdongle"', out)
         self.assertIn('#define DONGLE_HOST "192.168.7.1"', out)
-        self.assertIn("#define DONGLE_PORT 8080", out)
-        self.assertIn("#define DONGLE_RELAY_HTTP_PORT 80", out)
-        self.assertIn("#define DONGLE_RELAY_RT_PORT 4210", out)
+        self.assertEmitsLine("#define DONGLE_PORT 8080", out)
+        self.assertEmitsLine("#define DONGLE_RELAY_HTTP_PORT 80", out)
+        self.assertEmitsLine("#define DONGLE_RELAY_RT_PORT 4210", out)
         self.assertIn("#define DONGLE_SSID_MAX 32", out)
         self.assertIn("#define DONGLE_PASS_MIN 8", out)
         # Pure means includable from net_cfg.h, which compiles with plain cc: no ESP-IDF,
@@ -440,9 +490,9 @@ class TestDongleEmitters(unittest.TestCase):
         out = self.g.emit_dongle_swift(self.s)
         self.assertIn('public static let device = "ajdongle"', out)
         self.assertIn('public static let host = "192.168.7.1"', out)
-        self.assertIn("public static let port: UInt16 = 8080", out)
-        self.assertIn("public static let relayHttpPort: UInt16 = 80", out)
-        self.assertIn("public static let relayRtPort: UInt16 = 4210", out)
+        self.assertEmitsLine("    public static let port: UInt16 = 8080", out)
+        self.assertEmitsLine("    public static let relayHttpPort: UInt16 = 80", out)
+        self.assertEmitsLine("    public static let relayRtPort: UInt16 = 4210", out)
         self.assertIn('public static let statusPath = "/status"', out)
         self.assertIn('public static let netPath = "/net"', out)
         self.assertIn('public static let otaPath = "/ota"', out)
