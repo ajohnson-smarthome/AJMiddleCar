@@ -16,6 +16,8 @@ tools/mock_car/.venv/
 # compiled host-test binaries (sources stay tracked)
 firmware/p4/test/test_*
 !firmware/p4/test/test_*.c
+firmware/s3/test/test_*
+!firmware/s3/test/test_*.c
 # Fetched by the component manager from dependencies.lock, which is tracked — that lock file
 # is the reproducibility guarantee, not 37 MB of vendored source.
 firmware/p4/managed_components/
