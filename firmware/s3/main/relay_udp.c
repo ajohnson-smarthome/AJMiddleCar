@@ -11,6 +11,7 @@
 
 #include "dongle_contract.inc"
 #include "udp_sess.h"
+#include "usb_net.h"
 #include "wifi_sta.h"
 
 static const char *TAG = "relay_udp";
@@ -50,6 +51,7 @@ typedef struct {
     int car_sock[UDP_SESS_MAX];
     int phone_sock;
     uint32_t gateway_be;   /* network byte order, meaningful once the wait loop below returns */
+    uint32_t host_be;      /* DONGLE_HOST, parsed once; network byte order */
 } relay_state_t;
 
 static uint32_t now_ms(void)
@@ -94,8 +96,28 @@ static void close_all_car_socks(relay_state_t *r)
  * what recv() will hand back — only datagrams from that exact address:port arrive on this
  * socket, so the socket a reply shows up on identifies the session with no lookup, per the
  * brief's "one socket per session". */
-static int open_car_sock(uint32_t gateway_be)
+static int open_car_sock(uint32_t gateway_be, uint32_t host_be)
 {
+    /* The gateway comes from whatever network the dongle was told to join, so it is attacker-
+     * influenced in the only sense that matters here: a network that advertises DONGLE_HOST
+     * as its router makes this relay dial its own listener. lwIP short-circuits a packet
+     * addressed to one of its own netif addresses into netif_loop_output, so the datagram
+     * comes straight back to the phone-facing socket, is seen as arriving from a new peer,
+     * and opens another session — one datagram becomes an unbounded loop that allocates a
+     * session per iteration. Refused here rather than survived. Rate-limited: a phone
+     * streaming at 10 Hz would otherwise put this on the sole UART console ten times a
+     * second for the whole time such a network stays joined. */
+    if (gateway_be == host_be) {
+        static uint32_t last_log;
+        uint32_t t = now_ms();
+        if ((uint32_t)(t - last_log) > 1000) {
+            last_log = t;
+            ESP_LOGE(TAG, "refusing to relay to %s: the joined network names the dongle "
+                          "itself as its gateway", DONGLE_HOST);
+        }
+        return -1;
+    }
+
     int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s < 0) {
         ESP_LOGW(TAG, "car-facing socket: errno %d", errno);
@@ -134,7 +156,7 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
     if (is_new) {
         /* A slot won by eviction can still carry the socket of the peer it displaced. */
         close_car_sock(r, idx);
-        r->car_sock[idx] = open_car_sock(r->gateway_be);
+        r->car_sock[idx] = open_car_sock(r->gateway_be, r->host_be);
         if (r->car_sock[idx] < 0) {
             /* Roll the touch back rather than leave the slot marked used with no socket
              * behind it: udp_sess.h has no "forget this one" call — a pure table has no
@@ -212,9 +234,22 @@ static void reaim(relay_state_t *r, uint32_t gateway_be)
 static void relay_task(void *arg)
 {
     (void)arg;
-    relay_state_t r = { .phone_sock = -1, .gateway_be = 0 };
+    relay_state_t r = { .phone_sock = -1, .gateway_be = 0, .host_be = 0 };
     udp_sess_init(&r.sess);
     for (int i = 0; i < UDP_SESS_MAX; i++) r.car_sock[i] = -1;
+
+    /* Parsed first, before the gateway is even read: open_car_sock compares against it to
+     * refuse a network that advertises the dongle itself as its gateway, and that comparison
+     * has to be in place before the first datagram can create a session. usb_net_start()
+     * (app_main, before this task can ever reach here) already gave the USB netif this exact
+     * static address, so the only way this fails is a real configuration error. */
+    esp_ip4_addr_t host_ip;
+    if (esp_netif_str_to_ip4(DONGLE_HOST, &host_ip) != ESP_OK) {
+        ESP_LOGE(TAG, "DONGLE_HOST does not parse as an address");
+        vTaskDelete(NULL);
+        return;
+    }
+    r.host_be = host_ip.addr;
 
     /* Nowhere to forward until the station has joined at least once. wifi_sta_gateway() is a
      * poll, not a callback — see wifi_sta.h's own comment on why one callback slot cannot
@@ -236,22 +271,28 @@ static void relay_task(void *arg)
         return;
     }
 
-    struct sockaddr_in phone_addr = {
-        .sin_family = AF_INET,
-        .sin_port = htons(DONGLE_RELAY_RT_PORT),
-    };
-    esp_ip4_addr_t host_ip;
-    /* Bind to DONGLE_HOST specifically, not INADDR_ANY — see relay_udp.h. usb_net_start()
-     * (app_main, before this task can ever reach here) already gave the USB netif this exact
-     * static address, so the only way this fails is a real configuration error, not a timing
-     * race against the interface coming up. */
-    if (esp_netif_str_to_ip4(DONGLE_HOST, &host_ip) != ESP_OK) {
-        ESP_LOGE(TAG, "DONGLE_HOST does not parse as an address");
+    /* THIS is what keeps the car's network from reaching the relay — not the bind below.
+     * See usb_net.h: bind() sets the pcb's address, SO_BINDTODEVICE sets its interface, and
+     * only the second one is an interface filter on a weak-host stack. Fail closed: a relay
+     * that could not be pinned is one a station on the car's network can drive, and four
+     * source ports at a low rate would hold the whole four-slot session table against the
+     * phone. Refusing to serve at all is the honest outcome, and it is loud on the console
+     * rather than silent. */
+    if (usb_net_bind_socket(r.phone_sock) != ESP_OK) {
+        ESP_LOGE(TAG, "cannot pin the real-time relay to the USB wire — not serving it");
         close(r.phone_sock);
         vTaskDelete(NULL);
         return;
     }
-    phone_addr.sin_addr.s_addr = host_ip.addr;
+
+    /* Bound to DONGLE_HOST rather than INADDR_ANY as well. That is not the isolation (the
+     * pin above is); it is what makes every reply leave with the address the phone sent to,
+     * so a phone's socket accepts it. */
+    struct sockaddr_in phone_addr = {
+        .sin_family = AF_INET,
+        .sin_port = htons(DONGLE_RELAY_RT_PORT),
+        .sin_addr.s_addr = r.host_be,
+    };
     if (bind(r.phone_sock, (struct sockaddr *)&phone_addr, sizeof(phone_addr)) < 0) {
         ESP_LOGE(TAG, "phone-facing bind %s:%d: errno %d", DONGLE_HOST, DONGLE_RELAY_RT_PORT,
                  errno);

@@ -13,6 +13,7 @@
 #include "lwip/sockets.h"
 
 #include "dongle_contract.inc"
+#include "usb_net.h"
 
 static const char *TAG = "api_guard";
 
@@ -113,6 +114,19 @@ esp_err_t api_guard_open(httpd_handle_t hd, int sockfd)
     esp_ip4_addr_t local_ip;
     if (have_want && got_local && sockaddr_to_ipv4(&local, &local_ip) &&
         local_ip.addr == want.addr) {
+        /* The address matched, which — see api_guard.h — says the connection was addressed
+         * to DONGLE_HOST and nothing about which wire carried it. Pin it to the USB
+         * interface on the way out so that from this point lwIP drops any segment for this
+         * connection that arrived on another netif (tcp_in.c:267-268), which is the closest
+         * this file can get to the question it would rather be asking. Deliberately NOT
+         * fail-closed, unlike the relays' identical call: a failure here means the pin could
+         * not be applied, leaving exactly the behaviour that shipped before it existed — the
+         * address check and the routing accident behind it — whereas refusing the connection
+         * would take POST /ota down with it, and /ota is the only cable-free way to repair a
+         * device that lives in a pocket. usb_net_bind_socket logs its own errno; there is no
+         * second line here, because the connections that reach this point are the ones that
+         * already look legitimate and are not an attacker's log-flood lever. */
+        (void)usb_net_bind_socket(sockfd);
         return ESP_OK;
     }
 

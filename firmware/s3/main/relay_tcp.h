@@ -15,10 +15,15 @@
  * The destination is never a constant: it is the gateway address the station's join
  * produced (wifi_sta_gateway()), read fresh every pass, because the dongle knows no car.
  *
- * Needs no guard of its own: the listener binds DONGLE_HOST specifically, not INADDR_ANY,
- * which is what keeps it from ever being reachable from the car's side of the dongle —
- * unlike the car's own HTTP server, which the car's network can reach unless something
- * stops it. */
+ * Needs no guard of its own, but not because of its bind address. The listener is pinned to
+ * the USB interface with SO_BINDTODEVICE (usb_net_bind_socket), and THAT is what keeps it
+ * from ever being reachable from the car's side of the dongle; an accepted connection
+ * inherits the pin from the listener. Binding DONGLE_HOST would not: lwIP is a weak-host
+ * stack — ip4_input walks NETIF_FOREACH and accepts a packet on any netif whose address
+ * matches the destination — so before the pin, a station on the car's network could take
+ * every slot in the pool. Unlike the dongle's own HTTP server (status_api.c), which
+ * esp_http_server gives no bind-address or bind-interface control over at all and which
+ * api_guard.c therefore has to screen connection by connection. */
 
 /* Starts the relay task. Safe to call right after wifi_sta_start(): the task waits on its
  * own for wifi_sta_gateway() to succeed before opening any socket, so this does not need to

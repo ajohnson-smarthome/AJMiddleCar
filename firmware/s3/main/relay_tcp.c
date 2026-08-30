@@ -11,6 +11,7 @@
 
 #include "dongle_contract.inc"
 #include "tcp_pending.h"
+#include "usb_net.h"
 #include "wifi_sta.h"
 
 static const char *TAG = "relay_tcp";
@@ -87,6 +88,7 @@ typedef struct {
     tcp_slot_t slots[RELAY_POOL_SIZE];
     int listen_sock;
     uint32_t gateway_be;   /* network byte order, meaningful once the wait loop below returns */
+    uint32_t host_be;      /* DONGLE_HOST, parsed once; network byte order */
 } relay_state_t;
 
 static uint32_t now_ms(void)
@@ -291,6 +293,26 @@ static void handle_accept(relay_state_t *r)
         return;
     }
 
+    /* Guards the connect() below, checked before a single upstream fd is spent on it. The
+     * gateway is whatever network the dongle was told to join, and one that advertises
+     * DONGLE_HOST as its router would aim this relay at its own listener: lwIP short-circuits
+     * a packet addressed to one of its netifs' own addresses into netif_loop_output, so every
+     * connection would be accepted straight back into this pool. One phone connection is then
+     * enough to fill all four slots with self-connections and take the car's REST surface
+     * down. Refused here rather than survived. Rate-limited: a REST client that retries hits
+     * this on every attempt for as long as such a network stays joined. */
+    if (r->gateway_be == r->host_be) {
+        static uint32_t last_log;
+        uint32_t t = now_ms();
+        if ((uint32_t)(t - last_log) > 1000) {
+            last_log = t;
+            ESP_LOGE(TAG, "refusing to relay to %s: the joined network names the dongle "
+                          "itself as its gateway", DONGLE_HOST);
+        }
+        close(c);
+        return;
+    }
+
     int car = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (car < 0) {
         /* Rate-limited for the same reason as the accept() failure above: a genuinely
@@ -419,11 +441,24 @@ static void handle_connecting(relay_state_t *r, int i, bool had_ready, fd_set *r
 static void relay_task(void *arg)
 {
     (void)arg;
-    relay_state_t r = { .listen_sock = -1, .gateway_be = 0 };
+    relay_state_t r = { .listen_sock = -1, .gateway_be = 0, .host_be = 0 };
     for (int i = 0; i < RELAY_POOL_SIZE; i++) {
         r.slots[i] = (tcp_slot_t){ .state = SLOT_FREE, .phone_sock = -1, .car_sock = -1,
                                     .connect_started_ms = 0 };
     }
+
+    /* Parsed first, before the gateway is even read: handle_accept compares against it to
+     * refuse a network that advertises the dongle itself as its gateway, and that comparison
+     * has to be in place before the first connection can be accepted. usb_net_start()
+     * (app_main, before this task can ever reach here) already gave the USB netif this exact
+     * static address, so the only way this fails is a real configuration error. */
+    esp_ip4_addr_t host_ip;
+    if (esp_netif_str_to_ip4(DONGLE_HOST, &host_ip) != ESP_OK) {
+        ESP_LOGE(TAG, "DONGLE_HOST does not parse as an address");
+        vTaskDelete(NULL);
+        return;
+    }
+    r.host_be = host_ip.addr;
 
     /* Nowhere to forward until the station has joined at least once — same wait as
      * relay_udp.c, for the same reason: wifi_sta_gateway() is a poll, not a callback. */
@@ -443,23 +478,27 @@ static void relay_task(void *arg)
         return;
     }
 
-    struct sockaddr_in listen_addr = {
-        .sin_family = AF_INET,
-        .sin_port = htons(DONGLE_RELAY_HTTP_PORT),
-    };
-    esp_ip4_addr_t host_ip;
-    /* Bind to DONGLE_HOST specifically, not INADDR_ANY — see relay_tcp.h. This is what
-     * keeps the car's side of the dongle from ever reaching this listener. usb_net_start()
-     * (app_main, before this task can ever reach here) already gave the USB netif this exact
-     * static address, so the only way this fails is a real configuration error, not a timing
-     * race against the interface coming up. */
-    if (esp_netif_str_to_ip4(DONGLE_HOST, &host_ip) != ESP_OK) {
-        ESP_LOGE(TAG, "DONGLE_HOST does not parse as an address");
+    /* THIS is what keeps the car's side of the dongle from ever reaching this listener — not
+     * the bind below. See usb_net.h: bind() sets the pcb's address, SO_BINDTODEVICE sets its
+     * interface, and only the second one is an interface filter on a weak-host stack. A
+     * listener's netif_idx is inherited by every connection it accepts (lwIP tcp_in.c:711),
+     * so this one call covers the whole pool. Fail closed: a listener that could not be
+     * pinned is one a station on the car's network can fill, and four connections is the
+     * entire pool. */
+    if (usb_net_bind_socket(r.listen_sock) != ESP_OK) {
+        ESP_LOGE(TAG, "cannot pin the REST relay to the USB wire — not serving it");
         close(r.listen_sock);
         vTaskDelete(NULL);
         return;
     }
-    listen_addr.sin_addr.s_addr = host_ip.addr;
+
+    /* Bound to DONGLE_HOST rather than INADDR_ANY as well. That is not the isolation (the
+     * pin above is); it is what makes this listener answer on the address the phone dialled. */
+    struct sockaddr_in listen_addr = {
+        .sin_family = AF_INET,
+        .sin_port = htons(DONGLE_RELAY_HTTP_PORT),
+        .sin_addr.s_addr = r.host_be,
+    };
     if (bind(r.listen_sock, (struct sockaddr *)&listen_addr, sizeof(listen_addr)) < 0) {
         ESP_LOGE(TAG, "listener bind %s:%d: errno %d", DONGLE_HOST, DONGLE_RELAY_HTTP_PORT,
                  errno);
