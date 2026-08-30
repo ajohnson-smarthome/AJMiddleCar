@@ -119,8 +119,12 @@ esp_err_t usb_net_start(void)
 
     esp_netif_ip_info_t ip = { 0 };
     ESP_RETURN_ON_ERROR(esp_netif_str_to_ip4(USB_NET_ADDR, &ip.ip), TAG, "bad address");
-    ESP_RETURN_ON_ERROR(esp_netif_str_to_ip4(USB_NET_ADDR, &ip.gw), TAG, "bad gateway");
     ESP_RETURN_ON_ERROR(esp_netif_str_to_ip4(USB_NET_MASK, &ip.netmask), TAG, "bad netmask");
+    /* ip.gw is deliberately left at its zero-init default (0.0.0.0), not USB_NET_ADDR.
+     * This interface must never become the host's default route — the whole point of
+     * the dongle is that plugging it in costs the phone nothing; it keeps its own
+     * Wi-Fi/cellular default route untouched. The DHCP-server option calls below back
+     * this up at the wire level, not just in this config struct. */
 
     esp_netif_inherent_config_t base = ESP_NETIF_INHERENT_DEFAULT_ETH();
     base.if_key = "USBNCM";
@@ -154,6 +158,46 @@ esp_err_t usb_net_start(void)
      * live-but-never-attached netif for usb_net_netif() to hand out. */
     esp_netif_t *netif = esp_netif_new(&cfg);
     ESP_RETURN_ON_FALSE(netif != NULL, ESP_FAIL, TAG, "cannot create the netif");
+
+    /* Refuse to be the host's gateway or DNS server — on top of leaving ip.gw at
+     * 0.0.0.0 above. The app only ever needs to reach USB_NET_ADDR itself: an
+     * on-link route to this /24, never a default route through it. Without this, a
+     * host that plugs in loses its real uplink outright — the DHCP server's router
+     * option names the dongle as gateway, the OS ranks the wired link above
+     * Wi-Fi, installs a default route through a device with no uplink, and every
+     * packet (DNS included) goes into a black hole. That is not a corner case: it
+     * is what a bare ESP_NETIF_DHCP_SERVER config does by default, and it inverts
+     * the one property this product exists to provide.
+     *
+     * Must land before the DHCP server starts: esp_netif_dhcps_option(..., SET, ...)
+     * refuses once dhcps_status is ESP_NETIF_DHCP_STARTED (esp_netif_lwip.c:2581-2583),
+     * and that only happens once esp_netif_attach() below runs usb_post_attach() ->
+     * esp_netif_action_start(). esp_netif->dhcps itself already exists here, though —
+     * it's allocated inside esp_netif_new() whenever ESP_NETIF_DHCP_SERVER is set
+     * (esp_netif_lwip.c:864-873) — so calling it now, ahead of TinyUSB and attach, is
+     * valid and is the earliest point it can run.
+     *
+     * DNS caveat, not fixable from here: IDF's DHCP server
+     * (components/lwip/apps/dhcpserver/dhcpserver.c:479-503) always emits a DNS
+     * option in every OFFER/ACK, falling back to this interface's own address
+     * whenever no real DNS server is configured via esp_netif_set_dns_info() — which
+     * this firmware never calls. Disabling ESP_NETIF_DOMAIN_NAME_SERVER below matches
+     * dhcps_dns's own factory default (already 0x00 — off) and is set explicitly for
+     * the same belt-and-braces reason as ip.gw, and in case that fallback ever
+     * changes upstream, but it does not remove the option from the wire in this IDF
+     * version. The router option has no equivalent gap: it is independently gated on
+     * both the offer bit cleared here and on ip.gw being unset (dhcpserver.c:466-476),
+     * so either one alone would already stop it — this is genuine belt and braces,
+     * not just documentation. */
+    uint8_t offer = 0;      /* dhcps_offer_t: no bits set — offer neither */
+    ESP_RETURN_ON_ERROR(esp_netif_dhcps_option(netif, ESP_NETIF_OP_SET,
+                                                ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,
+                                                &offer, sizeof(offer)), TAG,
+                        "cannot disable the router option");
+    ESP_RETURN_ON_ERROR(esp_netif_dhcps_option(netif, ESP_NETIF_OP_SET,
+                                                ESP_NETIF_DOMAIN_NAME_SERVER,
+                                                &offer, sizeof(offer)), TAG,
+                        "cannot disable the DNS option");
 
     const tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
     ESP_RETURN_ON_ERROR(tinyusb_driver_install(&tusb_cfg), TAG,
