@@ -1,0 +1,22 @@
+# Name,     Type, SubType,  Offset,   Size
+# 16 MB flash, laid out for a device that will be updated from the phone it plugs into rather
+# than from a laptop. The OTA slots and otadata exist before any OTA code does, deliberately:
+# the feature can be added whenever, but repartitioning a dongle that already lives in someone's
+# pocket means finding a cable and a laptop. The table is the irreversible half, so it is the
+# half that gets decided first.
+#
+# 4 MB slots against a 386 KB image — ~900 KB once the radio is linked — is roughly tenfold
+# headroom. Nothing is bought by trimming it: the alternative use for those megabytes is lying
+# unallocated. The layout is byte-identical to firmware/p4/partitions.csv so both boards in this
+# project answer at the same offsets.
+#
+# `storage` is a reservation, not a filesystem choice — nothing mounts or formats it, and the
+# dongle has no use for it today. It is here because unallocated flash cannot be claimed later
+# without the wired reflash this table exists to avoid. Video, if it ever arrives, buffers in the
+# 8 MB of PSRAM, not here.
+nvs,        data, nvs,      0x9000,   0x6000
+otadata,    data, ota,      0xf000,   0x2000
+phy_init,   data, phy,      0x11000,  0x1000
+ota_0,      app,  ota_0,    0x20000,  0x400000
+ota_1,      app,  ota_1,    0x420000, 0x400000
+storage,    data, fat,      0x820000, 0x7E0000

@@ -1,0 +1,30 @@
+CONFIG_IDF_TARGET="esp32s3"
+
+# The USB device class. NCM rather than ECM or RNDIS because it is the one both
+# macOS and iOS are expected to accept class-compliant, and the only mode IDF's
+# tusb_ncm example is built around.
+CONFIG_TINYUSB_NET_MODE_NCM=y
+
+# Console on UART0, reached through the board's second Type-C and its bridge chip.
+#
+# This is forced, not preferred: on ESP32-S3 the native USB pins (GPIO19/20) are muxed
+# between the USB-Serial-JTAG controller and the USB-OTG controller, and only one may
+# have them. TinyUSB needs USB-OTG, so the moment NCM comes up the USB console would
+# disappear mid-session. Putting the console on UART0 from the start means logs never
+# move.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=n
+
+# 16 MB flash with a custom table: two 4 MB OTA slots, plus a reserved data partition.
+# The slots are here before any OTA code is — see partitions.csv for why the table is the half
+# that gets decided first. CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE is deliberately NOT set: with
+# rollback on, an image written through the OTA API must mark itself valid or be reverted on the
+# next boot, and there is nothing here to mark it. It arrives with the OTA code that needs it.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# N16R8: 16 MB flash, 8 MB PSRAM on an octal bus. Octal PSRAM occupies GPIO33-37 —
+# nothing here needs them, but note it before assigning pins.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y

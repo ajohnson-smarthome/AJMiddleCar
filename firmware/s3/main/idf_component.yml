@@ -1,0 +1,4 @@
+## Pinned to the same major the IDF 6.0.2 tusb_ncm example uses.
+dependencies:
+  espressif/esp_tinyusb:
+    version: "^2.0.1~1"
