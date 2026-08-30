@@ -84,6 +84,30 @@ static void test_a_dropped_link_rejoins_with_a_full_budget(void)
         check(wifi_state_step(&sm, WIFI_EV_DISCONNECTED), "the budget restarted");
     }
     check(sm.state == WIFI_JOINING, "still joining at the end of a full budget");
+    /* Five DISCONNECTEDs total since the reconnect (the one above the loop, plus the loop's
+       three, plus this one) is the claim itself: a fresh budget of WIFI_JOIN_ATTEMPTS, not
+       the remainder of the one spent before GOT_IP. A bug that granted attempts = 0 instead
+       of 1 on reconnect would still pass every check above; only running the budget to
+       exhaustion catches it. */
+    check(!wifi_state_step(&sm, WIFI_EV_DISCONNECTED), "the restarted budget still runs out");
+    check(sm.state == WIFI_FAILED, "a full fresh budget ends in failed, same as the first one");
+}
+
+static void test_a_late_address_leaves_failed(void)
+{
+    /* WIFI_FAILED means no further connection attempts are made — it does not mean an
+       attempt already in flight is disowned. The realistic path: the budget's last attempt
+       finally associates and gets an address just after wifi_state_step already reported
+       WIFI_FAILED for the DISCONNECTED that preceded it. That address is proof the join
+       worked and must be believed, not discarded because the state machine gave up on
+       asking for more attempts. */
+    wifi_sm_t sm;
+    wifi_state_init(&sm);
+    wifi_state_step(&sm, WIFI_EV_CONFIGURED);
+    for (int i = 0; i < WIFI_JOIN_ATTEMPTS; i++) wifi_state_step(&sm, WIFI_EV_DISCONNECTED);
+    check(sm.state == WIFI_FAILED, "failed after the budget, as the other tests already show");
+    check(!wifi_state_step(&sm, WIFI_EV_GOT_IP), "a late address does not ask for another connect");
+    check(sm.state == WIFI_CONNECTED, "a late address is still believed, even out of a failed budget");
 }
 
 static void test_renewal_does_not_disturb_connected(void)
@@ -120,6 +144,7 @@ int main(void)
     test_failed_is_held();
     test_a_new_configuration_leaves_failed();
     test_a_dropped_link_rejoins_with_a_full_budget();
+    test_a_late_address_leaves_failed();
     test_renewal_does_not_disturb_connected();
     test_names_are_the_contract_s();
     if (failures) { printf("%d check(s) failed\n", failures); return 1; }

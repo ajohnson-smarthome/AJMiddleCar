@@ -18,7 +18,13 @@ bool wifi_state_step(wifi_sm_t *sm, wifi_ev_t ev)
 
     case WIFI_EV_GOT_IP:
         /* An address is the only evidence that matters: association alone leaves the relays
-           with no gateway to aim at. Idempotent, so a DHCP renewal changes nothing. */
+           with no gateway to aim at. Idempotent, so a DHCP renewal changes nothing.
+           Deliberately unconditional — including from WIFI_FAILED: an address is proof the
+           join worked, whoever asked for it. The realistic path is a late association from
+           the last attempt landing just after the budget ran out; reporting failed while
+           holding a working lease would be the real bug, since /status is what the app
+           steers on. WIFI_FAILED stops further attempts, it does not disown one already
+           in flight. */
         sm->state = WIFI_CONNECTED;
         sm->attempts = 0;
         return false;
@@ -41,7 +47,8 @@ bool wifi_state_step(wifi_sm_t *sm, wifi_ev_t ev)
         }
         return true;
     }
-    return false;  /* unreachable for the enum above; keeps -Werror quiet about the return */
+    return false;  /* every named case above returns; this only satisfies -Werror=return-type
+                        for a value outside the enum's range, e.g. via a cast */
 }
 
 const char *wifi_state_name(const wifi_sm_t *sm)

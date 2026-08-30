@@ -12,15 +12,21 @@
  * reasoned about on a bench with a car that may or may not be switched on. wifi_sta.c holds
  * the esp_wifi calls and no policy of its own.
  *
- * The rule this exists to enforce: a join that fails gives up and stays given up. A radio that
- * hunts for an absent car indefinitely drains the phone it is plugged into, and the phone
- * cannot see it happening. The app restarts the attempt by POSTing /net again. */
+ * The rule this exists to enforce: a join that keeps failing stops attempting, and stays
+ * stopped, rather than hunting for an absent car indefinitely and draining the phone it is
+ * plugged into while the phone cannot see it happening. "Stops attempting" is the precise
+ * claim — WIFI_FAILED means no further connection attempts are made, not that an attempt
+ * already in flight is disowned; see WIFI_EV_GOT_IP's handling in wifi_state.c. The app
+ * restarts the attempt by POSTing /net again. */
 
 typedef enum {
     WIFI_IDLE = 0,   /* nothing configured yet — the dongle has never been told a network */
     WIFI_JOINING,
     WIFI_CONNECTED,  /* associated AND addressed: the relays have a gateway to aim at */
-    WIFI_FAILED,     /* the budget ran out; held until a new configuration arrives */
+    WIFI_FAILED,     /* the budget ran out: no further connection attempts are made.
+                        Held until a new configuration arrives — but an address that
+                        lands from an attempt already in flight still moves this to
+                        WIFI_CONNECTED; see WIFI_EV_GOT_IP in wifi_state.c. */
 } wifi_state_t;
 
 typedef enum {
