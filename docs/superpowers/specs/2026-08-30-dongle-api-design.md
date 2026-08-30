@@ -12,8 +12,8 @@ other.
 
 **A modem, not a brain.** It knows no car: no SSID, no protocol, no device id compiled in. It is
 told which network to join at runtime and carries bytes it does not interpret. That rule is the
-same one `firmware/c6/` lives under, and it is what lets AJPicoCar use the same dongle with no
-change to either.
+same one `firmware/c6/` lives under, and it is what keeps the dongle's firmware independent of
+the car's contract — the two can be reasoned about, tested and changed apart.
 
 Everything the app does with the car today — the five config domains, calibration, OTA,
 telemetry, driving — passes through unchanged. The dongle adds no feature to that traffic and
@@ -72,9 +72,9 @@ route to that address and no default gateway to fall back on. Traffic would flow
 die.
 
 Two fixes exist. Add a route to the car's firmware — which breaks "the car does not change", and
-would have to be repeated for AJPicoCar. Or make the car see the traffic as coming **from the
-dongle**, at an address in its own subnet, which it can answer on-link. The second is NAT, and it
-is the only one that keeps the car untouched.
+puts a networking concern into a codebase that has no other reason to hold one. Or make the car
+see the traffic as coming **from the dongle**, at an address in its own subnet, which it can
+answer on-link. The second is NAT, and it is the only one that keeps the car untouched.
 
 ESP-IDF 6.0.2 supports it natively: `CONFIG_LWIP_IP_FORWARD`, `CONFIG_LWIP_IPV4_NAPT`,
 `CONFIG_LWIP_IPV4_NAPT_PORTMAP`, with `ip_napt_enable_netif()` and `ip_portmap_add()`.
@@ -146,7 +146,7 @@ Three paths on `192.168.7.1:8080`.
 | `fw` | The dongle's firmware version. |
 | `usb` | `up` whenever this response was served, which is tautological but keeps the shape stable if a future state is added. |
 | `net.ssid` | The network the dongle is configured to join. Empty string when unconfigured. |
-| `net.state` | `idle` \| `joining` \| `connected` \| `failed`. |
+| `net.state` | `idle` (no network configured) \| `joining` \| `connected` \| `failed` (tried and gave up). |
 | `net.rssi` | Signal strength in dBm, or `0` when not connected. |
 
 `net.rssi` is worth more than the car's own. The car reports `rssi: 0` whenever its AP station
@@ -176,7 +176,13 @@ no compensating benefit. `configured` is false and `ssid` empty before the first
 
 Answers `{"ok":true}`, persists to NVS, and begins joining. The response does not wait for the
 join to succeed: `GET /status` reports `net.state` for that. A `POST` whose body matches the
-stored value does not rewrite flash and does not restart the radio.
+stored value does not rewrite flash and does not restart a radio that is already connected —
+so the app may send it unconditionally, and does.
+
+The join is bounded on the dongle's side as well as the app's. A `failed` state is reached and
+held rather than retried forever; the app decides when to try again by POSTing again. A radio
+that hunts for an absent car indefinitely is drawing the phone's battery for nothing, and the
+device it is attached to cannot see that happening.
 
 Validation, rejecting rather than clamping:
 
@@ -202,7 +208,8 @@ The flash is already partitioned for this — two 4 MB slots and `otadata`, laid
 before any OTA code existed, because repartitioning a device that lives in a pocket costs
 physical access.
 
-`UpdateClient.swift` is reused as-is. It already speaks this shape.
+The app's `UpdateClient` already speaks this shape — the POST is the car's, unchanged. What it
+gains is a second asset to fetch and a second place to send it; see the distribution section.
 
 ## The configuration surface must not be reachable over the radio
 
@@ -235,6 +242,8 @@ Small, and concentrated.
 | `ConnectView.swift` | "Join network X with password Y" becomes "plug in the dongle". The dongle's own states — absent, present but not configured, joining, cannot find the car — replace the Wi-Fi ones. |
 | `LinkState.swift` | The state machine gains the dongle's states. Today it distinguishes "no Wi-Fi" from "connected"; the dongle can additionally be present but idle, or connected to the wrong network. |
 | A new dongle client | `GET /status`, `GET`/`POST /net`, `POST /ota` against `192.168.7.1:8080`. Small, and modelled on `CalibClient.swift`. |
+| `UpdateClient.swift` | A second asset name and a second cache path, so one release yields two images. The POST path itself is unchanged — the dongle's `/ota` is the car's shape. |
+| `AppFlow.swift` | Phases for the dongle: waiting for one, and forcing its update. The car's forced gate is untouched. |
 | `ControlModel.signalLevel` | May take RSSI from the dongle instead of the car. Optional; the existing fallback keeps working either way. |
 
 **Unchanged:** `ConfigStore`, `RTFrame`, `CarTransport`'s framing, every settings screen, the
@@ -247,21 +256,128 @@ simulator keeps talking to `tools/mock_car` directly, exactly as today. Only rea
 go through the dongle. Dongle-specific screens are exercised on hardware, or against a stub if
 one proves necessary — deliberately not built in advance.
 
-## Configuration is automatic
+## The startup sequence
 
-The user never types an SSID. The app holds `CarContract.ssid` and `CarContract.password` and
-sends them itself: on seeing a dongle whose `GET /net` reports a different network, or none, it
-POSTs the right one. Switching between the two cars means launching the other app, which
-reconfigures the dongle in one request.
+Launch runs a linear gate, and the app already has one: `AppFlow` checks the internet, fetches
+and caches the firmware, waits for the car, forces an update if the car is behind, and hands
+over. The dongle extends it at the front.
 
-This is better than what it replaces. Today, changing cars means leaving the app, opening
-Settings, and joining a different Wi-Fi network by hand.
+```
+is a dongle there?          no  → "plug in the dongle"
+  ↓ yes
+internet, latest release        → offline fallback to the cache, as today
+  ↓
+dongle behind?              yes → update it, forced
+  ↓ no
+network configured?         no  → POST /net, silently
+  ↓
+join the car                    → bounded retries, then "car not found — is it on?"
+  ↓
+car behind?                 yes → update it, forced (this gate exists today)
+  ↓ no
+drive
+```
+
+### Where each step lives
+
+`AppFlow` carries a deliberate split, stated in its own comment: it has no `.drive` phase, because
+"driving is not a phase the gate can enter and latch; it is what `CarLink` says is true right
+now." The gate decides what is decided **once**; everything continuously true lives in the link
+layer and is rendered from there.
+
+| Step | Belongs to |
+|---|---|
+| Is a dongle present | the link layer — the cable can be pulled at any moment |
+| Fetch the release, compare versions | the gate — asked once per launch |
+| Update the dongle | the gate, forced |
+| Write the network if it is not set | the link layer, silent |
+| Join the car | the link layer |
+| Update the car | the gate, forced — exists today |
+
+The dongle's presence is a live fact, not a phase. The gate *waits* on it, but what appears on
+screen comes from the link layer — exactly how `awaitingCar` already behaves.
+
+### The dongle check comes before the internet check
+
+Reversed from today's order, and deliberately: "plug in the dongle" depends on nothing. It needs
+no network, no GitHub, no cache. Making somebody wait through a round trip to be told to plug in
+a cable is a worse experience for no gain, and the check itself is local and instant.
+
+### Retries are bounded
+
+Joining is automatic — the user taps nothing — but it must not become an endless radar. After a
+few failed attempts the app stops and says *"Car not found. Is it switched on?"* with a Retry
+button.
+
+This is the same principle `LinkState` already encodes: distinct problems get distinct states
+because they have distinct fixes, and the thing it replaced was one endless radar for every
+cause. An infinite retry loop is that radar with extra steps — and it holds the radio on,
+drawing from the phone's battery, for a car that is not there.
+
+### Configuration itself is silent
+
+The user never types an SSID and never learns that one exists. The app holds
+`CarContract.ssid` and `CarContract.password`, sees a dongle reporting a different network or
+none, and POSTs the right one. No screen, no prompt — the "joining" state covers it.
+
+This is strictly less work than what it replaces: today, reaching the car means leaving the app,
+opening Settings, and joining a Wi-Fi network by hand.
+
+### The gate gets more reliable, not less
+
+Today the app must fetch a GitHub release while sitting on the car's softAP, which has no route
+to the internet — it works only because `URLSession` traffic rides whatever path does reach out,
+usually cellular (`docs/superpowers/specs/2026-08-21-wifi-pinned-networking.md`). In a garage
+with no signal, the gate degrades to its offline fallback.
+
+With the dongle the phone never leaves its own Wi-Fi. The release check runs over an ordinary
+connection, and the fallback becomes the exception it was meant to be.
+
+## Firmware distribution: one release, two images
+
+Both firmwares ship from the same GitHub release, under one tag:
+
+```
+v1.0+520
+├── ajmiddlecar.bin
+└── ajdongle.bin
+```
+
+`tools/release.sh` builds and attaches both. `UpdateClient` gains a second asset name and a
+second cache path — it already matches assets by exact name rather than by "the first file
+ending in .bin", with a comment recording that the loose match was outgrown.
+
+**This settles an open question rather than adding one.** Plan 1's final review noticed that the
+dongle's `/status` reports the *car repo's* `git describe`, and asked whether `firmware/s3/`
+needed its own version source. Under co-release the answer is no, and the present behaviour is
+correct by construction: one tag, one build number, two images from one commit. Their versions
+cannot disagree, because nothing computes them separately.
+
+It also makes the consistency structural. There is no way to ship an app against a dongle
+firmware that is not in the release it was built from.
+
+### Three consequences
+
+**Rollback must be switched on when OTA arrives.** `firmware/s3/sdkconfig.defaults` deliberately
+leaves `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` off, and says why: with it on, an image written
+through the OTA API must mark itself valid or be reverted, and Plan 1 had nothing to mark it.
+This is the moment it acquires that. Without rollback, one bad image is a dongle that needs a
+cable and a laptop.
+
+**The dongle updates before the car.** Its update reboots it, drops the USB interface and brings
+it back — short, and it recovers on its own. The car's update is longer and travels *through* the
+dongle. Settle the pipe before pushing the long transfer down it.
+
+**One gate covers both.** Because the two share a version, "the hardware is behind this app" is a
+single event. Two separate policies would produce the odd case of the app forcing a car update
+across a dongle that is also behind. One screen, two updates in sequence.
 
 ## What this spec does not decide
 
 - **The order of implementation.** Config before radio, radio before the app — argued in
   `docs/superpowers/plans/2026-08-29-dongle-p1-ncm-endpoint.md` under "Why this plan stops where
-  it does" — but the plans themselves are written separately.
+  it does" — but the plans themselves are written separately. Note that OTA is now part of the
+  dongle's surface, and it is the one piece that must not ship before rollback does.
 - **Whether the dongle's own API stays on `:8080`.** It is a contract constant, changeable in one
   place on each side for as long as nothing else has been built against it.
 - **Video.** Out of scope. If it arrives it will want its own port, and the port map has room.
