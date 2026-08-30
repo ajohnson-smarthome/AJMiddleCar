@@ -140,7 +140,27 @@ static esp_err_t net_post(httpd_req_t *req)
     }
 
     if (s_configured && net_cfg_equal(&s_cfg, &next)) {
-        return api_reply_ok(req);    /* nothing changed: no flash write, no radio churn */
+        /* Nothing changed, so nothing is written: the dirty check exists to protect flash
+         * from an app that POSTs its configuration at every launch, and that reason is
+         * untouched.
+         *
+         * The radio is a separate question, and conflating the two was a bug. The design says
+         * a failed join is reached and HELD rather than retried forever, and that the app
+         * decides when to try again by POSTing again — so an unchanged re-POST is precisely
+         * how a retry is requested. Returning 200 here without calling the radio meant that
+         * once the state reached `failed`, re-POSTing the same credentials did nothing at all
+         * and only a power cycle recovered. The rule the plan actually stated is "an unchanged
+         * POST must not restart a WORKING radio", and that is what this now enforces. */
+        if (wifi_sta_connected()) {
+            return api_reply_ok(req);
+        }
+        ESP_LOGI(TAG, "network unchanged, but the station is not connected — rejoining %s",
+                 s_cfg.ssid);
+        if (wifi_sta_join(&s_cfg) != ESP_OK) {
+            return api_reply_error(req, "500 Internal Server Error", "",
+                                   "the radio refused the join");
+        }
+        return api_reply_ok(req);
     }
 
     if (store(&next) != ESP_OK) {
@@ -149,7 +169,14 @@ static esp_err_t net_post(httpd_req_t *req)
     s_cfg = next;
     s_configured = true;
     ESP_LOGI(TAG, "network set: %s", s_cfg.ssid);
-    wifi_sta_join(&s_cfg);   /* only here: the value actually changed and NVS now has it */
+    /* Reported rather than swallowed: before this, every way a join could fail still answered
+     * 200, so a client could not tell "joining" from "the radio would not even start". The
+     * value IS stored by this point — hence the wording; a client that retries is retrying the
+     * join, not the write. */
+    if (wifi_sta_join(&s_cfg) != ESP_OK) {
+        return api_reply_error(req, "500 Internal Server Error", "",
+                               "stored, but the radio refused the join");
+    }
     return api_reply_ok(req);
 }
 

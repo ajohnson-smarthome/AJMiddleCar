@@ -196,12 +196,20 @@ esp_err_t wifi_sta_start(void)
 
     net_cfg_t cfg;
     if (net_api_current(&cfg)) {
-        wifi_sta_join(&cfg);
+        /* Logged, not returned. app_main wraps this call in ESP_ERROR_CHECK, and a stored
+         * network the radio will not take must not become a boot loop on a device whose only
+         * repair path (POST /ota) needs the rest of app_main to finish. The station exists
+         * either way, and a POST /net can restart the join. */
+        esp_err_t jerr = wifi_sta_join(&cfg);
+        if (jerr != ESP_OK) {
+            ESP_LOGW(TAG, "the stored network could not be joined at boot: %s",
+                     esp_err_to_name(jerr));
+        }
     }
     return ESP_OK;
 }
 
-void wifi_sta_join(const net_cfg_t *cfg)
+esp_err_t wifi_sta_join(const net_cfg_t *cfg)
 {
     /* Set unconditionally — no lock needed, and none can make this fail to happen. See
      * s_join_in_flight's own comment for why that is the point. */
@@ -237,7 +245,7 @@ void wifi_sta_join(const net_cfg_t *cfg)
                       "attempt, not this request; GET /net already shows what was requested",
                  esp_err_to_name(err));
         atomic_store(&s_join_in_flight, false);
-        return;
+        return err;
     }
 
     if (lock_take()) {
@@ -259,7 +267,24 @@ void wifi_sta_join(const net_cfg_t *cfg)
     esp_err_t cerr = esp_wifi_connect();
     if (cerr != ESP_OK) {
         ESP_LOGW(TAG, "connect failed: %s", esp_err_to_name(cerr));
+        return cerr;
     }
+    /* The attempt is under way, which is all this can honestly claim: whether it succeeds is
+     * decided later, by the event handlers above, and is readable through
+     * wifi_sta_state_name(). A lock that was busy at the publish_state_locked() call above is
+     * deliberately NOT an error here — the radio was still told to connect, and reporting a
+     * 500 for a join that is actually running would be the less honest answer. */
+    return ESP_OK;
+}
+
+bool wifi_sta_connected(void)
+{
+    /* The lock-free mirror, not s_sm.state: this is called from the HTTP task on the POST /net
+     * path, and a bounded-wait mutex acquisition would be a worse answer than a read that is
+     * at most one transition stale. Staleness is harmless in both directions here — a stale
+     * "connected" costs a join that net_api would otherwise have skipped, and a stale
+     * "not connected" costs one that wifi_sta_join handles idempotently anyway. */
+    return atomic_load(&s_state_view) == WIFI_CONNECTED;
 }
 
 const char *wifi_sta_state_name(void)

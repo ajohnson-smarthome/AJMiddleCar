@@ -60,8 +60,20 @@ static esp_err_t status_get(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    /* `rssi` is a real reading from the dongle's own receiver, not a placeholder: 0 when not
+    /* Read into locals, in this order, rather than passed as two arguments to one snprintf.
+     * C does not order argument evaluation, and these two are not one snapshot: state is taken
+     * under wifi_sta's lock, rssi is an unlocked esp_wifi_sta_get_ap_info. Evaluated
+     * right-to-left, rssi could be sampled while the station was still down and state a moment
+     * later once it was up, publishing {"state":"connected","rssi":0} out of two readings that
+     * were each correct. Taking state FIRST leaves only the honest version of that pairing: if
+     * state says connected, rssi was read afterwards, so a 0 means the link genuinely dropped
+     * in between. Not atomicity — there is no lock spanning both — but an ordering that cannot
+     * invent a contradiction.
+     *
+     * `rssi` is a real reading from the dongle's own receiver, not a placeholder: 0 when not
      * connected, whatever esp_wifi_sta_get_ap_info reports otherwise. */
+    const char *net_state = wifi_sta_state_name();
+    int net_rssi = (int)wifi_sta_rssi();
     /* 320, not 256. Worst case with the rollback and net fields: 98 bytes of literal template,
      * + 31 (esp_app_desc_t.version is char[32]) + 31 (idf_ver, likewise) + 5 ("false")
      * + 64 (a 32-byte SSID whose every byte escapes to two) + 9 ("connected") + 4 ("-128")
@@ -79,7 +91,7 @@ static esp_err_t status_get(httpd_req_t *req)
                      "\"" DONGLE_KEY_NET_STATE "\":\"%s\","
                      "\"" DONGLE_KEY_NET_RSSI "\":%d}}",
                      app->version, app->idf_ver, s_rollback ? "true" : "false", ssid_esc,
-                     wifi_sta_state_name(), (int)wifi_sta_rssi());
+                     net_state, net_rssi);
     if (n < 0 || (size_t)n >= sizeof(body)) {
         /* Same rule as the car's own /status: truncated JSON parses as something else or
          * nothing, and shipping it under a 200 hides exactly that. Only reachable if a

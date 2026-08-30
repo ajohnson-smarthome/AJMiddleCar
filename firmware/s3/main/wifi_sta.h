@@ -24,9 +24,25 @@
  * once, from app_main, after nvs_flash_init and esp_event_loop_create_default. */
 esp_err_t wifi_sta_start(void);
 
-/* Join this network, restarting the attempt budget. net_api calls this when a POST /net changed
- * the stored value — an unchanged POST must not restart a working radio. */
-void wifi_sta_join(const net_cfg_t *cfg);
+/* Join this network, restarting the attempt budget. Returns the first error that stopped the
+ * request from reaching the radio (esp_wifi_set_config, esp_wifi_connect), or ESP_OK when the
+ * attempt is genuinely under way — ESP_OK means "the join started", never "the join
+ * succeeded"; poll wifi_sta_state_name() for the outcome.
+ *
+ * net_api calls this when a POST /net changed the stored value, and ALSO when an unchanged
+ * POST arrives while the station is not connected. The rule is "an unchanged POST must not
+ * restart a WORKING radio" — not "an unchanged POST does nothing". Those read the same until
+ * the state is `failed`, which is the one state the retry exists for: the design says a failed
+ * join is held rather than retried forever and the app decides when to try again by POSTing
+ * again, so an unchanged re-POST is exactly how that decision arrives. */
+esp_err_t wifi_sta_join(const net_cfg_t *cfg);
+
+/* Whether the station is associated AND addressed right now. Lock-free, so /net's handler can
+ * ask without waiting behind the event task; it reads the same _Atomic mirror
+ * wifi_sta_state_name falls back to. This is a liveness question, not a configuration one —
+ * net_api uses it to tell "the radio is already doing what you asked" from "the radio gave up
+ * and you are asking again". */
+bool wifi_sta_connected(void);
 
 /* GET /status's `net.state`, spelled by the generated contract. */
 const char *wifi_sta_state_name(void);
