@@ -38,9 +38,9 @@ esp_err_t status_api_start(void)
      * the car's own REST surface so that CarHost.port and the car's contract never move —
      * the dongle is the new thing in the system, so the dongle takes the unusual port. */
     cfg.server_port = 8080;
-    /* Plan 2 adds POST /net; leave room so that does not become a config change
-     * disguised as a feature. */
-    cfg.max_uri_handlers = 4;
+    /* /status, GET /net, POST /net, and room for Plan 3's additions — sized so that a
+     * new endpoint is not also a config change. */
+    cfg.max_uri_handlers = 6;
 
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &cfg), TAG, "cannot start the server");
 
@@ -54,4 +54,9 @@ esp_err_t status_api_start(void)
 
     ESP_LOGI(TAG, "http://%s:8080/status", USB_NET_ADDR);
     return ESP_OK;
+}
+
+httpd_handle_t status_api_server(void)
+{
+    return s_server;
 }

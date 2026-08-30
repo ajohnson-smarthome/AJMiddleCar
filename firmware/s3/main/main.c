@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 
+#include "net_api.h"
 #include "status_api.h"
 #include "usb_net.h"
 
@@ -27,5 +28,7 @@ void app_main(void)
 
     ESP_ERROR_CHECK(usb_net_start());
     ESP_ERROR_CHECK(status_api_start());
+    net_api_load();
+    ESP_ERROR_CHECK(net_api_register(status_api_server()));
     ESP_LOGI(TAG, "dongle up");
 }
