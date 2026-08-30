@@ -65,6 +65,23 @@ for i in $(seq 1 300); do
            -d '{"ssid":"BenchTest","password":"abc"}' \
            -w "\n  [HTTP %{http_code} in %{time_total}s]\n" 2>&1 | sed 's/^/  /'
       echo
+      echo "POST /ota with a 2 KB body (must be refused as too small — nothing is erased):"
+      head -c 2048 /dev/urandom > /tmp/ota-tiny.bin
+      curl -s --max-time 10 -X POST --data-binary @/tmp/ota-tiny.bin \
+           -H 'Content-Type: application/octet-stream' http://192.168.7.1:8080/ota \
+           -w "\n  [HTTP %{http_code}]\n" 2>&1 | sed 's/^/  /'
+      # This one DOES erase the inactive slot before IDF's magic check rejects the first write.
+      # That is harmless here and worth knowing: after a successful update the inactive slot holds
+      # the previous image, but rollback was already waived at boot, so nothing depends on it.
+      echo "POST /ota with 8 KB of noise (must be refused — the first byte is not 0xE9):"
+      head -c 8192 /dev/urandom > /tmp/ota-noise.bin
+      curl -s --max-time 15 -X POST --data-binary @/tmp/ota-noise.bin \
+           -H 'Content-Type: application/octet-stream' http://192.168.7.1:8080/ota \
+           -w "\n  [HTTP %{http_code}]\n" 2>&1 | sed 's/^/  /'
+      rm -f /tmp/ota-tiny.bin /tmp/ota-noise.bin
+      echo "the dongle is still answering after two refused uploads:"
+      curl -s --max-time 5 -w "\n  [HTTP %{http_code}]\n" http://192.168.7.1:8080/status 2>&1 | sed 's/^/  /'
+      echo
       echo "=== 2. THE REGRESSION THAT MUST NOT RETURN ==="
       echo "route get 1.1.1.1 (must be unchanged from baseline):"
       route -n get 1.1.1.1 2>&1 | grep -E "gateway|interface" | sed 's/^/  /'

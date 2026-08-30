@@ -152,3 +152,26 @@ compiler and the S3 build fails on a missing toolchain. Install it once:
 
 The console is on UART0, reached through the `COM` port — not on the native USB,
 because TinyUSB owns that peripheral.
+
+## Updating over USB
+
+Once the dongle is running an image with `/ota`, the cable is only needed for the first flash:
+
+```bash
+cd firmware/s3 && idf.py build
+curl --data-binary @build/ajdongle.bin \
+     -H 'Content-Type: application/octet-stream' \
+     http://192.168.7.1:8080/ota
+```
+
+Expect `{"ok":true}`, then the USB interface drops and comes back within a few seconds as the
+dongle reboots into the new slot. Confirm with `/status`:
+
+```bash
+curl -s http://192.168.7.1:8080/status
+```
+
+`fw` should be the version just built, and **`rollback` should be `false`**. `rollback:true` means
+the bootloader put the previous image back — the new one failed its first boot before `app_main`
+finished, so it never got to cancel the revert. That is the safety net working, not a bug in the
+update; the `fw` you see is the old image, and pushing the same binary again will do the same thing.
