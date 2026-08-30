@@ -343,5 +343,73 @@ class TestDriftCheck(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
+class TestDongleSchema(unittest.TestCase):
+    def setUp(self):
+        with open(ROOT / "contract" / "dongle-api.json") as f:
+            self.s = json.load(f)
+
+    def test_identity_and_address_are_pinned(self):
+        self.assertEqual(self.s["device"], "ajdongle")
+        self.assertEqual(self.s["network"]["host"], "192.168.7.1")
+        # 8080, not 80: the car keeps its native ports and the dongle takes the odd one.
+        self.assertEqual(self.s["network"]["port"], 8080)
+
+    def test_bounds_are_wpa2s(self):
+        b = self.s["bounds"]
+        self.assertEqual((b["ssid_min"], b["ssid_max"]), (1, 32))
+        self.assertEqual((b["pass_min"], b["pass_max"]), (8, 63))
+
+    def test_it_names_no_car(self):
+        # The dongle's schema must not acquire a car's SSID, password or device id —
+        # the constraint the whole firmware is built around.
+        blob = json.dumps(self.s).lower()
+        for forbidden in ("ajmiddlecar", "drive1234", "192.168.4."):
+            self.assertNotIn(forbidden, blob)
+
+    def test_state_vocabulary_is_the_documented_one(self):
+        self.assertEqual(self.s["net_states"], ["idle", "joining", "connected", "failed"])
+
+
+class TestDongleEmitters(unittest.TestCase):
+    def setUp(self):
+        # No sys.path insertion here: the file already does it at module level, beside
+        # its other mid-file imports, and a second one would be a second thing to keep true.
+        import gen_dongle
+        self.g = gen_dongle
+        with open(ROOT / "contract" / "dongle-api.json") as f:
+            self.s = json.load(f)
+
+    def test_c_header_is_pure_defines(self):
+        out = self.g.emit_dongle_c(self.s)
+        self.assertIn('#define DONGLE_DEVICE "ajdongle"', out)
+        self.assertIn('#define DONGLE_HOST "192.168.7.1"', out)
+        self.assertIn("#define DONGLE_PORT 8080", out)
+        self.assertIn("#define DONGLE_SSID_MAX 32", out)
+        self.assertIn("#define DONGLE_PASS_MIN 8", out)
+        # Pure means includable from net_cfg.h, which compiles with plain cc: no ESP-IDF,
+        # no types, nothing but preprocessor text.
+        for banned in ("#include", "esp_err_t", "typedef", "struct "):
+            self.assertNotIn(banned, out)
+
+    def test_c_header_carries_the_state_vocabulary(self):
+        out = self.g.emit_dongle_c(self.s)
+        self.assertIn('#define DONGLE_STATE_IDLE "idle"', out)
+        self.assertIn('#define DONGLE_STATE_CONNECTED "connected"', out)
+
+    def test_swift_exposes_the_same_vocabulary(self):
+        out = self.g.emit_dongle_swift(self.s)
+        self.assertIn('public static let device = "ajdongle"', out)
+        self.assertIn('public static let host = "192.168.7.1"', out)
+        self.assertIn("public static let port: UInt16 = 8080", out)
+        self.assertIn('public static let statusPath = "/status"', out)
+        self.assertIn('public static let netPath = "/net"', out)
+        self.assertIn("public static let ssidMax = 32", out)
+        self.assertIn('public static let all = ["idle", "joining", "connected", "failed"]', out)
+
+    def test_both_emitters_are_deterministic(self):
+        self.assertEqual(self.g.emit_dongle_c(self.s), self.g.emit_dongle_c(self.s))
+        self.assertEqual(self.g.emit_dongle_swift(self.s), self.g.emit_dongle_swift(self.s))
+
+
 if __name__ == "__main__":
     unittest.main()

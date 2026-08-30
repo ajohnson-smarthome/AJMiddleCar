@@ -1,0 +1,35 @@
+{
+  "device": "ajdongle",
+  "doc": "The vocabulary the app and the dongle must spell identically. Rules live in firmware/s3/main/net_cfg.{c,h}, which is host-tested; this file carries only names, numbers and paths.",
+  "network": {
+    "host": "192.168.7.1",
+    "port": 8080,
+    "doc": "The dongle's own address on the USB wire, and the port it serves. Port 80 and the real-time port are reserved for the car, forwarded through untouched."
+  },
+  "endpoints": {
+    "status": "/status",
+    "net": "/net"
+  },
+  "status_fields": {
+    "device": "device",
+    "fw": "fw",
+    "usb": "usb",
+    "net": "net",
+    "net_ssid": "ssid",
+    "net_state": "state",
+    "net_rssi": "rssi"
+  },
+  "net_fields": {
+    "ssid": "ssid",
+    "password": "password",
+    "configured": "configured"
+  },
+  "bounds": {
+    "ssid_min": 1,
+    "ssid_max": 32,
+    "pass_min": 8,
+    "pass_max": 63,
+    "doc": "WPA2's limits, not ours. A password is empty or pass_min..pass_max; net_cfg enforces that, and the character-class rule it also enforces has no expression here."
+  },
+  "net_states": ["idle", "joining", "connected", "failed"]
+}

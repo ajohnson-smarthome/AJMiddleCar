@@ -14,6 +14,14 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCHEMA = ROOT / "contract" / "car-api.json"
 
+# Invoked as `python3 tools/gen_contract.py` from the repo root: Python already puts the
+# script's own directory (tools/) at sys.path[0] for a direct run, but this file is also
+# imported as a plain module (e.g. by test_gen_contract.py), where that auto-insertion
+# does not happen. Insert it explicitly, the same way test_gen_contract.py already does
+# for its own directory, so `import gen_dongle` is not invocation-dependent.
+sys.path.insert(0, str(ROOT / "tools"))
+from gen_dongle import emit_dongle_c, emit_dongle_swift
+
 MARK_BEGIN = "<!-- generated:endpoints -->"
 MARK_END = "<!-- /generated:endpoints -->"
 
@@ -271,6 +279,17 @@ TARGETS = [
         "spliced": [
             ("docs/protocol.md", emit_doc, MARK_BEGIN, MARK_END),
         ],
+    },
+    {
+        "name": "dongle",
+        "schema": ROOT / "contract" / "dongle-api.json",
+        "artifacts": [
+            ("firmware/s3/main/dongle_contract.inc", emit_dongle_c),
+            ("app/AJMiddleCar/Generated/DongleAPI.swift", emit_dongle_swift),
+        ],
+        # No spliced documentation: the dongle's endpoints are described in its spec as
+        # prose, and a generated table would duplicate rather than replace it.
+        "spliced": [],
     },
 ]
 
