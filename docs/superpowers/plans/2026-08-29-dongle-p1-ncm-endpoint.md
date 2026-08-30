@@ -391,6 +391,16 @@ esp_netif_t *usb_net_netif(void);
 
 - [ ] **Step 3: Write `usb_net.c`**
 
+> **Superseded — do not copy this snippet.** `firmware/s3/main/usb_net.c` as shipped is the
+> authority; two defects found after this was written make the code below actively harmful to
+> transcribe. It assigns `s_netif` at `esp_netif_new`, which opens a window where a frame arriving
+> before the driver config is installed calls a NULL `driver_free_rx_buffer` — the shipped code
+> uses a local `netif` and publishes only after `esp_netif_attach` succeeds. And it lacks the
+> `esp_netif_dhcps_option` calls that stop the dongle advertising itself as a gateway, which cost a
+> session's connectivity to discover. Kept here as the record of what was planned, not as a
+> template.
+
+
 ```c
 #include <string.h>
 
