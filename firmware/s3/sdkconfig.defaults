@@ -15,6 +15,14 @@ CONFIG_TINYUSB_NET_MODE_NCM=y
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=n
 
+# 16 MB flash with a custom table: two 4 MB OTA slots, plus a reserved data partition.
+# The slots are here before any OTA code is — see partitions.csv for why the table is the half
+# that gets decided first. CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE is deliberately NOT set: with
+# rollback on, an image written through the OTA API must mark itself valid or be reverted on the
+# next boot, and there is nothing here to mark it. It arrives with the OTA code that needs it.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
 # N16R8: 16 MB flash, 8 MB PSRAM on an octal bus. Octal PSRAM occupies GPIO33-37 —
 # nothing here needs them, but note it before assigning pins.
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
