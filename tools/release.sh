@@ -20,16 +20,18 @@ for arg in "$@"; do
 done
 
 # version.txt must be exactly one line: CMake reads only the first, this script strips
-# whitespace — a second line would let the tag and the embedded version disagree.
-if [ "$(grep -c '' firmware/p4/version.txt)" != 1 ]; then
-    echo "ERROR: firmware/p4/version.txt must be exactly one line"; exit 1
+# whitespace — a second line would let the tag and the embedded version disagree. It lives at
+# the repo root because both firmwares read it: one release, one version, two images.
+if [ "$(grep -c '' version.txt)" != 1 ]; then
+    echo "ERROR: version.txt must be exactly one line"; exit 1
 fi
-SEMVER=$(tr -d '[:space:]' < firmware/p4/version.txt)
+SEMVER=$(tr -d '[:space:]' < version.txt)
 [[ "$SEMVER" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "ERROR: version.txt must contain a bare semver (got: $SEMVER)"; exit 1; }
 BUILD_NUM=$(git rev-list --count HEAD)
 VER="v${SEMVER}+${BUILD_NUM}"
 TITLE="v${SEMVER} (build ${BUILD_NUM})"
-BIN="firmware/p4/build/ajmiddlecar.bin"
+BIN_CAR="firmware/p4/build/ajmiddlecar.bin"
+BIN_DONGLE="firmware/s3/build/ajdongle.bin"
 NOTES="${NOTES_ARG:-Release ${VER}}"
 
 # Radio pin: read from the current tree only (no network), so this fires even under
@@ -48,10 +50,11 @@ if [ "$DRY_RUN" = 1 ]; then
     echo "[dry-run] version : $VER"
     echo "[dry-run] tag     : $VER  (target: $(git rev-parse HEAD))"
     echo "[dry-run] title   : $TITLE"
-    echo "[dry-run] asset   : $BIN"
+    echo "[dry-run] assets  : $BIN_CAR"
+    echo "[dry-run]         : $BIN_DONGLE"
     echo "[dry-run] radio   : esp_hosted $PIN"
     echo "[dry-run] notes   : $NOTES"
-    echo "[dry-run] would run: test-all && rm sdkconfig && idf.py fullclean && idf.py build && gh release create '$VER' '$BIN' --target <HEAD> ..."
+    echo "[dry-run] would run: test-all && rm sdkconfig && idf.py fullclean && idf.py build (p4, s3) && gh release create '$VER' '$BIN_CAR' '$BIN_DONGLE' --target <HEAD> ..."
     exit 0
 fi
 
@@ -116,10 +119,21 @@ source tools/env-p4.sh >/dev/null 2>&1
 RC=$?
 set -e
 [ "$RC" = 0 ] || { echo "ERROR: failed to source tools/env-p4.sh"; exit 1; }
-# A stray bench sdkconfig must not configure a release: regenerate purely from defaults.
+# A stray bench sdkconfig must not configure a release: regenerate purely from defaults. This
+# matters more for the dongle than for the car — bench work on the S3 has run with local
+# overrides before, and a release built from one would ship them.
 rm -f firmware/p4/sdkconfig firmware/p4/sdkconfig.old
+rm -f firmware/s3/sdkconfig firmware/s3/sdkconfig.old
 (cd firmware/p4 && idf.py fullclean >/dev/null && idf.py build)
-[ -f "$BIN" ] || { echo "ERROR: $BIN not built"; exit 1; }
+[ -f "$BIN_CAR" ] || { echo "ERROR: $BIN_CAR not built"; exit 1; }
+# The dongle is an Xtensa target; the car and its radio are both RISC-V, so an ESP-IDF installed
+# for the car alone has no compiler for it. Say so rather than letting a toolchain error look
+# like a firmware problem.
+if ! (cd firmware/s3 && idf.py fullclean >/dev/null && idf.py build); then
+    echo "ERROR: the dongle build failed. If this is a fresh ESP-IDF install, it has no Xtensa"
+    echo "       toolchain yet: ~/esp/esp-idf-v6.0.2/install.sh esp32s3"; exit 1
+fi
+[ -f "$BIN_DONGLE" ] || { echo "ERROR: $BIN_DONGLE not built"; exit 1; }
 
-gh release create "$VER" "$BIN" --target "$LOCAL_HEAD" --title "$TITLE" --notes "$NOTES"
+gh release create "$VER" "$BIN_CAR" "$BIN_DONGLE" --target "$LOCAL_HEAD" --title "$TITLE" --notes "$NOTES"
 echo "Released $VER"
