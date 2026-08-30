@@ -49,11 +49,19 @@ const char *net_cfg_err_msg(net_cfg_err_t e);
  * has no use for reading it back, so an endpoint that returns a stored credential would
  * be a liability with nothing on the other side of the trade.
  *
+ * The SSID is an 802.11 octet string, not text: net_cfg_validate bounds only its length,
+ * so a raw '"', '\', or control byte is a value this renders, not one it can rule out.
+ * Such bytes are JSON-escaped rather than rejected — a real network with one in its name
+ * must still be reachable through this dongle.
+ *
  * Returns the length written, or -1 if buf is too small. */
 int net_cfg_render_public(const net_cfg_t *cfg, bool configured, char *buf, size_t n);
 
 /* The NVS body. Contains the password — it has to, since this is what the dongle reloads
- * at boot to rejoin without being told again. Returns the length written, or -1. */
+ * at boot to rejoin without being told again. Both fields are JSON-escaped for the same
+ * reason as net_cfg_render_public — an unescaped quote here would corrupt the very blob
+ * the boot-time parser reads back, silently dropping the saved credentials.
+ * Returns the length written, or -1. */
 int net_cfg_render_stored(const net_cfg_t *cfg, char *buf, size_t n);
 
 /* Whether two configurations are the same, for the dirty check that keeps an unchanged
