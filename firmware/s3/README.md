@@ -27,7 +27,8 @@ The two ports are silkscreened `USB` and `COM`, and they are not interchangeable
 | Dongle answers on its own address | **yes** — `ping 192.168.7.1` 1.3 ms, 0% loss | 2026-08-30 |
 | Host keeps its own default route | **yes** — `route get 1.1.1.1` unchanged; internet and DNS unaffected | 2026-08-30 |
 | `GET /status` answers over the USB wire | **yes** — HTTP 200 in 12 ms | 2026-08-30 |
-| iOS binds a CDC-NCM driver | *(Task 5 — the question this whole plan exists to answer)* | |
+| iOS binds a CDC-NCM driver | **yes** — `http://192.168.7.1/status` answers in Safari on the phone | 2026-08-30 |
+| iPhone keeps its own internet and DNS | **yes** — an ordinary site loads by name with the dongle attached | 2026-08-30 |
 
 The third row is the one that matters, and it was measured rather than assumed: a
 USB-C source supplies VBUS only after it sees Rd, so enumeration over a C-to-C cable
@@ -68,6 +69,29 @@ moment it appears, on the "wired beats Wi-Fi" heuristic, and then quietly fail t
 device with no uplink — which looks exactly like the dongle stealing traffic. Tell them apart with
 `route get 1.1.1.1` (the routing decision itself) and `netstat -ibn -I en11` (a client retrying into
 the void shows lopsided counters and a packet every ~5 s). One client did this; another did not.
+
+## The question this firmware existed to ask
+
+**iOS accepts a class-compliant CDC-NCM device.** Confirmed on hardware 2026-08-30: the dongle
+plugged into an iPhone's USB-C port, and `http://192.168.7.1/status` answered in Safari.
+
+That one request proves the entire chain at once — iOS enumerated the device, bound a CDC-NCM
+driver to it, accepted an address from the dongle's own DHCP server, routed a TCP connection over
+the wired interface, and got a reply. No app, no profile, no MFi, no entitlement: the phone treats
+it as an ordinary network interface, which is exactly what the design asked for.
+
+Nothing in Espressif's documentation promised this. IDF's `tusb_ncm` example names Linux and
+Windows only, and iOS appears nowhere in it — which is why this plan was cut to the smallest slice
+that could ask the question, and why everything downstream was gated on the answer.
+
+**And the phone kept its own internet.** An ordinary site loaded by name with the dongle attached —
+which is the premise the whole project rests on, and the one an early build broke on the Mac at the
+cost of a session's connectivity. It also closes the DNS question from the other direction: the
+dongle hands out its own address as a resolver in every lease and IDF offers no way to stop it
+(`dhcpserver.c:502-506`), but a host whose default route we do not take keeps its own resolvers
+primary. Measured now on both macOS and iOS rather than argued.
+
+The answer opens the rest: the config channel, the radio, and the proxy to the car.
 
 ## The Mac acceptance run
 
