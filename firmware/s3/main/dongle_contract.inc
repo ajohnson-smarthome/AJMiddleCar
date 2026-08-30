@@ -9,6 +9,7 @@
 
 #define DONGLE_PATH_STATUS "/status"
 #define DONGLE_PATH_NET "/net"
+#define DONGLE_PATH_OTA "/ota"
 
 #define DONGLE_SSID_MIN 1
 #define DONGLE_SSID_MAX 32
@@ -19,6 +20,7 @@
 #define DONGLE_KEY_FW "fw"
 #define DONGLE_KEY_IDF "idf"
 #define DONGLE_KEY_USB "usb"
+#define DONGLE_KEY_ROLLBACK "rollback"
 #define DONGLE_KEY_NET "net"
 #define DONGLE_KEY_NET_SSID "ssid"
 #define DONGLE_KEY_NET_STATE "state"

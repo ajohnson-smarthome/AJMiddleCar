@@ -18,7 +18,7 @@ void net_api_load(void);
 esp_err_t net_api_register(httpd_handle_t server);
 
 /* The live configuration. Returns false when none has been set, in which case *out is
- * left untouched. Plan 3's radio reads this to know what to join. */
+ * left untouched. Plan 4's radio reads this to know what to join. */
 bool net_api_current(net_cfg_t *out);
 
 #endif /* NET_API_H */

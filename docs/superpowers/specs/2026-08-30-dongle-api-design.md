@@ -159,7 +159,9 @@ Three paths on `192.168.7.1:8080`.
 {
   "device": "ajdongle",
   "fw": "v1.0+483",
+  "idf": "v6.0.2",
   "usb": "up",
+  "rollback": false,
   "net": {
     "ssid": "AJMiddleCar",
     "state": "connected",
@@ -172,7 +174,9 @@ Three paths on `192.168.7.1:8080`.
 |---|---|
 | `device` | Always `ajdongle`. How the app tells this apart from any other USB-Ethernet adapter the user might plug in. |
 | `fw` | The dongle's firmware version. |
+| `idf` | The ESP-IDF version this firmware was built against. |
 | `usb` | `up` whenever this response was served, which is tautological but keeps the shape stable if a future state is added. |
+| `rollback` | `true` when the bootloader reverted the last OTA update — the image that was pushed failed its first boot before it could confirm itself, so the device is back on the one before it. When `true`, `fw` names that older image, not the one that was pushed, and pushing the same binary again will fail the same way. |
 | `net.ssid` | The network the dongle is configured to join. Empty string when unconfigured. |
 | `net.state` | `idle` (no network configured) \| `joining` \| `connected` \| `failed` (tried and gave up). |
 | `net.rssi` | Signal strength in dBm, or `0` when not connected. |

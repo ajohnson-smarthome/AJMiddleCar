@@ -1,7 +1,7 @@
 # firmware/s3 — the USB-Ethernet dongle
 
 An ESP32-S3 that plugs into an iPhone's USB-C port, presents itself as an Ethernet
-adapter (CDC-NCM), and — from Plan 3 onwards — bridges that wire to a car's softAP.
+adapter (CDC-NCM), and — from Plan 4 onwards — bridges that wire to a car's softAP.
 The phone keeps its own Wi-Fi and cellular.
 
 Design: `docs/research/2026-08-21-usb-ethernet-dongle.md`.
@@ -31,6 +31,8 @@ The two ports are silkscreened `USB` and `COM`, and they are not interchangeable
 | iPhone keeps its own internet and DNS | **yes** — an ordinary site loads by name with the dongle attached | 2026-08-30 |
 | `POST /net` persists across a reboot | *(record what you observed)* | |
 | `GET /net` withholds the password | *(record what you observed)* | |
+| `POST /ota` accepts an image and reboots into it | *(record what you observed)* | |
+| The bootloader reverts an image that fails its first boot | *(record what you observed)* | |
 
 The third row is the one that matters, and it was measured rather than assumed: a
 USB-C source supplies VBUS only after it sees Rd, so enumeration over a C-to-C cable
@@ -152,3 +154,36 @@ compiler and the S3 build fails on a missing toolchain. Install it once:
 
 The console is on UART0, reached through the `COM` port — not on the native USB,
 because TinyUSB owns that peripheral.
+
+## Updating over USB
+
+Once the dongle is running an image with `/ota`, the cable is only needed for the first flash:
+
+```bash
+cd firmware/s3 && idf.py build
+curl --data-binary @build/ajdongle.bin \
+     -H 'Content-Type: application/octet-stream' \
+     http://192.168.7.1:8080/ota
+```
+
+Expect `{"ok":true}`, then the USB interface drops and comes back within a few seconds as the
+dongle reboots into the new slot. Confirm with `/status`:
+
+```bash
+curl -s http://192.168.7.1:8080/status
+```
+
+`fw` should be the version just built, and **`rollback` should be `false`**. `rollback:true` means
+the bootloader put the previous image back — the new one failed its first boot before `app_main`
+finished, so it never got to cancel the revert. That is the safety net working, not a bug in the
+update; the `fw` you see is the old image, and pushing the same binary again will do the same thing.
+
+**Rollback protects against an image that panics, not one that hangs.** A panic reboots
+immediately and the bootloader reverts on the next boot, unaided. An image that instead hangs
+without panicking never reboots, so the bootloader never gets that chance — recovering from one
+needs nothing more than unplugging and replugging the dongle. Trivial for a device you are
+already holding, but worth knowing before mistaking a silent dongle for a bricked one.
+
+`/ota` is unauthenticated: anything that can reach `192.168.7.1:8080` can push a new image —
+today that is only the host on the other end of the USB cable, which could already reflash the
+dongle by cable anyway.

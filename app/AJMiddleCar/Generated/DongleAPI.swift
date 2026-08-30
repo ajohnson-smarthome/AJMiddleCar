@@ -7,6 +7,7 @@ public enum DongleContract {
 
     public static let statusPath = "/status"
     public static let netPath = "/net"
+    public static let otaPath = "/ota"
 
     public static let ssidMin = 1
     public static let ssidMax = 32
@@ -24,6 +25,7 @@ public enum DongleStatusKey {
     public static let fw = "fw"
     public static let idf = "idf"
     public static let usb = "usb"
+    public static let rollback = "rollback"
     public static let net = "net"
     public static let netSsid = "ssid"
     public static let netState = "state"

@@ -1,9 +1,12 @@
+#include <stdbool.h>
 #include <stdio.h>
 
 #include "esp_app_desc.h"
 #include "esp_check.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
 
 #include "dongle_contract.inc"
 #include "net_api.h"
@@ -13,6 +16,23 @@
 static const char *TAG = "status_api";
 
 static httpd_handle_t s_server;
+
+/* Did the bootloader revert the previous OTA? The other slot is left ESP_OTA_IMG_ABORTED exactly
+ * when an update failed its first boot — the one signal a client has that the image it pushed did
+ * not survive. Read once at start: the answer cannot change without a reboot. The car's
+ * status_api.c carries the twin of this; the duplication is the price of the two firmwares not
+ * referencing each other. */
+static bool s_rollback = false;
+
+static void read_rollback_state(void)
+{
+    const esp_partition_t *other = esp_ota_get_next_update_partition(NULL);
+    esp_ota_img_states_t st;
+    s_rollback = other != NULL &&
+                 esp_ota_get_state_partition(other, &st) == ESP_OK &&
+                 st == ESP_OTA_IMG_ABORTED;
+    if (s_rollback) ESP_LOGW(TAG, "the previous OTA was rolled back by the bootloader");
+}
 
 /* The identity key is `device`, spelled as the car's contract spells it
  * (contract/car-api.json, device_field). The app's "which device am I talking to" check
@@ -40,19 +60,24 @@ static esp_err_t status_get(httpd_req_t *req)
 
     /* `state` is always "idle" in this firmware, and honestly so: there is no radio yet,
      * so there is nothing that could be joining, connected or failed. The field is here
-     * rather than added later because its SHAPE is final — Plan 3 gives it the other
+     * rather than added later because its SHAPE is final — Plan 4 gives it the other
      * values without moving a key or changing a caller. */
-    char body[256];
+    /* 320, not 256. Worst case with the rollback field: 103 bytes of literal template,
+     * + 31 (esp_app_desc_t.version is char[32]) + 31 (idf_ver, likewise) + 5 ("false")
+     * + 64 (a 32-byte SSID whose every byte escapes to two) + NUL = 235. The margin is
+     * deliberate: adding one field should not also be a buffer calculation. */
+    char body[320];
     int n = snprintf(body, sizeof(body),
                      "{\"" DONGLE_KEY_DEVICE "\":\"" DONGLE_DEVICE "\","
                      "\"" DONGLE_KEY_FW "\":\"%s\","
                      "\"" DONGLE_KEY_IDF "\":\"%s\","
                      "\"" DONGLE_KEY_USB "\":\"" DONGLE_USB_STATE_UP "\","
+                     "\"" DONGLE_KEY_ROLLBACK "\":%s,"
                      "\"" DONGLE_KEY_NET "\":{"
                      "\"" DONGLE_KEY_NET_SSID "\":\"%s\","
                      "\"" DONGLE_KEY_NET_STATE "\":\"" DONGLE_STATE_IDLE "\","
                      "\"" DONGLE_KEY_NET_RSSI "\":0}}",
-                     app->version, app->idf_ver, ssid_esc);
+                     app->version, app->idf_ver, s_rollback ? "true" : "false", ssid_esc);
     if (n < 0 || (size_t)n >= sizeof(body)) {
         /* Same rule as the car's own /status: truncated JSON parses as something else or
          * nothing, and shipping it under a 200 hides exactly that. Only reachable if a
@@ -67,12 +92,14 @@ static esp_err_t status_get(httpd_req_t *req)
 
 esp_err_t status_api_start(void)
 {
+    read_rollback_state();
+
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    /* 8080, not 80: port 80 belongs to the car. Plan 3 forwards it straight through to
+    /* 8080, not 80: port 80 belongs to the car. Plan 4 forwards it straight through to
      * the car's own REST surface so that CarHost.port and the car's contract never move —
      * the dongle is the new thing in the system, so the dongle takes the unusual port. */
     cfg.server_port = DONGLE_PORT;
-    /* /status, GET /net, POST /net, and room for Plan 3's additions — sized so that a
+    /* /status, GET /net, POST /net, and room for Plan 4's additions — sized so that a
      * new endpoint is not also a config change. */
     cfg.max_uri_handlers = 6;
 
