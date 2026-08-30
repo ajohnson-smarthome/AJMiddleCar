@@ -102,10 +102,41 @@ die.
 Two fixes exist. Add a route to the car's firmware — which breaks "the car does not change", and
 puts a networking concern into a codebase that has no other reason to hold one. Or make the car
 see the traffic as coming **from the dongle**, at an address in its own subnet, which it can
-answer on-link. The second is NAT, and it is the only one that keeps the car untouched.
+answer on-link. The second is the one that keeps the car untouched.
 
-ESP-IDF 6.0.2 supports it natively: `CONFIG_LWIP_IP_FORWARD`, `CONFIG_LWIP_IPV4_NAPT`,
-`CONFIG_LWIP_IPV4_NAPT_PORTMAP`, with `ip_napt_enable_netif()` and `ip_portmap_add()`.
+### Why lwIP's NAPT cannot do it
+
+**Amended 2026-08-30, before any of it was built.** This section used to say ESP-IDF supports the
+translation natively — `CONFIG_LWIP_IPV4_NAPT_PORTMAP`, `ip_napt_enable_netif()`,
+`ip_portmap_add()` — and describe a static port map on the dongle's own address. That does not
+work, and the reason is in lwIP's source rather than in its documentation.
+
+Three facts, in IDF 6.0.2:
+
+- `ip_portmap_find` (`ip4_napt.c`) matches on the destination **port alone** and rewrites the
+  destination address and port. It is pure DNAT — it never touches the source.
+- Source translation happens elsewhere, in `ip_napt_forward`, and `ip4.c:336` runs it only when
+  the **output** interface does *not* carry the `napt` flag.
+- The DNAT hook, `ip4.c:582`, runs only when the **input** interface does *not* carry the flag.
+
+Our topology needs both at once: the phone's packet arrives on the USB interface addressed to the
+dongle (so USB must be unflagged, for DNAT) and leaves toward the car (so the station must be
+unflagged, for the masquerade the car's reply depends on). And the flag cannot simply be absent
+from both — `ip_napt_enable_netif` (`ip4_napt.c:245-265`) allocates the NAPT tables only while at
+least one interface carries it, and `esp_netif_napt_enable` clears it from every other interface
+by design.
+
+Both placements were checked against the code rather than guessed:
+
+| Flag on | What happens |
+|---|---|
+| the station | DNAT fires, the masquerade does not; the car answers `192.168.7.2`, has no route, the reply dies |
+| the USB interface | the port map never fires; the packet is delivered locally to a port nothing listens on |
+
+A third arrangement does work — the phone addressing `192.168.4.1` directly, with the USB
+interface flagged — but it needs the phone to hold a route to the car's subnet, and the section
+below records why no route can be pushed. The only route the dongle's DHCP server *can* offer is
+a default one, which is the thing Plan 1 established it must never send.
 
 ### Why the route is not pushed by DHCP
 
@@ -115,10 +146,12 @@ emits nine options, and 121 is not among them. Using it would mean patching lwIP
 
 Recorded because it is the obvious next idea, and it is unavailable rather than unwise.
 
-### The port map
+### The relay
 
-Static mappings on the dongle's own address. The phone needs no route at all — `192.168.7.1` is
-on-link.
+The dongle carries the traffic itself, at the socket layer. It listens on its own address, and
+for each arriving connection or datagram opens its own toward the car — so the car sees the
+dongle as the peer, at an address in its own subnet, which is exactly the property NAT was
+wanted for. The phone needs no route: `192.168.7.1` is on-link.
 
 | Reached at | Goes to | Carries |
 |---|---|---|
@@ -126,14 +159,30 @@ on-link.
 | `192.168.7.1:4210` UDP | the car's `:4210` | the real-time channel |
 | `192.168.7.1:8080` | the dongle itself | this document's API |
 
+**The relay interprets nothing.** It moves bytes between two sockets and has no idea whether they
+are JSON, a control frame or a firmware image. That is the same rule the rest of this document
+lives under — "a modem, not a brain" — and a byte-level relay honours it more literally than a
+packet translator would.
+
+**Where the car's address comes from.** Not a constant. The dongle joins the car's softAP as an
+ordinary DHCP client, and a softAP's gateway *is* the AP. The relay's destination is therefore
+the gateway the join produced, read at runtime. Nothing about the car is compiled in, and a
+different car on a different subnet needs no change.
+
 **The car keeps its native ports; the dongle takes the unusual one.** Not symmetry for its own
 sake: it is what leaves the most code untouched. `CarHost.port` stays `80`, `CarHost.rtPort`
 stays `4210`, and `contract/car-api.json` does not change at all. Only `CarHost.host` moves. The
 dongle is the new thing in the system, so the dongle absorbs the strangeness.
 
-The real-time channel survives translation without special handling. The app streams commands at
-10 Hz; the car sees the dongle as the sender and pushes telemetry back to it at 5 Hz; the
-translation is refreshed continuously from both directions and cannot lapse mid-drive.
+**What the relay costs that translation would not.** A TCP listener with a bounded pool of
+sessions and a bidirectional pump; a UDP session table keyed by the phone's source port, with an
+idle timeout. More code than two library calls — but code whose semantics are ours, testable in
+the parts that are pure, and debuggable from the dongle's own console. The translation's
+semantics were never ours, and the four hours above are what discovering that cost.
+
+**The real-time channel is the part to watch.** The app streams commands at 10 Hz and the car
+pushes telemetry back at 5 Hz. The relay must keep a session alive on both halves for as long as
+either side is sending, and must not let a silent gap in one direction tear down the other.
 
 ## Two things this changes about what Plan 1 shipped
 
@@ -413,15 +462,20 @@ across a dongle that is also behind. One screen, two updates in sequence.
   dongle's surface, and it is the one piece that must not ship before rollback does.
 - **Whether the dongle's own API stays on `:8080`.** It is a contract constant, changeable in one
   place on each side for as long as nothing else has been built against it.
-- **Video.** Out of scope. If it arrives it will want its own port, and the port map has room.
+- **Video.** Out of scope. If it arrives it will want its own port, and the relay has room for one.
 
 ## Open risks
 
-**`ip_portmap_add`'s behaviour with the real-time channel is reasoned, not measured.** The
-argument above — that a continuous bidirectional flow keeps the translation alive — is sound, but
-the car pushes telemetry to an address it learned through NAT, and that path deserves a bench
-test before the app depends on it. Symptom to watch for: telemetry stops while commands keep
-working.
+**The relay's handling of the real-time channel is designed, not measured.** The UDP half has no
+connection to lean on: the dongle must decide for itself when a phone's session is over, and the
+car's 5 Hz telemetry must find its way back to a source port the phone chose. An idle timeout that
+is too short tears down a live drive; one that is too long leaks table entries. Symptom to watch
+for on the bench: telemetry stops while commands keep working — the same symptom the translation
+design would have had, for a different reason.
+
+**The TCP half must not serialise the car's REST surface.** The app can have a config POST and a
+firmware upload in flight together, and a relay with one session slot would deadlock the second
+behind the first. The pool's size is a real design number, not a detail.
 
 **The radio's arrival is where the image size question lands.** The app is 395 KB today against a
 4 MB slot; the station and its stack will roughly double it. Comfortable, and worth measuring
