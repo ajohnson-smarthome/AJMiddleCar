@@ -9,16 +9,25 @@ trap 'rm -rf "$TMP"' EXIT
 
 python3 "$ROOT/tools/gen_contract.py" --out-dir "$TMP"
 
-status=0
 # The artefact list comes from the generator: it was duplicated here, and a fifth
 # artefact meant editing two files in step or silently checking only some of them.
+#
+# Captured into a variable, not piped or process-substituted: a command inside
+# `< <(...)` or `| while` runs in a subshell whose exit status `set -euo pipefail`
+# does not see, so a broken `--list-artifacts` would print nothing, the loop would
+# see EOF, and the script would report "no drift" having checked zero artefacts. A
+# plain `x="$(cmd)"` assignment IS subject to `set -e`, so a failing generator
+# aborts the script here instead of being silently swallowed.
+artifact_list="$(python3 "$ROOT/tools/gen_contract.py" --list-artifacts)"
+
+status=0
 while IFS= read -r rel; do
     if ! diff -u "$ROOT/$rel" "$TMP/$rel" > /dev/null 2>&1; then
         echo "DRIFT: $rel differs from a fresh generation" >&2
         diff -u "$ROOT/$rel" "$TMP/$rel" >&2 || true
         status=1
     fi
-done < <(python3 "$ROOT/tools/gen_contract.py" --list-artifacts)
+done <<< "$artifact_list"
 
 # docs/protocol.md is spliced into hand-written prose, so compare only the region.
 region() { sed -n '/generated:endpoints/,/\/generated:endpoints/p' "$1"; }

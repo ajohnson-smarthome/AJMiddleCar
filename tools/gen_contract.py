@@ -316,9 +316,12 @@ def main(argv=None):
         # --schema overrides only a single-target run; with several targets it would be
         # ambiguous which one it names, and silently applying it to the first is the kind
         # of helpfulness that hides a mistake.
-        schema_path = args.schema if (args.schema and len(TARGETS) == 1) else target["schema"]
-        if args.schema and len(TARGETS) > 1:
-            raise SystemExit("--schema is ambiguous with more than one target; edit TARGETS instead")
+        if args.schema:
+            if len(TARGETS) > 1:
+                raise SystemExit("--schema is ambiguous with more than one target; edit TARGETS instead")
+            schema_path = args.schema
+        else:
+            schema_path = target["schema"]
         schema = load_schema(schema_path)
 
         for rel, emitter in target["artifacts"]:

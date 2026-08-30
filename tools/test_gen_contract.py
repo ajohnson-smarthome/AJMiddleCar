@@ -129,13 +129,22 @@ class TestArtifactListing(unittest.TestCase):
     """The generator owns the list of what it writes; check_contract.sh asks rather
     than keeping a second copy that has to be edited in step."""
 
-    def test_list_artifacts_names_every_whole_file(self):
+    def test_list_artifacts_names_every_whole_file_exactly(self):
+        # An exact, ordered comparison, not assertIn: assertIn only proves the known
+        # entries are present, so a table that gained an entry nobody meant to add
+        # (or lost one silently) would still pass. This list is pinned to what
+        # TARGETS actually holds today, car and dongle both — a real new artifact
+        # updates this test deliberately, which is the point.
         out = subprocess.run(
             [sys.executable, str(ROOT / "tools" / "gen_contract.py"), "--list-artifacts"],
             capture_output=True, text=True, check=True).stdout.split()
-        self.assertIn("firmware/p4/main/cfg_table.inc", out)
-        self.assertIn("app/AJMiddleCar/Generated/CarAPI.swift", out)
-        self.assertIn("tools/mock_car/generated.py", out)
+        self.assertEqual(out, [
+            "firmware/p4/main/cfg_table.inc",
+            "app/AJMiddleCar/Generated/CarAPI.swift",
+            "tools/mock_car/generated.py",
+            "firmware/s3/main/dongle_contract.inc",
+            "app/AJMiddleCar/Generated/DongleAPI.swift",
+        ])
 
     def test_list_artifacts_excludes_spliced_files(self):
         # docs/protocol.md is spliced into hand-written prose and is compared by
