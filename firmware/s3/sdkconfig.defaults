@@ -44,21 +44,49 @@ CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
-CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1
+#
+# Dynamic TX buffers, stated the only way that actually takes. This line used to read
+# CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1, which is a silent no-op: that symbol has no prompt and is
+# derived (esp_wifi/Kconfig) from the promptable choice below it —
+#   config ESP_WIFI_TX_BUFFER_TYPE
+#       int
+#       default 0 if ESP_WIFI_STATIC_TX_BUFFER
+#       default 1 if ESP_WIFI_DYNAMIC_TX_BUFFER
+# — so kconfiglib recomputes it from the choice and discards whatever was written here,
+# without a warning. Setting it to 0 produced 1 all the same. The value was right only by
+# coincidence with the choice's own unforced default (ESP_WIFI_DYNAMIC_TX_BUFFER), which a
+# later IDF is free to move.
+#
+# Dynamic and not static, with a caveat worth knowing: the choice's help says "If PSRAM is
+# enabled, 'Static' should be selected to guarantee enough WiFi TX buffers", and PSRAM is
+# enabled here. Dynamic is kept because it is what this firmware has been built and bench-run
+# with, and because the dongle's Wi-Fi carries relayed REST and a 10 Hz control stream rather
+# than the sustained bulk TX that advice is aimed at. If TX buffer exhaustion is ever seen on
+# hardware, CONFIG_ESP_WIFI_STATIC_TX_BUFFER=y plus a STATIC_TX_BUFFER_NUM is the first thing
+# to try — and now it will actually take effect.
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER=y
 CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
 
 # The relays forward between two interfaces, so lwIP must be willing to hold more sockets than
 # a single-purpose device needs. Worst-case budget, one line per consumer:
 #
-#   httpd (status_api.c, :8080): 1 listener + 1 ctrl_port + max_open_sockets(3, lowered from
+#   httpd (status_api.c, :8080): 3 internal sockets + max_open_sockets(3, lowered from
 #     esp_http_server's default of 7 in status_api.c, since this is an admin API, not proxied
-#     REST traffic) = 5
+#     REST traffic) = 6. Three, not two: httpd_start's own comment enumerates listen_fd, the
+#     UDP socket it SENDS control messages on (msg_fd) and the one it RECEIVES them on
+#     (ctrl_fd), and states "the total number of required sockets is max_open_sockets + 3".
+#     It enforces that too — httpd_start returns ESP_ERR_INVALID_ARG when
+#     CONFIG_LWIP_MAX_SOCKETS is smaller.
 #   relay_udp.c (:4210): 1 phone-facing socket + UDP_SESS_MAX(4) car-facing sockets = 5
 #   relay_tcp.c (:80): 1 listener + RELAY_POOL_SIZE(4) slots x 2 sockets each
 #     (phone_sock + car_sock, held whether a slot is SLOT_CONNECTING or SLOT_ACTIVE) = 9
 #
-# Worst case total: 5 + 5 + 9 = 19. 24 leaves 5 sockets of headroom above that — comfortable
-# against a device with hundreds of KB of RAM to spare, and cheap to raise again if any of the
-# three consumers above grows. (Before this fix the budget was computed wrong and this value
-# was 16, seven short of the worst case — see task-5's review.)
+# Steady-state worst case: 6 + 5 + 9 = 20, so 24 leaves 4 sockets of headroom. The true
+# instantaneous peak is 21: relay_tcp's handle_accept accepts a connection BEFORE it looks for
+# a free slot, so with the pool already full it briefly holds a twenty-first socket between
+# accept() and the close() that refuses it. That is deliberate — refusing a full pool by
+# closing beats hanging a client on an unaccepted connection — and 24 covers it. Cheap to raise
+# again if any of the three consumers above grows. (Before task-5's review this value was 16,
+# four short of the 20 above and five short of the peak; an earlier version of this comment put
+# that shortfall at seven, which was wrong twice over.)
 CONFIG_LWIP_MAX_SOCKETS=24
