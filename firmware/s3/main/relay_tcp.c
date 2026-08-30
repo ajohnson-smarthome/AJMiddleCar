@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <string.h>
 
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -30,19 +31,34 @@ static const char *TAG = "relay_tcp";
  * same rhythm as relay_udp.c. */
 #define RELAY_LOOP_MS 1000
 
-/* How patiently pump_send (below) waits out a destination whose own TCP send buffer is
- * momentarily full, and how often it checks back. Not a guess at a "correct" number: a
- * destination that never drains within a second is treated as dead, same order of magnitude
- * as RELAY_LOOP_MS. */
-#define RELAY_DRAIN_TIMEOUT_MS 1000
-#define RELAY_DRAIN_RETRY_MS 10
-
-/* One task, so these can live at file scope instead of the task's own stack — see
- * relay_udp.c's identical comment for why that is a requirement here and not merely tidy.
- * Two buffers, not eight: one task pumps one direction of one slot at a time, so a shared
- * buffer per direction is enough regardless of how many slots are live. */
+/* One task, so the receive scratch buffers can live at file scope instead of the task's own
+ * stack — see relay_udp.c's identical comment for why that is a requirement here and not
+ * merely tidy. Two of them, not eight: one task reads one direction of one slot at a time, so
+ * a single shared scratch buffer per direction is enough regardless of how many slots are
+ * live — the brief's "reused per pass, not per slot" holds for these exactly as written; a
+ * chunk is copied out of one of these before the next recv() into it. */
 static char s_phone_buf[RELAY_BUF_LEN];
 static char s_car_buf[RELAY_BUF_LEN];
+
+/* Pending buffers are the one place that "reused per pass, not per slot" rule does not apply,
+ * and deliberately so: when a destination's own TCP send buffer is momentarily full,
+ * pump_read (below) cannot forward the whole chunk it just read, and the unsent remainder has
+ * to live somewhere that survives past this pass — and past whatever OTHER slot this task
+ * services next, since it is still the same single task working through all four. That makes
+ * a pending backlog inherently per slot AND per direction, not a shared scratch. Sized like
+ * the scratch buffers (1460 bytes) because a backlog can never exceed what a single pump_read
+ * call read in one shot. 4 slots × 2 directions × sizeof(pending_t) is roughly 11.7 KiB of
+ * static RAM — see the task-5 report for the exact figure — comfortable against the S3's
+ * 512 KiB of internal SRAM. Cleared by close_slot whenever a slot frees, so a connection that
+ * later reuses the same index never inherits and flushes a stranger's leftover bytes. */
+typedef struct {
+    char buf[RELAY_BUF_LEN];
+    int len;    /* valid bytes waiting to be sent; 0 means nothing pending for this direction */
+    int off;    /* how many of those bytes have already gone out */
+} pending_t;
+
+static pending_t s_p2c_pending[RELAY_POOL_SIZE];   /* phone -> car backlog, indexed by slot */
+static pending_t s_c2p_pending[RELAY_POOL_SIZE];   /* car -> phone backlog, indexed by slot */
 
 typedef enum {
     SLOT_FREE = 0,     /* no connection; both sockets -1 */
@@ -61,11 +77,6 @@ typedef struct {
     int listen_sock;
     uint32_t gateway_be;   /* network byte order, meaningful once the wait loop below returns */
 } relay_state_t;
-
-static uint32_t now_ms(void)
-{
-    return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-}
 
 /* Every socket this relay opens is made non-blocking, here, right after it is created —
  * before it is ever added to a select() set. See relay_udp.c's set_nonblocking for the fd-
@@ -98,66 +109,81 @@ static void close_slot(tcp_slot_t *slots, int idx, const char *why)
     s->phone_sock = -1;
     s->car_sock = -1;
     s->state = SLOT_FREE;
+    /* A slot's pending backlog belongs to the connection that just ended; clear both
+     * directions so a future occupant of this same index starts empty rather than inheriting
+     * — and eventually flushing — a stranger's leftover bytes. */
+    s_p2c_pending[idx].len = 0;
+    s_p2c_pending[idx].off = 0;
+    s_c2p_pending[idx].len = 0;
+    s_c2p_pending[idx].off = 0;
     /* Unlike relay_udp.c's per-datagram sends, a TCP connection's close is a rare event —
      * on the order of one per REST request, not one per 10 Hz frame — so this is logged
      * plainly every time rather than rate-limited. */
     ESP_LOGI(TAG, "slot %d closed: %s", idx, why);
 }
 
-/* Sends every one of the len bytes at buf to dst, waiting out ordinary backpressure — the
- * destination's own TCP send buffer momentarily full — rather than corrupting the stream by
- * forwarding only part of it. A short config POST or status GET almost never hits this: with
- * CONFIG_LWIP_TCP_SND_BUF_DEFAULT at 5760 bytes (firmware/s3/sdkconfig), a single 1460-byte
- * chunk fits easily. A firmware upload — the reason the pool is 4, not 1 — routinely does:
- * the phone-facing side (USB) can hand over chunks far faster than the car-facing side
- * (the softAP's own WiFi) can drain them, so the send buffer fills within a few passes of a
- * sustained transfer. Treating that as a hard error would make every large upload fail
- * partway through, which is worse than the bounded wait below.
- *
- * Never calls a blocking socket op — dst stays O_NONBLOCK throughout, and the wait between
- * attempts is vTaskDelay (a scheduler yield), not a blocking send(). That bounds a stuck
- * destination's cost to RELAY_DRAIN_TIMEOUT_MS of this task's attention, not an unbounded
- * one — the same "must not stall the other sessions" property the brief asks of the upstream
- * connect(), extended to the steady-state pump. A destination that has not accepted another
- * byte in that long is treated the same as any other error: the slot is closed. */
-static bool pump_send(int dst, const char *buf, int len)
+/* Sends as much of a slot's already-buffered backlog as dst currently accepts. Called only
+ * when select() has just reported dst writable for this direction, which only happens while
+ * the direction actually has something pending (see relay_task's fd-set build) — so p->len >
+ * p->off is guaranteed here. Makes exactly one send() attempt: whatever dst still cannot take
+ * simply stays pending, and dst stays in next pass's writefds until select() says it is worth
+ * trying again. No retry loop and no delay — the earlier version of this file spun on EAGAIN
+ * with a bounded wait, which blocked this single task's attention (and so every other slot)
+ * for up to a second at a time; this version never calls send() more than once without a
+ * fresh select() saying to. */
+static void flush_pending(tcp_slot_t *slots, int idx, int dst, pending_t *p)
 {
-    int off = 0;
-    uint32_t start = now_ms();
-    while (off < len) {
-        int w = send(dst, buf + off, (size_t)(len - off), 0);
-        if (w > 0) {
-            off += w;
-            continue;
+    int w = send(dst, p->buf + p->off, (size_t)(p->len - p->off), 0);
+    if (w > 0) {
+        p->off += w;
+        if (p->off == p->len) {
+            p->len = 0;
+            p->off = 0;
         }
-        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            if ((uint32_t)(now_ms() - start) >= RELAY_DRAIN_TIMEOUT_MS) {
-                return false;
-            }
-            vTaskDelay(pdMS_TO_TICKS(RELAY_DRAIN_RETRY_MS));
-            continue;
-        }
-        return false;   /* w == 0 (shouldn't happen for send(), but not a success either) or
-                          * a real error — either way, not this function's job to log; the
-                          * caller knows which direction and which slot. */
+        return;
     }
-    return true;
+    if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        return;   /* still full; select() will say so again next pass if this persists */
+    }
+    close_slot(slots, idx, "forwarding failed");   /* w == 0, or a real error */
 }
 
-/* One direction of one slot: read what is waiting on src, forward every byte of it to dst.
- * label is purely for the log line ("phone->car" or "car->phone"). Closes the slot on a
- * clean EOF, a real recv() error, or a forwarding failure — including the backpressure
- * timeout inside pump_send — and leaves it alone on EAGAIN (nothing to do this pass) exactly
- * like relay_udp.c's read paths. */
-static void pump_direction(tcp_slot_t *slots, int idx, int src, int dst, char *buf,
-                            const char *label)
+/* One direction of one slot: called only when its source is in this pass's readfds, which
+ * relay_task's fd-set build offers only while this direction's backlog (p) is empty — a call
+ * here never needs to check for one first. Reads once into the shared per-direction scratch
+ * buffer and makes exactly one send() attempt to forward it. Whatever dst does not accept
+ * right now becomes this slot's pending backlog for the direction; relay_task's next fd-set
+ * build then drops src from readfds and adds dst to writefds until flush_pending (above)
+ * drains it. That is the whole backpressure mechanism: select() is what throttles a fast
+ * producer against a slow consumer, not a retry loop in here, and a source socket is simply
+ * never offered for reading again until its own backlog is gone — so this task can never read
+ * faster than it can deliver.
+ *
+ * label is purely for the log line ("phone->car" or "car->phone"). Closes the slot on a clean
+ * EOF, a real recv() error, or a forwarding failure, and leaves it alone on EAGAIN (nothing to
+ * do this pass) exactly like relay_udp.c's read paths. */
+static void pump_read(tcp_slot_t *slots, int idx, int src, int dst, char *scratch,
+                       pending_t *p, const char *label)
 {
-    int n = recv(src, buf, RELAY_BUF_LEN, 0);
+    int n = recv(src, scratch, RELAY_BUF_LEN, 0);
     if (n > 0) {
-        if (!pump_send(dst, buf, n)) {
+        int w = send(dst, scratch, (size_t)n, 0);
+        if (w == n) {
+            return;   /* the common case: forwarded whole, nothing left pending */
+        }
+        if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
             ESP_LOGW(TAG, "%s forwarding failed on slot %d: errno %d", label, idx, errno);
             close_slot(slots, idx, "forwarding failed");
+            return;
         }
+        /* Partial (0 <= w < n) or nothing accepted at all (w < 0, EAGAIN) — either way not an
+         * error: a fast producer outrunning a slow consumer is the ordinary condition this
+         * backlog exists for, not something to log. Stash the unsent remainder; the fd-set
+         * build (relay_task) does the actual throttling from here. */
+        int sent = (w > 0) ? w : 0;
+        memcpy(p->buf, scratch + sent, (size_t)(n - sent));
+        p->len = n - sent;
+        p->off = 0;
         return;
     }
     if (n == 0) {
@@ -341,10 +367,29 @@ static void relay_task(void *arg)
         for (int i = 0; i < RELAY_POOL_SIZE; i++) {
             tcp_slot_t *s = &r.slots[i];
             if (s->state == SLOT_ACTIVE) {
-                FD_SET(s->phone_sock, &rfds);
-                if (s->phone_sock > maxfd) maxfd = s->phone_sock;
-                FD_SET(s->car_sock, &rfds);
-                if (s->car_sock > maxfd) maxfd = s->car_sock;
+                pending_t *p2c = &s_p2c_pending[i];
+                pending_t *c2p = &s_c2p_pending[i];
+                /* Backpressure: offer a side for reading only while ITS OWN outbound
+                 * backlog is empty — offering it while backed up would let this task keep
+                 * accepting bytes it already knows it cannot deliver. Offer the other side
+                 * for writing only while there is a backlog aimed at it. A socket can land
+                 * in both sets in the same pass (e.g. phone_sock readable for phone->car
+                 * while also in writefds to drain a car->phone backlog) — the two
+                 * directions of one TCP connection are independent. */
+                if (p2c->len == 0) {
+                    FD_SET(s->phone_sock, &rfds);
+                    if (s->phone_sock > maxfd) maxfd = s->phone_sock;
+                } else {
+                    FD_SET(s->car_sock, &wfds);
+                    if (s->car_sock > maxfd) maxfd = s->car_sock;
+                }
+                if (c2p->len == 0) {
+                    FD_SET(s->car_sock, &rfds);
+                    if (s->car_sock > maxfd) maxfd = s->car_sock;
+                } else {
+                    FD_SET(s->phone_sock, &wfds);
+                    if (s->phone_sock > maxfd) maxfd = s->phone_sock;
+                }
             } else if (s->state == SLOT_CONNECTING) {
                 /* connect() completion is observed as writability, not readability — see
                  * handle_accept's comment. */
@@ -385,19 +430,33 @@ static void relay_task(void *arg)
                 if (s->state != SLOT_ACTIVE) {
                     continue;
                 }
+
+                pending_t *p2c = &s_p2c_pending[i];
+                pending_t *c2p = &s_c2p_pending[i];
+
+                /* Flush before reading more: draining a backlog is what earns a throttled
+                 * side its way back into next pass's readfds (see the fd-set build above),
+                 * so do it first. Every step re-checks state == SLOT_ACTIVE first: any one
+                 * of these four calls can close this same slot (a forwarding failure, a
+                 * peer hanging up), and once it does its sockets are -1 — FD_ISSET on a
+                 * closed slot's stale fd number is exactly what must not happen, so the
+                 * state check has to run, and short-circuit, before it. */
+                if (p2c->len > 0 && FD_ISSET(s->car_sock, &wfds)) {
+                    flush_pending(r.slots, i, s->car_sock, p2c);
+                }
+                if (s->state == SLOT_ACTIVE && c2p->len > 0 && FD_ISSET(s->phone_sock, &wfds)) {
+                    flush_pending(r.slots, i, s->phone_sock, c2p);
+                }
                 /* Non-blocking (set_nonblocking on both sockets, at creation): a stale
                  * readiness bit here — this slot's fd reused by an eviction after select()
-                 * sampled it — costs an EAGAIN inside pump_direction, not a wait. */
-                if (FD_ISSET(s->phone_sock, &rfds)) {
-                    pump_direction(r.slots, i, s->phone_sock, s->car_sock, s_phone_buf,
-                                   "phone->car");
+                 * sampled it — costs an EAGAIN inside pump_read, not a wait. */
+                if (s->state == SLOT_ACTIVE && FD_ISSET(s->phone_sock, &rfds)) {
+                    pump_read(r.slots, i, s->phone_sock, s->car_sock, s_phone_buf, p2c,
+                              "phone->car");
                 }
-                /* Re-check state: the phone->car pump just above may have closed this same
-                 * slot (a forwarding failure, or the phone hanging up), in which case
-                 * car_sock is already -1 and there is nothing left to read from it. */
                 if (s->state == SLOT_ACTIVE && FD_ISSET(s->car_sock, &rfds)) {
-                    pump_direction(r.slots, i, s->car_sock, s->phone_sock, s_car_buf,
-                                   "car->phone");
+                    pump_read(r.slots, i, s->car_sock, s->phone_sock, s_car_buf, c2p,
+                              "car->phone");
                 }
             }
         } else if (nready < 0 && errno != EINTR) {
