@@ -52,7 +52,14 @@ void app_main(void)
         esp_ota_get_state_partition(running, &ota_state) == ESP_OK &&
         ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
         ESP_LOGI(TAG, "first boot of a new image — cancelling rollback");
-        esp_ota_mark_app_valid_cancel_rollback();
+        esp_err_t mark_ret = esp_ota_mark_app_valid_cancel_rollback();
+        if (mark_ret != ESP_OK) {
+            /* The call that was supposed to make this "cancelled" is the one that just
+               failed. The image is still PENDING_VERIFY, so the bootloader reverts to the
+               previous one on the next boot — this log is the only record of why. */
+            ESP_LOGE(TAG, "cancel rollback failed (%s) — image stays PENDING_VERIFY, "
+                          "bootloader will revert on next boot", esp_err_to_name(mark_ret));
+        }
     }
     ESP_LOGI(TAG, "dongle up");
 }
