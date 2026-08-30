@@ -1,4 +1,5 @@
-idf_component_register(SRCS "main.c" "usb_net.c" "status_api.c" "api_util.c" "net_api.c" "net_cfg.c"
+idf_component_register(SRCS "main.c" "usb_net.c" "status_api.c" "api_util.c" "api_guard.c"
+                             "net_api.c" "net_cfg.c"
                              "ota_api.c" "wifi_sta.c" "wifi_state.c" "relay_udp.c" "udp_sess.c"
                              "relay_tcp.c" "tcp_pending.c"
                        INCLUDE_DIRS "."

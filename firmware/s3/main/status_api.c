@@ -8,6 +8,7 @@
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 
+#include "api_guard.h"
 #include "dongle_contract.inc"
 #include "net_api.h"
 #include "status_api.h"
@@ -111,6 +112,13 @@ esp_err_t status_api_start(void)
      * already generous; it does not need the default's share of a table the relays need
      * far more of. */
     cfg.max_open_sockets = 3;
+    /* httpd_config_t has no bind-address field in IDF 6.0.2, so this server always listens on
+     * INADDR_ANY — USB and, since the station came up, the car's Wi-Fi too. api_guard_open is
+     * what makes that safe: it runs on every accepted connection, before a request byte is
+     * parsed, and refuses (closes the socket) any connection that did not land on DONGLE_HOST.
+     * Without it, POST /net (a password) and POST /ota (unauthenticated firmware writes) would
+     * both be reachable from the car's network. */
+    cfg.open_fn = api_guard_open;
 
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &cfg), TAG, "cannot start the server");
 
