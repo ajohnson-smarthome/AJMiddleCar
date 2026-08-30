@@ -795,8 +795,10 @@ without letting a leaked slot starve the pool.
 
 Create `firmware/s3/main/relay_tcp.h` declaring `relay_tcp_start(void)`, with a comment carrying
 three facts a reader needs: the relay interprets nothing (it is a byte pump, and must never grow
-a parser); the destination is the gateway the join produced, never a constant; and the listener
-binds the USB address specifically, which is what keeps the car's network from reaching it.
+a parser); the destination is the gateway the join produced, never a constant; and — **amended
+after review, same correction as Task 4 Step 4** — it is the `SO_BINDTODEVICE` pin to the USB
+interface, not the bind address by itself, that keeps the car's network from reaching it; a
+weak-host lwIP would still deliver a bind-address-only listener a SYN from the car's side.
 
 - [ ] **Step 2: The relay**
 

@@ -36,6 +36,13 @@ esp_netif_t *usb_net_netif(void);
  * inherited by every connection it accepts (tcp_in.c:711), so pinning the listener pins the
  * whole conversation.
  *
+ * api_guard.c is the one caller that does not follow that order: it calls this on an already
+ * accepted, established connection, well after the listener's own bind() and after
+ * esp_http_server's accept() have both happened. That works — tcp_bind_netif (tcp.c:770)
+ * only asserts that lwIP's core lock is held, nothing about connection state — but it pins
+ * one already-open conversation rather than a whole listener's worth, and only from that call
+ * onward: see api_guard.h for exactly what window that leaves open on that path.
+ *
  * Returns ESP_ERR_INVALID_STATE before usb_net_start() has succeeded (there is no interface
  * to name yet), and ESP_FAIL if the option is refused. Both are fail-closed conditions for a
  * caller that relies on this for isolation: a socket this call did not pin is reachable from

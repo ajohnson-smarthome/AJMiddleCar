@@ -139,11 +139,19 @@ esp_err_t status_api_start(void)
      * pocket, so "unreachable until a power cycle" is the one outcome worth spending a
      * session for.
      *
-     * Checked against the source rather than assumed: httpd_sess_close_lru picks its victim
-     * through httpd_sess_enum's HTTPD_TASK_FIND_LOWEST_LRU case (httpd_sess.c), which
-     * considers a session only when `session->for_async_req == false` — so a session parked
-     * for an async request is never the one purged, and an in-flight OTA upload cannot be
-     * evicted by an unrelated connection arriving behind it. */
+     * Checked against the source, then checked again after review found the first check
+     * incomplete: httpd_sess_close_lru does pick its victim through httpd_sess_enum's
+     * HTTPD_TASK_FIND_LOWEST_LRU case (httpd_sess.c), which skips a session with
+     * `for_async_req == true` — but that guard does not cover an OTA upload in this
+     * firmware. ota_api.c reads its body with the synchronous httpd_req_recv, never the
+     * async request API, so for_async_req stays false for the whole upload; a purge sweep
+     * would not skip it on that basis. What actually makes eviction impossible:
+     * httpd_accept_conn — where a purge happens — and the handler currently blocked in
+     * httpd_req_recv both run on the same single httpd task (httpd_main.c:272
+     * httpd_server(), :311 where it hands ready sessions to their handlers). That task
+     * cannot be back in its own select()/accept loop while it is still inside the handler
+     * reading the upload's body, so no accept — and therefore no LRU purge — can land
+     * mid-upload. */
     cfg.lru_purge_enable = true;
     /* httpd_config_t has no bind-address field in IDF 6.0.2, so this server always listens on
      * INADDR_ANY — USB and, since the station came up, the car's Wi-Fi too. api_guard_open is

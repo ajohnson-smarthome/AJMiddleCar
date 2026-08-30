@@ -138,6 +138,22 @@ esp_err_t usb_net_bind_socket(int fd)
     struct ifreq iface = { 0 };
     ESP_RETURN_ON_ERROR(esp_netif_get_netif_impl_name(s_netif, iface.ifr_name), TAG,
                         "cannot read the USB interface name");
+    /* esp_netif_get_netif_impl_name's IDF 6.0.2 implementation (esp_netif_lwip.c:2770-2775)
+     * calls netif_index_to_name() but discards its NULL-on-failure return and always reports
+     * ESP_OK back to us, so a lookup failure does not fail the ESP_RETURN_ON_ERROR above — it
+     * just leaves iface.ifr_name untouched, still all-zero from the initializer. That matters
+     * here more than a normal ignored error would: lwIP's own SO_BINDTODEVICE handler
+     * (sockets.c, the SO_BINDTODEVICE case) treats ifr_name[0] == 0 as "no netif" and calls
+     * tcp_bind_netif(pcb, NULL), which CLEARS any pin rather than leaving one in place or
+     * failing the call — setsockopt returns 0 either way. An empty name is therefore worse
+     * than a failed lookup: it would make this function report ESP_OK while silently handing
+     * back an unpinned socket, which is the one outcome a caller relying on fail-closed
+     * isolation cannot tell apart from success. Caught explicitly rather than trusted to
+     * setsockopt, the same way ping_sock.c:271-274 checks its own name lookup before using it. */
+    if (iface.ifr_name[0] == '\0') {
+        ESP_LOGE(TAG, "cannot pin fd %d: the USB interface has no name", fd);
+        return ESP_FAIL;
+    }
     if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, &iface, sizeof(iface)) != 0) {
         ESP_LOGE(TAG, "SO_BINDTODEVICE(%s) on fd %d: errno %d", iface.ifr_name, fd, errno);
         return ESP_FAIL;

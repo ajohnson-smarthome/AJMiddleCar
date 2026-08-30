@@ -20,10 +20,18 @@
  * from ever being reachable from the car's side of the dongle; an accepted connection
  * inherits the pin from the listener. Binding DONGLE_HOST would not: lwIP is a weak-host
  * stack — ip4_input walks NETIF_FOREACH and accepts a packet on any netif whose address
- * matches the destination — so before the pin, a station on the car's network could take
- * every slot in the pool. Unlike the dongle's own HTTP server (status_api.c), which
- * esp_http_server gives no bind-address or bind-interface control over at all and which
- * api_guard.c therefore has to screen connection by connection. */
+ * matches the destination — so before the pin, a SYN from a station on the car's network
+ * would be delivered to this listener exactly as one from the USB wire is. It would not have
+ * gotten further than that, though: usb_net.c's ip.gw comment and api_guard.h both document
+ * that this interface has no gateway, so the SYN-ACK to an off-link peer fails at
+ * etharp_output with ERR_RTE (etharp.c:851) before the handshake can complete — accept()
+ * never returns for that peer, so no slot is ever taken. The delivery-layer premise holds; a
+ * completed connection taking every slot in the pool never followed from it. relay_udp.h's
+ * equivalent claim about its four-slot session table IS accurate, because a UDP session is
+ * created on the first datagram received, with no handshake to fail first. Unlike the
+ * dongle's own HTTP server (status_api.c), which esp_http_server gives no bind-address or
+ * bind-interface control over at all and which api_guard.c therefore has to screen connection
+ * by connection. */
 
 /* Starts the relay task. Safe to call right after wifi_sta_start(): the task waits on its
  * own for wifi_sta_gateway() to succeed before opening any socket, so this does not need to

@@ -46,8 +46,17 @@
  *    the .c). From then on lwIP discards any segment for that connection which arrived on
  *    another netif, so nothing a handler reads afterwards can have come from the car's
  *    network. It does not cover bytes lwIP had already queued between the handshake
- *    completing and open_fn running — a request pipelined into the first segment burst. That
- *    narrows the window to one segment; it does not close it.
+ *    completing and open_fn running, and that window is bigger than "one segment" on both
+ *    axes. Size: setup_tcp() installs the receive callback at accept time, inside lwIP
+ *    itself (api_msg.c:584) — before esp_http_server's own accept() and long before this
+ *    function runs — so a peer can fill the whole receive window before open_fn is ever
+ *    called: CONFIG_LWIP_TCP_WND_DEFAULT is 5760 bytes against a 1440-byte
+ *    CONFIG_LWIP_TCP_MSS, four MSS-sized segments, not one. Time: open_fn only runs once the
+ *    single httpd task returns to httpd_accept_conn, which can be seconds away if that task
+ *    is inside a handler for another session or blocked in esp_http_server_dispatch_event's
+ *    own CONFIG_HTTPD_SERVER_EVENT_POST_TIMEOUT (2000 ms here). The honest statement is up to
+ *    a full 5760-byte receive window, over an unbounded interval — comfortably enough for a
+ *    whole POST /net, which is exactly what this note exists to worry about.
  *
  * That local address does not arrive as a plain IPv4 sockaddr: esp_http_server's listener is
  * AF_INET6 whenever CONFIG_LWIP_IPV6=y (IDF 6.0.2's own default here), so an IPv4 connection's
