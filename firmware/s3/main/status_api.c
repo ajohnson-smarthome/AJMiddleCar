@@ -45,8 +45,13 @@ static esp_err_t status_get(httpd_req_t *req)
     char body[256];
     int n = snprintf(body, sizeof(body),
                      "{\"" DONGLE_KEY_DEVICE "\":\"" DONGLE_DEVICE "\","
-                     "\"fw\":\"%s\",\"idf\":\"%s\",\"usb\":\"up\","
-                     "\"net\":{\"ssid\":\"%s\",\"state\":\"" DONGLE_STATE_IDLE "\",\"rssi\":0}}",
+                     "\"" DONGLE_KEY_FW "\":\"%s\","
+                     "\"" DONGLE_KEY_IDF "\":\"%s\","
+                     "\"" DONGLE_KEY_USB "\":\"up\","
+                     "\"" DONGLE_KEY_NET "\":{"
+                     "\"" DONGLE_KEY_NET_SSID "\":\"%s\","
+                     "\"" DONGLE_KEY_NET_STATE "\":\"" DONGLE_STATE_IDLE "\","
+                     "\"" DONGLE_KEY_NET_RSSI "\":0}}",
                      app->version, app->idf_ver, ssid_esc);
     if (n < 0 || (size_t)n >= sizeof(body)) {
         /* Same rule as the car's own /status: truncated JSON parses as something else or
@@ -74,7 +79,7 @@ esp_err_t status_api_start(void)
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &cfg), TAG, "cannot start the server");
 
     static const httpd_uri_t status_uri = {
-        .uri = "/status",
+        .uri = DONGLE_PATH_STATUS,
         .method = HTTP_GET,
         .handler = status_get,
     };
