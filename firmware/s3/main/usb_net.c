@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_check.h"
@@ -60,12 +61,14 @@ static esp_err_t on_usb_frame(void *buffer, uint16_t len, void *ctx)
     return ESP_OK;
 }
 
-/* Step-1 header check (esp_netif_types.h / esp_netif.h, IDF 6.0.2): the brief drafted
- * post_attach as a field of esp_netif_driver_ifconfig_t. That struct has no such
+/* Step-1 header check (esp_netif_types.h / esp_netif.h, IDF 6.0.2): post_attach reads
+ * like it belongs inside esp_netif_driver_ifconfig_t, next to the transmit and
+ * free-rx callbacks it works alongside. It does not: that struct has no such
  * member — it only carries handle/transmit/transmit_wrap/driver_free_rx_buffer/
- * driver_set_mac_filter, so that would not compile. esp_netif_attach() instead casts
- * whatever handle it's given straight to esp_netif_driver_base_t*, and that base
- * struct — post_attach plus a netif back-pointer — is documented (esp_netif_driver.rst,
+ * driver_set_mac_filter, so a driver built that way would not compile.
+ * esp_netif_attach() instead casts whatever handle it's given straight to
+ * esp_netif_driver_base_t*, and that base struct — post_attach plus a netif
+ * back-pointer — is documented (esp_netif_driver.rst,
  * "ESP-NETIF Custom I/O Driver") to be the *first member* of the driver's own struct.
  * esp_eth_netif_glue_t follows exactly this shape, so usb_net_driver_t does too: it is
  * what goes to esp_netif_attach(), while esp_netif_driver_ifconfig_t is instead built
@@ -82,8 +85,14 @@ static esp_err_t usb_post_attach(esp_netif_t *netif, void *args)
     usb_net_driver_t *driver = (usb_net_driver_t *)args;
     driver->base.netif = netif;
 
+    /* .handle is retained even though usb_transmit/usb_free_rx both ignore the pointer
+     * they're handed — this class has no per-connection state to look up by it. It
+     * still has to be the real driver, not a placeholder: esp_netif_set_driver_config
+     * below overwrites esp_netif->driver_handle with whatever is here, clobbering the
+     * value esp_netif_attach() already set correctly. A dummy would make
+     * esp_netif_get_io_driver() hand back garbage to the next caller. */
     esp_netif_driver_ifconfig_t ifcfg = {
-        .handle = (void *)1,        /* no driver object: the class is a singleton */
+        .handle = driver,
         .transmit = usb_transmit,
         .driver_free_rx_buffer = usb_free_rx,
     };
@@ -211,8 +220,11 @@ esp_err_t usb_net_start(void)
     ESP_RETURN_ON_ERROR(tinyusb_net_init(&net_cfg), TAG, "cannot init the NCM class");
 
     /* The netif's own MAC must differ from the one the host sees on its side of the
-     * wire, or both ends answer to the same address. Flip the locally-administered
-     * bit for ours.
+     * wire, or both ends answer to the same address. Set the locally-administered bit
+     * on ours to force that. `|=` sets the bit unconditionally rather than toggling
+     * it — "set", not "flip" — which only reads as the same operation because an
+     * Espressif OUI never starts with that bit already on; the code is written for
+     * what it does, not for what happens to coincide with it today.
      *
      * net_cfg.mac_addr — the address the host sees, above — is a different, still-open
      * concern: it borrows the real, per-device station MAC from the efuse block.
