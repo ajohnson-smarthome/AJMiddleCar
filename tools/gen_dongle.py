@@ -56,7 +56,7 @@ def emit_dongle_swift(schema):
     """The app's half. No consumer until the app-side plan — generated now so that plan
     adds an import rather than a second hand-maintained copy of every name."""
     n, b, e = schema["network"], schema["bounds"], schema["endpoints"]
-    nf = schema["net_fields"]
+    sf, nf = schema["status_fields"], schema["net_fields"]
     states = ", ".join(f'"{s}"' for s in schema["net_states"])
 
     lines = [
@@ -78,6 +78,19 @@ def emit_dongle_swift(schema):
     ]
     for key, value in nf.items():
         lines.append(f'    public static let {key}Field = "{value}"')
+    lines += [
+        "}",
+        "",
+        "/// The keys `/status` uses. Named here so the app never spells one as a literal.",
+        "public enum DongleStatusKey {",
+    ]
+    for key, value in sf.items():
+        # Same camelCasing TelemetryKey uses in gen_contract.py's emit_swift: the
+        # schema's snake_case key becomes the Swift identifier, the schema's value
+        # (the actual wire name) becomes the string literal — the two can differ, as
+        # they do for net_ssid -> "ssid" nested under the body's "net" object.
+        camel = key.split("_")[0] + "".join(w.title() for w in key.split("_")[1:])
+        lines.append(f'    public static let {camel} = "{value}"')
     lines += [
         "}",
         "",

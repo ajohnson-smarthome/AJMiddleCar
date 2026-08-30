@@ -17,6 +17,7 @@
 
 #define DONGLE_KEY_DEVICE "device"
 #define DONGLE_KEY_FW "fw"
+#define DONGLE_KEY_IDF "idf"
 #define DONGLE_KEY_USB "usb"
 #define DONGLE_KEY_NET "net"
 #define DONGLE_KEY_NET_SSID "ssid"

@@ -13,6 +13,7 @@
   "status_fields": {
     "device": "device",
     "fw": "fw",
+    "idf": "idf",
     "usb": "usb",
     "net": "net",
     "net_ssid": "ssid",

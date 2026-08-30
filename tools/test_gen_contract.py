@@ -405,6 +405,24 @@ class TestDongleEmitters(unittest.TestCase):
         self.assertIn('#define DONGLE_STATE_IDLE "idle"', out)
         self.assertIn('#define DONGLE_STATE_CONNECTED "connected"', out)
 
+    def test_c_header_carries_the_paths(self):
+        out = self.g.emit_dongle_c(self.s)
+        self.assertIn('#define DONGLE_PATH_STATUS "/status"', out)
+        self.assertIn('#define DONGLE_PATH_NET "/net"', out)
+
+    def test_c_header_carries_the_status_and_net_keys(self):
+        # DONGLE_KEY_IDF is the fix's regression test: status_fields gained "idf" because
+        # status_api.c already puts "idf" in the /status body and had no macro for it.
+        # DONGLE_KEY_DEVICE and DONGLE_NETKEY_SSID/PASSWORD are "at least one member of
+        # each key group" — the drift check catches a whole-file regression here, but
+        # nothing before this asserted an individual DONGLE_KEY_*/DONGLE_NETKEY_* name.
+        out = self.g.emit_dongle_c(self.s)
+        self.assertIn('#define DONGLE_KEY_DEVICE "device"', out)
+        self.assertIn('#define DONGLE_KEY_IDF "idf"', out)
+        self.assertIn('#define DONGLE_KEY_NET_SSID "ssid"', out)
+        self.assertIn('#define DONGLE_NETKEY_SSID "ssid"', out)
+        self.assertIn('#define DONGLE_NETKEY_PASSWORD "password"', out)
+
     def test_swift_exposes_the_same_vocabulary(self):
         out = self.g.emit_dongle_swift(self.s)
         self.assertIn('public static let device = "ajdongle"', out)
@@ -414,6 +432,28 @@ class TestDongleEmitters(unittest.TestCase):
         self.assertIn('public static let netPath = "/net"', out)
         self.assertIn("public static let ssidMax = 32", out)
         self.assertIn('public static let all = ["idle", "joining", "connected", "failed"]', out)
+
+    def test_swift_exposes_the_net_fields(self):
+        out = self.g.emit_dongle_swift(self.s)
+        self.assertIn('public static let ssidField = "ssid"', out)
+        self.assertIn('public static let passwordField = "password"', out)
+        self.assertIn('public static let configuredField = "configured"', out)
+
+    def test_swift_exposes_the_status_keys(self):
+        # Regression test: emit_dongle_swift once destructured net_fields and never
+        # touched status_fields at all, so the C and Swift sides did not carry the same
+        # vocabulary — the one property this task exists to establish. Every key
+        # status_fields names must appear on the Swift side too, device through idf.
+        out = self.g.emit_dongle_swift(self.s)
+        self.assertIn("public enum DongleStatusKey {", out)
+        self.assertIn('public static let device = "device"', out)
+        self.assertIn('public static let fw = "fw"', out)
+        self.assertIn('public static let idf = "idf"', out)
+        self.assertIn('public static let usb = "usb"', out)
+        self.assertIn('public static let net = "net"', out)
+        self.assertIn('public static let netSsid = "ssid"', out)
+        self.assertIn('public static let netState = "state"', out)
+        self.assertIn('public static let netRssi = "rssi"', out)
 
     def test_both_emitters_are_deterministic(self):
         self.assertEqual(self.g.emit_dongle_c(self.s), self.g.emit_dongle_c(self.s))
