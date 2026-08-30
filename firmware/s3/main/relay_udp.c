@@ -356,7 +356,20 @@ static void relay_task(void *arg)
                 }
             }
         } else if (nready < 0 && errno != EINTR) {
-            ESP_LOGW(TAG, "select: errno %d", errno);
+            /* select() failing returns immediately, so this pass has no wait left in it. An
+             * error that persists — EBADF the instant any fd in the sets is dead, which is
+             * what a socket closed underneath this task produces — would otherwise make a
+             * priority-5 task spin at full speed with an unthrottled log per iteration, which
+             * is worse for the device than the fault being reported. Take the pass's wait
+             * here instead, and rate-limit the line to the same 1 Hz as this file's other
+             * repeating warnings. expire_sessions below still runs every pass. */
+            static uint32_t last_log;
+            uint32_t t = now_ms();
+            if ((uint32_t)(t - last_log) > 1000) {
+                last_log = t;
+                ESP_LOGW(TAG, "select: errno %d", errno);
+            }
+            vTaskDelay(pdMS_TO_TICKS(RELAY_LOOP_MS));
         }
 
         expire_sessions(&r);

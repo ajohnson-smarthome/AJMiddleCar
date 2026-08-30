@@ -112,33 +112,48 @@ esp_err_t status_api_start(void)
      * already generous; it does not need the default's share of a table the relays need
      * far more of. */
     cfg.max_open_sockets = 3;
+    /* With max_open_sockets this low, LRU purging is not a nicety — it is what keeps the
+     * admin API reachable. HTTPD_DEFAULT_CONFIG leaves lru_purge_enable false, and with it
+     * false httpd_server does not even put listen_fd in its read set once every session slot
+     * is taken (esp_http_server/src/httpd_main.c: `if (hd->config.lru_purge_enable ||
+     * httpd_is_sess_available(hd))`). Three stranded keep-alive sessions — a phone unplugged
+     * mid-request, three times — would therefore make /status, /net and POST /ota permanently
+     * unreachable, with new connections hanging unaccepted rather than being refused, until a
+     * power cycle. POST /ota is the only cable-free way to repair a device that lives in a
+     * pocket, so "unreachable until a power cycle" is the one outcome worth spending a
+     * session for.
+     *
+     * Checked against the source rather than assumed: httpd_sess_close_lru picks its victim
+     * through httpd_sess_enum's HTTPD_TASK_FIND_LOWEST_LRU case (httpd_sess.c), which
+     * considers a session only when `session->for_async_req == false` — so a session parked
+     * for an async request is never the one purged, and an in-flight OTA upload cannot be
+     * evicted by an unrelated connection arriving behind it. */
+    cfg.lru_purge_enable = true;
     /* httpd_config_t has no bind-address field in IDF 6.0.2, so this server always listens on
      * INADDR_ANY — USB and, since the station came up, the car's Wi-Fi too. api_guard_open is
-     * what makes that safe: it runs on every accepted connection, before a request byte is
-     * parsed, and refuses (closes the socket) any connection that did not land on DONGLE_HOST.
-     * Without it, POST /net (a password) and POST /ota (unauthenticated firmware writes) would
-     * both be reachable from the car's network.
+     * what stands in front of that: it runs on every accepted connection, before a request
+     * byte is parsed, and refuses (closes the socket) any connection that did not land on
+     * DONGLE_HOST. Without it, POST /net (a password) and POST /ota (unauthenticated firmware
+     * writes) would both be plainly reachable from the car's network. Read api_guard.h for
+     * what that check does and does not establish — it is an address check, not an
+     * arrival-interface check, and the difference is written down there rather than glossed
+     * over here.
      *
-     * Installing open_fn newly reaches a double close() inside esp_http_server on every
-     * rejection, and this is documented rather than worked around. On a non-ESP_OK return,
-     * httpd_sess_new calls httpd_sess_delete (esp_http_server/src/httpd_sess.c, the open_fn
-     * call site and the delete-on-failure branch just after it), which itself closes the fd;
-     * control then returns to its caller, httpd_accept_conn (esp_http_server/src/
-     * httpd_main.c, the "session creation failed" ESP_LOGE and its goto exit), which closes
-     * the same fd number again on the way out. Before this change open_fn was NULL and this
-     * path was unreachable; api_guard_open makes it fire on every rejected connection. The
-     * two close() calls are not adjacent — an event dispatch and an unthrottled ESP_LOGE to a
-     * 115200-baud UART sit between them — so under a station-side connection flood, a task
-     * switch in that window could let another task (a relay accepting a new connection of its
-     * own) claim the just-freed fd number before the second close() runs, which would then
-     * close that OTHER, unrelated socket instead. The only application-level lever is
-     * close_fn, which would suppress the delete-side close and fix this — at the cost of
-     * leaking the fd on every NORMAL session close instead, since close_fn replaces, rather
-     * than supplements, that call for every session, not only rejected ones. A rare,
-     * hard-to-trigger double-close beats a certain leak, so this is left as upstream's
-     * behaviour: if a "why did a relay socket disappear" hunt ever starts, it should start
-     * here. */
+     * close_fn is not optional company for open_fn. Installing an open_fn that can fail
+     * reaches a double close() inside esp_http_server on every rejection: httpd_sess_new calls
+     * httpd_sess_delete (httpd_sess.c), which closes the fd, and control then returns to
+     * httpd_accept_conn (httpd_main.c), whose `exit:` closes the same fd number again. The gap
+     * between them is not a few instructions — esp_http_server_dispatch_event -> esp_event_post
+     * sits in it with CONFIG_HTTPD_SERVER_EVENT_POST_TIMEOUT (2000 ms in this build), blocking
+     * the httpd task with the fd already freed whenever the event queue is full, plus an
+     * unthrottled ESP_LOGE to a 115200-baud UART. A relay accepting a connection in that window
+     * gets handed the freed fd number and has it closed underneath it — and the consequence is
+     * not a lost socket: lwip_select returns EBADF the instant any fd in its sets is dead, and
+     * a select() loop that treats an error as a log line and falls through has no wait left in
+     * the pass. api_guard_close closes that hole; both relays also grew a bounded delay on a
+     * select() error, so neither depends on this being right. */
     cfg.open_fn = api_guard_open;
+    cfg.close_fn = api_guard_close;
 
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &cfg), TAG, "cannot start the server");
 

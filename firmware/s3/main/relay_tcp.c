@@ -46,6 +46,27 @@ static const char *TAG = "relay_tcp";
  * allowed to pin a slot. */
 #define RELAY_CONNECT_TIMEOUT_MS 5000
 
+/* How long a SLOT_ACTIVE slot may go without a single byte moving in either direction before
+ * this relay gives up on it. Without this the state has no clock at all: every other exit
+ * from SLOT_ACTIVE is event-driven, and a USB detach produces no event whatsoever — usb_net.c
+ * calls the netif start action once and never a stop, and the TinyUSB component reports no
+ * link state, so lwIP is never told the wire went away. There is no FIN, no RST, and select()
+ * never marks the socket readable or errored; the slot stays ACTIVE forever. Four of those
+ * and the car's whole REST surface through the dongle is dead until a power cycle, with
+ * /status still reporting a healthy dongle.
+ *
+ * Sixty seconds, sized against what a legitimate quiet connection needs rather than against
+ * what is convenient to test. The longest legitimate silence on an open REST connection is a
+ * kept-alive one between two requests while a person decides something — the calibration
+ * wizard's spin-a-wheel-and-answer step is the concrete case, and that is human-scale
+ * seconds, not minutes. A firmware upload is never silent for long: the car's OTA path erases
+ * its partition inside esp_ota_begin, several seconds, not a minute. So a minute clears every
+ * legitimate pause with room to spare, while turning "dead until a power cycle" into "heals
+ * itself a minute after the phone goes away". Deliberately much longer than relay_udp's
+ * UDP_SESS_IDLE_MS (10 s): a control stream that is quiet for ten seconds has ended, whereas
+ * a REST connection quiet for ten seconds is just a user reading the screen. */
+#define RELAY_ACTIVE_IDLE_MS 60000u
+
 /* One task, so the receive scratch buffers can live at file scope instead of the task's own
  * stack — see relay_udp.c's identical comment for why that is a requirement here and not
  * merely tidy. Two of them, not eight: one task reads one direction of one slot at a time, so
@@ -82,6 +103,11 @@ typedef struct {
     int phone_sock;
     int car_sock;
     uint32_t connect_started_ms;    /* meaningful only while state == SLOT_CONNECTING */
+    /* When this slot last moved a byte, in either direction. Set when the slot is created so
+     * it is never stale, refreshed on every successful read and every successful write, and
+     * read only while state == SLOT_ACTIVE — the same idiom relay_udp uses for its sessions,
+     * where udp_sess_touch refreshes a deadline udp_sess_expire enforces. */
+    uint32_t last_active_ms;
 } tcp_slot_t;
 
 typedef struct {
@@ -162,6 +188,7 @@ static void flush_pending(relay_state_t *r, int idx, int dst, tcp_pending_t *p,
     int w = send(dst, p->buf + p->off, (size_t)remaining, 0);
     if (w > 0) {
         tcp_pending_advance(p, w);
+        r->slots[idx].last_active_ms = now_ms();   /* bytes moved: the slot is not idle */
         return;
     }
     if (w == 0 || (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
@@ -196,6 +223,10 @@ static void pump_read(relay_state_t *r, int idx, int src, int dst, char *scratch
 {
     int n = recv(src, scratch, RELAY_BUF_LEN, 0);
     if (n > 0) {
+        /* A successful read is progress on its own, whatever the forward attempt below does:
+         * a slot whose phone is talking must not age out because the car is momentarily
+         * refusing more bytes. */
+        r->slots[idx].last_active_ms = now_ms();
         int w = send(dst, scratch, (size_t)n, 0);
         if (w == n) {
             return;   /* the common case: forwarded whole, nothing left pending */
@@ -370,6 +401,10 @@ static void handle_accept(relay_state_t *r)
     }
     r->slots[idx].phone_sock = c;
     r->slots[idx].car_sock = car;
+    /* Seeded here rather than only on the SLOT_ACTIVE transition, so the idle deadline is
+     * never read against an uninitialised (or a previous occupant's) timestamp — including on
+     * the cr == 0 path just above, which goes straight to SLOT_ACTIVE. */
+    r->slots[idx].last_active_ms = now_ms();
 }
 
 /* One SLOT_CONNECTING slot, checked every pass regardless of what select() returned. Three
@@ -434,6 +469,11 @@ static void handle_connecting(relay_state_t *r, int i, bool had_ready, fd_set *r
             close_slot(r, i, "connect failed");
         } else {
             s->state = SLOT_ACTIVE;
+            /* The idle clock starts when the slot goes ACTIVE, not when the phone connected:
+             * time spent waiting for the car to answer is already bounded by
+             * RELAY_CONNECT_TIMEOUT_MS, and charging it twice would cut a legitimate
+             * connection's first quiet period short. */
+            s->last_active_ms = now_ms();
         }
     }
 }
@@ -444,7 +484,7 @@ static void relay_task(void *arg)
     relay_state_t r = { .listen_sock = -1, .gateway_be = 0, .host_be = 0 };
     for (int i = 0; i < RELAY_POOL_SIZE; i++) {
         r.slots[i] = (tcp_slot_t){ .state = SLOT_FREE, .phone_sock = -1, .car_sock = -1,
-                                    .connect_started_ms = 0 };
+                                    .connect_started_ms = 0, .last_active_ms = 0 };
     }
 
     /* Parsed first, before the gateway is even read: handle_accept compares against it to
@@ -569,7 +609,20 @@ static void relay_task(void *arg)
         struct timeval tv = { .tv_sec = RELAY_LOOP_MS / 1000, .tv_usec = 0 };
         int nready = select(maxfd + 1, &rfds, &wfds, NULL, &tv);
         if (nready < 0 && errno != EINTR) {
-            ESP_LOGW(TAG, "select: errno %d", errno);
+            /* select() failing returns immediately, so this pass has no wait left in it. An
+             * error that persists — EBADF the instant any fd in the sets is dead, which is
+             * what a socket closed underneath this task produces — would otherwise make a
+             * priority-5 task spin at full speed with an unthrottled log per iteration, which
+             * is worse for the device than the fault being reported. Take the pass's wait
+             * here instead, and rate-limit the line to the same 1 Hz as every other repeating
+             * warning in this file. The deadline checks below still run every pass. */
+            static uint32_t last_log;
+            uint32_t t = now_ms();
+            if ((uint32_t)(t - last_log) > 1000) {
+                last_log = t;
+                ESP_LOGW(TAG, "select: errno %d", errno);
+            }
+            vTaskDelay(pdMS_TO_TICKS(RELAY_LOOP_MS));
         }
 
         if (nready > 0 && FD_ISSET(r.listen_sock, &rfds)) {
@@ -586,7 +639,22 @@ static void relay_task(void *arg)
                 continue;
             }
 
-            if (s->state != SLOT_ACTIVE || nready <= 0) {
+            if (s->state != SLOT_ACTIVE) {
+                continue;
+            }
+
+            /* Runs every pass, not only when select() found something — for the same reason
+             * handle_connecting's deadline does. The failure this exists for (a USB detach,
+             * which lwIP is never told about) is precisely the one where select() reports
+             * nothing, pass after pass, forever: a check gated on activity could never see
+             * it. See RELAY_ACTIVE_IDLE_MS for the sizing, and note the same wraparound-safe
+             * subtraction udp_sess_expire uses. */
+            if ((uint32_t)(now_ms() - s->last_active_ms) >= RELAY_ACTIVE_IDLE_MS) {
+                close_slot(&r, i, "idle timeout");
+                continue;
+            }
+
+            if (nready <= 0) {
                 continue;
             }
 

@@ -56,4 +56,26 @@
  * see its comment for why that is done instead of turning CONFIG_LWIP_IPV6 off. */
 esp_err_t api_guard_open(httpd_handle_t hd, int sockfd);
 
+/* Assign this to httpd_config_t.close_fn, alongside api_guard_open. It exists only to undo
+ * the double close() that installing an open_fn otherwise reaches on every rejection.
+ *
+ * The sequence, in esp_http_server 6.0.2: open_fn returns non-ESP_OK, httpd_sess_new calls
+ * httpd_sess_delete (httpd_sess.c), which closes the fd; control returns to httpd_accept_conn
+ * (httpd_main.c), which logs "session creation failed" and closes the same fd number again on
+ * its way out through `exit:`. The two closes are not adjacent — between them sits
+ * esp_http_server_dispatch_event -> esp_event_post with CONFIG_HTTPD_SERVER_EVENT_POST_TIMEOUT
+ * (2000 ms here), which blocks the httpd task with the fd already freed if the event queue is
+ * full — so another task can be handed that fd number in the gap and have it closed underneath
+ * it. lwip_select returns EBADF the moment any fd in its sets is dead, which for a relay loop
+ * with no delay on an error return is a priority-5 task spinning at full speed.
+ *
+ * close_fn REPLACES the delete-side close for the session it is called on (httpd_sess.c: it is
+ * called instead of close(), not before it), which is what makes this fixable without leaking
+ * a normal session's fd. api_guard_open records the fd it rejected and this function skips
+ * close() for exactly that one, clearing the record, and closes normally otherwise. Both run
+ * on the single httpd task and pair deterministically within one httpd_sess_new call, so there
+ * is no window in which the record could describe a different session. httpd_accept_conn's own
+ * `exit: close(new_fd)` then performs the single correct close. */
+void api_guard_close(httpd_handle_t hd, int sockfd);
+
 #endif /* API_GUARD_H */

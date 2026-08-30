@@ -17,6 +17,14 @@
 
 static const char *TAG = "api_guard";
 
+/* The fd api_guard_open most recently refused, waiting for api_guard_close to skip closing it.
+ * -1 when there is none, which is every moment except the few instructions between those two
+ * calls inside one httpd_sess_new. Not volatile and not atomic on purpose: open_fn and
+ * close_fn both run on the single httpd task (httpd_thread -> httpd_server -> httpd_accept_conn
+ * -> httpd_sess_new -> open_fn, then httpd_sess_delete -> close_fn, with no yield that could
+ * let another accept interleave), so this is single-threaded state, not shared state. */
+static int s_rejected_fd = -1;
+
 static uint32_t now_ms(void)
 {
     return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
@@ -181,5 +189,28 @@ esp_err_t api_guard_open(httpd_handle_t hd, int sockfd)
         }
     }
 
+    /* Recorded before returning, so api_guard_close — which esp_http_server calls next, on
+     * this same task, for this same fd — knows not to close it. See api_guard.h for the whole
+     * sequence and why the alternative is a double close(). */
+    s_rejected_fd = sockfd;
     return ESP_FAIL;
+}
+
+void api_guard_close(httpd_handle_t hd, int sockfd)
+{
+    (void)hd;
+
+    if (sockfd == s_rejected_fd) {
+        /* Cleared whether or not anything else happens: leaving it set would make the NEXT
+         * session that happened to reuse this fd number leak instead of closing. */
+        s_rejected_fd = -1;
+        /* No close() here. httpd_accept_conn's `exit: close(new_fd)` is about to run for this
+         * same fd, and that one is the correct single close. */
+        return;
+    }
+
+    /* An ordinary session ending. close_fn replaces esp_http_server's own close() for every
+     * session it is set on, so this call is not optional — without it every completed request
+     * would leak an fd, which is the objection that kept this fix out of the tree before. */
+    close(sockfd);
 }
