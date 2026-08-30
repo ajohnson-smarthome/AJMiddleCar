@@ -1,6 +1,7 @@
 #include "relay_udp.h"
 
 #include <errno.h>
+#include <fcntl.h>
 
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -31,6 +32,15 @@ static const char *TAG = "relay_udp";
  * even on a channel that has gone completely quiet. */
 #define RELAY_LOOP_MS 1000
 
+/* One task, so these can live at file scope instead of on the task's own stack — 4096 bytes
+ * (this repo's precedent for a UDP relay task; see the car's rt_link.c) with two 1501-byte
+ * buffers in inner scopes leaves the compiler's slot-sharing as the only thing standing
+ * between select()/sendto()/ESP_LOGW's vprintf path and a stack overflow. Static removes the
+ * question rather than trusting the optimisation. Never touched by more than one task, so no
+ * lock is needed. */
+static char s_phone_buf[RELAY_BUF_LEN];
+static char s_car_buf[RELAY_BUF_LEN];
+
 typedef struct {
     udp_sess_table_t sess;
     /* car_sock[i] mirrors sess.s[i].used exactly: valid (>=0) whenever, and only when, slot i
@@ -45,6 +55,25 @@ typedef struct {
 static uint32_t now_ms(void)
 {
     return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+}
+
+/* Every socket this relay opens is made non-blocking, here, right after it is created —
+ * before it is ever added to a select() set. Without this, a socket that select() marked
+ * readable in one pass can be closed and its fd number handed straight back by lwIP's
+ * alloc_socket (which scans sockets[] from 0 for the first free entry — so the fd just freed
+ * by an eviction is the likely candidate) to a brand-new session before the next recv() on it
+ * runs. A blocking recv() on that fresh socket — nothing queued for it yet — would then wait
+ * forever: no forwarding, no expiry, no gateway poll, the whole relay wedged on one socket.
+ * Non-blocking turns that into an EAGAIN/EWOULDBLOCK the existing error paths already handle,
+ * rather than a hang. */
+static bool set_nonblocking(int s)
+{
+    int flags = fcntl(s, F_GETFL, 0);
+    if (flags < 0 || fcntl(s, F_SETFL, flags | O_NONBLOCK) < 0) {
+        ESP_LOGW(TAG, "fcntl O_NONBLOCK failed on fd %d: errno %d", s, errno);
+        return false;
+    }
+    return true;
 }
 
 static void close_car_sock(relay_state_t *r, int idx)
@@ -70,6 +99,10 @@ static int open_car_sock(uint32_t gateway_be)
     int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s < 0) {
         ESP_LOGW(TAG, "car-facing socket: errno %d", errno);
+        return -1;
+    }
+    if (!set_nonblocking(s)) {
+        close(s);
         return -1;
     }
     struct sockaddr_in car = {
@@ -118,7 +151,18 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
     }
 
     if (send(r->car_sock[idx], buf, (size_t)n, 0) < 0) {
-        ESP_LOGW(TAG, "phone->car send failed on slot %d: errno %d", idx, errno);
+        /* Rate-limited: a Wi-Fi drop fails every send, and udp_sess_touch (above) refreshes
+         * this session's deadline on every phone datagram regardless of whether the send that
+         * follows succeeds — so the session cannot age out while the phone keeps streaming,
+         * and an unthrottled log here would be one ESP_LOGW per datagram, at 10 Hz, on the
+         * dongle's sole UART console, for the whole outage. Same idiom as rt_link.c's
+         * last_log. */
+        static uint32_t last_log;
+        uint32_t t = now_ms();
+        if ((uint32_t)(t - last_log) > 1000) {
+            last_log = t;
+            ESP_LOGW(TAG, "phone->car send failed on slot %d: errno %d", idx, errno);
+        }
     }
 }
 
@@ -134,7 +178,13 @@ static void handle_car_datagram(relay_state_t *r, int idx, const char *buf, int 
         .sin_port = htons(s->port),
     };
     if (sendto(r->phone_sock, buf, (size_t)n, 0, (struct sockaddr *)&to, sizeof(to)) < 0) {
-        ESP_LOGW(TAG, "car->phone send failed on slot %d: errno %d", idx, errno);
+        /* Rate-limited for the same reason as the phone->car send above. */
+        static uint32_t last_log;
+        uint32_t t = now_ms();
+        if ((uint32_t)(t - last_log) > 1000) {
+            last_log = t;
+            ESP_LOGW(TAG, "car->phone send failed on slot %d: errno %d", idx, errno);
+        }
     }
 }
 
@@ -177,6 +227,11 @@ static void relay_task(void *arg)
     r.phone_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (r.phone_sock < 0) {
         ESP_LOGE(TAG, "phone-facing socket: errno %d", errno);
+        vTaskDelete(NULL);
+        return;
+    }
+    if (!set_nonblocking(r.phone_sock)) {
+        close(r.phone_sock);
         vTaskDelete(NULL);
         return;
     }
@@ -230,29 +285,31 @@ static void relay_task(void *arg)
         int nready = select(maxfd + 1, &rfds, NULL, NULL, &tv);
         if (nready > 0) {
             if (FD_ISSET(r.phone_sock, &rfds)) {
-                char buf[RELAY_BUF_LEN];
                 struct sockaddr_in from;
                 socklen_t flen = sizeof(from);
-                int n = recvfrom(r.phone_sock, buf, sizeof(buf), 0, (struct sockaddr *)&from,
-                                  &flen);
+                /* Non-blocking (set_nonblocking, above): a stale readiness bit — e.g. this
+                 * fd was reused by an eviction after select() sampled it but before this line
+                 * runs — costs an EAGAIN here, not a wait. */
+                int n = recvfrom(r.phone_sock, s_phone_buf, sizeof(s_phone_buf), 0,
+                                  (struct sockaddr *)&from, &flen);
                 if (n == RELAY_BUF_LEN) {
                     ESP_LOGW(TAG, "phone->car datagram over %d bytes, dropped whole",
                               RELAY_DATAGRAM_MAX);
                 } else if (n > 0 && from.sin_family == AF_INET) {
-                    handle_phone_datagram(&r, buf, n, &from);
+                    handle_phone_datagram(&r, s_phone_buf, n, &from);
                 } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     ESP_LOGW(TAG, "phone-facing recvfrom: errno %d", errno);
                 }
             }
             for (int i = 0; i < UDP_SESS_MAX; i++) {
                 if (r.car_sock[i] < 0 || !FD_ISSET(r.car_sock[i], &rfds)) continue;
-                char buf[RELAY_BUF_LEN];
-                int n = recv(r.car_sock[i], buf, sizeof(buf), 0);
+                /* Same non-blocking guarantee as the phone-facing read above. */
+                int n = recv(r.car_sock[i], s_car_buf, sizeof(s_car_buf), 0);
                 if (n == RELAY_BUF_LEN) {
                     ESP_LOGW(TAG, "car->phone datagram over %d bytes, dropped whole (slot %d)",
                               RELAY_DATAGRAM_MAX, i);
                 } else if (n > 0) {
-                    handle_car_datagram(&r, i, buf, n);
+                    handle_car_datagram(&r, i, s_car_buf, n);
                 } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     ESP_LOGW(TAG, "car-facing recv (slot %d): errno %d", i, errno);
                 }

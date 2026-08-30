@@ -171,6 +171,24 @@ static void test_expire_returns_a_bitmask_of_every_freed_slot(void) {
     assert(t.s[c].used);
 }
 
+static void test_expire_still_elapses_correctly_across_a_millisecond_rollover(void) {
+    /* udp_sess_expire's own comment claims the unsigned subtraction means "a millisecond
+     * counter that wraps at 2^32 still elapses correctly" — a dongle left plugged into a
+     * power bank reaches that wrap at ~49.7 days of uptime. Every other test in this file
+     * uses now_ms values under 20000, so none of them would catch a regression to a signed
+     * comparison here. Touch just before the wrap, then expire just after it. */
+    udp_sess_table_t t;
+    udp_sess_init(&t);
+    uint32_t touched_at = 0xFFFFFF00u;  /* ~256ms of counter left before it wraps to 0 */
+    int idx = udp_sess_touch(&t, ADDR_A, PORT_1, touched_at);
+
+    uint32_t exact = touched_at + UDP_SESS_IDLE_MS;  /* wraps past 0xFFFFFFFF */
+    assert(exact < touched_at);  /* sanity: this now_ms really is on the far side of a wrap */
+    assert(udp_sess_expire(&t, exact, UDP_SESS_IDLE_MS) == 0u);  /* exactly idle_ms: not yet */
+    assert(t.s[idx].used);
+    assert(udp_sess_expire(&t, exact + 1u, UDP_SESS_IDLE_MS) == (1u << idx));  /* one ms more */
+}
+
 int main(void) {
     test_new_peer_takes_a_free_slot();
     test_same_peer_returns_the_same_slot();
@@ -186,6 +204,7 @@ int main(void) {
     test_a_touch_moves_a_sessions_deadline();
     test_expire_boundary_is_exact();
     test_expire_returns_a_bitmask_of_every_freed_slot();
+    test_expire_still_elapses_correctly_across_a_millisecond_rollover();
     printf("test_udp_sess: all passed\n");
     return 0;
 }
