@@ -663,8 +663,9 @@ static void relay_task(void *arg)
 
             /* Flush before reading more: draining a backlog is what earns a throttled side
              * its way back into next pass's readfds (see the fd-set build above), so do it
-             * first. The first flush below relies on the `state != SLOT_ACTIVE` check just
-             * above — state is guaranteed ACTIVE here, nothing has run yet to change it.
+             * first. The first flush below relies on the `state != SLOT_ACTIVE` check above —
+             * state is guaranteed ACTIVE here, since the only thing between that check and
+             * this line is the idle deadline, which `continue`s when it closes the slot.
              * Each of the three steps after it re-checks state == SLOT_ACTIVE explicitly,
              * because any earlier one in this sequence (a forwarding failure, a peer hanging
              * up) can close this same slot, and once it does its sockets are -1 — FD_ISSET
