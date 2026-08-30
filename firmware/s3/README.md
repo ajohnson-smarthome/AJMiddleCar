@@ -27,7 +27,7 @@ The two ports are silkscreened `USB` and `COM`, and they are not interchangeable
 | Dongle answers on its own address | **yes** — `ping 192.168.7.1` 1.3 ms, 0% loss | 2026-08-30 |
 | Host keeps its own default route | **yes** — `route get 1.1.1.1` unchanged; internet and DNS unaffected | 2026-08-30 |
 | `GET /status` answers over the USB wire | **yes** — HTTP 200 in 12 ms | 2026-08-30 |
-| iOS binds a CDC-NCM driver | **yes** — `http://192.168.7.1:8080/status` answers in Safari on the phone | 2026-08-30 |
+| iOS binds a CDC-NCM driver | **yes** — `http://192.168.7.1/status` answers in Safari on the phone | 2026-08-30 |
 | iPhone keeps its own internet and DNS | **yes** — an ordinary site loads by name with the dongle attached | 2026-08-30 |
 
 The third row is the one that matters, and it was measured rather than assumed: a
@@ -73,7 +73,7 @@ the void shows lopsided counters and a packet every ~5 s). One client did this; 
 ## The question this firmware existed to ask
 
 **iOS accepts a class-compliant CDC-NCM device.** Confirmed on hardware 2026-08-30: the dongle
-plugged into an iPhone's USB-C port, and `http://192.168.7.1:8080/status` answered in Safari.
+plugged into an iPhone's USB-C port, and `http://192.168.7.1/status` answered in Safari.
 
 That one request proves the entire chain at once — iOS enumerated the device, bound a CDC-NCM
 driver to it, accepted an address from the dongle's own DHCP server, routed a TCP connection over
@@ -104,12 +104,14 @@ local ESP-IDF checkout also carried uncommitted changes at build time.
 
 ```
 GET /status:
-  {"device":"ajdongle","fw":"v1.0+483-147-g51f1f8e-dirty","idf":"v6.0.2-dirty","usb":"up"}
+  {"dev":"ajdongle","fw":"v1.0+483-147-g51f1f8e-dirty","idf":"v6.0.2-dirty","usb":"up"}
     [HTTP 200 in 0.012553s]
 ```
 
-The dongle answers on `:8080`, not `:80`: port 80 is reserved for the car, which Plan 3
-forwards through untouched so its own contract and the app's `CarHost.port` never move.
+The records above are from the run of 2026-08-30, when the dongle served `:80` and named
+itself with the key `dev`. This commit moves the server to `:8080` and renames that key to
+`device`; the observations are left as they were taken, and the next bench run will record
+the new shape.
 
 | Check | Baseline (no dongle) | Dongle attached |
 |---|---|---|
