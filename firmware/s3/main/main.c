@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 
+#include "status_api.h"
 #include "usb_net.h"
 
 static const char *TAG = "dongle";
@@ -22,5 +23,6 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     ESP_ERROR_CHECK(usb_net_start());
+    ESP_ERROR_CHECK(status_api_start());
     ESP_LOGI(TAG, "dongle up");
 }
