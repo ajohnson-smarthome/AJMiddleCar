@@ -23,6 +23,18 @@ static esp_err_t status_get(httpd_req_t *req)
     net_cfg_t cfg;
     const char *ssid = net_api_current(&cfg) ? cfg.ssid : "";
 
+    /* This body is one flat snprintf with no per-field isolation, so a raw '"' or '\' in
+     * the SSID would not just corrupt net.ssid — it would break the parse of the WHOLE
+     * document, taking device/fw/idf/usb down with it for every client polling this
+     * endpoint. net_cfg_validate lets a quote or backslash through on purpose (a real
+     * network can be named with one), so this must escape it rather than trust it. Reuse
+     * net_cfg's own escaper — the one net_cfg_render_public/net_cfg_render_stored already
+     * use — instead of growing a second one here that could drift from it. */
+    char ssid_esc[72]; /* worst case: 32 SSID bytes, every one a quote, doubles to 64, +NUL = 65 */
+    if (net_cfg_escape(ssid, ssid_esc, sizeof(ssid_esc)) < 0) {
+        return ESP_FAIL;
+    }
+
     /* `state` is always "idle" in this firmware, and honestly so: there is no radio yet,
      * so there is nothing that could be joining, connected or failed. The field is here
      * rather than added later because its SHAPE is final — Plan 3 gives it the other
@@ -31,7 +43,7 @@ static esp_err_t status_get(httpd_req_t *req)
     int n = snprintf(body, sizeof(body),
                      "{\"device\":\"ajdongle\",\"fw\":\"%s\",\"idf\":\"%s\",\"usb\":\"up\","
                      "\"net\":{\"ssid\":\"%s\",\"state\":\"idle\",\"rssi\":0}}",
-                     app->version, app->idf_ver, ssid);
+                     app->version, app->idf_ver, ssid_esc);
     if (n < 0 || (size_t)n >= sizeof(body)) {
         return ESP_FAIL;
     }

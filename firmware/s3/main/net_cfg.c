@@ -163,6 +163,16 @@ int net_cfg_render_stored(const net_cfg_t *cfg, char *buf, size_t n)
     return (int)pos;
 }
 
+int net_cfg_escape(const char *in, char *out, size_t n)
+{
+    size_t pos = 0;
+    if (!append_escaped(out, n, &pos, in)) {
+        return -1;
+    }
+    out[pos] = '\0';
+    return (int)pos;
+}
+
 bool net_cfg_equal(const net_cfg_t *a, const net_cfg_t *b)
 {
     return strcmp(a->ssid, b->ssid) == 0 && strcmp(a->password, b->password) == 0;

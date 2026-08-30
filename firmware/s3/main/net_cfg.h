@@ -59,10 +59,13 @@ const char *net_cfg_err_msg(net_cfg_err_t e);
  * has no use for reading it back, so an endpoint that returns a stored credential would
  * be a liability with nothing on the other side of the trade.
  *
- * The SSID is an 802.11 octet string, not text: net_cfg_validate bounds only its length,
- * so a raw '"', '\', or control byte is a value this renders, not one it can rule out.
- * Such bytes are JSON-escaped rather than rejected — a real network with one in its name
- * must still be reachable through this dongle.
+ * The SSID is an 802.11 octet string, not text: net_cfg_validate bounds its length and now
+ * rejects control bytes outright, but still lets a raw '"' or '\' through on purpose — a
+ * real network can be named with one, and refusing it would make that network permanently
+ * unreachable through this dongle — so this JSON-escapes rather than rejects those bytes.
+ * Control bytes are escaped here too, not because validation still admits them, but as
+ * defence for a net_cfg_t built without going through net_cfg_validate at all (its fields
+ * are plain char arrays, so a caller can bypass it — see append_escaped's comment).
  *
  * Returns the length written, or -1 if buf is too small. */
 int net_cfg_render_public(const net_cfg_t *cfg, bool configured, char *buf, size_t n);
@@ -73,6 +76,13 @@ int net_cfg_render_public(const net_cfg_t *cfg, bool configured, char *buf, size
  * the boot-time parser reads back, silently dropping the saved credentials.
  * Returns the length written, or -1. */
 int net_cfg_render_stored(const net_cfg_t *cfg, char *buf, size_t n);
+
+/* Escape one string as JSON string CONTENT — the bytes that go between the quotes, without
+ * them. The whole-object renders above use the same machinery; this exists because /status
+ * builds a body this module does not own and must not therefore grow a second escaper.
+ *
+ * Returns the length written, or -1 if it will not fit. */
+int net_cfg_escape(const char *in, char *out, size_t n);
 
 /* Whether two configurations are the same, for the dirty check that keeps an unchanged
  * POST from rewriting flash. */

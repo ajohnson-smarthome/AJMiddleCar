@@ -298,6 +298,46 @@ static void test_stored_render_escapes_a_quoted_password_exactly(void) {
     assert(strcmp(buf, "{\"ssid\":\"net\",\"password\":\"pass\\\"word1\"}") == 0);
 }
 
+/* net_cfg_escape exists so /status can escape a single field (the SSID) into a body
+ * net_cfg does not own, without growing a second escaper that could drift from the one
+ * the whole-object renders above use. It must go through the same append_escaped they do
+ * — these tests exercise it standalone rather than through a render, but the escaping
+ * behaviour itself is already pinned by test_render_escapes_a_quote_in_the_ssid and its
+ * siblings above. */
+static void test_escape_passes_plain_text_through_unchanged(void) {
+    char buf[16];
+    int n = net_cfg_escape("hello", buf, sizeof(buf));
+    assert(n == 5);
+    assert(strcmp(buf, "hello") == 0);
+}
+
+static void test_escape_doubles_a_quote(void) {
+    char buf[16];
+    int n = net_cfg_escape("a\"b", buf, sizeof(buf));
+    assert(n == 4);
+    assert(strcmp(buf, "a\\\"b") == 0);
+}
+
+static void test_escape_doubles_a_backslash(void) {
+    char buf[16];
+    int n = net_cfg_escape("a\\b", buf, sizeof(buf));
+    assert(n == 4);
+    assert(strcmp(buf, "a\\\\b") == 0);
+}
+
+static void test_escape_refuses_a_buffer_one_byte_too_small(void) {
+    /* "ab" needs 2 bytes of content plus a NUL — 3 bytes minimum. One short of that
+       must refuse exactly like append_str's per-chunk check the renders rely on. */
+    char buf[8];
+    assert(net_cfg_escape("ab", buf, 2) == -1);
+}
+
+static void test_escape_succeeds_in_a_buffer_exactly_large_enough(void) {
+    char buf[8];
+    assert(net_cfg_escape("ab", buf, 3) == 2);
+    assert(strcmp(buf, "ab") == 0);
+}
+
 int main(void) {
     test_accepts_a_normal_network();
     test_accepts_an_open_network();
@@ -323,6 +363,11 @@ int main(void) {
     test_render_still_escapes_a_legacy_control_byte();
     test_stored_render_escapes_a_quoted_ssid_exactly();
     test_stored_render_escapes_a_quoted_password_exactly();
+    test_escape_passes_plain_text_through_unchanged();
+    test_escape_doubles_a_quote();
+    test_escape_doubles_a_backslash();
+    test_escape_refuses_a_buffer_one_byte_too_small();
+    test_escape_succeeds_in_a_buffer_exactly_large_enough();
     printf("test_net_cfg: all passed\n");
     return 0;
 }
