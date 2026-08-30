@@ -5,6 +5,7 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 
+#include "net_api.h"
 #include "status_api.h"
 #include "usb_net.h"
 
@@ -19,11 +20,19 @@ static esp_err_t status_get(httpd_req_t *req)
 {
     const esp_app_desc_t *app = esp_app_get_description();
 
-    char body[192];
+    net_cfg_t cfg;
+    const char *ssid = net_api_current(&cfg) ? cfg.ssid : "";
+
+    /* `state` is always "idle" in this firmware, and honestly so: there is no radio yet,
+     * so there is nothing that could be joining, connected or failed. The field is here
+     * rather than added later because its SHAPE is final — Plan 3 gives it the other
+     * values without moving a key or changing a caller. */
+    char body[256];
     int n = snprintf(body, sizeof(body),
-                     "{\"device\":\"ajdongle\",\"fw\":\"%s\",\"idf\":\"%s\",\"usb\":\"up\"}",
-                     app->version, app->idf_ver);
-    if (n < 0 || n >= (int)sizeof(body)) {
+                     "{\"device\":\"ajdongle\",\"fw\":\"%s\",\"idf\":\"%s\",\"usb\":\"up\","
+                     "\"net\":{\"ssid\":\"%s\",\"state\":\"idle\",\"rssi\":0}}",
+                     app->version, app->idf_ver, ssid);
+    if (n < 0 || (size_t)n >= sizeof(body)) {
         return ESP_FAIL;
     }
 
