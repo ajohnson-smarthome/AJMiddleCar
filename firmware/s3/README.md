@@ -141,7 +141,7 @@ Measurements taken as each plan lands, rather than assumed.
 
 | Check | Result | Date |
 |---|---|---|
-| Built image size with the station radio (`esp_wifi` + the join state machine) | 870 KB (`ajdongle.bin`, 890,752 bytes / 0xd9780) in a 4 MB OTA slot — 21% used, 3.15 MB free | 2026-08-30 |
+| Built image size with the station radio (`esp_wifi` + the join state machine), SoftAP support compiled out (`CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n`) | 819 KB (`ajdongle.bin`, 838,480 bytes / 0xccb50) in a 4 MB OTA slot — 20% used, 3.20 MB free | 2026-08-30 |
 
 The app was 395 KB before this plan added the radio; roughly double, as expected, and comfortable
 against the slot — the earlier 1 MB partition this project considered and discarded would have been

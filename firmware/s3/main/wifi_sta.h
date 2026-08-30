@@ -35,7 +35,11 @@ const char *wifi_sta_state_name(void);
  * receiver, so unlike the car this is a real measurement whenever it is non-zero. */
 int8_t wifi_sta_rssi(void);
 
-/* The gateway of the joined network, in network byte order. False until connected. This is the
+/* The gateway of the joined network, in network byte order. False until the FIRST address
+ * ever arrives; once true, it stays true and keeps the last-known gateway even across a
+ * drop and a retry — it is not cleared on disconnect, because a softAP's gateway does not
+ * move between joins of the same network. This is not a liveness signal: call
+ * wifi_sta_state_name() for whether the radio is actually connected right now. This is the
  * relays' destination, and the only reason the dongle needs no compiled-in car address. */
 bool wifi_sta_gateway(uint32_t *out_be);
 

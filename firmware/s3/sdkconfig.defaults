@@ -39,6 +39,9 @@ CONFIG_SPIRAM_MODE_OCT=y
 #
 # Station only. The dongle never becomes an AP: the phone reaches it over USB, and a softAP
 # would be a second radio interface for the API guard to worry about and for nobody to use.
+# Disabling SoftAP support is what makes that structural rather than just a promise wifi_sta.c
+# happens to keep — esp_wifi_set_mode(WIFI_MODE_STA) alone doesn't remove the AP code, this does.
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
 CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1
