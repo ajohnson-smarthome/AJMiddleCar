@@ -4,12 +4,18 @@
 #include <string.h>
 
 /* "Big enough" scratch buffers for the tests that aren't specifically pinning the
- * truncation boundary. Sized from the render templates' literal bytes plus the worst
- * realistic expansion — a '"' or '\' in the SSID/password doubles to two bytes; nothing
- * below ever puts a control byte (which escapes to six bytes, \u00XX) at NET_SSID_MAX or
- * NET_PASS_MAX length, so 2x per byte is enough headroom for every case here.
+ * truncation boundary. net_cfg_validate rejects control bytes and DEL outright (see
+ * test_ssid_rejects_control_bytes / test_password_rejects_control_bytes below), so the
+ * only escape a *validated* value can still trigger is '"' or '\' doubling to two bytes —
+ * the six-byte \uXXXX case in net_cfg.c's append_escaped is defence for a value that
+ * reached render_* some other way than net_cfg_validate (net_cfg_t's fields are plain, so
+ * a caller can bypass it; test_render_still_escapes_a_legacy_control_byte does exactly
+ * that) and these buffers are not sized for it.
  *   public: 25 literal + 32*2 (ssid)               + 5 ("false")  = 94, +1 NUL = 95
- *   stored: 25 literal + 32*2 (ssid) + 63*2 (password)            = 215, +1 NUL = 216 */
+ *   stored: 25 literal + 32*2 (ssid) + 63*2 (password)            = 215, +1 NUL = 216
+ * test_validated_values_always_fit_the_stored_worst_case and its public-render sibling
+ * are what pin these as a proven bound rather than a hopeful one — that pair is what
+ * would have caught the bug where these numbers were first wrong. */
 #define PUBLIC_BUF_MAX 95
 #define STORED_BUF_MAX 216
 
@@ -51,6 +57,18 @@ static void test_ssid_bounds(void) {
     assert(net_cfg_validate("", "drive1234", &c) == NET_CFG_SSID_LEN);
 }
 
+static void test_ssid_rejects_control_bytes(void) {
+    /* net_cfg_render_public/net_cfg_render_stored can only widen a '"' or '\' into two
+       bytes, not the six a \uXXXX control-byte escape needs — so what validates must be
+       what render can produce, or a downstream buffer sized from the narrower bound
+       overruns. 802.11 permits arbitrary octets, but a tab or NUL is not a network
+       anyone is trying to reach, unlike a literal quote. */
+    net_cfg_t c;
+    assert(net_cfg_validate("Net\twork", "drive1234", &c) == NET_CFG_SSID_BYTE);
+    assert(net_cfg_validate("Net\x01" "work", "drive1234", &c) == NET_CFG_SSID_BYTE);
+    assert(net_cfg_validate("Net\x7f" "work", "drive1234", &c) == NET_CFG_SSID_BYTE);
+}
+
 static void test_password_bounds(void) {
     net_cfg_t c;
     assert(net_cfg_validate("net", "1234567", &c) == NET_CFG_PASS_LEN);   /* 7, one short */
@@ -67,6 +85,13 @@ static void test_password_bounds(void) {
     assert(net_cfg_validate("net", over, &c) == NET_CFG_PASS_LEN);
 }
 
+static void test_password_rejects_control_bytes(void) {
+    net_cfg_t c;
+    assert(net_cfg_validate("net", "pass\t1234", &c) == NET_CFG_PASS_BYTE);
+    assert(net_cfg_validate("net", "pass\x01" "1234", &c) == NET_CFG_PASS_BYTE);
+    assert(net_cfg_validate("net", "pass\x7f" "1234", &c) == NET_CFG_PASS_BYTE);
+}
+
 static void test_a_rejected_body_does_not_write_out(void) {
     /* The caller's stored configuration must survive a bad POST intact. */
     net_cfg_t c;
@@ -78,9 +103,13 @@ static void test_a_rejected_body_does_not_write_out(void) {
 static void test_errors_name_their_field(void) {
     assert(strcmp(net_cfg_err_field(NET_CFG_SSID_LEN), "ssid") == 0);
     assert(strcmp(net_cfg_err_field(NET_CFG_PASS_LEN), "password") == 0);
+    assert(strcmp(net_cfg_err_field(NET_CFG_SSID_BYTE), "ssid") == 0);
+    assert(strcmp(net_cfg_err_field(NET_CFG_PASS_BYTE), "password") == 0);
     assert(strcmp(net_cfg_err_field(NET_CFG_OK), "") == 0);
     assert(net_cfg_err_msg(NET_CFG_SSID_LEN)[0] != '\0');
     assert(net_cfg_err_msg(NET_CFG_PASS_LEN)[0] != '\0');
+    assert(net_cfg_err_msg(NET_CFG_SSID_BYTE)[0] != '\0');
+    assert(net_cfg_err_msg(NET_CFG_PASS_BYTE)[0] != '\0');
 }
 
 static void test_public_render_never_leaks_the_password(void) {
@@ -172,6 +201,38 @@ static void test_max_length_ssid_and_password_render_together(void) {
     assert(strstr(buf, pass) != NULL);
 }
 
+static void test_validated_values_always_fit_the_public_worst_case(void) {
+    /* The invariant that matters: whatever net_cfg_validate accepts, net_cfg_render_public
+       must fit into PUBLIC_BUF_MAX. The worst case reachable now that control bytes are
+       refused is every SSID byte at max length being a '"', the only escape that still
+       expands — this is the case that would have caught the original bug, where the
+       buffer math assumed doubling but validation still let a 6x-expanding SSID through. */
+    net_cfg_t c;
+    char ssid[NET_SSID_MAX + 1];
+    memset(ssid, '"', NET_SSID_MAX);
+    ssid[NET_SSID_MAX] = '\0';
+    assert(net_cfg_validate(ssid, "drive1234", &c) == NET_CFG_OK);
+
+    char buf[PUBLIC_BUF_MAX];
+    assert(net_cfg_render_public(&c, true, buf, sizeof(buf)) > 0);
+}
+
+static void test_validated_values_always_fit_the_stored_worst_case(void) {
+    /* Same invariant, the stored form: worst case is both fields at max length, entirely
+       quotes. This is the pair of tests the review specifically called for. */
+    net_cfg_t c;
+    char ssid[NET_SSID_MAX + 1];
+    char pass[NET_PASS_MAX + 1];
+    memset(ssid, '"', NET_SSID_MAX);
+    ssid[NET_SSID_MAX] = '\0';
+    memset(pass, '"', NET_PASS_MAX);
+    pass[NET_PASS_MAX] = '\0';
+    assert(net_cfg_validate(ssid, pass, &c) == NET_CFG_OK);
+
+    char buf[STORED_BUF_MAX];
+    assert(net_cfg_render_stored(&c, buf, sizeof(buf)) > 0);
+}
+
 static void test_render_escapes_a_quote_in_the_ssid(void) {
     net_cfg_t c;
     assert(net_cfg_validate("Net\"work", "drive1234", &c) == NET_CFG_OK);
@@ -198,9 +259,16 @@ static void test_render_escapes_a_backslash_in_the_ssid(void) {
     assert(strstr(stored, "\"ssid\":\"Net\\\\work\"") != NULL);
 }
 
-static void test_render_escapes_a_control_byte_in_the_ssid(void) {
+static void test_render_still_escapes_a_legacy_control_byte(void) {
+    /* net_cfg_validate now refuses a control byte outright, so this path is reachable
+       only by a value that predates the rule — bytes already sitting in NVS from before
+       this fix, say. net_cfg_t's fields are plain char arrays, so a value can be built
+       directly without going through net_cfg_validate, which is what simulates that.
+       The escaper must still turn it into valid JSON rather than compounding the
+       problem: see the comment on append_escaped in net_cfg.c. */
     net_cfg_t c;
-    assert(net_cfg_validate("Net\x01work", "drive1234", &c) == NET_CFG_OK);
+    strcpy(c.ssid, "Net\x01" "work");
+    strcpy(c.password, "drive1234");
 
     char pub[PUBLIC_BUF_MAX];
     assert(net_cfg_render_public(&c, true, pub, sizeof(pub)) > 0);
@@ -235,7 +303,9 @@ int main(void) {
     test_accepts_an_open_network();
     test_accepts_a_one_byte_ssid();
     test_ssid_bounds();
+    test_ssid_rejects_control_bytes();
     test_password_bounds();
+    test_password_rejects_control_bytes();
     test_a_rejected_body_does_not_write_out();
     test_errors_name_their_field();
     test_public_render_never_leaks_the_password();
@@ -246,9 +316,11 @@ int main(void) {
     test_stored_render_boundary_is_exact();
     test_equal_drives_the_dirty_check();
     test_max_length_ssid_and_password_render_together();
+    test_validated_values_always_fit_the_public_worst_case();
+    test_validated_values_always_fit_the_stored_worst_case();
     test_render_escapes_a_quote_in_the_ssid();
     test_render_escapes_a_backslash_in_the_ssid();
-    test_render_escapes_a_control_byte_in_the_ssid();
+    test_render_still_escapes_a_legacy_control_byte();
     test_stored_render_escapes_a_quoted_ssid_exactly();
     test_stored_render_escapes_a_quoted_password_exactly();
     printf("test_net_cfg: all passed\n");

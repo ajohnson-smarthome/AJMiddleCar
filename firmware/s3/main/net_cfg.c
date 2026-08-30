@@ -19,10 +19,22 @@ net_cfg_err_t net_cfg_validate(const char *ssid, const char *password, net_cfg_t
     if (sn < 1 || sn > NET_SSID_MAX) {
         return NET_CFG_SSID_LEN;
     }
+    for (size_t i = 0; i < sn; i++) {
+        unsigned char b = (unsigned char)ssid[i];
+        if (b < 0x20 || b == 0x7F) {
+            return NET_CFG_SSID_BYTE;
+        }
+    }
 
     size_t pn = strlen(password);
     if (pn != 0 && (pn < NET_PASS_MIN || pn > NET_PASS_MAX)) {
         return NET_CFG_PASS_LEN;
+    }
+    for (size_t i = 0; i < pn; i++) {
+        unsigned char b = (unsigned char)password[i];
+        if (b < 0x20 || b == 0x7F) {
+            return NET_CFG_PASS_BYTE;
+        }
     }
 
     /* Written last, and only here: a rejected body must leave the caller's stored
@@ -35,9 +47,11 @@ net_cfg_err_t net_cfg_validate(const char *ssid, const char *password, net_cfg_t
 const char *net_cfg_err_field(net_cfg_err_t e)
 {
     switch (e) {
-    case NET_CFG_SSID_LEN: return "ssid";
-    case NET_CFG_PASS_LEN: return "password";
-    case NET_CFG_OK:       break;
+    case NET_CFG_SSID_LEN:
+    case NET_CFG_SSID_BYTE: return "ssid";
+    case NET_CFG_PASS_LEN:
+    case NET_CFG_PASS_BYTE: return "password";
+    case NET_CFG_OK:        break;
     }
     return "";
 }
@@ -45,9 +59,11 @@ const char *net_cfg_err_field(net_cfg_err_t e)
 const char *net_cfg_err_msg(net_cfg_err_t e)
 {
     switch (e) {
-    case NET_CFG_SSID_LEN: return "ssid must be 1..32 bytes";
-    case NET_CFG_PASS_LEN: return "password must be empty or 8..63 bytes";
-    case NET_CFG_OK:       break;
+    case NET_CFG_SSID_LEN:  return "ssid must be 1..32 bytes";
+    case NET_CFG_SSID_BYTE: return "ssid must not contain control bytes";
+    case NET_CFG_PASS_LEN:  return "password must be empty or 8..63 bytes";
+    case NET_CFG_PASS_BYTE: return "password must not contain control bytes";
+    case NET_CFG_OK:        break;
     }
     return "";
 }
@@ -70,11 +86,18 @@ static bool append_str(char *buf, size_t n, size_t *pos, const char *s)
 }
 
 /* Appends the JSON-escaped form of `s`: '"' and '\' doubled, control bytes below 0x20 as
- * \u00XX. An SSID is an 802.11 octet string, not text, and net_cfg_validate only bounds
- * its length — so a raw quote or backslash is a value this module must still be able to
- * render without corrupting the JSON it sits inside. Rejecting such a value instead would
- * make a real network permanently unreachable through this dongle: a correctness bug
- * traded for a robustness bug. */
+ * \u00XX. A raw quote or backslash is a value net_cfg_validate lets through on purpose —
+ * it's a real network's real name — so this module must still be able to render it
+ * without corrupting the JSON it sits inside; rejecting it instead would make that
+ * network permanently unreachable through this dongle, a correctness bug traded for a
+ * robustness bug.
+ *
+ * net_cfg_validate refuses control bytes and DEL outright (see its comment), so the
+ * \uXXXX branch below is unreachable for anything that passed validation — do not delete
+ * it as dead code. It stays as defence: NVS can hold bytes written before that rule
+ * existed, and net_cfg_t's fields are plain enough that a caller could construct one
+ * without going through net_cfg_validate at all. Either way, a raw control byte reaching
+ * this function must still come out as valid JSON. */
 static bool append_escaped(char *buf, size_t n, size_t *pos, const char *s)
 {
     for (const unsigned char *p = (const unsigned char *)s; *p; p++) {

@@ -28,6 +28,8 @@ typedef enum {
     NET_CFG_OK = 0,
     NET_CFG_SSID_LEN,
     NET_CFG_PASS_LEN,
+    NET_CFG_SSID_BYTE,
+    NET_CFG_PASS_BYTE,
 } net_cfg_err_t;
 
 /* Validate and copy. `*out` is written only on NET_CFG_OK; a rejected body leaves the
@@ -35,7 +37,15 @@ typedef enum {
  * flash write rather than during it.
  *
  * Values are rejected, never clamped — the car's domains behave the same way, and a
- * silently truncated SSID would fail to associate with no visible cause. */
+ * silently truncated SSID would fail to associate with no visible cause.
+ *
+ * Also rejects any byte below 0x20, or 0x7F (DEL), in either field. What validates here
+ * must be what net_cfg_render_public/net_cfg_render_stored can produce: those escape a
+ * `"` or `\` by doubling it, not by the six bytes a \uXXXX control-byte escape needs, so a
+ * control byte that passed on length alone could overrun a buffer sized from the narrower
+ * bound. 802.11 permits arbitrary octets in an SSID, but unlike a literal quote — which is
+ * a real network's real name — a tab or NUL is not a network anyone is trying to reach,
+ * which is why this rejects rather than escapes it. */
 net_cfg_err_t net_cfg_validate(const char *ssid, const char *password, net_cfg_t *out);
 
 /* Which field a rejection blames, for the {"error":…,"field":…} reply shape.
