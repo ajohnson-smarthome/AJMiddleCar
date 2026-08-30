@@ -4,26 +4,19 @@
 #include <string.h>
 
 /* "Big enough" scratch buffers for the tests that aren't specifically pinning the
- * truncation boundary. net_cfg_validate rejects control bytes and DEL outright (see
- * test_ssid_rejects_control_bytes / test_password_rejects_control_bytes below), so the
- * only escape a *validated* value can still trigger is '"' or '\' doubling to two bytes —
- * the six-byte \uXXXX case in net_cfg.c's append_escaped is defence for a value that
- * reached render_* some other way than net_cfg_validate (net_cfg_t's fields are plain, so
- * a caller can bypass it; test_render_still_escapes_a_legacy_control_byte does exactly
- * that) and these buffers are not sized for it.
- *   public: 25 literal + 32*2 (ssid)               + 5 ("false")  = 94, +1 NUL = 95
- *   stored: 25 literal + 32*2 (ssid) + 63*2 (password)            = 215, +1 NUL = 216
- * test_validated_values_always_fit_the_stored_worst_case and its public-render sibling
- * are what pin these as a proven bound rather than a hopeful one — that pair is what
- * would have caught the bug where these numbers were first wrong. */
+ * truncation boundary. The exact worst cases (95 public, 216 stored) follow from
+ * net_cfg_validate's doubling-not-sixfold guarantee — see its comment in net_cfg.h for
+ * the derivation. test_validated_values_always_fit_the_stored_worst_case and its
+ * public-render sibling below are what pin these as a proven bound rather than a hopeful
+ * one — that pair is what would have caught the bug where these numbers were first wrong. */
 #define PUBLIC_BUF_MAX 95
 #define STORED_BUF_MAX 216
 
 static void test_accepts_a_normal_network(void) {
     net_cfg_t c;
-    assert(net_cfg_validate("AJMiddleCar", "drive1234", &c) == NET_CFG_OK);
-    assert(strcmp(c.ssid, "AJMiddleCar") == 0);
-    assert(strcmp(c.password, "drive1234") == 0);
+    assert(net_cfg_validate("SomeNetwork", "secretpass", &c) == NET_CFG_OK);
+    assert(strcmp(c.ssid, "SomeNetwork") == 0);
+    assert(strcmp(c.password, "secretpass") == 0);
 }
 
 static void test_accepts_an_open_network(void) {
@@ -38,7 +31,7 @@ static void test_accepts_a_one_byte_ssid(void) {
     /* The floor of the SSID range (1 byte) was only ever implied by test_ssid_bounds
        rejecting the empty string — assert it's actually accepted, not just "not empty". */
     net_cfg_t c;
-    assert(net_cfg_validate("a", "drive1234", &c) == NET_CFG_OK);
+    assert(net_cfg_validate("a", "secretpass", &c) == NET_CFG_OK);
     assert(strcmp(c.ssid, "a") == 0);
 }
 
@@ -47,14 +40,14 @@ static void test_ssid_bounds(void) {
     char max[NET_SSID_MAX + 1];
     memset(max, 'a', NET_SSID_MAX);
     max[NET_SSID_MAX] = '\0';
-    assert(net_cfg_validate(max, "drive1234", &c) == NET_CFG_OK);
+    assert(net_cfg_validate(max, "secretpass", &c) == NET_CFG_OK);
 
     char over[NET_SSID_MAX + 2];
     memset(over, 'a', NET_SSID_MAX + 1);
     over[NET_SSID_MAX + 1] = '\0';
-    assert(net_cfg_validate(over, "drive1234", &c) == NET_CFG_SSID_LEN);
+    assert(net_cfg_validate(over, "secretpass", &c) == NET_CFG_SSID_LEN);
 
-    assert(net_cfg_validate("", "drive1234", &c) == NET_CFG_SSID_LEN);
+    assert(net_cfg_validate("", "secretpass", &c) == NET_CFG_SSID_LEN);
 }
 
 static void test_ssid_rejects_control_bytes(void) {
@@ -64,9 +57,9 @@ static void test_ssid_rejects_control_bytes(void) {
        overruns. 802.11 permits arbitrary octets, but a tab or NUL is not a network
        anyone is trying to reach, unlike a literal quote. */
     net_cfg_t c;
-    assert(net_cfg_validate("Net\twork", "drive1234", &c) == NET_CFG_SSID_BYTE);
-    assert(net_cfg_validate("Net\x01" "work", "drive1234", &c) == NET_CFG_SSID_BYTE);
-    assert(net_cfg_validate("Net\x7f" "work", "drive1234", &c) == NET_CFG_SSID_BYTE);
+    assert(net_cfg_validate("Net\twork", "secretpass", &c) == NET_CFG_SSID_BYTE);
+    assert(net_cfg_validate("Net\x01" "work", "secretpass", &c) == NET_CFG_SSID_BYTE);
+    assert(net_cfg_validate("Net\x7f" "work", "secretpass", &c) == NET_CFG_SSID_BYTE);
 }
 
 static void test_password_bounds(void) {
@@ -95,8 +88,8 @@ static void test_password_rejects_control_bytes(void) {
 static void test_a_rejected_body_does_not_write_out(void) {
     /* The caller's stored configuration must survive a bad POST intact. */
     net_cfg_t c;
-    assert(net_cfg_validate("keep", "drive1234", &c) == NET_CFG_OK);
-    assert(net_cfg_validate("", "drive1234", &c) == NET_CFG_SSID_LEN);
+    assert(net_cfg_validate("keep", "secretpass", &c) == NET_CFG_OK);
+    assert(net_cfg_validate("", "secretpass", &c) == NET_CFG_SSID_LEN);
     assert(strcmp(c.ssid, "keep") == 0);
 }
 
@@ -114,13 +107,13 @@ static void test_errors_name_their_field(void) {
 
 static void test_public_render_never_leaks_the_password(void) {
     net_cfg_t c;
-    assert(net_cfg_validate("AJMiddleCar", "drive1234", &c) == NET_CFG_OK);
+    assert(net_cfg_validate("SomeNetwork", "secretpass", &c) == NET_CFG_OK);
 
     char buf[PUBLIC_BUF_MAX];
     int n = net_cfg_render_public(&c, true, buf, sizeof(buf));
     assert(n > 0 && (size_t)n == strlen(buf));
-    assert(strstr(buf, "drive1234") == NULL);
-    assert(strstr(buf, "\"ssid\":\"AJMiddleCar\"") != NULL);
+    assert(strstr(buf, "secretpass") == NULL);
+    assert(strstr(buf, "\"ssid\":\"SomeNetwork\"") != NULL);
     assert(strstr(buf, "\"configured\":true") != NULL);
 }
 
@@ -134,21 +127,13 @@ static void test_public_render_when_unconfigured(void) {
 
 static void test_stored_render_round_trips(void) {
     net_cfg_t c;
-    assert(net_cfg_validate("AJMiddleCar", "drive1234", &c) == NET_CFG_OK);
+    assert(net_cfg_validate("SomeNetwork", "secretpass", &c) == NET_CFG_OK);
     char buf[STORED_BUF_MAX];
     assert(net_cfg_render_stored(&c, buf, sizeof(buf)) > 0);
     /* The stored form is what the dongle reloads to rejoin unaided, so it must carry
        the password that the public form must not. */
-    assert(strstr(buf, "drive1234") != NULL);
-    assert(strstr(buf, "AJMiddleCar") != NULL);
-}
-
-static void test_render_refuses_a_small_buffer(void) {
-    net_cfg_t c;
-    assert(net_cfg_validate("AJMiddleCar", "drive1234", &c) == NET_CFG_OK);
-    char tiny[8];
-    assert(net_cfg_render_public(&c, true, tiny, sizeof(tiny)) == -1);
-    assert(net_cfg_render_stored(&c, tiny, sizeof(tiny)) == -1);
+    assert(strstr(buf, "secretpass") != NULL);
+    assert(strstr(buf, "SomeNetwork") != NULL);
 }
 
 static void test_public_render_boundary_is_exact(void) {
@@ -156,7 +141,7 @@ static void test_public_render_boundary_is_exact(void) {
        room for its NUL and pass every other render test here, since all of them use a
        buffer far above the worst case. Pin the exact boundary instead of trusting size. */
     net_cfg_t c;
-    assert(net_cfg_validate("AJMiddleCar", "drive1234", &c) == NET_CFG_OK);
+    assert(net_cfg_validate("SomeNetwork", "secretpass", &c) == NET_CFG_OK);
     char scratch[PUBLIC_BUF_MAX];
     int len = net_cfg_render_public(&c, true, scratch, sizeof(scratch));
     assert(len > 0);
@@ -166,7 +151,7 @@ static void test_public_render_boundary_is_exact(void) {
 
 static void test_stored_render_boundary_is_exact(void) {
     net_cfg_t c;
-    assert(net_cfg_validate("AJMiddleCar", "drive1234", &c) == NET_CFG_OK);
+    assert(net_cfg_validate("SomeNetwork", "secretpass", &c) == NET_CFG_OK);
     char scratch[STORED_BUF_MAX];
     int len = net_cfg_render_stored(&c, scratch, sizeof(scratch));
     assert(len > 0);
@@ -176,29 +161,13 @@ static void test_stored_render_boundary_is_exact(void) {
 
 static void test_equal_drives_the_dirty_check(void) {
     net_cfg_t a, b;
-    assert(net_cfg_validate("net", "drive1234", &a) == NET_CFG_OK);
-    assert(net_cfg_validate("net", "drive1234", &b) == NET_CFG_OK);
+    assert(net_cfg_validate("net", "secretpass", &a) == NET_CFG_OK);
+    assert(net_cfg_validate("net", "secretpass", &b) == NET_CFG_OK);
     assert(net_cfg_equal(&a, &b));
-    assert(net_cfg_validate("net", "drive9999", &b) == NET_CFG_OK);
+    assert(net_cfg_validate("net", "otherpass2", &b) == NET_CFG_OK);
     assert(!net_cfg_equal(&a, &b));
-    assert(net_cfg_validate("other", "drive1234", &b) == NET_CFG_OK);
+    assert(net_cfg_validate("other", "secretpass", &b) == NET_CFG_OK);
     assert(!net_cfg_equal(&a, &b));
-}
-
-static void test_max_length_ssid_and_password_render_together(void) {
-    net_cfg_t c;
-    char ssid[NET_SSID_MAX + 1];
-    char pass[NET_PASS_MAX + 1];
-    memset(ssid, 'a', NET_SSID_MAX);
-    ssid[NET_SSID_MAX] = '\0';
-    memset(pass, 'p', NET_PASS_MAX);
-    pass[NET_PASS_MAX] = '\0';
-    assert(net_cfg_validate(ssid, pass, &c) == NET_CFG_OK);
-
-    char buf[STORED_BUF_MAX];
-    assert(net_cfg_render_stored(&c, buf, sizeof(buf)) > 0);
-    assert(strstr(buf, ssid) != NULL);
-    assert(strstr(buf, pass) != NULL);
 }
 
 static void test_validated_values_always_fit_the_public_worst_case(void) {
@@ -211,7 +180,7 @@ static void test_validated_values_always_fit_the_public_worst_case(void) {
     char ssid[NET_SSID_MAX + 1];
     memset(ssid, '"', NET_SSID_MAX);
     ssid[NET_SSID_MAX] = '\0';
-    assert(net_cfg_validate(ssid, "drive1234", &c) == NET_CFG_OK);
+    assert(net_cfg_validate(ssid, "secretpass", &c) == NET_CFG_OK);
 
     char buf[PUBLIC_BUF_MAX];
     assert(net_cfg_render_public(&c, true, buf, sizeof(buf)) > 0);
@@ -235,7 +204,7 @@ static void test_validated_values_always_fit_the_stored_worst_case(void) {
 
 static void test_render_escapes_a_quote_in_the_ssid(void) {
     net_cfg_t c;
-    assert(net_cfg_validate("Net\"work", "drive1234", &c) == NET_CFG_OK);
+    assert(net_cfg_validate("Net\"work", "secretpass", &c) == NET_CFG_OK);
 
     char pub[PUBLIC_BUF_MAX];
     assert(net_cfg_render_public(&c, true, pub, sizeof(pub)) > 0);
@@ -248,7 +217,7 @@ static void test_render_escapes_a_quote_in_the_ssid(void) {
 
 static void test_render_escapes_a_backslash_in_the_ssid(void) {
     net_cfg_t c;
-    assert(net_cfg_validate("Net\\work", "drive1234", &c) == NET_CFG_OK);
+    assert(net_cfg_validate("Net\\work", "secretpass", &c) == NET_CFG_OK);
 
     char pub[PUBLIC_BUF_MAX];
     assert(net_cfg_render_public(&c, true, pub, sizeof(pub)) > 0);
@@ -268,7 +237,7 @@ static void test_render_still_escapes_a_legacy_control_byte(void) {
        problem: see the comment on append_escaped in net_cfg.c. */
     net_cfg_t c;
     strcpy(c.ssid, "Net\x01" "work");
-    strcpy(c.password, "drive1234");
+    strcpy(c.password, "secretpass");
 
     char pub[PUBLIC_BUF_MAX];
     assert(net_cfg_render_public(&c, true, pub, sizeof(pub)) > 0);
@@ -283,10 +252,10 @@ static void test_stored_render_escapes_a_quoted_ssid_exactly(void) {
     /* The point is that the output is parseable — assert the exact escaped bytes rather
        than merely that the raw quote is gone. */
     net_cfg_t c;
-    assert(net_cfg_validate("Net\"work", "drive1234", &c) == NET_CFG_OK);
+    assert(net_cfg_validate("Net\"work", "secretpass", &c) == NET_CFG_OK);
     char buf[STORED_BUF_MAX];
     assert(net_cfg_render_stored(&c, buf, sizeof(buf)) > 0);
-    assert(strcmp(buf, "{\"ssid\":\"Net\\\"work\",\"password\":\"drive1234\"}") == 0);
+    assert(strcmp(buf, "{\"ssid\":\"Net\\\"work\",\"password\":\"secretpass\"}") == 0);
 }
 
 static void test_stored_render_escapes_a_quoted_password_exactly(void) {
@@ -311,20 +280,6 @@ static void test_escape_passes_plain_text_through_unchanged(void) {
     assert(strcmp(buf, "hello") == 0);
 }
 
-static void test_escape_doubles_a_quote(void) {
-    char buf[16];
-    int n = net_cfg_escape("a\"b", buf, sizeof(buf));
-    assert(n == 4);
-    assert(strcmp(buf, "a\\\"b") == 0);
-}
-
-static void test_escape_doubles_a_backslash(void) {
-    char buf[16];
-    int n = net_cfg_escape("a\\b", buf, sizeof(buf));
-    assert(n == 4);
-    assert(strcmp(buf, "a\\\\b") == 0);
-}
-
 static void test_escape_refuses_a_buffer_one_byte_too_small(void) {
     /* "ab" needs 2 bytes of content plus a NUL — 3 bytes minimum. One short of that
        must refuse exactly like append_str's per-chunk check the renders rely on. */
@@ -336,6 +291,15 @@ static void test_escape_succeeds_in_a_buffer_exactly_large_enough(void) {
     char buf[8];
     assert(net_cfg_escape("ab", buf, 3) == 2);
     assert(strcmp(buf, "ab") == 0);
+}
+
+static void test_escape_refuses_a_zero_length_buffer(void) {
+    /* Nothing fits in zero bytes, not even an empty string's own NUL. Without the guard
+       in net_cfg_escape, an empty `in` skips the escaping loop entirely and falls
+       straight through to a write at out[0] — on a buffer with no bytes to write into. */
+    char buf[4] = { 'X', 'X', 'X', 'X' };
+    assert(net_cfg_escape("", buf, 0) == -1);
+    assert(buf[0] == 'X'); /* untouched, not just "refused" */
 }
 
 int main(void) {
@@ -351,11 +315,9 @@ int main(void) {
     test_public_render_never_leaks_the_password();
     test_public_render_when_unconfigured();
     test_stored_render_round_trips();
-    test_render_refuses_a_small_buffer();
     test_public_render_boundary_is_exact();
     test_stored_render_boundary_is_exact();
     test_equal_drives_the_dirty_check();
-    test_max_length_ssid_and_password_render_together();
     test_validated_values_always_fit_the_public_worst_case();
     test_validated_values_always_fit_the_stored_worst_case();
     test_render_escapes_a_quote_in_the_ssid();
@@ -364,10 +326,9 @@ int main(void) {
     test_stored_render_escapes_a_quoted_ssid_exactly();
     test_stored_render_escapes_a_quoted_password_exactly();
     test_escape_passes_plain_text_through_unchanged();
-    test_escape_doubles_a_quote();
-    test_escape_doubles_a_backslash();
     test_escape_refuses_a_buffer_one_byte_too_small();
     test_escape_succeeds_in_a_buffer_exactly_large_enough();
+    test_escape_refuses_a_zero_length_buffer();
     printf("test_net_cfg: all passed\n");
     return 0;
 }

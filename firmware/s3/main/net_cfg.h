@@ -45,7 +45,13 @@ typedef enum {
  * control byte that passed on length alone could overrun a buffer sized from the narrower
  * bound. 802.11 permits arbitrary octets in an SSID, but unlike a literal quote — which is
  * a real network's real name — a tab or NUL is not a network anyone is trying to reach,
- * which is why this rejects rather than escapes it. */
+ * which is why this rejects rather than escapes it.
+ *
+ * This is the canonical statement of that guarantee. Every worst-case buffer bound built
+ * from NET_SSID_MAX/NET_PASS_MAX — the NVS blob in net_api.c, the render buffers in its
+ * tests — is arithmetic derived from exactly this refusal (at most a doubling, never a
+ * sixfold \uXXXX expansion). If the rule above ever changes, those buffers are wrong until
+ * they are re-derived; they point back here rather than restating the derivation. */
 net_cfg_err_t net_cfg_validate(const char *ssid, const char *password, net_cfg_t *out);
 
 /* Which field a rejection blames, for the {"error":…,"field":…} reply shape.

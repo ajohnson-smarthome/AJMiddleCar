@@ -32,6 +32,8 @@ static esp_err_t status_get(httpd_req_t *req)
      * use — instead of growing a second one here that could drift from it. */
     char ssid_esc[72]; /* worst case: 32 SSID bytes, every one a quote, doubles to 64, +NUL = 65 */
     if (net_cfg_escape(ssid, ssid_esc, sizeof(ssid_esc)) < 0) {
+        /* Only reachable if a future field outgrows ssid_esc — then this is the symptom. */
+        ESP_LOGE(TAG, "/status could not escape the ssid into its buffer");
         return ESP_FAIL;
     }
 
@@ -45,6 +47,10 @@ static esp_err_t status_get(httpd_req_t *req)
                      "\"net\":{\"ssid\":\"%s\",\"state\":\"idle\",\"rssi\":0}}",
                      app->version, app->idf_ver, ssid_esc);
     if (n < 0 || (size_t)n >= sizeof(body)) {
+        /* Same rule as the car's own /status: truncated JSON parses as something else or
+         * nothing, and shipping it under a 200 hides exactly that. Only reachable if a
+         * future field outgrows the buffer — then this is the symptom. */
+        ESP_LOGE(TAG, "/status does not fit its buffer");
         return ESP_FAIL;
     }
 

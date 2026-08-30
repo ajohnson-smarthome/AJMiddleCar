@@ -6,7 +6,6 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "nvs.h"
-#include "nvs_flash.h"
 
 #include "api_util.h"
 
@@ -34,11 +33,9 @@ bool net_api_current(net_cfg_t *out)
  * app does — must not erase a flash sector each time. */
 static esp_err_t store(const net_cfg_t *cfg)
 {
-    /* 216 worst case: 25 literal + 32×2 escaped SSID + 63×2 escaped password + NUL. The
-     * ×2 is right because net_cfg_validate refuses control bytes outright — the only
-     * escape a validated value can still trigger is '"' or '\' doubling to two bytes, not
-     * the six a \uXXXX control-byte escape would need. That refusal is what makes this
-     * bound provable rather than a guess; see net_cfg_validate's comment. */
+    /* 216 worst case: 25 literal + 32×2 escaped SSID + 63×2 escaped password + NUL; see
+     * net_cfg_validate's comment in net_cfg.h for why that ×2 is provable rather than a
+     * guess. */
     char json[256];
     if (net_cfg_render_stored(cfg, json, sizeof(json)) < 0) {
         return ESP_FAIL;
@@ -69,12 +66,9 @@ void net_api_load(void)
         return;                      /* nothing stored yet — the first boot */
     }
 
-    /* Sized to match store()'s write buffer: 216 worst case (25 literal + 32×2 escaped
-     * SSID + 63×2 escaped password + NUL, the ×2 being the only expansion a value that
-     * passed net_cfg_validate can still trigger — see the comment next to store()'s own
-     * 216). A short buffer here would fail to read back exactly the maximal configs
-     * store() can legitimately write, and silently — the ESP_ERR_NVS_INVALID_LENGTH falls
-     * into the same "nothing stored" return below. */
+    /* Matches store()'s 216-byte worst case above. A short buffer here would fail to read
+     * back exactly the maximal configs store() can legitimately write, and silently — the
+     * ESP_ERR_NVS_INVALID_LENGTH falls into the same "nothing stored" return below. */
     char json[256];
     size_t len = sizeof(json);
     esp_err_t err = nvs_get_str(h, NVS_KEY, json, &len);
@@ -107,6 +101,8 @@ static esp_err_t net_get(httpd_req_t *req)
     char body[128];
     int n = net_cfg_render_public(&s_cfg, s_configured, body, sizeof(body));
     if (n < 0) {
+        /* Only reachable if a future field outgrows body — then this is the symptom. */
+        ESP_LOGE(TAG, "GET /net does not fit its buffer");
         return ESP_FAIL;
     }
     httpd_resp_set_type(req, "application/json");

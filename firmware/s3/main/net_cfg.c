@@ -86,11 +86,9 @@ static bool append_str(char *buf, size_t n, size_t *pos, const char *s)
 }
 
 /* Appends the JSON-escaped form of `s`: '"' and '\' doubled, control bytes below 0x20 as
- * \u00XX. A raw quote or backslash is a value net_cfg_validate lets through on purpose —
- * it's a real network's real name — so this module must still be able to render it
- * without corrupting the JSON it sits inside; rejecting it instead would make that
- * network permanently unreachable through this dongle, a correctness bug traded for a
- * robustness bug.
+ * \u00XX. Why a validated value only ever hits the doubling case, and why that is what
+ * makes a caller's buffer arithmetic provable rather than guessed: net_cfg_validate's
+ * comment in net_cfg.h.
  *
  * net_cfg_validate refuses control bytes and DEL outright (see its comment), so the
  * \uXXXX branch below is unreachable for anything that passed validation — do not delete
@@ -165,6 +163,12 @@ int net_cfg_render_stored(const net_cfg_t *cfg, char *buf, size_t n)
 
 int net_cfg_escape(const char *in, char *out, size_t n)
 {
+    /* Nothing fits in zero bytes, not even an empty string's own NUL. Without this guard
+     * an empty `in` skips append_escaped's loop entirely and falls straight through to
+     * `out[0] = '\0'` — a write to a buffer with no bytes to write into. */
+    if (n == 0) {
+        return -1;
+    }
     size_t pos = 0;
     if (!append_escaped(out, n, &pos, in)) {
         return -1;
