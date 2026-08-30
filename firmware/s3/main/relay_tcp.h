@@ -1,0 +1,28 @@
+#ifndef RELAY_TCP_H
+#define RELAY_TCP_H
+
+#include "esp_err.h"
+
+/* The car's whole REST surface (config, calibration, status, firmware upload), carried
+ * between the phone and the car a byte at a time. See relay_udp.h and
+ * docs/superpowers/specs/2026-08-30-dongle-api-design.md, "The relay" — the NAPT path was
+ * checked against lwIP's source and does not work for this topology, so the dongle listens
+ * on its own address and, for every accepted connection, opens its own connection toward the
+ * car and pumps bytes between the two. It never parses a request, a header, a
+ * Content-Length or a firmware image; it only moves them — growing a parser here would be
+ * the wrong direction for a byte pump to go.
+ *
+ * The destination is never a constant: it is the gateway address the station's join
+ * produced (wifi_sta_gateway()), read fresh every pass, because the dongle knows no car.
+ *
+ * Needs no guard of its own: the listener binds DONGLE_HOST specifically, not INADDR_ANY,
+ * which is what keeps it from ever being reachable from the car's side of the dongle —
+ * unlike the car's own HTTP server, which the car's network can reach unless something
+ * stops it. */
+
+/* Starts the relay task. Safe to call right after wifi_sta_start(): the task waits on its
+ * own for wifi_sta_gateway() to succeed before opening any socket, so this does not need to
+ * wait for a join to finish and never blocks its caller. */
+esp_err_t relay_tcp_start(void);
+
+#endif /* RELAY_TCP_H */

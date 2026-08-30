@@ -7,6 +7,7 @@
 
 #include "net_api.h"
 #include "ota_api.h"
+#include "relay_tcp.h"
 #include "relay_udp.h"
 #include "status_api.h"
 #include "usb_net.h"
@@ -44,6 +45,9 @@ void app_main(void)
      * rather than blocking this function, so it only needs the station to exist, not to have
      * joined yet. */
     ESP_ERROR_CHECK(relay_udp_start());
+    /* Same reasoning as relay_udp_start() just above: relay_tcp's task waits on
+     * wifi_sta_gateway() itself, so this does not need to wait for a join either. */
+    ESP_ERROR_CHECK(relay_tcp_start());
     ESP_ERROR_CHECK(status_api_start());
     ESP_ERROR_CHECK(net_api_register(status_api_server()));
     ESP_ERROR_CHECK(ota_api_register(status_api_server()));
