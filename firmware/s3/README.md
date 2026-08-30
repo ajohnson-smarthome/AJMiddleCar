@@ -26,6 +26,8 @@ The two ports are silkscreened `USB` and `COM`, and they are not interchangeable
 | Dongle's DHCP server configures the host | **yes** — host takes `192.168.7.2/24` | 2026-08-30 |
 | Dongle answers on its own address | **yes** — `ping 192.168.7.1` 1.3 ms, 0% loss | 2026-08-30 |
 | Host keeps its own default route | **yes** — `route get 1.1.1.1` unchanged; internet and DNS unaffected | 2026-08-30 |
+| `GET /status` answers over the USB wire | **yes** — HTTP 200 in 12 ms | 2026-08-30 |
+| iOS binds a CDC-NCM driver | *(Task 5 — the question this whole plan exists to answer)* | |
 
 The third row is the one that matters, and it was measured rather than assumed: a
 USB-C source supplies VBUS only after it sees Rd, so enumeration over a C-to-C cable
@@ -63,6 +65,30 @@ moment it appears, on the "wired beats Wi-Fi" heuristic, and then quietly fail t
 device with no uplink — which looks exactly like the dongle stealing traffic. Tell them apart with
 `route get 1.1.1.1` (the routing decision itself) and `netstat -ibn -I en11` (a client retrying into
 the void shows lopsided counters and a packet every ~5 s). One client did this; another did not.
+
+## The Mac acceptance run
+
+Everything Plan 1 promised, measured in one pass on 2026-08-30 against build `94f81ae`:
+
+```
+GET /status:
+  {"dev":"ajdongle","fw":"v1.0+483-147-g51f1f8e-dirty","idf":"v6.0.2-dirty","usb":"up"}
+    [HTTP 200 in 0.012553s]
+```
+
+| Check | Baseline (no dongle) | Dongle attached |
+|---|---|---|
+| `route get 1.1.1.1` | `utun4` | `utun4` — unchanged |
+| internet by IP | 0.103 s | 0.107 s |
+| internet by name (needs DNS) | 0.592 s | 0.136 s |
+| Wi-Fi latency to the LAN router | 13.6 ms avg | 9.2 ms avg |
+| DHCP options received | — | 10 options, **no `router`** |
+| dongle interface counters | — | 13 in / 68 out — a quiet device |
+
+The host is measurably no worse off for having the dongle plugged in, which is the whole premise.
+The script that produces this is worth keeping for Plan 2: it checks the deliverable and the
+regression in the same run, so a returning route capture is caught by a test rather than by losing
+somebody's connectivity.
 
 ## Build
 
