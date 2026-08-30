@@ -3,6 +3,15 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Two-level stringify. NET_SSID_MIN etc. are themselves macros (from dongle_contract.inc,
+ * by way of net_cfg.h), and `#x` stringifies its argument's raw token text without
+ * expanding it first — applied directly to NET_SSID_MIN it would yield "NET_SSID_MIN",
+ * not "1". Passing through NET_STR forces one macro-expansion pass before NET_STR2 does
+ * the stringification, so the bounds baked into net_cfg_err_msg's messages below are the
+ * contract's numbers, not their names. */
+#define NET_STR2(x) #x
+#define NET_STR(x) NET_STR2(x)
+
 net_cfg_err_t net_cfg_validate(const char *ssid, const char *password, net_cfg_t *out)
 {
     /* Defensive: the one caller checks cJSON_IsString first, so neither can be NULL in
@@ -59,9 +68,9 @@ const char *net_cfg_err_field(net_cfg_err_t e)
 const char *net_cfg_err_msg(net_cfg_err_t e)
 {
     switch (e) {
-    case NET_CFG_SSID_LEN:  return "ssid must be 1..32 bytes";
+    case NET_CFG_SSID_LEN:  return "ssid must be " NET_STR(NET_SSID_MIN) ".." NET_STR(NET_SSID_MAX) " bytes";
     case NET_CFG_SSID_BYTE: return "ssid must not contain control bytes";
-    case NET_CFG_PASS_LEN:  return "password must be empty or 8..63 bytes";
+    case NET_CFG_PASS_LEN:  return "password must be empty or " NET_STR(NET_PASS_MIN) ".." NET_STR(NET_PASS_MAX) " bytes";
     case NET_CFG_PASS_BYTE: return "password must not contain control bytes";
     case NET_CFG_OK:        break;
     }
@@ -120,13 +129,13 @@ static bool append_escaped(char *buf, size_t n, size_t *pos, const char *s)
 int net_cfg_render_public(const net_cfg_t *cfg, bool configured, char *buf, size_t n)
 {
     size_t pos = 0;
-    if (!append_str(buf, n, &pos, "{\"ssid\":\"")) {
+    if (!append_str(buf, n, &pos, "{\"" DONGLE_NETKEY_SSID "\":\"")) {
         return -1;
     }
     if (!append_escaped(buf, n, &pos, cfg->ssid)) {
         return -1;
     }
-    if (!append_str(buf, n, &pos, "\",\"configured\":")) {
+    if (!append_str(buf, n, &pos, "\",\"" DONGLE_NETKEY_CONFIGURED "\":")) {
         return -1;
     }
     if (!append_str(buf, n, &pos, configured ? "true" : "false")) {
@@ -142,13 +151,13 @@ int net_cfg_render_public(const net_cfg_t *cfg, bool configured, char *buf, size
 int net_cfg_render_stored(const net_cfg_t *cfg, char *buf, size_t n)
 {
     size_t pos = 0;
-    if (!append_str(buf, n, &pos, "{\"ssid\":\"")) {
+    if (!append_str(buf, n, &pos, "{\"" DONGLE_NETKEY_SSID "\":\"")) {
         return -1;
     }
     if (!append_escaped(buf, n, &pos, cfg->ssid)) {
         return -1;
     }
-    if (!append_str(buf, n, &pos, "\",\"password\":\"")) {
+    if (!append_str(buf, n, &pos, "\",\"" DONGLE_NETKEY_PASSWORD "\":\"")) {
         return -1;
     }
     if (!append_escaped(buf, n, &pos, cfg->password)) {
