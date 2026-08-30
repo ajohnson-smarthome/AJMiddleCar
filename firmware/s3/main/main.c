@@ -1,6 +1,8 @@
 #include "esp_err.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
 #include "nvs_flash.h"
 
 #include "net_api.h"
@@ -34,5 +36,23 @@ void app_main(void)
     net_api_load();
     ESP_ERROR_CHECK(status_api_start());
     ESP_ERROR_CHECK(net_api_register(status_api_server()));
+
+    /* Rollback is waived here and nowhere earlier. Everything above is a rollback trigger:
+       the ESP_ERROR_CHECKs panic-reboot on failure, and a panic while the image is still
+       PENDING_VERIFY is what makes the bootloader put the previous one back. By this line the
+       USB netif is attached and the server is answering on DONGLE_PORT, which is the whole
+       property worth protecting — an image that boots but cannot serve /ota is an image that
+       needs a cable to undo, and this device lives in a pocket.
+
+       The guard matters: mark_app_valid on an image that is NOT pending is harmless but noisy,
+       and reading the state first keeps a normal cable-flashed boot silent. */
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_img_states_t ota_state;
+    if (running != NULL &&
+        esp_ota_get_state_partition(running, &ota_state) == ESP_OK &&
+        ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+        ESP_LOGI(TAG, "first boot of a new image — cancelling rollback");
+        esp_ota_mark_app_valid_cancel_rollback();
+    }
     ESP_LOGI(TAG, "dongle up");
 }
