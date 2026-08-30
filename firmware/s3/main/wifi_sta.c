@@ -29,11 +29,18 @@ static wifi_sm_t s_sm;
 static uint32_t s_gateway;   /* network byte order; meaningful only when s_has_gateway */
 static bool s_has_gateway;
 
-/* True from the moment wifi_sta_join issues its own esp_wifi_disconnect() until either that
- * disconnect's event is consumed by handle_disconnected, or wifi_sta_join itself clears it
- * having moved past the point where that event could still be in flight — see both. Guarded
- * by s_lock like everything else here. */
-static bool s_join_in_flight;
+/* True from the moment wifi_sta_join issues its own esp_wifi_disconnect() until it is
+ * consumed by handle_disconnected — or, if the resulting disconnect event never arrives at
+ * all (nothing was connected to begin with, the common case for a first join, or any join
+ * from WIFI_IDLE/WIFI_FAILED), until wifi_sta_join clears it itself on the way out.
+ *
+ * _Atomic, not s_lock-guarded, on purpose: an earlier version set/cleared this only inside
+ * lock_take()/lock_give() pairs, and a busy lock at the wrong moment could leave it stuck
+ * true forever — the next genuine disconnect, possibly hours later, would then be silently
+ * swallowed by the branch below. An atomic store can't fail to happen the way a timed-out
+ * mutex acquisition can; that is the guarantee this exists to make structural rather than
+ * "usually true". */
+static _Atomic bool s_join_in_flight;
 
 /* A lock-free mirror of s_sm.state, updated under s_lock alongside every real write to it.
  * wifi_state.h's wifi_sm_t is a pure, host-tested struct and gains no atomics of its own —
@@ -62,19 +69,19 @@ static void publish_state_locked(void)
 
 static void handle_disconnected(const wifi_event_sta_disconnected_t *ev)
 {
+    if (atomic_exchange(&s_join_in_flight, false)) {
+        /* This is the disconnect wifi_sta_join issued deliberately, to leave the interface
+         * idle before esp_wifi_set_config. Not a failure: consuming it here — rather than
+         * stepping WIFI_EV_DISCONNECTED — is what stops it from charging one of the five
+         * attempts and racing wifi_sta_join's own upcoming esp_wifi_connect(). Checked
+         * before s_lock is even touched, so consuming it never depends on that lock being
+         * free — see s_join_in_flight's own comment for why that matters. */
+        return;
+    }
     if (!lock_take()) {
         /* No further event follows from this dropped one, so the station will not retry on
          * its own — only a POST /net with a CHANGED value restarts it from here. */
         ESP_LOGE(TAG, "state lock busy — the station will not retry");
-        return;
-    }
-    if (s_join_in_flight) {
-        /* This is the disconnect wifi_sta_join issued deliberately, to leave the interface
-         * idle before esp_wifi_set_config. Not a failure: consuming it here — rather than
-         * stepping WIFI_EV_DISCONNECTED — is what stops it from charging one of the five
-         * attempts and racing wifi_sta_join's own upcoming esp_wifi_connect(). */
-        s_join_in_flight = false;
-        lock_give();
         return;
     }
     wifi_state_t prev = s_sm.state;
@@ -165,7 +172,13 @@ esp_err_t wifi_sta_start(void)
         return ESP_FAIL;
     }
     wifi_state_init(&s_sm);
-    publish_state_locked();   /* no concurrent reader yet, but keep the mirror honest */
+    /* Under the lock, like every other call to publish_state_locked() — there is no
+     * concurrent reader yet at this point, but this site should not be the one exception to
+     * its own "call with s_lock held" precondition. */
+    if (lock_take()) {
+        publish_state_locked();
+        lock_give();
+    }
 
     ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(
                              WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL),
@@ -190,12 +203,9 @@ esp_err_t wifi_sta_start(void)
 
 void wifi_sta_join(const net_cfg_t *cfg)
 {
-    if (lock_take()) {
-        s_join_in_flight = true;   /* the very next DISCONNECTED this causes is ours to eat */
-        lock_give();
-    } else {
-        ESP_LOGE(TAG, "state lock busy — join proceeding without disconnect suppression");
-    }
+    /* Set unconditionally — no lock needed, and none can make this fail to happen. See
+     * s_join_in_flight's own comment for why that is the point. */
+    atomic_store(&s_join_in_flight, true);
 
     /* Disconnect BEFORE reconfiguring, not after: an idle interface is what keeps
      * esp_wifi_set_config from returning ESP_ERR_WIFI_STATE ("still connecting") in the
@@ -226,26 +236,25 @@ void wifi_sta_join(const net_cfg_t *cfg)
         ESP_LOGE(TAG, "set config failed (%s) — net.state still reflects the previous "
                       "attempt, not this request; GET /net already shows what was requested",
                  esp_err_to_name(err));
-        if (lock_take()) {
-            s_join_in_flight = false;
-            lock_give();
-        }
+        atomic_store(&s_join_in_flight, false);
         return;
     }
 
     if (lock_take()) {
         wifi_state_step(&s_sm, WIFI_EV_CONFIGURED);
         publish_state_locked();
-        /* Cleared here, not left for handle_disconnected: by now the disconnect above has
-         * either already posted its event (the ordinary case, well ahead of this point) or
-         * was a no-op because nothing was connected. Either way this join owns nothing
-         * further to suppress, so bounding s_join_in_flight to at most the duration of this
-         * call keeps it from ever wedging a later, genuine disconnect. */
-        s_join_in_flight = false;
         lock_give();
     } else {
         ESP_LOGE(TAG, "state lock busy — join requested without recording it");
     }
+
+    /* Cleared unconditionally, independent of whether the lock_take() above succeeded: by
+     * now the disconnect above has either already posted its event (the ordinary case, well
+     * ahead of this point) or was a no-op because nothing was connected. Either way this
+     * join owns nothing further to suppress, and this store cannot fail to run the way that
+     * lock acquisition could — bounding s_join_in_flight to at most the duration of this
+     * call, with no path left that could leave it stuck. */
+    atomic_store(&s_join_in_flight, false);
 
     esp_err_t cerr = esp_wifi_connect();
     if (cerr != ESP_OK) {
