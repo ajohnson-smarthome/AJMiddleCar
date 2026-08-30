@@ -27,8 +27,10 @@ The two ports are silkscreened `USB` and `COM`, and they are not interchangeable
 | Dongle answers on its own address | **yes** — `ping 192.168.7.1` 1.3 ms, 0% loss | 2026-08-30 |
 | Host keeps its own default route | **yes** — `route get 1.1.1.1` unchanged; internet and DNS unaffected | 2026-08-30 |
 | `GET /status` answers over the USB wire | **yes** — HTTP 200 in 12 ms | 2026-08-30 |
-| iOS binds a CDC-NCM driver | **yes** — `http://192.168.7.1/status` answers in Safari on the phone | 2026-08-30 |
+| iOS binds a CDC-NCM driver | **yes** — `http://192.168.7.1/status` (`:8080` today) answers in Safari on the phone | 2026-08-30 |
 | iPhone keeps its own internet and DNS | **yes** — an ordinary site loads by name with the dongle attached | 2026-08-30 |
+| `POST /net` persists across a reboot | *(record what you observed)* | |
+| `GET /net` withholds the password | *(record what you observed)* | |
 
 The third row is the one that matters, and it was measured rather than assumed: a
 USB-C source supplies VBUS only after it sees Rd, so enumeration over a C-to-C cable
@@ -73,7 +75,7 @@ the void shows lopsided counters and a packet every ~5 s). One client did this; 
 ## The question this firmware existed to ask
 
 **iOS accepts a class-compliant CDC-NCM device.** Confirmed on hardware 2026-08-30: the dongle
-plugged into an iPhone's USB-C port, and `http://192.168.7.1/status` answered in Safari.
+plugged into an iPhone's USB-C port, and `http://192.168.7.1/status` (`:8080` today) answered in Safari.
 
 That one request proves the entire chain at once — iOS enumerated the device, bound a CDC-NCM
 driver to it, accepted an address from the dongle's own DHCP server, routed a TCP connection over
@@ -111,7 +113,9 @@ GET /status:
 The records above are from the run of 2026-08-30, when the dongle served `:80` and named
 itself with the key `dev`. This commit moves the server to `:8080` and renames that key to
 `device`; the observations are left as they were taken, and the next bench run will record
-the new shape.
+the new shape. Port 80 moved off, not away: it stays reserved for the car, which a later
+plan forwards through the dongle untouched, so that the car's own contract and the app's
+`CarHost.port` never have to move.
 
 | Check | Baseline (no dongle) | Dongle attached |
 |---|---|---|
