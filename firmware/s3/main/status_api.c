@@ -117,7 +117,27 @@ esp_err_t status_api_start(void)
      * what makes that safe: it runs on every accepted connection, before a request byte is
      * parsed, and refuses (closes the socket) any connection that did not land on DONGLE_HOST.
      * Without it, POST /net (a password) and POST /ota (unauthenticated firmware writes) would
-     * both be reachable from the car's network. */
+     * both be reachable from the car's network.
+     *
+     * Installing open_fn newly reaches a double close() inside esp_http_server on every
+     * rejection, and this is documented rather than worked around. On a non-ESP_OK return,
+     * httpd_sess_new calls httpd_sess_delete (esp_http_server/src/httpd_sess.c, the open_fn
+     * call site and the delete-on-failure branch just after it), which itself closes the fd;
+     * control then returns to its caller, httpd_accept_conn (esp_http_server/src/
+     * httpd_main.c, the "session creation failed" ESP_LOGE and its goto exit), which closes
+     * the same fd number again on the way out. Before this change open_fn was NULL and this
+     * path was unreachable; api_guard_open makes it fire on every rejected connection. The
+     * two close() calls are not adjacent — an event dispatch and an unthrottled ESP_LOGE to a
+     * 115200-baud UART sit between them — so under a station-side connection flood, a task
+     * switch in that window could let another task (a relay accepting a new connection of its
+     * own) claim the just-freed fd number before the second close() runs, which would then
+     * close that OTHER, unrelated socket instead. The only application-level lever is
+     * close_fn, which would suppress the delete-side close and fix this — at the cost of
+     * leaking the fd on every NORMAL session close instead, since close_fn replaces, rather
+     * than supplements, that call for every session, not only rejected ones. A rare,
+     * hard-to-trigger double-close beats a certain leak, so this is left as upstream's
+     * behaviour: if a "why did a relay socket disappear" hunt ever starts, it should start
+     * here. */
     cfg.open_fn = api_guard_open;
 
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &cfg), TAG, "cannot start the server");
