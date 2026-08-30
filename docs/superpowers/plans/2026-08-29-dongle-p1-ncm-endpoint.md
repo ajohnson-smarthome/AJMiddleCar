@@ -525,12 +525,19 @@ esp_err_t usb_net_start(void)
     our_mac[0] |= 0x02;
     ESP_RETURN_ON_ERROR(esp_netif_set_mac(s_netif, our_mac), TAG, "cannot set the MAC");
 
-    ESP_RETURN_ON_ERROR(esp_netif_attach(s_netif, &driver), TAG, "cannot attach");
-
-    /* Suppress both DHCP adverts, before the server starts. Zero is neither
-     * OFFER_ROUTER nor OFFER_DNS: the host gets an address and a netmask, and keeps
-     * its own router and resolvers. Advertising DNS is as damaging as advertising a
-     * route — queries into a black hole break a host that still has a correct default. */
+    /* Suppress the router advert BEFORE anything starts the server. esp_netif_attach
+     * below runs post_attach, which starts it, and esp_netif_dhcps_option refuses with
+     * ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED once it is running — the ordering here is
+     * load-bearing, not stylistic.
+     *
+     * Zero is neither OFFER_ROUTER nor OFFER_DNS. The router option is then genuinely
+     * omitted, gated twice: on this bit and on gw being 0.0.0.0 (dhcpserver.c:466-476).
+     *
+     * The DNS bit does NOT have the same effect, and the call is here for intent rather
+     * than for its result: dhcpserver.c's add_offer_options emits DHCP_OPTION_DNS_SERVER
+     * on every path, and with no server configured its else branch advertises our own
+     * address. Suppressing it is not offered by this IDF. What saves the host is that we
+     * are not its default route, so its own resolvers stay primary. */
     uint8_t offer = 0;
     ESP_RETURN_ON_ERROR(esp_netif_dhcps_option(s_netif, ESP_NETIF_OP_SET,
                                                ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,
@@ -538,6 +545,8 @@ esp_err_t usb_net_start(void)
     ESP_RETURN_ON_ERROR(esp_netif_dhcps_option(s_netif, ESP_NETIF_OP_SET,
                                                ESP_NETIF_DOMAIN_NAME_SERVER,
                                                &offer, sizeof(offer)), TAG, "cannot drop the DNS advert");
+
+    ESP_RETURN_ON_ERROR(esp_netif_attach(s_netif, &driver), TAG, "cannot attach");
 
     ESP_LOGI(TAG, "usb net up on %s", USB_NET_ADDR);
     return ESP_OK;
