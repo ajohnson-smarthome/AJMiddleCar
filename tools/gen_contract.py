@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Emit every expression of the app<->car contract from one schema.
+"""Emit every expression of each device's app<->firmware contract from its schema.
 
-Source of truth: contract/car-api.json. Everything this writes carries a header
-saying so and must never be hand-edited; tools/check_contract.sh fails a build
-where the committed output and a fresh run disagree.
+Source of truth: one JSON schema per device under contract/ — contract/car-api.json,
+contract/dongle-api.json — routed through the TARGETS table below, so a new device is a
+table entry here rather than a new script. Everything this writes carries a header saying
+so and must never be hand-edited; tools/check_contract.sh fails a build where the
+committed output and a fresh run disagree.
 """
 import argparse
 import json
@@ -13,6 +15,14 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCHEMA = ROOT / "contract" / "car-api.json"
+
+# Invoked as `python3 tools/gen_contract.py` from the repo root: Python already puts the
+# script's own directory (tools/) at sys.path[0] for a direct run, but this file is also
+# imported as a plain module (e.g. by test_gen_contract.py), where that auto-insertion
+# does not happen. Insert it explicitly, the same way test_gen_contract.py already does
+# for its own directory, so `import gen_dongle` is not invocation-dependent.
+sys.path.insert(0, str(ROOT / "tools"))
+from gen_dongle import emit_dongle_c, emit_dongle_swift
 
 MARK_BEGIN = "<!-- generated:endpoints -->"
 MARK_END = "<!-- /generated:endpoints -->"
@@ -251,25 +261,69 @@ def emit_python(schema):
     ])
 
 
+# One entry per device. The car's four artifacts and the dongle's two are addressed the
+# same way, so adding a device is a table entry rather than another pair of literals in
+# main() — and check_contract.sh reads this list instead of keeping its own copy, which
+# was a second thing to remember to edit.
+#
+# `artifacts` are written whole and diffed whole. `spliced` are written into a marked
+# region of a hand-written file and diffed by region; the two cannot be checked the same
+# way, which is why they are separate lists rather than one with a flag.
+TARGETS = [
+    {
+        "name": "car",
+        "schema": SCHEMA,
+        "artifacts": [
+            ("firmware/p4/main/cfg_table.inc", emit_c),
+            ("app/AJMiddleCar/Generated/CarAPI.swift", emit_swift),
+            ("tools/mock_car/generated.py", emit_python),
+        ],
+        "spliced": [
+            ("docs/protocol.md", emit_doc, MARK_BEGIN, MARK_END),
+        ],
+    },
+    {
+        "name": "dongle",
+        "schema": ROOT / "contract" / "dongle-api.json",
+        "artifacts": [
+            ("firmware/s3/main/dongle_contract.inc", emit_dongle_c),
+            ("app/AJMiddleCar/Generated/DongleAPI.swift", emit_dongle_swift),
+        ],
+        # No spliced documentation: the dongle's endpoints are described in its spec as
+        # prose, and a generated table would duplicate rather than replace it.
+        "spliced": [],
+    },
+]
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--schema", default=str(SCHEMA))
     ap.add_argument("--out-dir", default=None,
                     help="write every artefact under this root instead of in place")
+    ap.add_argument("--list-artifacts", action="store_true",
+                    help="print the repo-relative path of every whole-file artefact and exit")
     args = ap.parse_args(argv)
 
-    schema = load_schema(args.schema)
+    if args.list_artifacts:
+        for target in TARGETS:
+            for rel, _ in target["artifacts"]:
+                print(rel)
+        return 0
+
     root = pathlib.Path(args.out_dir) if args.out_dir else ROOT
 
-    doc_path = root / "docs" / "protocol.md"
-    if args.out_dir:
-        write(doc_path, MARK_BEGIN + "\n" + emit_doc(schema) + "\n" + MARK_END)
-    else:
-        write(doc_path, splice(doc_path.read_text(), emit_doc(schema)))
+    for target in TARGETS:
+        schema = load_schema(target["schema"])
 
-    write(root / "firmware" / "p4" / "main" / "cfg_table.inc", emit_c(schema))
-    write(root / "app" / "AJMiddleCar" / "Generated" / "CarAPI.swift", emit_swift(schema))
-    write(root / "tools" / "mock_car" / "generated.py", emit_python(schema))
+        for rel, emitter in target["artifacts"]:
+            write(root / rel, emitter(schema))
+
+        for rel, emitter, begin, end in target["spliced"]:
+            path = root / rel
+            if args.out_dir:
+                write(path, begin + "\n" + emitter(schema) + "\n" + end)
+            else:
+                write(path, splice(path.read_text(), emitter(schema)))
 
     return 0
 

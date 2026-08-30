@@ -125,6 +125,36 @@ import tempfile
 sys.path.insert(0, str(ROOT / "tools"))
 
 
+class TestArtifactListing(unittest.TestCase):
+    """The generator owns the list of what it writes; check_contract.sh asks rather
+    than keeping a second copy that has to be edited in step."""
+
+    def test_list_artifacts_names_every_whole_file_exactly(self):
+        # An exact, ordered comparison, not assertIn: assertIn only proves the known
+        # entries are present, so a table that gained an entry nobody meant to add
+        # (or lost one silently) would still pass. This list is pinned to what
+        # TARGETS actually holds today, car and dongle both — a real new artifact
+        # updates this test deliberately, which is the point.
+        out = subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "gen_contract.py"), "--list-artifacts"],
+            capture_output=True, text=True, check=True).stdout.split()
+        self.assertEqual(out, [
+            "firmware/p4/main/cfg_table.inc",
+            "app/AJMiddleCar/Generated/CarAPI.swift",
+            "tools/mock_car/generated.py",
+            "firmware/s3/main/dongle_contract.inc",
+            "app/AJMiddleCar/Generated/DongleAPI.swift",
+        ])
+
+    def test_list_artifacts_excludes_spliced_files(self):
+        # docs/protocol.md is spliced into hand-written prose and is compared by
+        # region, so a caller that diffs whole files must not be handed it.
+        out = subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "gen_contract.py"), "--list-artifacts"],
+            capture_output=True, text=True, check=True).stdout.split()
+        self.assertNotIn("docs/protocol.md", out)
+
+
 class TestDocEmitter(unittest.TestCase):
     def test_table_has_a_row_per_domain_with_ranges(self):
         import gen_contract
@@ -320,6 +350,129 @@ class TestDriftCheck(unittest.TestCase):
         r = subprocess.run(["bash", str(ROOT / "tools" / "check_contract.sh")],
                            capture_output=True, text=True, cwd=str(ROOT))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
+class TestDongleSchema(unittest.TestCase):
+    def setUp(self):
+        with open(ROOT / "contract" / "dongle-api.json") as f:
+            self.s = json.load(f)
+
+    def test_identity_and_address_are_pinned(self):
+        self.assertEqual(self.s["device"], "ajdongle")
+        self.assertEqual(self.s["network"]["host"], "192.168.7.1")
+        # 8080, not 80: the car keeps its native ports and the dongle takes the odd one.
+        self.assertEqual(self.s["network"]["port"], 8080)
+
+    def test_bounds_are_wpa2s(self):
+        b = self.s["bounds"]
+        self.assertEqual((b["ssid_min"], b["ssid_max"]), (1, 32))
+        self.assertEqual((b["pass_min"], b["pass_max"]), (8, 63))
+
+    def test_it_names_no_car(self):
+        # The dongle's schema must not acquire a car's SSID, password or device id —
+        # the constraint the whole firmware is built around.
+        blob = json.dumps(self.s).lower()
+        for forbidden in ("ajmiddlecar", "drive1234", "192.168.4."):
+            self.assertNotIn(forbidden, blob)
+
+    def test_state_vocabulary_is_the_documented_one(self):
+        self.assertEqual(self.s["net_states"], ["idle", "joining", "connected", "failed"])
+
+    def test_usb_state_vocabulary_is_the_documented_one(self):
+        # usb had a key (status_fields) but no enumerated values until this fix — status_api.c
+        # hardcoded "up" with nothing here to check it against.
+        self.assertEqual(self.s["usb_states"], ["up"])
+
+
+class TestDongleEmitters(unittest.TestCase):
+    def setUp(self):
+        # No sys.path insertion here: the file already does it at module level, beside
+        # its other mid-file imports, and a second one would be a second thing to keep true.
+        import gen_dongle
+        self.g = gen_dongle
+        with open(ROOT / "contract" / "dongle-api.json") as f:
+            self.s = json.load(f)
+
+    def test_c_header_is_pure_defines(self):
+        out = self.g.emit_dongle_c(self.s)
+        self.assertIn('#define DONGLE_DEVICE "ajdongle"', out)
+        self.assertIn('#define DONGLE_HOST "192.168.7.1"', out)
+        self.assertIn("#define DONGLE_PORT 8080", out)
+        self.assertIn("#define DONGLE_SSID_MAX 32", out)
+        self.assertIn("#define DONGLE_PASS_MIN 8", out)
+        # Pure means includable from net_cfg.h, which compiles with plain cc: no ESP-IDF,
+        # no types, nothing but preprocessor text.
+        for banned in ("#include", "esp_err_t", "typedef", "struct "):
+            self.assertNotIn(banned, out)
+
+    def test_c_header_carries_the_state_vocabulary(self):
+        out = self.g.emit_dongle_c(self.s)
+        self.assertIn('#define DONGLE_STATE_IDLE "idle"', out)
+        self.assertIn('#define DONGLE_STATE_CONNECTED "connected"', out)
+
+    def test_c_header_carries_the_usb_state_vocabulary(self):
+        out = self.g.emit_dongle_c(self.s)
+        self.assertIn('#define DONGLE_USB_STATE_UP "up"', out)
+
+    def test_c_header_carries_the_paths(self):
+        out = self.g.emit_dongle_c(self.s)
+        self.assertIn('#define DONGLE_PATH_STATUS "/status"', out)
+        self.assertIn('#define DONGLE_PATH_NET "/net"', out)
+
+    def test_c_header_carries_the_status_and_net_keys(self):
+        # DONGLE_KEY_IDF is the fix's regression test: status_fields gained "idf" because
+        # status_api.c already puts "idf" in the /status body and had no macro for it.
+        # DONGLE_KEY_DEVICE and DONGLE_NETKEY_SSID/PASSWORD are "at least one member of
+        # each key group" — the drift check catches a whole-file regression here, but
+        # nothing before this asserted an individual DONGLE_KEY_*/DONGLE_NETKEY_* name.
+        out = self.g.emit_dongle_c(self.s)
+        self.assertIn('#define DONGLE_KEY_DEVICE "device"', out)
+        self.assertIn('#define DONGLE_KEY_IDF "idf"', out)
+        self.assertIn('#define DONGLE_KEY_NET_SSID "ssid"', out)
+        self.assertIn('#define DONGLE_NETKEY_SSID "ssid"', out)
+        self.assertIn('#define DONGLE_NETKEY_PASSWORD "password"', out)
+
+    def test_swift_exposes_the_same_vocabulary(self):
+        out = self.g.emit_dongle_swift(self.s)
+        self.assertIn('public static let device = "ajdongle"', out)
+        self.assertIn('public static let host = "192.168.7.1"', out)
+        self.assertIn("public static let port: UInt16 = 8080", out)
+        self.assertIn('public static let statusPath = "/status"', out)
+        self.assertIn('public static let netPath = "/net"', out)
+        self.assertIn("public static let ssidMax = 32", out)
+        self.assertIn('public static let all = ["idle", "joining", "connected", "failed"]', out)
+
+    def test_swift_exposes_the_usb_state(self):
+        out = self.g.emit_dongle_swift(self.s)
+        self.assertIn("public enum DongleUsbState {", out)
+        self.assertIn('public static let up = "up"', out)
+        self.assertIn('public static let all = ["up"]', out)
+
+    def test_swift_exposes_the_net_fields(self):
+        out = self.g.emit_dongle_swift(self.s)
+        self.assertIn('public static let ssidField = "ssid"', out)
+        self.assertIn('public static let passwordField = "password"', out)
+        self.assertIn('public static let configuredField = "configured"', out)
+
+    def test_swift_exposes_the_status_keys(self):
+        # Regression test: emit_dongle_swift once destructured net_fields and never
+        # touched status_fields at all, so the C and Swift sides did not carry the same
+        # vocabulary — the one property this task exists to establish. Every key
+        # status_fields names must appear on the Swift side too, device through idf.
+        out = self.g.emit_dongle_swift(self.s)
+        self.assertIn("public enum DongleStatusKey {", out)
+        self.assertIn('public static let device = "device"', out)
+        self.assertIn('public static let fw = "fw"', out)
+        self.assertIn('public static let idf = "idf"', out)
+        self.assertIn('public static let usb = "usb"', out)
+        self.assertIn('public static let net = "net"', out)
+        self.assertIn('public static let netSsid = "ssid"', out)
+        self.assertIn('public static let netState = "state"', out)
+        self.assertIn('public static let netRssi = "rssi"', out)
+
+    def test_both_emitters_are_deterministic(self):
+        self.assertEqual(self.g.emit_dongle_c(self.s), self.g.emit_dongle_c(self.s))
+        self.assertEqual(self.g.emit_dongle_swift(self.s), self.g.emit_dongle_swift(self.s))
 
 
 if __name__ == "__main__":

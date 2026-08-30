@@ -82,8 +82,8 @@ void net_api_load(void)
         ESP_LOGW(TAG, "stored config is not JSON; ignoring it");
         return;
     }
-    const cJSON *ssid = cJSON_GetObjectItemCaseSensitive(root, "ssid");
-    const cJSON *pass = cJSON_GetObjectItemCaseSensitive(root, "password");
+    const cJSON *ssid = cJSON_GetObjectItemCaseSensitive(root, DONGLE_NETKEY_SSID);
+    const cJSON *pass = cJSON_GetObjectItemCaseSensitive(root, DONGLE_NETKEY_PASSWORD);
     if (cJSON_IsString(ssid) && cJSON_IsString(pass) &&
         net_cfg_validate(ssid->valuestring, pass->valuestring, &s_cfg) == NET_CFG_OK) {
         s_configured = true;
@@ -122,8 +122,8 @@ static esp_err_t net_post(httpd_req_t *req)
         return api_reply_error(req, "400 Bad Request", "", "body is not JSON");
     }
 
-    const cJSON *ssid = cJSON_GetObjectItemCaseSensitive(root, "ssid");
-    const cJSON *pass = cJSON_GetObjectItemCaseSensitive(root, "password");
+    const cJSON *ssid = cJSON_GetObjectItemCaseSensitive(root, DONGLE_NETKEY_SSID);
+    const cJSON *pass = cJSON_GetObjectItemCaseSensitive(root, DONGLE_NETKEY_PASSWORD);
     if (!cJSON_IsString(ssid) || !cJSON_IsString(pass)) {
         cJSON_Delete(root);
         return api_reply_error(req, "400 Bad Request", "",
@@ -154,10 +154,10 @@ static esp_err_t net_post(httpd_req_t *req)
 esp_err_t net_api_register(httpd_handle_t server)
 {
     static const httpd_uri_t get_uri = {
-        .uri = "/net", .method = HTTP_GET, .handler = net_get,
+        .uri = DONGLE_PATH_NET, .method = HTTP_GET, .handler = net_get,
     };
     static const httpd_uri_t post_uri = {
-        .uri = "/net", .method = HTTP_POST, .handler = net_post,
+        .uri = DONGLE_PATH_NET, .method = HTTP_POST, .handler = net_post,
     };
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &get_uri), TAG,
                         "cannot register GET /net");
