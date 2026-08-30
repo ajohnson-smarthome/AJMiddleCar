@@ -67,6 +67,10 @@ static esp_err_t ota_post(httpd_req_t *req)
         int r = httpd_req_recv(req, buf, chunk);
         if (r <= 0) {
             if (r == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts <= 6) continue;  /* ~6x5s, then abort */
+            /* The one genuinely silent failure otherwise: neither this path nor anything inside
+               IDF logs a dropped client or an exhausted timeout budget on its own. */
+            ESP_LOGW(TAG, "OTA upload abandoned: %d of %d bytes received (recv returned %d)",
+                     (int)req->content_len - remaining, (int)req->content_len, r);
             esp_ota_abort(handle);
             api_reply_error(req, "400 Bad Request", "", "recv error");
             return ESP_FAIL;
@@ -76,9 +80,20 @@ static esp_err_t ota_post(httpd_req_t *req)
            ESP_ERR_OTA_VALIDATE_FAILED — the spec's "reject anything whose first byte is not the
            ESP image magic" is satisfied by IDF, not by a check of ours. Do not add a second one:
            a hand-rolled magic test would be a copy of app_update's that could drift from it. */
-        if (esp_ota_write(handle, buf, r) != ESP_OK) {
+        esp_err_t werr = esp_ota_write(handle, buf, r);
+        if (werr != ESP_OK) {
             esp_ota_abort(handle);
-            api_reply_error(req, "400 Bad Request", "", "image invalid");
+            if (werr == ESP_ERR_OTA_VALIDATE_FAILED) {
+                /* The client sent something that isn't a valid app image — its fault. */
+                api_reply_error(req, "400 Bad Request", "", "image invalid");
+            } else {
+                /* Anything else (e.g. an esp_partition_write flash error) is this device's
+                   fault, not the client's. The car's twin (firmware/p4/main/ota_api.c) reports
+                   500 for both cases, which is wrong in the other direction — most of its
+                   failures here are this same magic-byte rejection, not a device fault. */
+                ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(werr));
+                api_reply_error(req, "500 Internal Server Error", "", "ota write failed");
+            }
             return ESP_FAIL;
         }
         remaining -= r;

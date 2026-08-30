@@ -87,8 +87,9 @@ if [ "$PIN_MOVED" = 1 ]; then
 fi
 
 # Only tracked changes matter — the build number comes from committed history; untracked
-# build artifacts don't change the release commit. (The one untracked file that COULD —
-# firmware/p4/sdkconfig — is deleted below so the build regenerates it from defaults.)
+# build artifacts don't change the release commit. (The two untracked files that COULD —
+# firmware/p4/sdkconfig and firmware/s3/sdkconfig — are deleted below so the build
+# regenerates both from defaults.)
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
     echo "ERROR: tracked changes present — commit them so the build number matches the release commit"; exit 1
 fi

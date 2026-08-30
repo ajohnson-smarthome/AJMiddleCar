@@ -9,6 +9,10 @@ if(NOT EXISTS "${VERSION_FILE}")
     message(FATAL_ERROR "version.txt not found at ${VERSION_FILE}")
 endif()
 file(STRINGS "${VERSION_FILE}" SEMVER LIMIT_COUNT 1)
+# Re-run configure when version.txt changes. The commit COUNT still refreshes only on
+# configure (a git state cannot be a configure dependency), so an incremental bench build
+# after new commits reports the count of its last configure — the release path fullcleans,
+# which is what makes release binaries exact. Recorded by the 2026-08-23 audit.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${VERSION_FILE}")
 string(STRIP "${SEMVER}" SEMVER)
 execute_process(

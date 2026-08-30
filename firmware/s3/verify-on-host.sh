@@ -1,6 +1,7 @@
 #!/bin/bash
-# The full Mac acceptance run for Plan 1: everything the plan promised, plus the
-# regression that cost a session's connectivity to find.
+# The full Mac acceptance run: everything Plan 1 promised, the regression that cost a
+# session's connectivity to find, and — since Plan 3 — the two ways POST /ota must
+# refuse an upload without leaving the dongle worse off for having tried.
 #
 # The two halves run in one pass, not two scripts, because they answer the same
 # question from opposite directions: "1. THE PLAN'S DELIVERABLE" below checks that
@@ -70,9 +71,12 @@ for i in $(seq 1 300); do
       curl -s --max-time 10 -X POST --data-binary @/tmp/ota-tiny.bin \
            -H 'Content-Type: application/octet-stream' http://192.168.7.1:8080/ota \
            -w "\n  [HTTP %{http_code}]\n" 2>&1 | sed 's/^/  /'
-      # This one DOES erase the inactive slot before IDF's magic check rejects the first write.
-      # That is harmless here and worth knowing: after a successful update the inactive slot holds
-      # the previous image, but rollback was already waived at boot, so nothing depends on it.
+      # This one DOES touch the inactive slot before IDF's magic check rejects the first write:
+      # esp_ota_begin(part, 8192, ...) erases ALIGN_UP(8192, 4096) = 8 KB — the image header,
+      # not the whole 4 MB slot — and, with rollback on, also calls
+      # esp_ota_invalidate_inactive_ota_data_slot(), leaving that slot doubly unusable. Harmless
+      # here and worth knowing: after a successful update the inactive slot holds the previous
+      # image, but rollback was already waived at boot, so nothing depends on it.
       echo "POST /ota with 8 KB of noise (must be refused — the first byte is not 0xE9):"
       head -c 8192 /dev/urandom > /tmp/ota-noise.bin
       curl -s --max-time 15 -X POST --data-binary @/tmp/ota-noise.bin \

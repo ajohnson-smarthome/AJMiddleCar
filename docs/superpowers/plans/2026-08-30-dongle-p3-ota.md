@@ -879,7 +879,19 @@ covered by the bench, and honestly so. In order:
    refusals return 400 with the dongle still answering afterwards.
 3. Push a real image with the README's `curl`. Expect `{"ok":true}`, an interface drop, and
    `/status` back within seconds carrying the same `fw` and `rollback:false`.
-4. The safety net, deliberately: build an image with a `return;` at the top of `app_main`, push
-   it, and confirm the dongle comes back on the PREVIOUS image with `rollback:true`. This is the
-   only test that proves rollback works, and it is the reason the whole feature is safe to have.
-   Do not skip it, and do not commit that image.
+4. The safety net, deliberately: build an image with `abort();` at the top of `app_main`, push
+   it, and confirm the dongle comes back on the PREVIOUS image with `rollback:true`. Not
+   `return;` — `app_main` returning is not a fault: IDF's `main_task` logs "Returned from
+   app_main()", deletes itself, and the system stays up. Nothing reboots, so rollback — which
+   only gets its chance at boot — never fires; the image sits alive, `PENDING_VERIFY` forever,
+   never enumerating USB, indistinguishable from a brick. `abort();` is a genuine panic, and the
+   built `sdkconfig` has `CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y` and
+   `CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS=0`, so it reboots immediately and the next boot
+   reverts. This is the only test that proves rollback works, and it is the reason the whole
+   feature is safe to have. Do not skip it, and do not commit that image.
+
+   The property this exposes, stated plainly because nothing else here says it: rollback
+   protects against an image that panics, not against an image that hangs. A hung image never
+   reboots either, so the bootloader never gets the chance the panic case gives it for free —
+   recovering from one needs the tester to unplug and replug the dongle. Trivial for a device
+   in your hand, but worth knowing before a silent dongle is mistaken for a bricked one.

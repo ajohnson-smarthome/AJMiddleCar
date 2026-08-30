@@ -60,7 +60,7 @@ static esp_err_t status_get(httpd_req_t *req)
 
     /* `state` is always "idle" in this firmware, and honestly so: there is no radio yet,
      * so there is nothing that could be joining, connected or failed. The field is here
-     * rather than added later because its SHAPE is final — Plan 3 gives it the other
+     * rather than added later because its SHAPE is final — Plan 4 gives it the other
      * values without moving a key or changing a caller. */
     /* 320, not 256. Worst case with the rollback field: 103 bytes of literal template,
      * + 31 (esp_app_desc_t.version is char[32]) + 31 (idf_ver, likewise) + 5 ("false")
@@ -95,11 +95,11 @@ esp_err_t status_api_start(void)
     read_rollback_state();
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    /* 8080, not 80: port 80 belongs to the car. Plan 3 forwards it straight through to
+    /* 8080, not 80: port 80 belongs to the car. Plan 4 forwards it straight through to
      * the car's own REST surface so that CarHost.port and the car's contract never move —
      * the dongle is the new thing in the system, so the dongle takes the unusual port. */
     cfg.server_port = DONGLE_PORT;
-    /* /status, GET /net, POST /net, and room for Plan 3's additions — sized so that a
+    /* /status, GET /net, POST /net, and room for Plan 4's additions — sized so that a
      * new endpoint is not also a config change. */
     cfg.max_uri_handlers = 6;
 
