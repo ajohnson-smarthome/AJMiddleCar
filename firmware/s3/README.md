@@ -22,6 +22,10 @@ The two ports are silkscreened `USB` and `COM`, and they are not interchangeable
 | Which port is the UART bridge | `COM` — WCH CH343, `0x1A86:0x55D3` → `/dev/cu.wchusbserial5C840016191` | 2026-08-29 |
 | Which port is native USB | `USB` — `0x303A:0x4001`, serial `123456` → `/dev/cu.usbmodem1234561` | 2026-08-29 |
 | Powers from a C-to-C cable, both orientations | **yes** — 5.1 kΩ present on CC1 and CC2 | 2026-08-29 |
+| macOS binds a CDC-NCM driver | **yes** — appears as `en11`, service "Espressif Device" | 2026-08-30 |
+| Dongle's DHCP server configures the host | **yes** — host takes `192.168.7.2/24` | 2026-08-30 |
+| Dongle answers on its own address | **yes** — `ping 192.168.7.1` 1.3 ms, 0% loss | 2026-08-30 |
+| Host keeps its own default route | **yes** — `route get 1.1.1.1` unchanged; internet and DNS unaffected | 2026-08-30 |
 
 The third row is the one that matters, and it was measured rather than assumed: a
 USB-C source supplies VBUS only after it sees Rd, so enumeration over a C-to-C cable
@@ -36,6 +40,29 @@ Note that `USB` currently enumerates as a serial device. It will stop doing so t
 moment TinyUSB claims the peripheral: on ESP32-S3 the native USB pins are muxed
 between the USB-Serial-JTAG controller and USB-OTG, and only one may hold them. A
 `USB` port that has gone quiet after flashing is the expected outcome, not a fault.
+
+## The dongle must never advertise itself as a gateway
+
+Learned the hard way on 2026-08-30: an early build set the interface's `gw` to its own address, so
+the DHCP server sent the **router option**. macOS ranks a wired service above Wi-Fi, installed a
+default route through the dongle, and posted every packet to a device with no uplink. The host lost
+the internet outright.
+
+The firmware now advertises no router (`esp_netif_dhcps_option` with
+`ESP_NETIF_ROUTER_SOLICITATION_ADDRESS`, plus `gw = 0.0.0.0`), and this is verified rather than
+assumed: `ipconfig getpacket en11` shows no `router` option, and `route get 1.1.1.1` is byte-identical
+with the dongle attached and detached.
+
+One thing cannot be fixed and does not need to be: IDF's DHCP server emits `domain_name_server` on
+every code path, advertising the dongle's own address when none is configured
+(`dhcpserver.c:502-506`). Measured effect on a real host: none — names resolve in 0.13 s with the
+dongle attached, because the host's own resolvers stay primary while we are not its default route.
+
+**A caveat for anyone debugging this.** A VPN client can re-bind its outer socket to the dongle the
+moment it appears, on the "wired beats Wi-Fi" heuristic, and then quietly fail to hand-shake through a
+device with no uplink — which looks exactly like the dongle stealing traffic. Tell them apart with
+`route get 1.1.1.1` (the routing decision itself) and `netstat -ibn -I en11` (a client retrying into
+the void shows lopsided counters and a packet every ~5 s). One client did this; another did not.
 
 ## Build
 
