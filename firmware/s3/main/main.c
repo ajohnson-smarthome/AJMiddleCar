@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 
+#include "net_api.h"
 #include "status_api.h"
 #include "usb_net.h"
 
@@ -26,6 +27,12 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     ESP_ERROR_CHECK(usb_net_start());
+    /* Before the server starts: /status reports the configured SSID, and a request
+     * arriving before net_api_load() runs would race the write to s_cfg and report an
+     * empty one. net_api_load() has no dependency on the server, so there is no reason
+     * for it to run after one exists. */
+    net_api_load();
     ESP_ERROR_CHECK(status_api_start());
+    ESP_ERROR_CHECK(net_api_register(status_api_server()));
     ESP_LOGI(TAG, "dongle up");
 }

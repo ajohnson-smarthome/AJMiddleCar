@@ -195,8 +195,9 @@ The bounds are WPA2's, not ours: 32 bytes is the maximum SSID length, and a PSK 
 characters cannot be used. An empty password means an open network, which the car's
 `identity.h` already contemplates.
 
-Both fields are required. A body missing either, or carrying an unknown key, is rejected whole —
-the car's domains behave the same way.
+Both fields are required and must be well-typed strings; a body missing either is rejected
+whole. An unknown key is ignored, not rejected — the car's `cfg_api.c` does the same, looking
+up each domain's own known fields by name and never checking for extras.
 
 ### `POST /ota` — update the dongle
 

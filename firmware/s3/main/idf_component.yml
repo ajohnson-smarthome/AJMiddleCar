@@ -2,3 +2,6 @@
 dependencies:
   espressif/esp_tinyusb:
     version: "^2.0.1~1"
+  # cJSON. Bundled inside ESP-IDF until 6.0, where it moved out to the component manager —
+  # same pin firmware/p4/main/idf_component.yml uses for the same reason.
+  espressif/cjson: '1.7.19~2'

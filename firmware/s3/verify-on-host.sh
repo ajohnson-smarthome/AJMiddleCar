@@ -48,7 +48,22 @@ for i in $(seq 1 300); do
       echo "dongle answers ping:"
       ping -c 3 -W 1000 -t 4 192.168.7.1 2>&1 | tail -2 | sed 's/^/  /'
       echo "GET /status:"
-      curl -s --max-time 5 -w "\n  [HTTP %{http_code} in %{time_total}s]\n" http://192.168.7.1/status 2>&1 | sed 's/^/  /'
+      curl -s --max-time 5 -w "\n  [HTTP %{http_code} in %{time_total}s]\n" http://192.168.7.1:8080/status 2>&1 | sed 's/^/  /'
+      echo
+      echo "GET /net (before):"
+      curl -s --max-time 5 -w "\n  [HTTP %{http_code} in %{time_total}s]\n" http://192.168.7.1:8080/net 2>&1 | sed 's/^/  /'
+      echo "POST /net (a network that does not exist — nothing here joins it):"
+      curl -s --max-time 5 -X POST http://192.168.7.1:8080/net \
+           -H 'Content-Type: application/json' \
+           -d '{"ssid":"BenchTest","password":"benchpass"}' \
+           -w "\n  [HTTP %{http_code} in %{time_total}s]\n" 2>&1 | sed 's/^/  /'
+      echo "GET /net (after — must show BenchTest, must NOT show the password):"
+      curl -s --max-time 5 -w "\n  [HTTP %{http_code} in %{time_total}s]\n" http://192.168.7.1:8080/net 2>&1 | sed 's/^/  /'
+      echo "POST /net with a 3-character password (must be refused, naming the field):"
+      curl -s --max-time 5 -X POST http://192.168.7.1:8080/net \
+           -H 'Content-Type: application/json' \
+           -d '{"ssid":"BenchTest","password":"abc"}' \
+           -w "\n  [HTTP %{http_code} in %{time_total}s]\n" 2>&1 | sed 's/^/  /'
       echo
       echo "=== 2. THE REGRESSION THAT MUST NOT RETURN ==="
       echo "route get 1.1.1.1 (must be unchanged from baseline):"
