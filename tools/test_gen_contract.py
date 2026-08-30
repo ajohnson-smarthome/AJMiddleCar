@@ -398,6 +398,8 @@ class TestDongleEmitters(unittest.TestCase):
         self.assertIn('#define DONGLE_DEVICE "ajdongle"', out)
         self.assertIn('#define DONGLE_HOST "192.168.7.1"', out)
         self.assertIn("#define DONGLE_PORT 8080", out)
+        self.assertIn("#define DONGLE_RELAY_HTTP_PORT 80", out)
+        self.assertIn("#define DONGLE_RELAY_RT_PORT 4210", out)
         self.assertIn("#define DONGLE_SSID_MAX 32", out)
         self.assertIn("#define DONGLE_PASS_MIN 8", out)
         # Pure means includable from net_cfg.h, which compiles with plain cc: no ESP-IDF,
@@ -439,6 +441,8 @@ class TestDongleEmitters(unittest.TestCase):
         self.assertIn('public static let device = "ajdongle"', out)
         self.assertIn('public static let host = "192.168.7.1"', out)
         self.assertIn("public static let port: UInt16 = 8080", out)
+        self.assertIn("public static let relayHttpPort: UInt16 = 80", out)
+        self.assertIn("public static let relayRtPort: UInt16 = 4210", out)
         self.assertIn('public static let statusPath = "/status"', out)
         self.assertIn('public static let netPath = "/net"', out)
         self.assertIn('public static let otaPath = "/ota"', out)

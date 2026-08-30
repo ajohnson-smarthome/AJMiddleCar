@@ -4,6 +4,8 @@ public enum DongleContract {
     public static let device = "ajdongle"
     public static let host = "192.168.7.1"
     public static let port: UInt16 = 8080
+    public static let relayHttpPort: UInt16 = 80
+    public static let relayRtPort: UInt16 = 4210
 
     public static let statusPath = "/status"
     public static let netPath = "/net"
