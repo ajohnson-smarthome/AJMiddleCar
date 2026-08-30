@@ -418,6 +418,7 @@ class TestDongleEmitters(unittest.TestCase):
         out = self.g.emit_dongle_c(self.s)
         self.assertIn('#define DONGLE_PATH_STATUS "/status"', out)
         self.assertIn('#define DONGLE_PATH_NET "/net"', out)
+        self.assertIn('#define DONGLE_PATH_OTA "/ota"', out)
 
     def test_c_header_carries_the_status_and_net_keys(self):
         # DONGLE_KEY_IDF is the fix's regression test: status_fields gained "idf" because
@@ -428,6 +429,7 @@ class TestDongleEmitters(unittest.TestCase):
         out = self.g.emit_dongle_c(self.s)
         self.assertIn('#define DONGLE_KEY_DEVICE "device"', out)
         self.assertIn('#define DONGLE_KEY_IDF "idf"', out)
+        self.assertIn('#define DONGLE_KEY_ROLLBACK "rollback"', out)
         self.assertIn('#define DONGLE_KEY_NET_SSID "ssid"', out)
         self.assertIn('#define DONGLE_NETKEY_SSID "ssid"', out)
         self.assertIn('#define DONGLE_NETKEY_PASSWORD "password"', out)
@@ -439,6 +441,7 @@ class TestDongleEmitters(unittest.TestCase):
         self.assertIn("public static let port: UInt16 = 8080", out)
         self.assertIn('public static let statusPath = "/status"', out)
         self.assertIn('public static let netPath = "/net"', out)
+        self.assertIn('public static let otaPath = "/ota"', out)
         self.assertIn("public static let ssidMax = 32", out)
         self.assertIn('public static let all = ["idle", "joining", "connected", "failed"]', out)
 
@@ -465,6 +468,7 @@ class TestDongleEmitters(unittest.TestCase):
         self.assertIn('public static let fw = "fw"', out)
         self.assertIn('public static let idf = "idf"', out)
         self.assertIn('public static let usb = "usb"', out)
+        self.assertIn('public static let rollback = "rollback"', out)
         self.assertIn('public static let net = "net"', out)
         self.assertIn('public static let netSsid = "ssid"', out)
         self.assertIn('public static let netState = "state"', out)

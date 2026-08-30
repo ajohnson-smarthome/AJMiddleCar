@@ -8,13 +8,15 @@
   },
   "endpoints": {
     "status": "/status",
-    "net": "/net"
+    "net": "/net",
+    "ota": "/ota"
   },
   "status_fields": {
     "device": "device",
     "fw": "fw",
     "idf": "idf",
     "usb": "usb",
+    "rollback": "rollback",
     "net": "net",
     "net_ssid": "ssid",
     "net_state": "state",
