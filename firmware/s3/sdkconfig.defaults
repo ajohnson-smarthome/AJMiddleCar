@@ -48,6 +48,17 @@ CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1
 CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
 
 # The relays forward between two interfaces, so lwIP must be willing to hold more sockets than
-# a single-purpose device needs: the HTTP server, the TCP relay's pool and its upstream halves,
-# and one UDP socket per real-time session.
-CONFIG_LWIP_MAX_SOCKETS=16
+# a single-purpose device needs. Worst-case budget, one line per consumer:
+#
+#   httpd (status_api.c, :8080): 1 listener + 1 ctrl_port + max_open_sockets(3, lowered from
+#     esp_http_server's default of 7 in status_api.c, since this is an admin API, not proxied
+#     REST traffic) = 5
+#   relay_udp.c (:4210): 1 phone-facing socket + UDP_SESS_MAX(4) car-facing sockets = 5
+#   relay_tcp.c (:80): 1 listener + RELAY_POOL_SIZE(4) slots x 2 sockets each
+#     (phone_sock + car_sock, held whether a slot is SLOT_CONNECTING or SLOT_ACTIVE) = 9
+#
+# Worst case total: 5 + 5 + 9 = 19. 24 leaves 5 sockets of headroom above that — comfortable
+# against a device with hundreds of KB of RAM to spare, and cheap to raise again if any of the
+# three consumers above grows. (Before this fix the budget was computed wrong and this value
+# was 16, seven short of the worst case — see task-5's review.)
+CONFIG_LWIP_MAX_SOCKETS=24

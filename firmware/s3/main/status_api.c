@@ -103,6 +103,14 @@ esp_err_t status_api_start(void)
     /* /status, GET /net, POST /net, and room for Plan 4's additions — sized so that a
      * new endpoint is not also a config change. */
     cfg.max_uri_handlers = 6;
+    /* Lowered from esp_http_server's default of 7: this device's whole lwIP socket table
+     * (CONFIG_LWIP_MAX_SOCKETS, sdkconfig.defaults) is shared with relay_udp.c and
+     * relay_tcp.c, which is where the full budget arithmetic lives — the comment there is
+     * the one to read for why this number is what it is. This server answers an admin API
+     * (/status, /net, /ota), not proxied REST traffic, so a couple of concurrent clients is
+     * already generous; it does not need the default's share of a table the relays need
+     * far more of. */
+    cfg.max_open_sockets = 3;
 
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &cfg), TAG, "cannot start the server");
 

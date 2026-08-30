@@ -2,7 +2,6 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <string.h>
 
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -11,6 +10,7 @@
 #include "lwip/sockets.h"
 
 #include "dongle_contract.inc"
+#include "tcp_pending.h"
 #include "wifi_sta.h"
 
 static const char *TAG = "relay_tcp";
@@ -24,12 +24,26 @@ static const char *TAG = "relay_tcp";
 /* TCP is a byte stream, not a datagram: unlike relay_udp.c's RELAY_BUF_LEN, this needs no
  * "+1 to detect truncation" trick. A recv() that does not drain everything queued just
  * leaves the remainder queued for the next pass — nothing is lost at a buffer boundary the
- * way a UDP datagram would be. 1460 bytes per the brief. */
-#define RELAY_BUF_LEN 1460
+ * way a UDP datagram would be. 1460 bytes per the brief — the same 1460 as tcp_pending.h's
+ * TCP_PENDING_BUF_LEN, on purpose: a backlog can never need to hold more than one read
+ * produced in a single shot, so the two are defined in terms of each other rather than as
+ * two numbers that happen to agree today. */
+#define RELAY_BUF_LEN TCP_PENDING_BUF_LEN
 
-/* select()'s timeout, and therefore the cadence of the gateway poll below — one second,
- * same rhythm as relay_udp.c. */
+/* select()'s timeout, and therefore the cadence of the gateway poll and the connect-timeout
+ * check below — one second, same rhythm as relay_udp.c. */
 #define RELAY_LOOP_MS 1000
+
+/* How long a SLOT_CONNECTING slot is allowed to wait for the upstream connect() to resolve
+ * before this relay gives up on it. Sized against a station that is already associated to
+ * the car's softAP (relay_task waits for wifi_sta_gateway() before it ever opens the
+ * listener, so an *initial* association is never on this clock) but that could have dropped
+ * and be silently re-associating at the exact moment a phone's connection arrives — plus an
+ * ordinary TCP handshake's round trips. A few seconds covers that with room to spare; it is
+ * nowhere near CONFIG_LWIP_TCP_SYNMAXRTX's (12) multi-minute worst case, which is exactly
+ * the point — see relay_tcp.h and the task-5 report for why that worst case must not be
+ * allowed to pin a slot. */
+#define RELAY_CONNECT_TIMEOUT_MS 5000
 
 /* One task, so the receive scratch buffers can live at file scope instead of the task's own
  * stack — see relay_udp.c's identical comment for why that is a requirement here and not
@@ -40,25 +54,21 @@ static const char *TAG = "relay_tcp";
 static char s_phone_buf[RELAY_BUF_LEN];
 static char s_car_buf[RELAY_BUF_LEN];
 
-/* Pending buffers are the one place that "reused per pass, not per slot" rule does not apply,
- * and deliberately so: when a destination's own TCP send buffer is momentarily full,
+/* Pending backlogs are the one place that "reused per pass, not per slot" rule does not
+ * apply, and deliberately so: when a destination's own TCP send buffer is momentarily full,
  * pump_read (below) cannot forward the whole chunk it just read, and the unsent remainder has
  * to live somewhere that survives past this pass — and past whatever OTHER slot this task
  * services next, since it is still the same single task working through all four. That makes
- * a pending backlog inherently per slot AND per direction, not a shared scratch. Sized like
- * the scratch buffers (1460 bytes) because a backlog can never exceed what a single pump_read
- * call read in one shot. 4 slots × 2 directions × sizeof(pending_t) is roughly 11.7 KiB of
- * static RAM — see the task-5 report for the exact figure — comfortable against the S3's
- * 512 KiB of internal SRAM. Cleared by close_slot whenever a slot frees, so a connection that
- * later reuses the same index never inherits and flushes a stranger's leftover bytes. */
-typedef struct {
-    char buf[RELAY_BUF_LEN];
-    int len;    /* valid bytes waiting to be sent; 0 means nothing pending for this direction */
-    int off;    /* how many of those bytes have already gone out */
-} pending_t;
-
-static pending_t s_p2c_pending[RELAY_POOL_SIZE];   /* phone -> car backlog, indexed by slot */
-static pending_t s_c2p_pending[RELAY_POOL_SIZE];   /* car -> phone backlog, indexed by slot */
+ * a backlog inherently per slot AND per direction, not a shared scratch — a different rule
+ * for a different job, not a violation of the first one. File-scope statics for the same
+ * stack-safety reason as the scratch buffers above. 4 slots × 2 directions ×
+ * sizeof(tcp_pending_t) is 11,744 bytes (~11.47 KiB) of static RAM — see the task-5 report
+ * for the arithmetic — comfortable against the S3's 512 KiB of internal SRAM. The bookkeeping
+ * itself (stash a chunk, advance on partial progress, know when empty) lives in
+ * tcp_pending.{c,h} as a pure, host-tested module; this file only owns the sockets around
+ * it. */
+static tcp_pending_t s_p2c_pending[RELAY_POOL_SIZE];   /* phone -> car backlog, by slot */
+static tcp_pending_t s_c2p_pending[RELAY_POOL_SIZE];   /* car -> phone backlog, by slot */
 
 typedef enum {
     SLOT_FREE = 0,     /* no connection; both sockets -1 */
@@ -70,6 +80,7 @@ typedef struct {
     slot_state_t state;
     int phone_sock;
     int car_sock;
+    uint32_t connect_started_ms;    /* meaningful only while state == SLOT_CONNECTING */
 } tcp_slot_t;
 
 typedef struct {
@@ -78,11 +89,19 @@ typedef struct {
     uint32_t gateway_be;   /* network byte order, meaningful once the wait loop below returns */
 } relay_state_t;
 
+static uint32_t now_ms(void)
+{
+    return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+}
+
 /* Every socket this relay opens is made non-blocking, here, right after it is created —
- * before it is ever added to a select() set. See relay_udp.c's set_nonblocking for the fd-
- * reuse hazard this avoids: the same rhythm (a slot freed by one peer's close, a new accept
- * in the same pass) applies here too, and lwIP's alloc_socket can hand the freed fd straight
- * back. Non-blocking turns a stale readiness bit into EAGAIN/EWOULDBLOCK, not a hang. */
+ * before it is ever added to a select() set. This file's design depends on it directly:
+ * SLOT_CONNECTING's connect() only works non-blocking, and flush_pending/pump_read's whole
+ * backpressure scheme is built on recv()/send() returning EAGAIN/EWOULDBLOCK rather than
+ * blocking when there is nothing to do right now. It is also defense in depth against the
+ * specific hazard relay_udp.c has to survive (a slot freed and a new accept landing on the
+ * same fd number within one pass) — though see the per-slot loop below for why that
+ * particular scenario cannot actually arise in this file's control flow. */
 static bool set_nonblocking(int s)
 {
     int flags = fcntl(s, F_GETFL, 0);
@@ -97,10 +116,15 @@ static bool set_nonblocking(int s)
  * both are already -1) and frees it. The single exit for every "this connection is over"
  * path in this file: no half-close. Either half returning 0 or an error takes this path for
  * both sockets together, never one alone — the car's REST surface has no use for a half-open
- * connection, and closing only one leaks the slot's other socket forever. */
-static void close_slot(tcp_slot_t *slots, int idx, const char *why)
+ * connection, and closing only one leaks the slot's other socket forever.
+ *
+ * Takes the whole relay_state_t, not a bare tcp_slot_t array, so the coupling to this slot's
+ * pending backlogs below is structural rather than a raw idx into file-scope arrays that
+ * merely happen to be indexed the same way reaim, handle_accept and every other stateful
+ * function in this file take relay_state_t for the same reason. */
+static void close_slot(relay_state_t *r, int idx, const char *why)
 {
-    tcp_slot_t *s = &slots[idx];
+    tcp_slot_t *s = &r->slots[idx];
     if (s->state == SLOT_FREE) {
         return;
     }
@@ -112,10 +136,8 @@ static void close_slot(tcp_slot_t *slots, int idx, const char *why)
     /* A slot's pending backlog belongs to the connection that just ended; clear both
      * directions so a future occupant of this same index starts empty rather than inheriting
      * — and eventually flushing — a stranger's leftover bytes. */
-    s_p2c_pending[idx].len = 0;
-    s_p2c_pending[idx].off = 0;
-    s_c2p_pending[idx].len = 0;
-    s_c2p_pending[idx].off = 0;
+    tcp_pending_clear(&s_p2c_pending[idx]);
+    tcp_pending_clear(&s_c2p_pending[idx]);
     /* Unlike relay_udp.c's per-datagram sends, a TCP connection's close is a rare event —
      * on the order of one per REST request, not one per 10 Hz frame — so this is logged
      * plainly every time rather than rate-limited. */
@@ -124,28 +146,33 @@ static void close_slot(tcp_slot_t *slots, int idx, const char *why)
 
 /* Sends as much of a slot's already-buffered backlog as dst currently accepts. Called only
  * when select() has just reported dst writable for this direction, which only happens while
- * the direction actually has something pending (see relay_task's fd-set build) — so p->len >
- * p->off is guaranteed here. Makes exactly one send() attempt: whatever dst still cannot take
- * simply stays pending, and dst stays in next pass's writefds until select() says it is worth
- * trying again. No retry loop and no delay — the earlier version of this file spun on EAGAIN
- * with a bounded wait, which blocked this single task's attention (and so every other slot)
- * for up to a second at a time; this version never calls send() more than once without a
- * fresh select() saying to. */
-static void flush_pending(tcp_slot_t *slots, int idx, int dst, pending_t *p)
+ * the direction actually has something pending (see relay_task's fd-set build) — so
+ * !tcp_pending_empty(p) is guaranteed here. Makes exactly one send() attempt: whatever dst
+ * still cannot take simply stays pending, and dst stays in next pass's writefds until
+ * select() says it is worth trying again. No retry loop and no delay — an earlier version of
+ * this file spun on EAGAIN with a bounded wait, which blocked this single task's attention
+ * (and so every other slot) for up to a second at a time; this version never calls send()
+ * more than once without a fresh select() saying to. */
+static void flush_pending(relay_state_t *r, int idx, int dst, tcp_pending_t *p,
+                           const char *label)
 {
-    int w = send(dst, p->buf + p->off, (size_t)(p->len - p->off), 0);
+    int remaining = p->len - p->off;
+    int w = send(dst, p->buf + p->off, (size_t)remaining, 0);
     if (w > 0) {
-        p->off += w;
-        if (p->off == p->len) {
-            p->len = 0;
-            p->off = 0;
-        }
+        tcp_pending_advance(p, w);
         return;
     }
-    if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-        return;   /* still full; select() will say so again next pass if this persists */
+    if (w == 0 || (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
+        /* No progress this attempt — not an error. lwIP never actually returns 0 for a
+         * non-zero-length non-blocking send(), so the w == 0 half of this is unreachable in
+         * practice; it is folded in here rather than treated as fatal so this function agrees
+         * with pump_read's identical treatment of the same (unreachable) case, instead of the
+         * two silently disagreeing about what a send() returning 0 would mean. The backlog
+         * stays; select() will say so again next pass if dst is still not ready. */
+        return;
     }
-    close_slot(slots, idx, "forwarding failed");   /* w == 0, or a real error */
+    ESP_LOGW(TAG, "%s forwarding failed on slot %d: errno %d", label, idx, errno);
+    close_slot(r, idx, "forwarding failed");
 }
 
 /* One direction of one slot: called only when its source is in this pass's readfds, which
@@ -162,8 +189,8 @@ static void flush_pending(tcp_slot_t *slots, int idx, int dst, pending_t *p)
  * label is purely for the log line ("phone->car" or "car->phone"). Closes the slot on a clean
  * EOF, a real recv() error, or a forwarding failure, and leaves it alone on EAGAIN (nothing to
  * do this pass) exactly like relay_udp.c's read paths. */
-static void pump_read(tcp_slot_t *slots, int idx, int src, int dst, char *scratch,
-                       pending_t *p, const char *label)
+static void pump_read(relay_state_t *r, int idx, int src, int dst, char *scratch,
+                       tcp_pending_t *p, const char *label)
 {
     int n = recv(src, scratch, RELAY_BUF_LEN, 0);
     if (n > 0) {
@@ -173,26 +200,25 @@ static void pump_read(tcp_slot_t *slots, int idx, int src, int dst, char *scratc
         }
         if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
             ESP_LOGW(TAG, "%s forwarding failed on slot %d: errno %d", label, idx, errno);
-            close_slot(slots, idx, "forwarding failed");
+            close_slot(r, idx, "forwarding failed");
             return;
         }
-        /* Partial (0 <= w < n) or nothing accepted at all (w < 0, EAGAIN) — either way not an
-         * error: a fast producer outrunning a slow consumer is the ordinary condition this
+        /* Partial (0 <= w < n) or nothing accepted at all (w < 0, EAGAIN, or the same
+         * unreachable-in-practice w == 0 flush_pending's comment describes) — either way not
+         * an error: a fast producer outrunning a slow consumer is the ordinary condition this
          * backlog exists for, not something to log. Stash the unsent remainder; the fd-set
          * build (relay_task) does the actual throttling from here. */
         int sent = (w > 0) ? w : 0;
-        memcpy(p->buf, scratch + sent, (size_t)(n - sent));
-        p->len = n - sent;
-        p->off = 0;
+        tcp_pending_stash(p, scratch, n, sent);
         return;
     }
     if (n == 0) {
-        close_slot(slots, idx, "peer closed");
+        close_slot(r, idx, "peer closed");
         return;
     }
     if (errno != EAGAIN && errno != EWOULDBLOCK) {
         ESP_LOGW(TAG, "%s recv failed on slot %d: errno %d", label, idx, errno);
-        close_slot(slots, idx, "recv error");
+        close_slot(r, idx, "recv error");
     }
 }
 
@@ -206,7 +232,7 @@ static void reaim(relay_state_t *r, uint32_t gateway_be)
     ESP_LOGW(TAG, "gateway changed — closing every live REST session");
     for (int i = 0; i < RELAY_POOL_SIZE; i++) {
         if (r->slots[i].state != SLOT_FREE) {
-            close_slot(r->slots, i, "gateway changed");
+            close_slot(r, i, "gateway changed");
         }
     }
     r->gateway_be = gateway_be;
@@ -223,9 +249,17 @@ static void handle_accept(relay_state_t *r)
     int c = accept(r->listen_sock, (struct sockaddr *)&from, &flen);
     if (c < 0) {
         /* Non-blocking (set_nonblocking on the listener, below): a stale readiness bit costs
-         * an EAGAIN here, not a wait — same guarantee as every recv() in this file. */
+         * an EAGAIN here, not a wait — same guarantee as every recv() in this file. Anything
+         * else — most plausibly the socket table itself being exhausted — repeats every pass
+         * for as long as a client keeps retrying, so it is rate-limited like relay_udp.c's
+         * per-datagram warnings rather than left to flood the sole UART console. */
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            ESP_LOGW(TAG, "accept: errno %d", errno);
+            static uint32_t last_log;
+            uint32_t t = now_ms();
+            if ((uint32_t)(t - last_log) > 1000) {
+                last_log = t;
+                ESP_LOGW(TAG, "accept: errno %d", errno);
+            }
         }
         return;
     }
@@ -244,16 +278,30 @@ static void handle_accept(relay_state_t *r)
     if (idx < 0) {
         /* Step 4 of the brief: close immediately rather than queue. A REST client sees a
          * refused connection and retries; a client held open by a relay with no capacity
-         * sees a hang instead — worse, and harder to diagnose. */
-        ESP_LOGW(TAG, "REST relay pool full (%d slots) — refusing a connection",
-                 RELAY_POOL_SIZE);
+         * sees a hang instead — worse, and harder to diagnose. Rate-limited: a client
+         * retrying against a pool that stays genuinely full hits this every pass. */
+        static uint32_t last_log;
+        uint32_t t = now_ms();
+        if ((uint32_t)(t - last_log) > 1000) {
+            last_log = t;
+            ESP_LOGW(TAG, "REST relay pool full (%d slots) — refusing a connection",
+                     RELAY_POOL_SIZE);
+        }
         close(c);
         return;
     }
 
     int car = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (car < 0) {
-        ESP_LOGW(TAG, "upstream socket: errno %d", errno);
+        /* Rate-limited for the same reason as the accept() failure above: a genuinely
+         * exhausted socket table fails this on every accepted connection a retrying client
+         * sends. */
+        static uint32_t last_log;
+        uint32_t t = now_ms();
+        if ((uint32_t)(t - last_log) > 1000) {
+            last_log = t;
+            ESP_LOGW(TAG, "upstream socket: errno %d", errno);
+        }
         close(c);
         return;
     }
@@ -268,7 +316,9 @@ static void handle_accept(relay_state_t *r)
      * through the same select() loop that watches every other socket — completion is
      * observed as car_sock becoming writable (see the SLOT_CONNECTING handling in
      * relay_task). A car that is powered but slow to answer therefore costs this one slot,
-     * never the other three. */
+     * never the other three — bounded further by RELAY_CONNECT_TIMEOUT_MS below, since a
+     * car that is off rather than merely slow can otherwise pin this slot for the several
+     * minutes CONFIG_LWIP_TCP_SYNMAXRTX's retry budget allows. */
     struct sockaddr_in dst = {
         .sin_family = AF_INET,
         .sin_addr.s_addr = r->gateway_be,
@@ -282,8 +332,16 @@ static void handle_accept(relay_state_t *r)
         r->slots[idx].state = SLOT_ACTIVE;
     } else if (errno == EINPROGRESS) {
         r->slots[idx].state = SLOT_CONNECTING;
+        r->slots[idx].connect_started_ms = now_ms();
     } else {
-        ESP_LOGW(TAG, "upstream connect: errno %d", errno);
+        /* Rate-limited: a car actively refusing the port (ECONNREFUSED comes back fast, no
+         * SYN retries involved) fails this on every attempt a retrying client makes. */
+        static uint32_t last_log;
+        uint32_t t = now_ms();
+        if ((uint32_t)(t - last_log) > 1000) {
+            last_log = t;
+            ESP_LOGW(TAG, "upstream connect: errno %d", errno);
+        }
         close(car);
         close(c);
         return;
@@ -292,12 +350,79 @@ static void handle_accept(relay_state_t *r)
     r->slots[idx].car_sock = car;
 }
 
+/* One SLOT_CONNECTING slot, checked every pass regardless of what select() returned. Three
+ * things can end a connect attempt, and Step 6 of the brief ("either half returning 0 or an
+ * error closes both and frees the slot") is not scoped to SLOT_ACTIVE — it applies here too:
+ *
+ * 1. The deadline. Checked first and unconditionally, because a car that never answers at
+ *    all — the ordinary failure mode of "the car is off", not an exotic one — leaves
+ *    select() timing out with nothing ready, pass after pass; only a check that runs whether
+ *    or not select() found anything can ever catch that.
+ * 2. The phone hanging up while this relay is still waiting on the car. Watched via
+ *    MSG_PEEK, not a real recv(): a phone that has already sent its request (an ordinary
+ *    thing to do right after connect(), without waiting for anything from the far end) must
+ *    not have those bytes silently discarded here — there is nowhere to stash them, since
+ *    this slot has no pending backlog until it is ACTIVE. MSG_PEEK reports EOF/error without
+ *    consuming a live request, leaving it queued for pump_read once this slot goes ACTIVE.
+ * 3. The connect() itself resolving, via the SO_ERROR/writable check the brief describes.
+ *
+ * Any of the three can close the slot; each returns immediately after doing so rather than
+ * falling into the next check on a slot that no longer exists. */
+static void handle_connecting(relay_state_t *r, int i, bool had_ready, fd_set *rfds,
+                               fd_set *wfds)
+{
+    tcp_slot_t *s = &r->slots[i];
+
+    if ((uint32_t)(now_ms() - s->connect_started_ms) >= RELAY_CONNECT_TIMEOUT_MS) {
+        /* Same wraparound-safe elapsed-time idiom as udp_sess_expire's: this subtraction
+         * elapses correctly even across the millisecond counter's ~49.7-day wrap. */
+        ESP_LOGW(TAG, "upstream connect timed out (slot %d)", i);
+        close_slot(r, i, "connect timed out");
+        return;
+    }
+
+    if (had_ready && FD_ISSET(s->phone_sock, rfds)) {
+        char peek;
+        int n = recv(s->phone_sock, &peek, sizeof(peek), MSG_PEEK);
+        if (n == 0) {
+            close_slot(r, i, "phone closed during connect");
+            return;
+        }
+        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            /* Mirrors pump_read's "recv failed" path: a real error, not an ordinary hangup,
+             * so the errno is worth keeping — this whole connect-in-progress window is the
+             * least-proven part of the file. */
+            ESP_LOGW(TAG, "phone recv during connect failed (slot %d): errno %d", i, errno);
+            close_slot(r, i, "phone closed during connect");
+            return;
+        }
+        /* n > 0: a real request byte is queued and MSG_PEEK left it untouched in the kernel
+         * buffer for pump_read to read for real once this slot goes ACTIVE. n < 0 with
+         * EAGAIN: a spurious wakeup: nothing to do. Either way, keep waiting on the car. */
+    }
+
+    if (had_ready && FD_ISSET(s->car_sock, wfds)) {
+        int err = 0;
+        socklen_t elen = sizeof(err);
+        if (getsockopt(s->car_sock, SOL_SOCKET, SO_ERROR, &err, &elen) < 0) {
+            ESP_LOGW(TAG, "upstream connect: getsockopt failed (slot %d): errno %d", i, errno);
+            close_slot(r, i, "connect failed");
+        } else if (err != 0) {
+            ESP_LOGW(TAG, "upstream connect failed (slot %d): errno %d", i, err);
+            close_slot(r, i, "connect failed");
+        } else {
+            s->state = SLOT_ACTIVE;
+        }
+    }
+}
+
 static void relay_task(void *arg)
 {
     (void)arg;
     relay_state_t r = { .listen_sock = -1, .gateway_be = 0 };
     for (int i = 0; i < RELAY_POOL_SIZE; i++) {
-        r.slots[i] = (tcp_slot_t){ .state = SLOT_FREE, .phone_sock = -1, .car_sock = -1 };
+        r.slots[i] = (tcp_slot_t){ .state = SLOT_FREE, .phone_sock = -1, .car_sock = -1,
+                                    .connect_started_ms = 0 };
     }
 
     /* Nowhere to forward until the station has joined at least once — same wait as
@@ -367,8 +492,8 @@ static void relay_task(void *arg)
         for (int i = 0; i < RELAY_POOL_SIZE; i++) {
             tcp_slot_t *s = &r.slots[i];
             if (s->state == SLOT_ACTIVE) {
-                pending_t *p2c = &s_p2c_pending[i];
-                pending_t *c2p = &s_c2p_pending[i];
+                tcp_pending_t *p2c = &s_p2c_pending[i];
+                tcp_pending_t *c2p = &s_c2p_pending[i];
                 /* Backpressure: offer a side for reading only while ITS OWN outbound
                  * backlog is empty — offering it while backed up would let this task keep
                  * accepting bytes it already knows it cannot deliver. Offer the other side
@@ -376,14 +501,14 @@ static void relay_task(void *arg)
                  * in both sets in the same pass (e.g. phone_sock readable for phone->car
                  * while also in writefds to drain a car->phone backlog) — the two
                  * directions of one TCP connection are independent. */
-                if (p2c->len == 0) {
+                if (tcp_pending_empty(p2c)) {
                     FD_SET(s->phone_sock, &rfds);
                     if (s->phone_sock > maxfd) maxfd = s->phone_sock;
                 } else {
                     FD_SET(s->car_sock, &wfds);
                     if (s->car_sock > maxfd) maxfd = s->car_sock;
                 }
-                if (c2p->len == 0) {
+                if (tcp_pending_empty(c2p)) {
                     FD_SET(s->car_sock, &rfds);
                     if (s->car_sock > maxfd) maxfd = s->car_sock;
                 } else {
@@ -392,7 +517,11 @@ static void relay_task(void *arg)
                 }
             } else if (s->state == SLOT_CONNECTING) {
                 /* connect() completion is observed as writability, not readability — see
-                 * handle_accept's comment. */
+                 * handle_accept's comment. The phone side is watched too, so a hangup mid-
+                 * connect is noticed rather than pinning the slot until the connect deadline
+                 * — see handle_connecting. */
+                FD_SET(s->phone_sock, &rfds);
+                if (s->phone_sock > maxfd) maxfd = s->phone_sock;
                 FD_SET(s->car_sock, &wfds);
                 if (s->car_sock > maxfd) maxfd = s->car_sock;
             }
@@ -400,67 +529,61 @@ static void relay_task(void *arg)
 
         struct timeval tv = { .tv_sec = RELAY_LOOP_MS / 1000, .tv_usec = 0 };
         int nready = select(maxfd + 1, &rfds, &wfds, NULL, &tv);
-        if (nready > 0) {
-            if (FD_ISSET(r.listen_sock, &rfds)) {
-                handle_accept(&r);
-            }
-
-            for (int i = 0; i < RELAY_POOL_SIZE; i++) {
-                tcp_slot_t *s = &r.slots[i];
-
-                if (s->state == SLOT_CONNECTING && FD_ISSET(s->car_sock, &wfds)) {
-                    int err = 0;
-                    socklen_t elen = sizeof(err);
-                    if (getsockopt(s->car_sock, SOL_SOCKET, SO_ERROR, &err, &elen) < 0) {
-                        ESP_LOGW(TAG, "upstream connect: getsockopt failed (slot %d): errno %d",
-                                 i, errno);
-                        close_slot(r.slots, i, "connect failed");
-                    } else if (err != 0) {
-                        ESP_LOGW(TAG, "upstream connect failed (slot %d): errno %d", i, err);
-                        close_slot(r.slots, i, "connect failed");
-                    } else {
-                        s->state = SLOT_ACTIVE;
-                    }
-                    /* Either way, nothing queued to pump on this slot yet this pass — a
-                     * freshly-connected socket has no data waiting, and a just-closed one
-                     * has no sockets left to read. */
-                    continue;
-                }
-
-                if (s->state != SLOT_ACTIVE) {
-                    continue;
-                }
-
-                pending_t *p2c = &s_p2c_pending[i];
-                pending_t *c2p = &s_c2p_pending[i];
-
-                /* Flush before reading more: draining a backlog is what earns a throttled
-                 * side its way back into next pass's readfds (see the fd-set build above),
-                 * so do it first. Every step re-checks state == SLOT_ACTIVE first: any one
-                 * of these four calls can close this same slot (a forwarding failure, a
-                 * peer hanging up), and once it does its sockets are -1 — FD_ISSET on a
-                 * closed slot's stale fd number is exactly what must not happen, so the
-                 * state check has to run, and short-circuit, before it. */
-                if (p2c->len > 0 && FD_ISSET(s->car_sock, &wfds)) {
-                    flush_pending(r.slots, i, s->car_sock, p2c);
-                }
-                if (s->state == SLOT_ACTIVE && c2p->len > 0 && FD_ISSET(s->phone_sock, &wfds)) {
-                    flush_pending(r.slots, i, s->phone_sock, c2p);
-                }
-                /* Non-blocking (set_nonblocking on both sockets, at creation): a stale
-                 * readiness bit here — this slot's fd reused by an eviction after select()
-                 * sampled it — costs an EAGAIN inside pump_read, not a wait. */
-                if (s->state == SLOT_ACTIVE && FD_ISSET(s->phone_sock, &rfds)) {
-                    pump_read(r.slots, i, s->phone_sock, s->car_sock, s_phone_buf, p2c,
-                              "phone->car");
-                }
-                if (s->state == SLOT_ACTIVE && FD_ISSET(s->car_sock, &rfds)) {
-                    pump_read(r.slots, i, s->car_sock, s->phone_sock, s_car_buf, c2p,
-                              "car->phone");
-                }
-            }
-        } else if (nready < 0 && errno != EINTR) {
+        if (nready < 0 && errno != EINTR) {
             ESP_LOGW(TAG, "select: errno %d", errno);
+        }
+
+        if (nready > 0 && FD_ISSET(r.listen_sock, &rfds)) {
+            handle_accept(&r);
+        }
+
+        for (int i = 0; i < RELAY_POOL_SIZE; i++) {
+            tcp_slot_t *s = &r.slots[i];
+
+            if (s->state == SLOT_CONNECTING) {
+                /* Runs every pass, not only when select() found something — see
+                 * handle_connecting's own comment on why the deadline needs that. */
+                handle_connecting(&r, i, nready > 0, &rfds, &wfds);
+                continue;
+            }
+
+            if (s->state != SLOT_ACTIVE || nready <= 0) {
+                continue;
+            }
+
+            tcp_pending_t *p2c = &s_p2c_pending[i];
+            tcp_pending_t *c2p = &s_c2p_pending[i];
+
+            /* Flush before reading more: draining a backlog is what earns a throttled side
+             * its way back into next pass's readfds (see the fd-set build above), so do it
+             * first. The first flush below relies on the `state != SLOT_ACTIVE` check just
+             * above — state is guaranteed ACTIVE here, nothing has run yet to change it.
+             * Each of the three steps after it re-checks state == SLOT_ACTIVE explicitly,
+             * because any earlier one in this sequence (a forwarding failure, a peer hanging
+             * up) can close this same slot, and once it does its sockets are -1 — FD_ISSET
+             * on a closed slot's stale fd number is exactly what must not happen. */
+            if (!tcp_pending_empty(p2c) && FD_ISSET(s->car_sock, &wfds)) {
+                flush_pending(&r, i, s->car_sock, p2c, "phone->car");
+            }
+            if (s->state == SLOT_ACTIVE && !tcp_pending_empty(c2p) &&
+                FD_ISSET(s->phone_sock, &wfds)) {
+                flush_pending(&r, i, s->phone_sock, c2p, "car->phone");
+            }
+            /* This is not the same fd-reuse hazard relay_udp.c has to survive: handle_accept
+             * — the only place this file ever creates a socket — always runs once, earlier
+             * in this same pass (just above), before any close_slot call here can free one.
+             * So no socket this pass's select() marked ready is ever handed to a new
+             * connection before this pass finishes examining it; a freed fd is only reused
+             * starting the NEXT pass's handle_accept, by which time a fresh select() has
+             * already run and correctly reflects it. Every socket here stays non-blocking
+             * regardless (see set_nonblocking's comment) — that is defense in depth here,
+             * not the reason it is needed. */
+            if (s->state == SLOT_ACTIVE && FD_ISSET(s->phone_sock, &rfds)) {
+                pump_read(&r, i, s->phone_sock, s->car_sock, s_phone_buf, p2c, "phone->car");
+            }
+            if (s->state == SLOT_ACTIVE && FD_ISSET(s->car_sock, &rfds)) {
+                pump_read(&r, i, s->car_sock, s->phone_sock, s_car_buf, c2p, "car->phone");
+            }
         }
     }
 }
