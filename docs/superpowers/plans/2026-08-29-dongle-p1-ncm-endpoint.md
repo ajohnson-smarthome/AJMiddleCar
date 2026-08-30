@@ -470,9 +470,13 @@ esp_err_t usb_net_start(void)
 {
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "cannot init esp_netif");
 
+    /* No gateway: `gw` stays 0.0.0.0, and the DHCP server is told below to advertise
+     * neither a router nor a DNS server. This is the feature, not an omission — a host
+     * that accepts us as its gateway sends everything to a device with no uplink, and
+     * macOS ranks a wired service above Wi-Fi, so it would do exactly that. The phone
+     * keeps its own default route; we are reachable on our own subnet and nowhere else. */
     esp_netif_ip_info_t ip = { 0 };
     ESP_RETURN_ON_ERROR(esp_netif_str_to_ip4(USB_NET_ADDR, &ip.ip), TAG, "bad address");
-    ESP_RETURN_ON_ERROR(esp_netif_str_to_ip4(USB_NET_ADDR, &ip.gw), TAG, "bad gateway");
     ESP_RETURN_ON_ERROR(esp_netif_str_to_ip4(USB_NET_MASK, &ip.netmask), TAG, "bad netmask");
 
     esp_netif_inherent_config_t base = ESP_NETIF_INHERENT_DEFAULT_ETH();
@@ -522,6 +526,18 @@ esp_err_t usb_net_start(void)
     ESP_RETURN_ON_ERROR(esp_netif_set_mac(s_netif, our_mac), TAG, "cannot set the MAC");
 
     ESP_RETURN_ON_ERROR(esp_netif_attach(s_netif, &driver), TAG, "cannot attach");
+
+    /* Suppress both DHCP adverts, before the server starts. Zero is neither
+     * OFFER_ROUTER nor OFFER_DNS: the host gets an address and a netmask, and keeps
+     * its own router and resolvers. Advertising DNS is as damaging as advertising a
+     * route — queries into a black hole break a host that still has a correct default. */
+    uint8_t offer = 0;
+    ESP_RETURN_ON_ERROR(esp_netif_dhcps_option(s_netif, ESP_NETIF_OP_SET,
+                                               ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,
+                                               &offer, sizeof(offer)), TAG, "cannot drop the router advert");
+    ESP_RETURN_ON_ERROR(esp_netif_dhcps_option(s_netif, ESP_NETIF_OP_SET,
+                                               ESP_NETIF_DOMAIN_NAME_SERVER,
+                                               &offer, sizeof(offer)), TAG, "cannot drop the DNS advert");
 
     ESP_LOGI(TAG, "usb net up on %s", USB_NET_ADDR);
     return ESP_OK;
