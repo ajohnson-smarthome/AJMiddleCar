@@ -33,3 +33,18 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
+
+# The S3 has its own radio — unlike the P4, which has none and drives a C6 over SDIO. Nothing
+# here is a co-processor; esp_wifi talks to silicon on the same die.
+#
+# Station only. The dongle never becomes an AP: the phone reaches it over USB, and a softAP
+# would be a second radio interface for the API guard to worry about and for nobody to use.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+
+# The relays forward between two interfaces, so lwIP must be willing to hold more sockets than
+# a single-purpose device needs: the HTTP server, the TCP relay's pool and its upstream halves,
+# and one UDP socket per real-time session.
+CONFIG_LWIP_MAX_SOCKETS=16

@@ -8,6 +8,7 @@
 #include "nvs.h"
 
 #include "api_util.h"
+#include "wifi_sta.h"
 
 static const char *TAG = "net_api";
 
@@ -148,6 +149,7 @@ static esp_err_t net_post(httpd_req_t *req)
     s_cfg = next;
     s_configured = true;
     ESP_LOGI(TAG, "network set: %s", s_cfg.ssid);
+    wifi_sta_join(&s_cfg);   /* only here: the value actually changed and NVS now has it */
     return api_reply_ok(req);
 }
 
