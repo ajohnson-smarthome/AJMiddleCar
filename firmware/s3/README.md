@@ -20,8 +20,8 @@ The two ports are silkscreened `USB` and `COM`, and they are not interchangeable
 | Question | Answer | Date |
 |---|---|---|
 | Which port is the UART bridge | `COM` — WCH CH343, `0x1A86:0x55D3` → `/dev/cu.wchusbserial5C840016191` | 2026-08-29 |
-| Which port is native USB | `USB` — `0x303A:0x4001`, serial `123456` → `/dev/cu.usbmodem1234561` | 2026-08-29 |
-| Powers from a C-to-C cable, both orientations | **yes** — 5.1 kΩ present on CC1 and CC2 | 2026-08-29 |
+| Which port is native USB | `USB` — `0x303A:0x4001` (ROM bootloader, before this firmware is flashed), serial `123456` → `/dev/cu.usbmodem1234561` | 2026-08-29 |
+| Powers from a C-to-C cable, both orientations | **yes** — Rd present on both CC lines (inferred from enumeration, not measured) | 2026-08-29 |
 | macOS binds a CDC-NCM driver | **yes** — appears as `en11`, service "Espressif Device" | 2026-08-30 |
 | Dongle's DHCP server configures the host | **yes** — host takes `192.168.7.2/24` | 2026-08-30 |
 | Dongle answers on its own address | **yes** — `ping 192.168.7.1` 1.3 ms, 0% loss | 2026-08-30 |
@@ -38,10 +38,13 @@ phone cannot be blamed on two missing resistors.
 Detection is `ioreg -rc IOUSBHostDevice` and `ls /dev/cu.*`, not a power LED — the
 shell sees this more reliably than a human squinting at the board.
 
-Note that `USB` currently enumerates as a serial device. It will stop doing so the
-moment TinyUSB claims the peripheral: on ESP32-S3 the native USB pins are muxed
-between the USB-Serial-JTAG controller and USB-OTG, and only one may hold them. A
-`USB` port that has gone quiet after flashing is the expected outcome, not a fault.
+Note that `USB` currently enumerates as a serial device, at the ROM bootloader's
+`0x303A:0x4001`. It will stop doing so the moment TinyUSB claims the peripheral: on
+ESP32-S3 the native USB pins are muxed between the USB-Serial-JTAG controller and
+USB-OTG, and only one may hold them. A `USB` port that has gone quiet after flashing
+is the expected outcome, not a fault — and once this firmware is running, that same
+port answers as TinyUSB's default `0x303A:0x4000` instead, not the reading recorded
+above.
 
 ## The dongle must never advertise itself as a gateway
 
@@ -68,7 +71,12 @@ the void shows lopsided counters and a packet every ~5 s). One client did this; 
 
 ## The Mac acceptance run
 
-Everything Plan 1 promised, measured in one pass on 2026-08-30 against build `94f81ae`:
+Everything Plan 1 promised, measured in one pass on 2026-08-30. The reply below names the actual
+binary, and it is not `94f81ae`: `g51f1f8e-dirty` is `94f81ae`'s *parent* commit, built dirty — this
+run exercised a tree one commit behind the `GET /status` commit it was meant to be checking, not
+that commit's own content. Anyone rebuilding at `94f81ae` should see a clean `g94f81ae` in its
+place, not this string. `"idf":"v6.0.2-dirty"` records the same kind of gap one layer down: the
+local ESP-IDF checkout also carried uncommitted changes at build time.
 
 ```
 GET /status:
@@ -80,15 +88,17 @@ GET /status:
 |---|---|---|
 | `route get 1.1.1.1` | `utun4` | `utun4` — unchanged |
 | internet by IP | 0.103 s | 0.107 s |
-| internet by name (needs DNS) | 0.592 s | 0.136 s |
-| Wi-Fi latency to the LAN router | 13.6 ms avg | 9.2 ms avg |
+| internet by name (needs DNS) | 0.592 s | 0.136 s — a warm DNS cache on the second run, not evidence the dongle helped |
+| Wi-Fi latency to the LAN router | 13.6 ms avg | 9.2 ms avg — ordinary jitter between two pings, not evidence the dongle helped |
 | DHCP options received | — | 10 options, **no `router`** |
 | dongle interface counters | — | 13 in / 68 out — a quiet device |
 
-The host is measurably no worse off for having the dongle plugged in, which is the whole premise.
-The script that produces this is worth keeping for Plan 2: it checks the deliverable and the
-regression in the same run, so a returning route capture is caught by a test rather than by losing
-somebody's connectivity.
+The host is measurably no worse off for having the dongle plugged in, which is the whole premise —
+and the strong evidence for that is the unchanged routing decision and the absent `router` option,
+not the two rows above that merely happened to come back faster.
+The script that produces this, `firmware/s3/verify-on-host.sh`, is checked in for Plan 2: it checks
+the deliverable and the regression in the same run, so a returning route capture is caught by a test
+rather than by losing somebody's connectivity.
 
 ## Build
 
