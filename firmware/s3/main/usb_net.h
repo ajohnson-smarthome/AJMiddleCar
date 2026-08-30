@@ -4,6 +4,8 @@
 #include "esp_err.h"
 #include "esp_netif.h"
 
+#include "dongle_contract.inc"
+
 /* Brings up the USB NCM class and attaches an lwIP interface to it.
  *
  * The dongle is an endpoint on this wire, not a transparent bridge: it holds
@@ -15,7 +17,7 @@ esp_err_t usb_net_start(void);
 /* The interface, for later plans that need to bridge or route through it. */
 esp_netif_t *usb_net_netif(void);
 
-#define USB_NET_ADDR "192.168.7.1"
+#define USB_NET_ADDR DONGLE_HOST
 #define USB_NET_MASK "255.255.255.0"
 
 #endif /* USB_NET_H */

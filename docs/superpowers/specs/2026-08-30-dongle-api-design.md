@@ -34,16 +34,44 @@ this document              app ↔ dongle  (new)
 The app is the only place the two meet. It reads `CarContract.ssid` and `CarContract.password`
 and hands them to the dongle as opaque strings; the dongle never learns whose they are.
 
-**The dongle's API is hand-written, not generated.** `tools/gen_contract.py` earns its keep on
-the car's five config domains — ten fields with ranges, four artifacts, a drift check. The
-dongle has one config domain with two fields. Generalising the generator (its output routing is
-four string literals in `main()`, duplicated again in `check_contract.sh`) would cost more than
-it saves.
+**The dongle's vocabulary is generated; its rules are not.** The reasoning above was half right
+when it was written, and the half that is now wrong is the one that read as decisive: "one
+config domain, two fields, not worth it." That was never the load-bearing objection — the
+load-bearing one sat right next to it, "output routing is four string literals in `main()`,
+duplicated again in `check_contract.sh`." A later task on this same plan replaced that routing
+with one `TARGETS` table `check_contract.sh` reads instead of re-declaring, and once a second
+device meant a table entry rather than a rewrite, the size argument stopped deciding anything.
+`contract/dongle-api.json` now carries the dongle's own vocabulary — device id, address, port,
+endpoint paths, status/net field names, the WPA2 length bounds, the net-state list — generated
+into `firmware/s3/main/dongle_contract.inc` (a C header, pure `#define`s) and
+`app/AJMiddleCar/Generated/DongleAPI.swift`, both watched by the same drift check that already
+guarded the car's four artifacts. Neither side writes an agreed name, number or path as a
+literal, which is the principle the car already lived under and the dongle now shares.
 
-There is ample precedent: six of the car's eleven HTTP endpoints — `/`, `/status`, `/calib`,
-`/calib/spin`, `/calib/save`, `/ota` — are hand-written in both firmware and docs, and are
-first-class parts of the protocol. If the dongle's surface ever grows to justify generation, the
-schema can be introduced then; nothing here forecloses it.
+What did not move, and does not move under this reasoning either, is the *rule* a value is
+checked against. `net_cfg_validate`'s length bounds, its character-class check, its escaping,
+its refuse-rather-than-truncate discipline stay in `firmware/s3/main/net_cfg.{c,h}`,
+hand-written and host-tested with plain `cc -Wall -Wextra -Werror`, exactly as before. The car's
+own schema-driven validation could not absorb it either, and the reason is structural, not a
+matter of scale: every field `contract/car-api.json` hands to a generated validator is `int`,
+`bool` or `enum`, and `cfg_api.c` names the consequence directly — values move "as an array of
+int32 in the field order the generated table declares, so the generic handler never needs to
+know a domain's struct layout." One handler, one numeric shape, no fourth case for a string
+bounded by which bytes it may contain. `gen_dongle.py` can and does emit a string as a named
+*constant* — `DONGLE_DEVICE`, `DONGLE_HOST`, `DONGLE_STATE_IDLE` are exactly that — but a
+constant is not a rule, and nothing in either schema drives a validator the way `cfg_field_t`
+drives the car's. Teaching that machinery a character-class type is a change to the car's own
+contract system, not the dongle's, and this plan does not make it.
+
+So the two devices were never actually divergent on the question that decides whether a
+generator is worth it. It looked that way because a fixable cost (routing duplication) and a
+genuine limit (an unrepresentable rule) were bundled into one "not worth it," and only the
+second is permanent. Six of the car's eleven HTTP endpoints — `/`, `/status`, `/calib`,
+`/calib/spin`, `/calib/save`, `/ota` — are still hand-written in both firmware and docs today,
+and remain first-class parts of the protocol; that precedent stands unchanged for whatever the
+dongle's rules turn out to need next. If either device ever needs a value a schema can express,
+adding it is a table entry now, not a rewrite — but a rule stays exactly where the values it
+governs are enforced.
 
 **Conventions are borrowed wholesale from the car**, because consistency across the two devices
 is worth more than any local optimum:

@@ -16,7 +16,7 @@ net_cfg_err_t net_cfg_validate(const char *ssid, const char *password, net_cfg_t
     }
 
     size_t sn = strlen(ssid);
-    if (sn < 1 || sn > NET_SSID_MAX) {
+    if (sn < DONGLE_SSID_MIN || sn > NET_SSID_MAX) {
         return NET_CFG_SSID_LEN;
     }
     for (size_t i = 0; i < sn; i++) {

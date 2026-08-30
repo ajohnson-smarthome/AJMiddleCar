@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "dongle_contract.inc"
+
 /* The network the dongle has been told to join.
  *
  * Pure: no ESP-IDF, no cJSON, no NVS, so the rules below are host-tested with plain `cc`
@@ -13,11 +15,15 @@
  * The SSID is an opaque string. This firmware does not know what a car is and must not
  * learn: the value arrives over the wire and is stored and replayed unread. */
 
-/* WPA2's limits, not ours. 32 bytes is the maximum SSID length; a PSK shorter than 8
- * characters cannot be used, and an empty password means an open network. */
-#define NET_SSID_MAX   32
-#define NET_PASS_MIN    8
-#define NET_PASS_MAX   63
+/* WPA2's limits, not ours, and now the contract's: the same four numbers reach the app
+ * through app/AJMiddleCar/Generated/DongleAPI.swift, so neither side writes them as a
+ * literal and check_contract.sh fails a tree where they disagree.
+ *
+ * The bounds are named here rather than used directly so the rest of this header reads
+ * as it did — and so a reader sees at a glance which numbers are contractual. */
+#define NET_SSID_MAX   DONGLE_SSID_MAX
+#define NET_PASS_MIN   DONGLE_PASS_MIN
+#define NET_PASS_MAX   DONGLE_PASS_MAX
 
 typedef struct {
     char ssid[NET_SSID_MAX + 1];

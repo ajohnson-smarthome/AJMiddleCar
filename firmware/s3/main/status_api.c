@@ -5,6 +5,7 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 
+#include "dongle_contract.inc"
 #include "net_api.h"
 #include "status_api.h"
 #include "usb_net.h"
@@ -43,8 +44,9 @@ static esp_err_t status_get(httpd_req_t *req)
      * values without moving a key or changing a caller. */
     char body[256];
     int n = snprintf(body, sizeof(body),
-                     "{\"device\":\"ajdongle\",\"fw\":\"%s\",\"idf\":\"%s\",\"usb\":\"up\","
-                     "\"net\":{\"ssid\":\"%s\",\"state\":\"idle\",\"rssi\":0}}",
+                     "{\"" DONGLE_KEY_DEVICE "\":\"" DONGLE_DEVICE "\","
+                     "\"fw\":\"%s\",\"idf\":\"%s\",\"usb\":\"up\","
+                     "\"net\":{\"ssid\":\"%s\",\"state\":\"" DONGLE_STATE_IDLE "\",\"rssi\":0}}",
                      app->version, app->idf_ver, ssid_esc);
     if (n < 0 || (size_t)n >= sizeof(body)) {
         /* Same rule as the car's own /status: truncated JSON parses as something else or
@@ -64,7 +66,7 @@ esp_err_t status_api_start(void)
     /* 8080, not 80: port 80 belongs to the car. Plan 3 forwards it straight through to
      * the car's own REST surface so that CarHost.port and the car's contract never move —
      * the dongle is the new thing in the system, so the dongle takes the unusual port. */
-    cfg.server_port = 8080;
+    cfg.server_port = DONGLE_PORT;
     /* /status, GET /net, POST /net, and room for Plan 3's additions — sized so that a
      * new endpoint is not also a config change. */
     cfg.max_uri_handlers = 6;
@@ -79,7 +81,7 @@ esp_err_t status_api_start(void)
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &status_uri), TAG,
                         "cannot register GET /status");
 
-    ESP_LOGI(TAG, "http://%s:8080/status", USB_NET_ADDR);
+    ESP_LOGI(TAG, "http://%s:%d" DONGLE_PATH_STATUS, USB_NET_ADDR, DONGLE_PORT);
     return ESP_OK;
 }
 
