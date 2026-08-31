@@ -6,11 +6,31 @@ import Network
 /// other reasons a car is not answering: the dongle is unplugged, local-network access was
 /// denied, or we are simply still looking. One radar for all of them is what this screen used to
 /// be.
+///
+/// Extended for the dongle's own launch sequence (`AppFlow.dongleGate()`, `DongleLink`): before
+/// the car is even reachable, the dongle itself can be updating, waiting to be told a network,
+/// or unable to reach one it was already told. Those four cases render here too, on the same
+/// radar, rather than as a second screen family — from the seat this is watched from, "the car
+/// is not answering yet" and "the adapter is not ready yet" are the same wait with a different
+/// reason underneath.
 struct ConnectView: View {
     enum Situation: Equatable {
         case searching
         case noDongle(NWPath.UnsatisfiedReason)
         case localNetworkDenied
+        /// The dongle's own firmware is behind the latest release; it is downloading and
+        /// flashing it before anything else in the sequence touches the car.
+        case dongleUpdating
+        /// The dongle is current and either sending the car's credentials for the first time or
+        /// between join attempts — both read as "connecting" from here; see
+        /// `DongleLink.DongleStep.sendCredentials`/`.waiting`.
+        case dongleConfiguring
+        /// The dongle's join attempt budget ran out. `AppFlow` retries it on the next poll with
+        /// no button to press — the credentials are already stored and correct.
+        case dongleJoinFailed
+        /// The dongle's bootloader reverted its last update. Shown once, standing, so the app
+        /// does not silently offer the same failing image again.
+        case dongleRolledBack
     }
 
     var situation: Situation = .searching
@@ -19,9 +39,22 @@ struct ConnectView: View {
 
     var body: some View {
         SplitScreen(palette: p) {
-            ConnectCarView(palette: p)
+            leftPanel
         } right: {
             rightPanel
+        }
+    }
+
+    /// The radar sweep reads as "still looking, will resolve on its own" — true of every
+    /// situation here except `.dongleRolledBack`, which is a standing failure nothing here
+    /// retries automatically. That one borrows `WrongCarView`'s static failed-car image instead,
+    /// the same way `WrongCarView` does, so a state that will not clear on its own does not look
+    /// like one that will.
+    @ViewBuilder private var leftPanel: some View {
+        if situation == .dongleRolledBack {
+            FirmwareCarView(phase: .failed, palette: p)
+        } else {
+            ConnectCarView(palette: p)
         }
     }
 
@@ -30,6 +63,10 @@ struct ConnectView: View {
         case .searching: return L.connectTitle
         case .noDongle: return L.linkNoDongleTitle
         case .localNetworkDenied: return L.linkDeniedTitle
+        case .dongleUpdating: return L.dongleUpdatingTitle
+        case .dongleConfiguring: return L.dongleConfiguringTitle
+        case .dongleJoinFailed: return L.dongleJoinFailedTitle
+        case .dongleRolledBack: return L.dongleRolledBackTitle
         }
     }
 
@@ -38,6 +75,10 @@ struct ConnectView: View {
         case .searching: return L.connectBody
         case .noDongle: return L.linkNoDongleSub
         case .localNetworkDenied: return L.linkDeniedSub
+        case .dongleUpdating: return L.dongleUpdatingSub
+        case .dongleConfiguring: return L.dongleConfiguringSub
+        case .dongleJoinFailed: return L.dongleJoinFailedSub
+        case .dongleRolledBack: return L.dongleRolledBackSub
         }
     }
 

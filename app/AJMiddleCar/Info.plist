@@ -30,7 +30,7 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Connects to the AJMiddleCar over local Wi-Fi to drive it.</string>
+	<string>Connects to the AJMiddleCar over the USB adapter to drive it.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

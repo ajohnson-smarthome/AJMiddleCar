@@ -222,9 +222,11 @@ struct FirmwareView: View {
                 return
             }
         }
-        // Deadline without a reconnect: iOS routinely hops to another known network when the
-        // softAP vanishes and does not come back on its own. The flash is committed either
-        // way — report that, not failure.
+        // Deadline without a reconnect: the car's own reboot can outlast this window, or the
+        // dongle relaying it can still be mid-rejoin of the car's Wi-Fi when it does. Either
+        // way the phone's own connection to the dongle over USB never moved — nothing here
+        // hopped networks — so it is the far end that has not caught up, not the link. The
+        // flash is committed either way — report that, not failure.
         phase = .flashed
     }
 }

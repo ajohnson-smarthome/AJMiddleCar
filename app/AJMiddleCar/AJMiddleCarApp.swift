@@ -67,6 +67,19 @@ struct AJMiddleCarApp: App {
 
     @ViewBuilder private var root: some View {
         switch flow.phase {
+        case .dongleAbsent:
+            // Reuses the same "plug it in" copy CarLink's own noDongle situation shows later —
+            // whether nothing answered because the interface is not there or because nothing on
+            // it has spoken yet is not a distinction worth two screens for the same instruction.
+            ConnectView(situation: .noDongle(.notAvailable))
+        case .dongleUpdating:
+            ConnectView(situation: .dongleUpdating)
+        case .dongleRolledBack:
+            ConnectView(situation: .dongleRolledBack)
+        case .dongleConfiguring:
+            ConnectView(situation: .dongleConfiguring)
+        case .dongleJoinFailed:
+            ConnectView(situation: .dongleJoinFailed)
         case .checkInternet, .checkUpdate, .downloading, .checkFailed:
             UpdateCheckView(palette: p, phase: flow.phase, client: flow.client) { flow.retry() }
         case .noInternet:
