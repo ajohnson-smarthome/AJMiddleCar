@@ -54,10 +54,6 @@ struct ConnectView: View {
         /// The dongle's own firmware is behind the latest release; it is downloading and
         /// flashing it before anything else in the sequence touches the car.
         case dongleUpdating
-        /// `performDongleUpdate()` failed `maxDongleUpdateAttempts` times running — no usable
-        /// internet or cache, or the upload itself kept failing. `onRetryDongleUpdate` gives a
-        /// way to ask for a fresh budget rather than watching it loop forever.
-        case dongleUpdateFailed
         /// The dongle is current and pointed at the car's own network. Either its credentials
         /// are being sent for the first time (including a re-point, if it was pointed at some
         /// other network), or the radio is working through its own join budget — both read as
@@ -82,8 +78,6 @@ struct ConnectView: View {
     /// rollback flag clears only when a later OTA succeeds, and this app is the only thing that
     /// can perform one.
     var onRecheckRollback: (() -> Void)? = nil
-    /// `.dongleUpdateFailed` only.
-    var onRetryDongleUpdate: (() -> Void)? = nil
     /// `.dongleJoinFailed` only. The same offer as `onRetryDongleUpdate`, for the other bounded
     /// wait — asking again now, and with a fresh budget.
     var onRetryJoin: (() -> Void)? = nil
@@ -123,9 +117,6 @@ struct ConnectView: View {
         case .wrongDongle:
             DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
                         chip: (glyph: "questionmark", tint: p.warn)) { AdapterBody(palette: p) }
-        case .dongleUpdateFailed:
-            DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
-                        chip: (glyph: "exclamationmark", tint: p.warn)) { AdapterBody(palette: p) }
         case .dongleRolledBack:
             DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
                         chip: (glyph: "arrow.uturn.backward", tint: p.warn)) { AdapterBody(palette: p) }
@@ -200,7 +191,6 @@ struct ConnectView: View {
         case .dongleFault: return L.dongleFaultTitle
         case .wrongDongle: return L.dongleWrongTitle
         case .dongleUpdating: return L.dongleUpdatingTitle
-        case .dongleUpdateFailed: return L.dongleUpdFailTitle
         case .dongleConfiguring: return L.dongleConfiguringTitle
         case .dongleJoinFailed: return L.dongleJoinFailedTitle
         case .dongleRolledBack: return L.dongleRolledBackTitle
@@ -222,7 +212,6 @@ struct ConnectView: View {
         case .dongleFault: return L.dongleFaultSub
         case .wrongDongle(let device): return L.dongleWrongSub(device)
         case .dongleUpdating: return L.dongleUpdatingSub
-        case .dongleUpdateFailed: return L.dongleUpdateFailedSub
         case .dongleConfiguring: return L.dongleConfiguringSub
         case .dongleJoinFailed: return L.dongleJoinFailedSub
         case .dongleRolledBack: return L.dongleRolledBackSub
@@ -255,10 +244,6 @@ struct ConnectView: View {
         case .dongleRolledBack:
             if let onRecheckRollback {
                 pillButton(L.fwRetry, tint: p.warn, action: onRecheckRollback)
-            }
-        case .dongleUpdateFailed:
-            if let onRetryDongleUpdate {
-                pillButton(L.fwRetry, tint: p.warn, action: onRetryDongleUpdate)
             }
         case .dongleJoinFailed:
             if let onRetryJoin {

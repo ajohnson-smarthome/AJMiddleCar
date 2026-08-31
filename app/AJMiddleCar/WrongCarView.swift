@@ -54,7 +54,7 @@ struct WrongCarView: View {
 
     var body: some View {
         SplitScreen(palette: p) {
-            FirmwareCarView(phase: .failed, palette: p)
+            FirmwareDeviceView(phase: .failed, palette: p)
         } right: {
             VStack(alignment: .leading, spacing: 9) {
                 Text(title).font(.system(size: 22, weight: .semibold)).foregroundStyle(p.text)

@@ -1,14 +1,17 @@
 import SwiftUI
 
-/// Phases of the firmware-update screen, shared by FirmwareView and its car image.
+/// Phases of a firmware update, shared by both devices' screens and their images.
 enum FwPhase { case checking, upToDate, available, downloading, downloaded, uploading, rebooting, flashed, done, failed }
 
-/// The firmware screen's car: top-down body, a chip carrying the phase, OTA rings around it.
+/// The device being updated, drawn top-down with a chip carrying the phase and OTA rings
+/// around it.
 ///
-/// Every part of it now comes from `DeviceArt`, which is where the car, the rings and the chip
-/// live for the whole app. This view is what is left once they do: a mapping from `FwPhase` to
-/// the three dials of that language — which rings, which chip glyph, which tint.
-struct FirmwareCarView: View {
+/// One view for both devices, because the update flow is one flow: the car and the adapter run
+/// the same ten phases through the same screen, and the only thing that differs is which object
+/// is under the chip. Everything else — the rings, the glyphs, the tints — comes from
+/// `DeviceArt`, and is chosen by the phase alone.
+struct FirmwareDeviceView: View {
+    var device: UpdateRules.Device = .car
     let phase: FwPhase
     let palette: Palette
 
@@ -34,7 +37,11 @@ struct FirmwareCarView: View {
         DeviceScene(palette: palette, rings: rings,
                     chip: (glyph: chipIcon, tint: chipColor),
                     chipHalo: phase == .done ? 8 : 5) {
-            CarBody(palette: palette)
+            if device == .car {
+                CarBody(palette: palette)
+            } else {
+                AdapterBody(palette: palette)
+            }
         }
         .opacity(phase == .rebooting ? 0.85 : 1)
     }

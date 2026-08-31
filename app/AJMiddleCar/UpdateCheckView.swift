@@ -19,7 +19,7 @@ struct UpdateCheckView: View {
 
     var body: some View {
         SplitScreen(palette: p) {
-            FirmwareCarView(phase: fwPhase, palette: p)
+            FirmwareDeviceView(phase: fwPhase, palette: p)
         } right: {
             VStack(alignment: .leading, spacing: 9) {
                 switch phase {

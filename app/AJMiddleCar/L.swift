@@ -30,6 +30,8 @@ enum L {
     static var dongleJoinFailedSub: String { s("dongle.joinFailedSub") }
     static var dongleRolledBackTitle: String { s("dongle.rolledBackTitle") }
     static var dongleRolledBackSub: String { s("dongle.rolledBackSub") }
+    static var settingsFirmwareCar: String { s("settings.firmwareCar") }
+    static var settingsFirmwareDongle: String { s("settings.firmwareDongle") }
     static var gateNoReleaseTitle: String { s("gate.noReleaseTitle") }
     static func gateNoReleaseSub(_ tag: String) -> String { s("gate.noReleaseSub", tag) }
     static var dongleUpdFailTitle: String { s("dongle.updFailTitle") }
@@ -84,26 +86,26 @@ enum L {
     static var fwAvailable: String { s("fw.available") }
     static var fwUpdate: String { s("fw.update") }
     static var fwDownloadTitle: String { s("fw.downloadTitle") }
-    static var fwConnectTitle: String { s("fw.connectTitle") }
-    static var fwConnectSub: String { s("fw.connectSub") }
+    static func fwConnectTitle(_ d: UpdateRules.Device) -> String { s("fw.connectTitle.\(d.rawValue)") }
+    static func fwConnectSub(_ d: UpdateRules.Device) -> String { s("fw.connectSub.\(d.rawValue)") }
     static var fwFlash: String { s("fw.flash") }
     static var fwUploadTitle: String { s("fw.uploadTitle") }
     static var fwRebootTitle: String { s("fw.rebootTitle") }
-    static var fwRebootWait: String { s("fw.rebootWait") }
+    static func fwRebootWait(_ d: UpdateRules.Device) -> String { s("fw.rebootWait.\(d.rawValue)") }
     static var fwDoneTitle: String { s("fw.doneTitle") }
     static var fwFailTitle: String { s("fw.failTitle") }
     static var fwFailSub: String { s("fw.failSub") }
     static var fwRetry: String { s("fw.retry") }
     static var fwCancel: String { s("fw.cancel") }
-    static func fwFailReason(_ r: String) -> String { s("fw.failReason", r) }
+    static func fwFailReason(_ d: UpdateRules.Device, _ r: String) -> String { s("fw.failReason.\(d.rawValue)", r) }
     static func fwCurrent(_ v: String) -> String { s("fw.current", v) }
     static func fwVersionLine(_ v: String) -> String { s("fw.versionLine", v) }
     static func fwTransition(_ a: String, _ b: String) -> String { s("fw.transition", a, b) }
     static var fwFromCache: String { s("fw.fromCache") }
     static func fwDoneSub(_ v: String) -> String { s("fw.doneSub", v) }
     static var fwFlashedTitle: String { s("fw.flashedTitle") }
-    static var fwFlashedSub: String { s("fw.flashedSub") }
-    static var fwRollbackSub: String { s("fw.rollbackSub") }
+    static func fwFlashedSub(_ d: UpdateRules.Device) -> String { s("fw.flashedSub.\(d.rawValue)") }
+    static func fwRollbackSub(_ d: UpdateRules.Device) -> String { s("fw.rollbackSub.\(d.rawValue)") }
     static var driveConnected: String { s("drive.connected") }
     static var rampTitle: String { s("ramp.title") }
     static var rampHeadline: String { s("ramp.headline") }

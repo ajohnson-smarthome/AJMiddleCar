@@ -65,20 +65,26 @@
 "fw.fromCache"      = "из кэша — GitHub недоступен";
 "fw.update"         = "Обновить";
 "fw.downloadTitle"  = "Скачивание";
-"fw.connectTitle"   = "Подключение к машинке";
-"fw.connectSub"     = "Через USB-адаптер";
+"fw.connectTitle.car"    = "Подключение к машинке";
+"fw.connectTitle.dongle" = "Подключение к адаптеру";
+"fw.connectSub.car"      = "Через USB-адаптер";
+"fw.connectSub.dongle"   = "Напрямую по USB";
 "fw.flash"          = "Залить";
 "fw.uploadTitle"    = "Заливка";
 "fw.rebootTitle"    = "Перезагрузка…";
-"fw.rebootWait"     = "Машинка скоро вернётся";
+"fw.rebootWait.car"      = "Машинка скоро вернётся";
+"fw.rebootWait.dongle"   = "Адаптер скоро вернётся";
 "fw.doneTitle"      = "Готово";
 "fw.doneSub"        = "Обновлено до %@";
 "fw.flashedTitle"   = "Прошито";
-"fw.flashedSub"     = "Версия проверится сама, как только машинка снова выйдет на связь";
-"fw.rollbackSub"    = "Машинка вернулась на прежнюю версию — прошивка откатилась. Повторная заливка того же образа, скорее всего, повторит откат";
+"fw.flashedSub.car"      = "Версия проверится сама, как только машинка снова выйдет на связь";
+"fw.flashedSub.dongle"   = "Версия проверится сама, как только адаптер снова выйдет на связь";
+"fw.rollbackSub.car"     = "Машинка вернулась на прежнюю версию — прошивка откатилась. Повторная заливка того же образа, скорее всего, повторит откат";
+"fw.rollbackSub.dongle"  = "Адаптер вернулся на прежнюю версию — прошивка откатилась. Повторная заливка того же образа, скорее всего, повторит откат";
 "fw.failTitle"      = "Не удалось";
 "fw.failSub"        = "Проверь связь и повтори";
-"fw.failReason"     = "Машинка ответила: %@";
+"fw.failReason.car"      = "Машинка ответила: %@";
+"fw.failReason.dongle"   = "Адаптер ответил: %@";
 "fw.retry"          = "Повторить";
 "fw.cancel"         = "Отмена";
 "ramp.title"         = "Разгон";
@@ -192,3 +198,6 @@
    in it. Naming the tag is what makes it actionable for the one person who can publish one. */
 "gate.noReleaseTitle"    = "Нет выпуска для адаптера";
 "gate.noReleaseSub"      = "В последнем выпуске (%@) нет прошивки адаптера, поэтому сверить его версию не с чем. Пока такой выпуск не опубликован, ехать нельзя.";
+
+"settings.firmwareCar"    = "Прошивка машинки";
+"settings.firmwareDongle" = "Прошивка адаптера";

@@ -71,9 +71,18 @@ struct SettingsView: View {
                     }
                     Section {
                         NavigationLink {
-                            FirmwareView(palette: palette, link: link)
+                            FirmwareView(palette: palette, flow: .forCar(link: link), radio: link.radio)
                         } label: {
-                            Label(L.settingsFirmware, systemImage: "arrow.down.circle")
+                            Label(L.settingsFirmwareCar, systemImage: "arrow.down.circle")
+                                .foregroundStyle(palette.text)
+                        }
+                        .listRowBackground(palette.panel)
+                        // The adapter gets its own entry now that its update is a real screen
+                        // rather than something the launch gate did to it in passing.
+                        NavigationLink {
+                            FirmwareView(palette: palette, flow: .forDongle(client: DongleClient()))
+                        } label: {
+                            Label(L.settingsFirmwareDongle, systemImage: "arrow.down.circle")
                                 .foregroundStyle(palette.text)
                         }
                         .listRowBackground(palette.panel)

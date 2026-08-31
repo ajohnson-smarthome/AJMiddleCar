@@ -103,9 +103,10 @@ struct AJMiddleCarApp: App {
         case .dongleWrong(let device):
             ConnectView(situation: .wrongDongle(device))
         case .dongleUpdating:
-            ConnectView(situation: .dongleUpdating, updateProgress: flow.dongleUpdateProgress)
-        case .dongleUpdateFailed:
-            ConnectView(situation: .dongleUpdateFailed, onRetryDongleUpdate: { flow.retryDongleUpdate() })
+            // The adapter's update is the car's update: same screen, same phases, same words.
+            // Only the object under the chip differs.
+            FirmwareView(palette: p, flow: .forDongle(client: flow.dongle), forced: true,
+                         onDone: { flow.dongleUpdateFinished() })
         case .dongleRolledBack:
             ConnectView(situation: .dongleRolledBack,
                         onRecheckRollback: { flow.recheckDongleRollback() })
@@ -123,7 +124,8 @@ struct AJMiddleCarApp: App {
         case .noInternet:
             NoInternetView(palette: p) { flow.retry() }
         case .updateRequired:
-            FirmwareView(palette: p, forced: true, onDone: { flow.updateFinished() }, link: link)
+            FirmwareView(palette: p, flow: .forCar(link: link), forced: true,
+                         onDone: { flow.updateFinished() }, radio: link.radio)
                 .onAppear { link.start() }
         case .awaitingCar, .ready:
             // The link opens when the gate hands over, not at launch: until then there is

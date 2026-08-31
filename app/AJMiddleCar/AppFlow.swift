@@ -59,13 +59,8 @@ final class AppFlow: ObservableObject {
         case dongleWrong(device: String)
         /// The dongle's own firmware is behind the latest release; downloading and flashing it,
         /// before anything else in this sequence touches the car. Reused for the short reboot
-        /// that follows a successful flash — see `performDongleUpdate()`.
+        /// The screen is `FirmwareView`, the same one the car's update uses.
         case dongleUpdating
-        /// `performDongleUpdate()` failed `maxDongleUpdateAttempts` times in a row (no internet
-        /// and no usable cache, or the upload itself kept failing) — `dongleGate()` stops
-        /// retrying automatically and waits for `retryDongleUpdate()` instead of re-downloading
-        /// from GitHub every poll forever.
-        case dongleUpdateFailed
         /// The dongle's bootloader reverted its last update. Standing until the user answers —
         /// the rollback flag itself does not clear until a LATER OTA to that slot succeeds, so
         /// without an answer this phase would never release. Two answers, both needed:
@@ -108,7 +103,7 @@ final class AppFlow: ObservableObject {
             case .checkDongle, .dongleAbsent, .dongleChecking, .dongleUpdateCheck, .carFinding,
                  .dongleOffline, .dongleNoRelease,
                  .dongleFault, .dongleDenied, .dongleWrong,
-                 .dongleUpdating, .dongleUpdateFailed, .dongleRolledBack,
+                 .dongleUpdating, .dongleRolledBack,
                  .dongleConfiguring, .dongleJoinFailed,
                  .checkInternet, .noInternet, .checkUpdate, .checkFailed, .downloading: return false
             }
@@ -131,7 +126,10 @@ final class AppFlow: ObservableObject {
     /// teaches the user not to believe the next one.
     @Published private(set) var dongleUpdateProgress: Double?
     let client = UpdateClient()
-    private let dongle = DongleClient()
+    /// Shared with `FirmwareView`, which now runs the adapter's update through the same screen
+    /// the car's goes through — one client, so the gate and the screen are talking to the same
+    /// device over the same connection.
+    let dongle = DongleClient()
 
     /// How often `dongleGate()` re-reads `/status` while it is not yet `.readyForCar`. A
     /// judgement, not a measurement: fast enough that "plug it in" clears within a beat of the
@@ -150,7 +148,6 @@ final class AppFlow: ObservableObject {
     /// `WIFI_JOIN_ATTEMPTS`: enough that a single flaky download or upload does not give up
     /// early, few enough that a phone with no usable internet and no cache is told so within a
     /// few tries rather than re-fetching from GitHub on every poll forever.
-    private static let maxDongleUpdateAttempts = 3
 
     /// The same shape, for the other unbounded loop: how many times `dongleGate()` will POST
     /// the car's network at the dongle — the first configure and every retry together — before
@@ -183,8 +180,6 @@ final class AppFlow: ObservableObject {
     /// Whether `/status` has ever answered this launch — the trigger for step 2, and nothing
     /// else.
     private var sawDongle = false
-    private var dongleUpdateAttempts = 0
-    private var dongleUpdateGaveUp = false
     private var dongleJoinAttempts = 0
     private var dongleJoinGaveUp = false
     /// The last `/status` failure written to the log — see `readStatus()` for why it is
@@ -263,6 +258,12 @@ final class AppFlow: ObservableObject {
         // version": fetching GitHub before the first presence check would make a phone with
         // nothing plugged in wait on a network round trip just to be told to plug something in.
         while true {
+            if phase == .dongleUpdating {
+                // The screen owns the adapter right now. Polling it mid-flash would read the
+                // silence as "unplugged" and tear down the very view doing the work.
+                try? await Task.sleep(for: Self.donglePollInterval)
+                continue
+            }
             let reply = await readStatus()
             // Step 2, once: something is there and is being looked over. Guarded, because this
             // loop re-reads /status forever and must not walk the ladder backwards on every poll.
@@ -325,20 +326,12 @@ final class AppFlow: ObservableObject {
                 setPhase(.dongleRolledBack)
             case .updating:
                 consumeRollbackRecheck()
-                if dongleUpdateGaveUp {
-                    setPhase(.dongleUpdateFailed)
-                } else {
-                    setPhase(.dongleUpdating)
-                    if await performDongleUpdate(release: dongleRelease) {
-                        dongleUpdateAttempts = 0
-                    } else {
-                        dongleUpdateAttempts += 1
-                        if dongleUpdateAttempts >= Self.maxDongleUpdateAttempts {
-                            dongleUpdateGaveUp = true
-                            setPhase(.dongleUpdateFailed)
-                        }
-                    }
-                }
+                // Handing over, not doing. `FirmwareView` runs the update — the same screen and
+                // the same phases the car's update has always used — and this loop stands aside
+                // until it says it is finished. It used to do the work itself, blind, behind a
+                // spinner and an attempt budget; the budget existed because a headless retry can
+                // spin forever unnoticed, and a screen with a failure and a button does not.
+                setPhase(.dongleUpdating)
             case .sendCredentials:
                 // Once the budget is spent this is the same dead end `.retryJoin` reaches, and
                 // it says so: a dongle that keeps reporting a network other than the car's
@@ -490,12 +483,12 @@ final class AppFlow: ObservableObject {
     }
 
     /// The user asked `dongleGate()` to try updating the dongle again after it gave up —
-    /// `maxDongleUpdateAttempts` consecutive failures with no progress. Clears both counters so
     /// the very next `.updating` step gets a fresh budget.
-    func retryDongleUpdate() {
-        dongleUpdateGaveUp = false
-        dongleUpdateAttempts = 0
-    }
+    /// `FirmwareView` is done with the adapter — updated, or failed and dismissed. Handing the
+    /// phase back to the check is what makes the gate re-decide from a fresh `/status` instead of
+    /// trusting whatever the screen concluded.
+    func dongleUpdateFinished() { setPhase(.dongleChecking) }
+
 
     /// Download (or reuse the cached image) and flash the dongle's own firmware, then give it a
     /// moment to reboot before `dongleGate()`'s loop resumes polling normally. Returns whether
@@ -507,37 +500,6 @@ final class AppFlow: ObservableObject {
     /// pure and host-tested; this function performs only the network/disk work that plan names,
     /// and always for the device the plan itself carries (see `flashPlan`'s own doc for why that
     /// is the whole point of it returning a value rather than a bare URL).
-    private func performDongleUpdate(release: UpdateClient.Release?) async -> Bool {
-        let plan = UpdateRules.flashPlan(for: .dongle,
-                                         release: release.map { (tag: $0.tag, assetURL: $0.assetURL) },
-                                         cachedBuild: UpdateClient.cachedBuild(for: .dongle),
-                                         hasCachedFile: UpdateClient.hasCachedFile(for: .dongle))
-        let binURL: URL?
-        switch plan {
-        case .download(let device, let url, let recordBuild, let tag):
-            let recordAs = recordBuild.map { (build: $0, tag: tag) }
-            binURL = await client.download(url, recordAs: recordAs, device: device)
-        case .useCache(let device):
-            binURL = UpdateClient.cachedBinURL(for: device)
-        case .unavailable:
-            binURL = nil
-        }
-        guard let binURL, let data = try? Data(contentsOf: binURL) else { return false }
-        dongleUpdateProgress = 0
-        defer { dongleUpdateProgress = nil }
-        do {
-            try await dongle.uploadFirmware(data) { fraction in
-                Task { @MainActor in self.dongleUpdateProgress = fraction }
-            }
-        } catch {
-            // Not swallowed into "success": a failed upload must count against the attempt
-            // budget above, and must not earn the reboot grace below — nothing rebooted.
-            return false
-        }
-        try? await Task.sleep(for: Self.dongleRebootGrace)
-        return true
-    }
-
     /// The pre-existing pre-connect gate for the CAR's own firmware (internet probe → latest
     /// release → download if needed), unchanged from before this task except its name — it used
     /// to be `startupCheck()` itself. Reached only once `dongleGate()` (or the simulator's

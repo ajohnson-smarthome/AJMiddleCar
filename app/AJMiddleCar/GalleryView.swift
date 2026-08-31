@@ -70,8 +70,17 @@ struct GalleryView: View {
         ConfigStore.shared.recover.seed(.default)
         ConfigStore.shared.wheel.seed(.default)
         ConfigStore.shared.dims.seed(.default)
-        func fw(_ phase: FwPhase, forced: Bool = false) -> AnyView {
-            AnyView(NavigationStack { FirmwareView(palette: p, forced: forced, debugPhase: phase, link: mockLink()) })
+        // One helper, two devices: the whole point of the unification is that these render the
+        // same screen with a different object under the chip.
+        func fw(_ phase: FwPhase, forced: Bool = false,
+                device: UpdateRules.Device = .car) -> AnyView {
+            let link = mockLink()
+            let flow = device == .car ? FirmwareFlow.forCar(link: link)
+                                      : FirmwareFlow.forDongle(client: DongleClient())
+            return AnyView(NavigationStack {
+                FirmwareView(palette: p, flow: flow, forced: forced,
+                             radio: device == .car ? link.radio : nil, debugPhase: phase)
+            })
         }
         func calib(_ d: CalibrationView.CalDebug) -> AnyView {
             AnyView(NavigationStack { CalibrationView(palette: p, debugState: d) })
@@ -89,7 +98,6 @@ struct GalleryView: View {
             ("Local network denied",    AnyView(ConnectView(situation: .localNetworkDenied))),
             ("Dongle updating",         AnyView(ConnectView(situation: .dongleUpdating,
                                                   updateProgress: 0.45))),
-            ("Dongle update failed",    AnyView(ConnectView(situation: .dongleUpdateFailed, onRetryDongleUpdate: {}))),
             ("Dongle configuring",      AnyView(ConnectView(situation: .dongleConfiguring))),
             ("Dongle join failed",      AnyView(ConnectView(situation: .dongleJoinFailed, onRetryJoin: {}))),
             ("Dongle rolled back",      AnyView(ConnectView(situation: .dongleRolledBack,
@@ -115,15 +123,21 @@ struct GalleryView: View {
             ("Firmware failed",         fw(.failed)),
             ("Firmware forced",         fw(.available, forced: true)),
             ("Firmware radio mismatch",  AnyView(NavigationStack { FirmwareView(
-                palette: p, debugPhase: .upToDate,
-                link: CarLink.preview(.live(Telemetry()), fw: "v1.0+584",
-                                      radio: .known(fw: "2.11.7", ok: false))) })),
+                palette: p, flow: .forCar(link: CarLink.preview(.live(Telemetry()), fw: "v1.0+584")),
+                radio: .known(fw: "2.11.7", ok: false), debugPhase: .upToDate) })),
             ("Firmware radio unknown",   AnyView(NavigationStack { FirmwareView(
-                palette: p, debugPhase: .upToDate,
-                link: CarLink.preview(.live(Telemetry()), fw: "v1.0+584",
-                                      radio: .unavailable)) })),
+                palette: p, flow: .forCar(link: CarLink.preview(.live(Telemetry()), fw: "v1.0+584")),
+                radio: .unavailable, debugPhase: .upToDate) })),
             ("Firmware flashed",         fw(.flashed)),
             ("Firmware failed forced",   fw(.failed, forced: true)),
+            // The adapter, through the same screen — this is the unification, visible.
+            ("Adapter fw checking",      fw(.checking, device: .dongle)),
+            ("Adapter fw available",     fw(.available, device: .dongle)),
+            ("Adapter fw downloading",   fw(.downloading, device: .dongle)),
+            ("Adapter fw uploading",     fw(.uploading, device: .dongle)),
+            ("Adapter fw rebooting",     fw(.rebooting, device: .dongle)),
+            ("Adapter fw done",          fw(.done, device: .dongle)),
+            ("Adapter fw failed",        fw(.failed, device: .dongle)),
             ("Drive arcade",            AnyView(DriveView(link: mockLink(), intent: intent, preview: true).onAppear { UserDefaults.standard.set(Scheme.arcade.rawValue, forKey: "scheme") })),
             ("Drive tank",              AnyView(DriveView(link: mockLink(), intent: intent, preview: true).onAppear { UserDefaults.standard.set(Scheme.tank.rawValue, forKey: "scheme") })),
             ("Drive warning",           AnyView(DriveView(link: mockLink(wdtTrips: 3), intent: intent, preview: true))),
