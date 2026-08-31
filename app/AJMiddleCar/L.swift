@@ -15,12 +15,27 @@ enum L {
     static var wrongProtoTitle: String { s("wrongProto.title") }
     static func wrongProtoSub(_ theirs: Int, _ ours: Int) -> String { s("wrongProto.sub", theirs, ours) }
     static var wrongProtoHint: String { s("wrongProto.hint") }
-    static func wrongCarHint(_ ssid: String) -> String { s("wrongCar.hint", ssid) }
-    static func connectBody(_ ssid: String, _ password: String) -> String { s("connect.body", ssid, password) }
-    static var linkNoWifiTitle: String { s("link.noWifiTitle") }
-    static func linkNoWifiSub(_ ssid: String, _ password: String) -> String { s("link.noWifiSub", ssid, password) }
+    static var wrongCarHint: String { s("wrongCar.hint") }
+    static var connectBody: String { s("connect.body") }
+    static var linkNoDongleTitle: String { s("link.noDongleTitle") }
+    static var linkNoDongleSub: String { s("link.noDongleSub") }
     static var linkDeniedTitle: String { s("link.deniedTitle") }
     static var linkDeniedSub: String { s("link.deniedSub") }
+    static var dongleUpdatingTitle: String { s("dongle.updatingTitle") }
+    static var dongleUpdatingSub: String { s("dongle.updatingSub") }
+    static var dongleUpdateFailedSub: String { s("dongle.updateFailedSub") }
+    static var dongleConfiguringTitle: String { s("dongle.configuringTitle") }
+    static var dongleConfiguringSub: String { s("dongle.configuringSub") }
+    static var dongleJoinFailedTitle: String { s("dongle.joinFailedTitle") }
+    static var dongleJoinFailedSub: String { s("dongle.joinFailedSub") }
+    static var dongleRolledBackTitle: String { s("dongle.rolledBackTitle") }
+    static var dongleRolledBackSub: String { s("dongle.rolledBackSub") }
+    static var dongleCheckingTitle: String { s("dongle.checkingTitle") }
+    static var dongleCheckingSub: String { s("dongle.checkingSub") }
+    static var dongleFaultTitle: String { s("dongle.faultTitle") }
+    static var dongleFaultSub: String { s("dongle.faultSub") }
+    static var dongleWrongTitle: String { s("dongle.wrongTitle") }
+    static func dongleWrongSub(_ found: String) -> String { s("dongle.wrongSub", found) }
     static var configNotRead: String { s("config.notRead") }
     static var configRetry: String { s("config.retry") }
     static var calibSpinFailTitle: String { s("calib.spinFailTitle") }

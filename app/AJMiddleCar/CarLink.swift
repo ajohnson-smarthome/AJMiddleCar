@@ -61,7 +61,7 @@ final class CarLink: ObservableObject {
     /// order they execute in — the unstructured stop task racing a later start() is how the
     /// link used to die until the next background/foreground cycle.
     private var lifecycle: Task<Void, Never>?
-    private var pathState: PathState = .noWifi(.notAvailable)
+    private var pathState: PathState = .noDongle(.notAvailable)
     #if DEBUG
     /// Set by the debug gallery: hold the seeded state, with no transport and no path behind it.
     private var frozen = false
@@ -133,9 +133,9 @@ final class CarLink: ObservableObject {
         pump?.cancel(); pump = nil
         decay?.cancel(); decay = nil
         radioFetch?.cancel(); radioFetch = nil
-        // Bounded: a goodbye stuck on a dead path (Wi-Fi gone while the socket was still
-        // `.waiting`) must not dam the lifecycle chain forever — every later start/stop queues
-        // behind an unbounded await otherwise. 300 ms covers 3 sends at 10 Hz spacing with
+        // Bounded: a goodbye stuck on a dead path (the dongle's interface gone while the socket
+        // was still `.waiting`) must not dam the lifecycle chain forever — every later start/stop
+        // queues behind an unbounded await otherwise. 300 ms covers 3 sends at 10 Hz spacing with
         // margin; `transport.stop` is cancel-safe mid-goodbye (`send`'s `onCancel` resolves the
         // pending send, `sayGoodbye`'s `try?` swallows it, and `socket.cancel()` still runs).
         let stop = Task { await transport.stop(graceful: graceful) }

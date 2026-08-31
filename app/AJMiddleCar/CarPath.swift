@@ -3,44 +3,49 @@ import Network
 
 /// Interface and permission truth, from two `NWPathMonitor`s.
 ///
-/// Two, because the car's network is the one case where the general path being unsatisfied is
-/// *normal*: iOS demotes a Wi-Fi with no internet out of general routing while the interface
-/// itself keeps working, which is exactly the situation the app spends its life in. The
-/// Wi-Fi-restricted monitor says whether the car is reachable at all; the general monitor is
-/// where local-network denial shows up.
+/// Two, because the dongle's interface and the phone's general path now answer different
+/// questions. The dongle-restricted monitor is the only one that can say whether the car is
+/// reachable at all — its interface appears when the cable goes in and disappears when it comes
+/// out, exactly the presence-or-absence question `CarPath` exists to answer. The general monitor
+/// no longer needs watching for *that*: with the dongle attached the phone keeps its own Wi-Fi,
+/// with internet, throughout, so the general path stays satisfied the whole time. What it still
+/// carries is local-network denial, which is why both monitors are still checked for it.
 ///
 /// Nothing here used to be read. Wi-Fi off, local network denied, wrong network and a powered-off
 /// car were one indistinguishable radar.
 @MainActor
 final class CarPath: ObservableObject {
-    @Published private(set) var state: PathState = .noWifi(.notAvailable)
+    @Published private(set) var state: PathState = .noDongle(.notAvailable)
 
-    private let wifi = NWPathMonitor(requiredInterfaceType: .wifi)
+    /// Restricted to `CarNet.carInterface` — normally the dongle's interface, or Wi-Fi under the
+    /// bench escape hatch (`CarHost.direct`); see that constant for why the choice is folded
+    /// there rather than read from `CarHost` directly.
+    private let dongle = NWPathMonitor(requiredInterfaceType: CarNet.carInterface)
     private let general = NWPathMonitor()
     private let queue = DispatchQueue(label: "car.path")
-    private var wifiPath: NWPath?
+    private var donglePath: NWPath?
     private var generalPath: NWPath?
 
     init() {
-        wifi.pathUpdateHandler = { [weak self] p in
-            Task { @MainActor in self?.wifiPath = p; self?.recompute() }
+        dongle.pathUpdateHandler = { [weak self] p in
+            Task { @MainActor in self?.donglePath = p; self?.recompute() }
         }
         general.pathUpdateHandler = { [weak self] p in
             Task { @MainActor in self?.generalPath = p; self?.recompute() }
         }
-        wifi.start(queue: queue)
+        dongle.start(queue: queue)
         general.start(queue: queue)
     }
 
     deinit {
-        wifi.cancel()
+        dongle.cancel()
         general.cancel()
     }
 
     private func recompute() {
         // Denial is checked first and on either monitor: it is the one state waiting cannot fix,
         // and it must never be rendered as "searching".
-        for path in [generalPath, wifiPath] {
+        for path in [generalPath, donglePath] {
             if path?.status == .unsatisfied, path?.unsatisfiedReason == .localNetworkDenied {
                 state = .localNetworkDenied
                 return
@@ -49,12 +54,12 @@ final class CarPath: ObservableObject {
         #if targetEnvironment(simulator)
         // The mock is reached over whatever the Mac uses — often Ethernet, sometimes loopback —
         // so requiring Wi-Fi here would strand every simulator session on a "no Wi-Fi" screen.
-        state = generalPath?.status == .satisfied ? .wifiUp : .noWifi(generalPath?.unsatisfiedReason ?? .notAvailable)
+        state = generalPath?.status == .satisfied ? .dongleUp : .noDongle(generalPath?.unsatisfiedReason ?? .notAvailable)
         #else
-        if wifiPath?.status == .satisfied {
-            state = .wifiUp
+        if donglePath?.status == .satisfied {
+            state = .dongleUp
         } else {
-            state = .noWifi(wifiPath?.unsatisfiedReason ?? .notAvailable)
+            state = .noDongle(donglePath?.unsatisfiedReason ?? .notAvailable)
         }
         #endif
     }

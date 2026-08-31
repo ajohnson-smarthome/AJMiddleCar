@@ -3,12 +3,12 @@ import Network
 
 /// Where the phone's network stands. `CarPath` produces it from two `NWPathMonitor`s.
 ///
-/// Wi-Fi off, local network denied, and a Wi-Fi that is up but has no car on it are three
-/// different problems with three different fixes, and the app used to render all of them as one
-/// endless radar.
+/// The dongle unplugged, local network denied, and the dongle plugged in but with no car
+/// answering are three different problems with three different fixes, and the app used to
+/// render all of them as one endless radar.
 enum PathState: Equatable {
-    case wifiUp
-    case noWifi(NWPath.UnsatisfiedReason)
+    case dongleUp
+    case noDongle(NWPath.UnsatisfiedReason)
     /// The user denied local-network access. Nothing we send leaves the phone, and no amount of
     /// waiting changes that — its only signal is `unsatisfiedReason`, which nothing used to read.
     case localNetworkDenied
@@ -19,7 +19,7 @@ enum SessionState: Equatable {
     case none
     case adopted(device: String, fw: String)
     /// A car answered, but it is not ours. Both cars are a softAP serving the same API at the
-    /// same address, so a wrong network finds a car exactly where one is expected.
+    /// same address: whichever one the dongle is joined to is the one that answers here.
     case foreign(device: String)
     /// A car answered our hello naming a protocol version this app does not speak. The car
     /// answers a mismatched hello on purpose so this state can exist rather than a silent radar.
@@ -47,7 +47,7 @@ enum SessionState: Equatable {
 /// The one liveness truth. Everything on screen — the status pill, the signal bars, the searching
 /// overlay, the launch gate — reads this and nothing else.
 enum Link: Equatable {
-    case noWiFi(NWPath.UnsatisfiedReason)
+    case noDongle(NWPath.UnsatisfiedReason)
     case localNetworkDenied
     case searching
     case wrongCar(device: String)
@@ -57,6 +57,12 @@ enum Link: Equatable {
     case live(Telemetry)
 
     var isLive: Bool { if case .live = self { return true }; return false }
+    /// Whether the interface itself is gone — asked as a transition (`was`, `is no longer`) by
+    /// the root view, which turns it into "the wire came back" and re-enters the dongle gate.
+    /// A predicate rather than two `if case`s at the call site for the reason
+    /// `SessionState.survivingSessionEnd` is one function: the copy that gets forgotten is the
+    /// second one.
+    var isNoDongle: Bool { if case .noDongle = self { return true }; return false }
     var telemetry: Telemetry? { if case .live(let t) = self { return t }; return nil }
 }
 
@@ -75,8 +81,8 @@ enum LinkRule {
                         age: TimeInterval?) -> Link {
         switch path {
         case .localNetworkDenied: return .localNetworkDenied
-        case .noWifi(let reason): return .noWiFi(reason)
-        case .wifiUp: break
+        case .noDongle(let reason): return .noDongle(reason)
+        case .dongleUp: break
         }
         // Identity beats liveness: a car that answers with someone else's name — or in another
         // protocol version — must not be driven, however fresh its telemetry is.

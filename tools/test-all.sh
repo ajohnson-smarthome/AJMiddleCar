@@ -29,6 +29,7 @@ for dir in app/tests/*/; do
         done < "${dir}sources"
     fi
     swiftc -o "/tmp/hosttest_$name" app/AJMiddleCar/Generated/CarAPI.swift \
+        app/AJMiddleCar/Generated/DongleAPI.swift \
         ${extra[@]+"${extra[@]}"} "${dir}main.swift"
     "/tmp/hosttest_$name"
 done

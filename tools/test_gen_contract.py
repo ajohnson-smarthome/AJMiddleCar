@@ -407,18 +407,54 @@ class TestDongleAgreesWithTheCar(unittest.TestCase):
 
     def test_relay_http_port_is_the_cars_rest_port(self):
         # car-api.json carries no HTTP port: the car's http_server.c leaves
-        # HTTPD_DEFAULT_CONFIG's 80 alone, so the number's only other written home is
-        # CarHost.port on the device branch. Checked against that source rather than against
-        # a literal here, so that changing either one alone fails in this file instead of on
-        # a bench. Matched with its indentation, which is what distinguishes the device
-        # branch's `static let port: UInt16 = 80` from the simulator branch's launch-argument
-        # line just above it.
+        # HTTPD_DEFAULT_CONFIG's 80 alone. Before the dongle cutover (Plan 5 Task 3) this
+        # asserted CarHost.port's device branch carried that same number as its own literal;
+        # now it takes the number from DongleContract.relayHttpPort instead of respelling it —
+        # generated from this schema's relay.http_port, which is the tie back to the number
+        # this test is named for. Checked as a whole line, not a substring: a substring search
+        # would also match the symbol sitting in a comment, or on the simulator branch, without
+        # telling the device branch's own assignment apart from either — exactly the trap
+        # assertEmitsLine's docstring (below, in TestDongleEmitters) documents as having already
+        # bitten a port assertion once. test_swift_exposes_the_same_vocabulary is what still
+        # guards the constant's own value against contract/dongle-api.json; this test only
+        # guards that CarHost.port still takes it from there.
         source = (ROOT / "app" / "AJMiddleCar" / "CarHost.swift").read_text()
-        want = f"    static let port: UInt16 = {self.dongle['relay']['http_port']}"
+        want = "    static let port: UInt16 = directPort ?? DongleContract.relayHttpPort"
         self.assertIn(want, source.splitlines(),
-                      "contract/dongle-api.json's relay.http_port and CarHost.port "
-                      "(the non-simulator branch) disagree; the relay would forward the "
-                      "car's REST traffic to a port the app does not use")
+                      "CarHost.swift's device branch no longer takes its REST port from "
+                      "DongleContract.relayHttpPort — the relay could again forward the "
+                      "car's REST traffic to a port the app does not use, with nothing "
+                      "here to catch it")
+
+    def test_relay_http_port_is_the_number_the_car_actually_serves(self):
+        """The value half of the tie, which the symbol assertion above cannot make.
+
+        That one proves CarHost.port TAKES its number from DongleContract.relayHttpPort, and
+        test_swift_exposes_the_same_vocabulary proves the constant carries what this schema
+        says. Neither of them says the schema's number is the CAR's REST port. Between them the
+        loop stayed open, and relay_tcp.c aims at that same constant for the car-side
+        destination — so editing the one number moves both ends together: the app asks the
+        dongle on a port the dongle really serves, the dongle forwards to a port the car does
+        not, and every test in this file passes while the car is unreachable. That is the
+        failure this test is named for, and it is the one it could no longer see.
+
+        contract/car-api.json cannot close it — it carries no HTTP port at all — so the car's
+        own firmware does. http_server.c takes HTTPD_DEFAULT_CONFIG()'s port and never assigns
+        config.server_port, and that default is 80: the number this schema has to carry, and
+        the assertion that fails the day either side of it moves.
+        """
+        httpd_default_port = 80          # esp_http_server's HTTPD_DEFAULT_CONFIG()
+        car_http = (ROOT / "firmware" / "p4" / "main" / "http_server.c").read_text()
+        self.assertIn("HTTPD_DEFAULT_CONFIG()", car_http,
+                      "the car's REST server no longer starts from HTTPD_DEFAULT_CONFIG, so "
+                      "its port is no longer the default this test ties the relay to")
+        self.assertNotIn("server_port", car_http,
+                         "the car's REST server now sets its own port — contract/"
+                         "dongle-api.json's relay.http_port has to move with it, or the relay "
+                         "forwards the car's REST traffic into nothing")
+        self.assertEqual(self.dongle["relay"]["http_port"], httpd_default_port,
+                         "relay.http_port is not the port the car actually serves; the relay "
+                         "would forward REST to a port nothing listens on")
 
 
 class TestDongleEmitters(unittest.TestCase):

@@ -9,7 +9,7 @@ import Network
 /// that was not answering was indistinguishable from a car that answered with defaults.
 enum CarError: Error, Equatable {
     /// The path cannot carry the request at all; `reason` says which of the four ways.
-    case noWiFi(NWPath.UnsatisfiedReason)
+    case noDongle(NWPath.UnsatisfiedReason)
     /// Local-network access was denied. No wait fixes it — only the user, in Settings.
     case denied
     case refused
@@ -22,7 +22,7 @@ enum CarError: Error, Equatable {
     /// they are the difference between "wait" and "the user must do something".
     static func from(_ error: NWError?, path: NWPath?) -> CarError {
         if let path, path.status == .unsatisfied {
-            return path.unsatisfiedReason == .localNetworkDenied ? .denied : .noWiFi(path.unsatisfiedReason)
+            return path.unsatisfiedReason == .localNetworkDenied ? .denied : .noDongle(path.unsatisfiedReason)
         }
         if case .posix(let code)? = error, code == .ECONNREFUSED { return .refused }
         if let error { return .malformed(String(describing: error)) }
@@ -32,7 +32,7 @@ enum CarError: Error, Equatable {
     /// For logs only — user-facing text is localized in the views that show it.
     var logDescription: String {
         switch self {
-        case .noWiFi(let r): return "no wifi (\(r))"
+        case .noDongle(let r): return "no dongle (\(r))"
         case .denied: return "local network denied"
         case .refused: return "refused"
         case .timeout(let s): return "timeout after \(s)s"

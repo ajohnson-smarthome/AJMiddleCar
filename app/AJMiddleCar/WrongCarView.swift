@@ -3,9 +3,10 @@ import SwiftUI
 /// Shown when a car answered our hello with a different device identifier.
 ///
 /// This screen exists because both cars are a softAP serving the same API at the same address:
-/// joining the wrong network is easy, and without an explicit stop the app would drive the other
-/// car with this one's calibration. A wrong car must not look like an offline car — the user has
-/// to switch networks, not wait — so it gets its own screen rather than a silent retry loop.
+/// whichever one answers at the address the app reaches is the one it hears from, and without an
+/// explicit stop the app would drive the other car with this one's calibration. A wrong car must
+/// not look like an offline car — it needs to be resolved, not waited out — so it gets its own
+/// screen rather than a silent retry loop.
 /// Identity now arrives in the hello reply, on the first exchange, so this can no longer be
 /// missed by a probe that cancelled itself.
 ///
@@ -46,7 +47,7 @@ struct WrongCarView: View {
 
     private var hint: String {
         switch kind {
-        case .foreignDevice: return L.wrongCarHint(CarContract.ssid)
+        case .foreignDevice: return L.wrongCarHint
         case .protoMismatch: return L.wrongProtoHint
         }
     }

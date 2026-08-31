@@ -62,8 +62,17 @@ struct GalleryView: View {
         }
         return [
             ("Connect (radar)",         AnyView(ConnectView())),
-            ("No Wi-Fi",                AnyView(ConnectView(situation: .noWiFi(.notAvailable)))),
+            ("Checking dongle",         AnyView(ConnectView(situation: .checkingDongle))),
+            ("No dongle",               AnyView(ConnectView(situation: .noDongle(.notAvailable)))),
             ("Local network denied",    AnyView(ConnectView(situation: .localNetworkDenied))),
+            ("Dongle updating",         AnyView(ConnectView(situation: .dongleUpdating))),
+            ("Dongle update failed",    AnyView(ConnectView(situation: .dongleUpdateFailed, onRetryDongleUpdate: {}))),
+            ("Dongle configuring",      AnyView(ConnectView(situation: .dongleConfiguring))),
+            ("Dongle join failed",      AnyView(ConnectView(situation: .dongleJoinFailed, onRetryJoin: {}))),
+            ("Dongle rolled back",      AnyView(ConnectView(situation: .dongleRolledBack, onSkipRollback: {},
+                                                              onRecheckRollback: {}))),
+            ("Dongle fault",            AnyView(ConnectView(situation: .dongleFault))),
+            ("Wrong dongle",            AnyView(ConnectView(situation: .wrongDongle("some-other-adapter")))),
             ("NoInternet",              AnyView(NoInternetView(palette: p, onRetry: {}))),
             ("WrongCar",                AnyView(WrongCarView(palette: p, kind: .foreignDevice("esp32-car"), onRetry: {}))),
             ("WrongProto",              AnyView(WrongCarView(palette: p, kind: .protoMismatch(theirs: CarContract.proto + 1), onRetry: {}))),

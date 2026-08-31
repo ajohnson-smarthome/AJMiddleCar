@@ -58,15 +58,55 @@ struct AJMiddleCarApp: App {
                 }
             }
             .onChange(of: link.fw) { _, fw in flow.carIdentified(fw: fw) }
-            .onChange(of: link.state) { _, _ in
+            .onChange(of: link.state) { old, new in
                 // The identity may already be known when the gate finishes; re-asking is cheap
                 // and closes the race where the hello landed before `startupCheck` returned.
-                if case .live = link.state { flow.carIdentified(fw: link.fw) }
+                if case .live = new { flow.carIdentified(fw: link.fw) }
+                // The wire came back. Everything the dongle was asked at launch has to be asked
+                // again — above all whether it is still joined to the car — and the gate that
+                // asked returned for good when it handed over. Without this, a dongle replugged
+                // after the car was switched off answers "failed" to nobody at all.
+                if old.isNoDongle, !new.isNoDongle {
+                    Task { await flow.dongleReturned() }
+                }
             }
     }
 
     @ViewBuilder private var root: some View {
         switch flow.phase {
+        case .checkDongle:
+            // Its own line, not the radar's default one. `.searching`'s copy says the car is
+            // not answering — which, on the first frame of every launch, is an assertion about
+            // a device nothing has spoken to yet, made while the thing actually being asked is
+            // the adapter in front of it. (That copy was also rewritten on this branch, so the
+            // claim that this reused the pre-cutover screen's wording stopped being true.)
+            ConnectView(situation: .checkingDongle)
+        case .dongleAbsent:
+            // Reuses the same "plug it in" copy CarLink's own noDongle situation shows later —
+            // whether nothing answered because the interface is not there or because nothing on
+            // it has spoken yet is not a distinction worth two screens for the same instruction.
+            ConnectView(situation: .noDongle(.notAvailable))
+        case .dongleFault:
+            ConnectView(situation: .dongleFault)
+        case .dongleDenied:
+            // The same screen, with the same Settings button, `CarLink` shows for a denial once
+            // the gate has handed over. The gate could not say it at all before this: a denied
+            // request threw, the throw became nil, and nil said "plug in an adapter".
+            ConnectView(situation: .localNetworkDenied)
+        case .dongleWrong(let device):
+            ConnectView(situation: .wrongDongle(device))
+        case .dongleUpdating:
+            ConnectView(situation: .dongleUpdating)
+        case .dongleUpdateFailed:
+            ConnectView(situation: .dongleUpdateFailed, onRetryDongleUpdate: { flow.retryDongleUpdate() })
+        case .dongleRolledBack:
+            ConnectView(situation: .dongleRolledBack,
+                        onSkipRollback: { flow.skipDongleRollback() },
+                        onRecheckRollback: { flow.recheckDongleRollback() })
+        case .dongleConfiguring:
+            ConnectView(situation: .dongleConfiguring)
+        case .dongleJoinFailed:
+            ConnectView(situation: .dongleJoinFailed, onRetryJoin: { flow.retryDongleJoin() })
         case .checkInternet, .checkUpdate, .downloading, .checkFailed:
             UpdateCheckView(palette: p, phase: flow.phase, client: flow.client) { flow.retry() }
         case .noInternet:
@@ -84,8 +124,8 @@ struct AJMiddleCarApp: App {
     /// Past the gate, the screen is whatever `CarLink` currently is. There is no second opinion.
     @ViewBuilder private var carRoot: some View {
         switch link.state {
-        case .noWiFi(let reason):
-            ConnectView(situation: .noWiFi(reason))
+        case .noDongle(let reason):
+            ConnectView(situation: .noDongle(reason))
         case .localNetworkDenied:
             ConnectView(situation: .localNetworkDenied)
         case .wrongCar(let device):
