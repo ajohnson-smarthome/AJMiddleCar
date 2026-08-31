@@ -41,6 +41,11 @@ final class AppFlow: ObservableObject {
         /// `.noInternet`, whose screen offers a Retry: while this loop is running `retry()` is
         /// refused by `gateRunning`, and a button that does nothing is worse than no button.
         case dongleOffline
+        /// A release exists and carries no image for the adapter, so its version cannot be
+        /// established and the gate will not hand over. Not the user's to fix — only publishing
+        /// a release with the adapter's image clears it — which is why the screen says that
+        /// instead of blaming the network.
+        case dongleNoRelease(tag: String)
         /// Something answered at the dongle's address and it was not usable — an HTTP error, a
         /// truncated stream, a body that would not decode. Deliberately not `.dongleAbsent`:
         /// the one instruction that screen gives is the one thing already done.
@@ -101,7 +106,7 @@ final class AppFlow: ObservableObject {
             switch self {
             case .updateRequired, .awaitingCar, .ready: return true
             case .checkDongle, .dongleAbsent, .dongleChecking, .dongleUpdateCheck, .carFinding,
-                 .dongleOffline,
+                 .dongleOffline, .dongleNoRelease,
                  .dongleFault, .dongleDenied, .dongleWrong,
                  .dongleUpdating, .dongleUpdateFailed, .dongleRolledBack,
                  .dongleConfiguring, .dongleJoinFailed,
@@ -270,17 +275,33 @@ final class AppFlow: ObservableObject {
             // is — a launch that could not reach GitHub must not proceed on the assumption that
             // nothing has changed, which is exactly what it used to do.
             if case .status = reply, dongleLatestTag == nil {
-                setPhase(.dongleUpdateCheck)          // step 3
-                dongleRelease = await client.latestRelease(for: .dongle)
-                // Same offline fallback `carGate()` uses below, aimed at the dongle's own cache:
-                // without internet, "the last release this phone downloaded FOR THE DONGLE, while
-                // that image is still on disk" is the only tag worth comparing against —
-                // GateRule.canProceedOffline's own precondition (`hasCachedFile`) is exactly what
-                // makes `performDongleUpdate()` below able to flash from cache when it lands in
-                // `.updating` by this path.
-                dongleLatestTag = dongleRelease?.tag
-                guard GateRule.canVerify(
-                        latestBuild: UpdateClient.buildNumber(dongleLatestTag)) else {
+                // Announce the check only when not already holding on a failure of it. This loop
+                // re-asks every poll, and re-announcing each time made "checking" and the hold
+                // alternate — with `PhasePacer` guaranteeing each screen its 400 ms, that is a
+                // strobe rather than a sequence, which is exactly the complaint this whole
+                // redesign began from.
+                var holding = phase == .dongleOffline
+                if case .dongleNoRelease = phase { holding = true }
+                if !holding {
+                    setPhase(.dongleUpdateCheck)      // step 3
+                }
+                switch await client.latestReleaseLookup(for: .dongle) {
+                case .found(let rel):
+                    dongleRelease = rel
+                    // The tag is only adopted once it can be compared against. Setting it first
+                    // and validating after left an unusable tag in place, and the next poll then
+                    // skipped this whole block and drove on it.
+                    guard GateRule.canVerify(latestBuild: UpdateClient.buildNumber(rel.tag)) else {
+                        setPhase(.dongleNoRelease(tag: rel.tag))
+                        try? await Task.sleep(for: Self.donglePollInterval)
+                        continue
+                    }
+                    dongleLatestTag = rel.tag
+                case .noImage(let tag):
+                    setPhase(.dongleNoRelease(tag: tag))
+                    try? await Task.sleep(for: Self.donglePollInterval)
+                    continue
+                case .unreachable:
                     setPhase(.dongleOffline)
                     try? await Task.sleep(for: Self.donglePollInterval)
                     continue
@@ -531,7 +552,11 @@ final class AppFlow: ObservableObject {
             return
         }
         setPhase(.checkUpdate)
-        guard let rel = await client.latestRelease() else {
+        // The car's half tells the two apart too, though only one of them has ever fired: the
+        // car's image has been in every release. Both land on `.checkFailed`, which carries a
+        // Retry — this gate returns rather than looping, so a button is the way back.
+        let lookup = await client.latestReleaseLookup()
+        guard case .found(let rel) = lookup else {
             setPhase(.checkFailed)
             return
         }

@@ -30,6 +30,8 @@ enum L {
     static var dongleJoinFailedSub: String { s("dongle.joinFailedSub") }
     static var dongleRolledBackTitle: String { s("dongle.rolledBackTitle") }
     static var dongleRolledBackSub: String { s("dongle.rolledBackSub") }
+    static var gateNoReleaseTitle: String { s("gate.noReleaseTitle") }
+    static func gateNoReleaseSub(_ tag: String) -> String { s("gate.noReleaseSub", tag) }
     static var dongleUpdFailTitle: String { s("dongle.updFailTitle") }
     static var dongleFindingTitle: String { s("dongle.findingTitle") }
     static var dongleFindingSub: String { s("dongle.findingSub") }

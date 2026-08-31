@@ -91,6 +91,8 @@ struct AJMiddleCarApp: App {
             ConnectView(situation: .findingCar)
         case .dongleOffline:
             ConnectView(situation: .offline)
+        case .dongleNoRelease(let tag):
+            ConnectView(situation: .noRelease(tag: tag))
         case .dongleFault:
             ConnectView(situation: .dongleFault)
         case .dongleDenied:

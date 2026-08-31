@@ -187,3 +187,8 @@
 /* Its own line, not the generic fw.failTitle: three different screens said "Не удалось"
    and left the user to work out which of them had. */
 "dongle.updFailTitle"     = "Не удалось обновить адаптер";
+
+/* Not a network problem and not the user's to fix: a release exists and has no adapter image
+   in it. Naming the tag is what makes it actionable for the one person who can publish one. */
+"gate.noReleaseTitle"    = "Нет выпуска для адаптера";
+"gate.noReleaseSub"      = "В последнем выпуске (%@) нет прошивки адаптера, поэтому сверить его версию не с чем. Пока такой выпуск не опубликован, ехать нельзя.";

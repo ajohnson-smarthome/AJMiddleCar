@@ -199,17 +199,41 @@ final class UpdateClient: NSObject, ObservableObject {
     /// Defaults to the car — the only device this asked about before branch P4's dongle images.
     /// One release carries both under the same tag, so a caller after the dongle's own asset
     /// passes `device: .dongle` and gets the same tag back with a different `assetURL`.
-    func latestRelease(for device: UpdateRules.Device = .car) async -> Release? {
-        guard let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest") else { return nil }
+    /// What a release lookup can come back as.
+    ///
+    /// These used to be one `nil`, and collapsing them was expensive the day the launch gate
+    /// became strict: the newest release carried only the car's image, so the adapter's lookup
+    /// returned nothing forever, the gate refused to hand over — correctly — and the screen said
+    /// "no internet" at a phone whose internet was fine. Unreachable is the user's problem to
+    /// fix; a release with no image for this device is nobody's, until one is published.
+    enum ReleaseLookup {
+        case found(Release)
+        /// A release exists and was read, and it carries no image for this device.
+        case noImage(tag: String)
+        /// GitHub could not be reached, or answered something this build cannot read.
+        case unreachable
+    }
+
+    func latestReleaseLookup(for device: UpdateRules.Device = .car) async -> ReleaseLookup {
+        guard let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest") else {
+            return .unreachable
+        }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tag = j["tag_name"] as? String,
-                  let assets = j["assets"] as? [[String: Any]] else { return nil }
+                  let assets = j["assets"] as? [[String: Any]] else { return .unreachable }
             let bin = assets.first { ($0["name"] as? String) == UpdateClient.assetName(for: device) }
-            guard let s = bin?["browser_download_url"] as? String, let u = URL(string: s) else { return nil }
-            return Release(tag: tag, assetURL: u)
-        } catch { return nil }
+            guard let s = bin?["browser_download_url"] as? String, let u = URL(string: s) else {
+                return .noImage(tag: tag)
+            }
+            return .found(Release(tag: tag, assetURL: u))
+        } catch { return .unreachable }
+    }
+
+    func latestRelease(for device: UpdateRules.Device = .car) async -> Release? {
+        if case .found(let r) = await latestReleaseLookup(for: device) { return r }
+        return nil
     }
 
     /// Decision 6: nothing enters the firmware cache unvalidated. URLSession does not throw

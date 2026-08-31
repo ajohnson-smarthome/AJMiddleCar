@@ -22,6 +22,10 @@ struct ConnectView: View {
         /// The newest release could not be established, so nothing may proceed. No button: the
         /// gate loop is still asking and clears this itself the moment the network returns.
         case offline
+        /// A release exists and carries no image for the adapter. Carries the tag, because the
+        /// only person who can act on this is the one who publishes releases, and the tag is
+        /// what tells them which one to look at.
+        case noRelease(tag: String)
         case findingAdapter
         /// Step 3: the adapter is ours and healthy; asking GitHub whether it is current. Had no
         /// screen at all before — `dongleGate()` did this silently, so a launch that stopped
@@ -146,6 +150,11 @@ struct ConnectView: View {
         case .offline:
             DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
                         chip: (glyph: "wifi.exclamationmark", tint: p.warn)) { AdapterBody(palette: p) }
+        case .noRelease:
+            // A cross, not a warning triangle: there is nothing wrong with the adapter, there is
+            // simply no image to compare it against.
+            DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
+                        chip: (glyph: "xmark", tint: p.warn)) { AdapterBody(palette: p) }
         case .dongleFault:
             // Answering, but wrongly: the adapter is present, so it is drawn present, and the
             // chip carries the fault. The radar used to sit here and promised a search nobody
@@ -180,6 +189,7 @@ struct ConnectView: View {
         switch situation {
         case .searching: return L.connectTitle
         case .offline: return L.gateNoInternetTitle
+        case .noRelease: return L.gateNoReleaseTitle
         case .findingAdapter: return L.dongleFindingTitle
         case .adapterUpdateCheck: return L.dongleUpdCheckTitle
         case .findingCar: return L.carFindingTitle
@@ -201,6 +211,7 @@ struct ConnectView: View {
         switch situation {
         case .searching: return L.connectBody
         case .offline: return L.gateNoInternetSub
+        case .noRelease(let tag): return L.gateNoReleaseSub(tag)
         case .findingAdapter: return L.dongleFindingSub
         case .adapterUpdateCheck: return L.dongleUpdCheckSub
         case .findingCar: return L.carFindingSub
@@ -255,7 +266,8 @@ struct ConnectView: View {
             }
         case .searching, .checkingDongle, .noDongle, .dongleUpdating, .dongleConfiguring,
              .dongleFault, .wrongDongle,
-             .findingAdapter, .adapterUpdateCheck, .findingCar, .carUpdateCheck, .offline:
+             .findingAdapter, .adapterUpdateCheck, .findingCar, .carUpdateCheck, .offline,
+             .noRelease:
             EmptyView()
         }
     }

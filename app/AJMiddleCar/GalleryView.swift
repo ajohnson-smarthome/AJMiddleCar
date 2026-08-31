@@ -96,6 +96,7 @@ struct GalleryView: View {
                                                               onRecheckRollback: {}))),
             ("Dongle fault",            AnyView(ConnectView(situation: .dongleFault))),
             ("Offline, cannot verify",  AnyView(ConnectView(situation: .offline))),
+            ("No release for adapter",  AnyView(ConnectView(situation: .noRelease(tag: "v1.0+483")))),
             ("Wrong dongle",            AnyView(ConnectView(situation: .wrongDongle("some-other-adapter")))),
             ("NoInternet",              AnyView(NoInternetView(palette: p, onRetry: {}))),
             ("WrongCar",                AnyView(WrongCarView(palette: p, kind: .foreignDevice("esp32-car"), onRetry: {}))),
