@@ -180,8 +180,12 @@ Pure Swift modules are host-tested with `swiftc` directly — no XCTest runtime 
 
 Ported from AJPicoCar with feature parity, and **first run on hardware 2026-08-20**: the board
 boots, the softAP comes up, and the radio was updated from its shipped image to the pinned 3.0.6.
-Two things are known and unfinished — the motors are not wired yet, so `board.h`'s I2C pins are
-still unverified — a stock build boots anyway with `bus_ok:false` (network and OTA up, motors
-inert, by design); and the native USB port stopped enumerating, so bench work runs with a local
-override putting the console on UART0. Both are written up in `docs/bringup.md`, which is the
-live record of what the board has and has not answered.
+The motors were not wired at first, so `board.h`'s I2C pins went unverified for a while — a
+stock build boots anyway with `bus_ok:false` (network and OTA up, motors inert, by design).
+`docs/bringup.md` is the live record of what the board has and has not answered.
+
+Two notes that used to live here are stale as of 2026-08-31 and were corrected on the bench:
+the native USB port **does** enumerate (esptool detects the P4 on `/dev/cu.usbmodem*` and
+flashes over it), and the console on UART0 is not a local override — it is committed policy in
+`firmware/p4/sdkconfig.defaults`, with the reason written at that line: a board whose native USB
+goes silent would otherwise have no console at all.
