@@ -27,6 +27,10 @@
 #include "dims.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
+#include "nvs.h"
+#include "radio_ota.h"
+#include "radio_flash.h"
+#include "radio_expected.h"
 
 static const char *TAG = "main";
 
@@ -86,6 +90,55 @@ static int parse_mix(const char *line, float *t, float *y) {
     return 0;
 }
 
+/* The attempt counter. Its own namespace and a single byte: this is not configuration, nothing
+   reads it over the API, and the JSON-per-domain shape the config domains use would be
+   ceremony around one number. */
+#define RADIO_NVS_NS   "radio"
+#define RADIO_NVS_KEY  "ota_tries"
+
+static uint8_t radio_attempts_load(void) {
+    nvs_handle_t h;
+    if (nvs_open(RADIO_NVS_NS, NVS_READONLY, &h) != ESP_OK) return 0;
+    uint8_t n = 0;
+    if (nvs_get_u8(h, RADIO_NVS_KEY, &n) != ESP_OK) n = 0;
+    nvs_close(h);
+    return n;
+}
+
+static void radio_attempts_store(uint8_t n) {
+    nvs_handle_t h;
+    if (nvs_open(RADIO_NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+        ESP_LOGW(TAG, "cannot open NVS for the radio attempt counter");
+        return;
+    }
+    if (nvs_set_u8(h, RADIO_NVS_KEY, n) == ESP_OK) nvs_commit(h);
+    nvs_close(h);
+}
+
+static void radio_gate(void) {
+    const char *running = radio_flash_version();
+    const bool have_image = radio_flash_image_size() > 0;
+    const bool match = (strcmp(running, RADIO_EXPECTED_FW) == 0);
+    const uint8_t attempts = radio_attempts_load();
+
+    /* Charged BEFORE the flash, deliberately: radio_flash_apply() restarts the car, so a
+       counter written after it would never be written at all. */
+    const uint8_t next = (uint8_t)radio_ota_next_attempts(match, attempts);
+    if (next != attempts) radio_attempts_store(next);
+
+    if (!radio_ota_should_flash(running, RADIO_EXPECTED_FW,
+                                attempts, RADIO_OTA_MAX_ATTEMPTS, have_image)) {
+        if (!match && have_image) {
+            ESP_LOGW(TAG, "radio %s vs expected %s: %d attempts spent, giving up and booting on",
+                     running, RADIO_EXPECTED_FW, (int)attempts);
+        }
+        return;
+    }
+    ESP_LOGW(TAG, "radio %s, expected %s — flashing (attempt %d of %d)",
+             running, RADIO_EXPECTED_FW, (int)next, RADIO_OTA_MAX_ATTEMPTS);
+    radio_flash_apply();   /* does not return */
+}
+
 void app_main(void) {
     /* A dead motor bus must not take the radio with it. Booting into the network
        with bus_ok=false is diagnosable and OTA-recoverable; a boot loop needs a
@@ -134,6 +187,14 @@ void app_main(void) {
         ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
         esp_ota_mark_app_valid_cancel_rollback();
     }
+    /* The radio's image rides inside this one, so a pin bump no longer means a bench visit
+       (docs/superpowers/specs/2026-08-31-radio-in-one-image-design.md).
+
+       The position is not free. AFTER mark-valid, because a successful flash ends in a restart
+       we chose and the bootloader cannot tell that from a crash — before it, that restart would
+       revert a perfectly good app image. BEFORE rt_link_start/http_server_start, because from
+       there on the car is serving and the SDIO link is not ours to drop. */
+    radio_gate();
     telemetry_start();                     // 1 Hz RSSI sampler, off the control task
     recovery_init();                       // breadcrumb buffer; the watchdog trips into it
     /* Driving comes up before the API: rt_link carries control, the watchdog and

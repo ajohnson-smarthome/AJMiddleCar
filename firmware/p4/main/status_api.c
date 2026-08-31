@@ -10,21 +10,13 @@
 #include "board.h"
 #include "contract.h"
 #include <string.h>
-#include "esp_hosted.h"
 #include "esp_ota_ops.h"
 #include "api_util.h"
 #include "eh_common_fw_version.h"   /* esp_hosted's own version macros — the single source */
+#include "radio_flash.h"
+#include "radio_expected.h"
 
 static const char *TAG = "status_api";
-
-/* The expected slave version is the HOST library's version: esp_hosted requires the pair
- * matched, and deriving the string from the component's own macros makes drift between
- * idf_component.yml and this check impossible — the hand-copied board.h pin the audit
- * caught could lie in both directions. */
-#define RADIO_STR2(x) #x
-#define RADIO_STR(x)  RADIO_STR2(x)
-#define RADIO_EXPECTED_FW \
-    RADIO_STR(PROJECT_VERSION_MAJOR_1) "." RADIO_STR(PROJECT_VERSION_MINOR_1) "." RADIO_STR(PROJECT_VERSION_PATCH_1)
 
 // The radio co-processor's firmware version, read once at boot. Reading it per request would put
 // SDIO traffic on the app's 1.5 s status poll for a value that cannot change without a reboot.
@@ -56,18 +48,15 @@ static void read_rollback_state(void) {
 }
 
 static void read_radio_version(void) {
-    esp_hosted_coprocessor_fwver_t v;
-    if (esp_hosted_get_coprocessor_fwversion(&v) != 0) {
-        ESP_LOGW(TAG, "could not read radio firmware version");
-        return;
-    }
-    snprintf(s_radio_fw, sizeof(s_radio_fw), "%u.%u.%u",
-             (unsigned)v.major1, (unsigned)v.minor1, (unsigned)v.patch1);
+    snprintf(s_radio_fw, sizeof(s_radio_fw), "%s", radio_flash_version());
     s_radio_ok = (strcmp(s_radio_fw, RADIO_EXPECTED_FW) == 0);
     if (s_radio_ok) {
         ESP_LOGI(TAG, "radio firmware %s", s_radio_fw);
     } else {
-        ESP_LOGW(TAG, "radio firmware %s, expected %s — reflash the C6 (firmware/c6/README.md)",
+        /* No longer an instruction to fetch a cable: main.c's boot gate offers the embedded
+         * image first, and only a spent attempt budget or a build with no image reaches here
+         * still mismatched. */
+        ESP_LOGW(TAG, "radio firmware %s, expected %s — the car could not correct it",
                  s_radio_fw, RADIO_EXPECTED_FW);
     }
 }
