@@ -69,6 +69,12 @@ final class UpdateClient: NSObject, ObservableObject {
         // cold launch's network establishment (association, DNS) can still cost a couple of
         // seconds on a phone that is genuinely online, and a probe that gives up too fast reads
         // that as "no internet" for nothing.
+        //
+        // The 10 s / 25 s below are carried over unchanged from the old measurement and were
+        // never re-sized against "a couple of seconds" — they are not tuned to today's scenario,
+        // they are a safe ceiling for it: this only ever delays declaring "no internet" while a
+        // path comes up, never causes a false one, so an oversized budget costs nothing but a
+        // slower failure on a phone that truly has none.
         let cfg = URLSessionConfiguration.ephemeral
         cfg.waitsForConnectivity = true
         cfg.timeoutIntervalForRequest = 10
@@ -97,14 +103,15 @@ final class UpdateClient: NSObject, ObservableObject {
     /// a phone in the field proceed without internet. Excluded from backup: it is a cache in
     /// spirit, just not one the OS may unilaterally delete.
     ///
-    /// One path per device (`UpdateRules.Device.cacheFileName`), so a stale car image can never
-    /// be found — let alone offered to `DongleClient.uploadFirmware` — under the dongle's path,
-    /// or vice versa: the two devices simply never share a file.
+    /// One path per device — `UpdateRules.cacheURL(for:in:)` is the pure join that guarantees
+    /// it, host-tested there; this only supplies (and creates) the real directory. A stale car
+    /// image can never be found — let alone offered to `DongleClient.uploadFirmware` — under the
+    /// dongle's path, or vice versa: the two devices simply never share a file.
     static func cachedBinURL(for device: UpdateRules.Device) -> URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory,
                                            in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent(device.cacheFileName)
+        return UpdateRules.cacheURL(for: device, in: dir)
     }
     /// The car's cache — the only device this existed for before branch P4's dongle images.
     static var cachedBinURL: URL { cachedBinURL(for: .car) }

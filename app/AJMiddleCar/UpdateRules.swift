@@ -33,6 +33,16 @@ enum UpdateRules {
         var cacheFileName: String { assetName }
     }
 
+    /// The local cache's full path for `device`, under `dir` (the caller's Application Support
+    /// directory — `UpdateClient` owns finding and creating it; this only joins the two). Pure,
+    /// and host-tested here rather than only at the `Device.cacheFileName` value layer: the risk
+    /// this whole split exists to close — a car image and a dongle image landing under the same
+    /// file — lives at the point a device turns into an actual URL, not one layer above it where
+    /// `UpdateClient`'s `@MainActor` `ObservableObject` sits outside what `swiftc` host-builds.
+    static func cacheURL(for device: Device, in dir: URL) -> URL {
+        dir.appendingPathComponent(device.cacheFileName)
+    }
+
     /// Normalize a version like "v1.2" / "v1.2-3-gabc" → "1.2" for comparison.
     static func normalize(_ v: String?) -> String {
         guard let v else { return "" }

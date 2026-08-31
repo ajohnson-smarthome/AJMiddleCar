@@ -51,6 +51,22 @@ check(UpdateRules.Device.dongle.cacheFileName == UpdateRules.Device.dongle.asset
 check(UpdateRules.Device.car.cacheFileName != UpdateRules.Device.dongle.cacheFileName,
       "a cached image for one device is never offered for the other")
 
+// -- cacheURL: the pure join that turns a device into an actual file path -------------
+// This is the layer the risk actually lives at — `UpdateClient.cachedBinURL(for:)` is a thin,
+// untested wrapper around it (it needs a real Application Support directory, which is why it
+// stays in UpdateClient); this proves the join itself, with a directory the test controls.
+let supportDir = URL(fileURLWithPath: "/tmp/update-rules-test-support")
+check(UpdateRules.cacheURL(for: .car, in: supportDir) == UpdateRules.cacheURL(for: .car, in: supportDir),
+      "same device, same directory → the same URL every time")
+check(UpdateRules.cacheURL(for: .dongle, in: supportDir) == UpdateRules.cacheURL(for: .dongle, in: supportDir),
+      "same device, same directory → the same URL every time (dongle side too)")
+check(UpdateRules.cacheURL(for: .car, in: supportDir) != UpdateRules.cacheURL(for: .dongle, in: supportDir),
+      "a URL built for one device is never the URL built for the other — the property that matters")
+check(UpdateRules.cacheURL(for: .car, in: supportDir).lastPathComponent == UpdateRules.Device.car.assetName,
+      "the join actually uses the device's asset name, not some other distinct-but-wrong name")
+check(UpdateRules.cacheURL(for: .dongle, in: supportDir).lastPathComponent == UpdateRules.Device.dongle.assetName,
+      "the join actually uses the device's asset name, not some other distinct-but-wrong name")
+
 // -- mustUpdate answerable for either device, independently ---------------------------
 // Same tag, same function, fed each device's own running firmware: the car being behind
 // must not force the dongle, and vice versa — each answer depends only on its own input.
