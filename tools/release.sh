@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cut a GitHub release whose tag carries the firmware build number (v<semver>+<count>).
-# Usage: tools/release.sh [--dry-run] [--radio-bumped] ["release notes"]
+# Usage: tools/release.sh [--dry-run] ["release notes"]
 #
 # Known hazard, deliberately unguarded: the build number is `git rev-list --count HEAD`,
 # so a rewrite of main's history can cut a release every fielded car considers itself
@@ -8,11 +8,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."   # repo root
 
-DRY_RUN=0; RADIO_BUMPED=0; NOTES_ARG=""
+DRY_RUN=0; NOTES_ARG=""
 for arg in "$@"; do
     case "$arg" in
         --dry-run)      DRY_RUN=1 ;;
-        --radio-bumped) RADIO_BUMPED=1 ;;
         --*)            echo "ERROR: unknown flag $arg"; exit 1 ;;
         *)              [ -z "$NOTES_ARG" ] || { echo "ERROR: multiple notes arguments"; exit 1; }
                         NOTES_ARG="$arg" ;;
@@ -34,56 +33,16 @@ BIN_CAR="firmware/p4/build/ajmiddlecar.bin"
 BIN_DONGLE="firmware/s3/build/ajdongle.bin"
 NOTES="${NOTES_ARG:-Release ${VER}}"
 
-# Radio pin: read from the current tree only (no network), so this fires even under
-# --dry-run and before any fetch. The `|| true` keeps a missing/malformed pin line from
-# being swallowed by `set -e` on a failing command substitution — under set -euo pipefail,
-# a bare `VAR=$(cmd)` assignment from a failing substitution kills the script with no
-# output, which would make the guard below unreachable. The explicit guard turns that into
-# a clear error instead.
-radio_pin() { grep -E 'espressif/esp_hosted:' "$1" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1; }
-PIN=$(radio_pin firmware/p4/main/idf_component.yml) || true
-[ -n "$PIN" ] || { echo "ERROR: no esp_hosted pin found in firmware/p4/main/idf_component.yml"; exit 1; }
-PIN_MOVED=0
-PREV_PIN=""
-
 if [ "$DRY_RUN" = 1 ]; then
     echo "[dry-run] version : $VER"
     echo "[dry-run] tag     : $VER  (target: $(git rev-parse HEAD))"
     echo "[dry-run] title   : $TITLE"
     echo "[dry-run] assets  : $BIN_CAR"
     echo "[dry-run]         : $BIN_DONGLE"
-    echo "[dry-run] radio   : esp_hosted $PIN"
+    echo "[dry-run] radio   : built from the pinned esp_hosted and embedded in $BIN_CAR"
     echo "[dry-run] notes   : $NOTES"
     echo "[dry-run] would run: test-all && rm sdkconfig && idf.py fullclean && idf.py build (p4, s3) && gh release create '$VER' '$BIN_CAR' '$BIN_DONGLE' --target <HEAD> ..."
     exit 0
-fi
-
-# The radio half rides OUTSIDE this channel: /ota updates only the P4, so a release whose
-# firmware pins a newer esp_hosted strands every OTA'd car on a bench reflash of the C6.
-# Detect the pin moving since the previous release and refuse to ship it silently.
-#
-# The previous release's tag may exist only on origin (gh-created release tags are pushed,
-# not necessarily fetched into every clone) — fetch quietly first, tolerating offline. The
-# repo also carries a stray bare `v1.0` tag that is not a release tag; match the release
-# pattern (v<semver>+<build>) so it can never be picked up here.
-#
-# This whole block runs only on the real (non-dry-run) path: it is the only network call
-# release.sh makes, and a dry run must make zero network calls.
-git fetch --tags origin >/dev/null 2>&1 || true
-PREV_TAG=$(git tag --list 'v*+*' --sort=-creatordate | head -1 || true)
-if [ -z "$PREV_TAG" ]; then
-    echo "NOTE: no previous release tag found — radio-pin gate is a no-op for this release."
-else
-    PREV_PIN=$(git show "${PREV_TAG}:firmware/p4/main/idf_component.yml" 2>/dev/null | \
-               { grep -E 'espressif/esp_hosted:' || true; } | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) || true
-    if [ -z "$PREV_PIN" ]; then
-        echo "NOTE: ${PREV_TAG} predates the esp_hosted pin line — radio-pin gate is a no-op for this release."
-    elif [ "$PREV_PIN" != "$PIN" ]; then
-        PIN_MOVED=1
-    fi
-fi
-if [ "$PIN_MOVED" = 1 ]; then
-    NOTES="${NOTES}"$'\n\n'"⚠️ Этот релиз меняет радио-пин (esp_hosted ${PREV_PIN} → ${PIN}): после OTA потребуется стендовая перепрошивка радио C6 (firmware/c6/README.md)."
 fi
 
 # Only tracked changes matter — the build number comes from committed history; untracked
@@ -106,12 +65,6 @@ if [ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]; then
     echo "ERROR: local main ($LOCAL_HEAD) is not origin/main ($REMOTE_HEAD) — push first"; exit 1
 fi
 
-if [ "$PIN_MOVED" = 1 ] && [ "$RADIO_BUMPED" != 1 ]; then
-    echo "ERROR: the esp_hosted pin moved since $PREV_TAG ($PREV_PIN → $PIN)."
-    echo "       OTA cannot deliver the C6 image: every updated car will need a bench"
-    echo "       reflash. Pass --radio-bumped to acknowledge and ship anyway."; exit 1
-fi
-
 echo "Running the test suite before building..."
 ./tools/test-all.sh
 
@@ -125,8 +78,30 @@ set -e
 # overrides before, and a release built from one would ship them.
 rm -f firmware/p4/sdkconfig firmware/p4/sdkconfig.old
 rm -f firmware/s3/sdkconfig firmware/s3/sdkconfig.old
+# The C6's image rides inside the car's, so build it first and put it where the car's build
+# embeds it. Same source flash-radio.sh uses — the pinned component's own example — so the pin
+# determines both halves and there is no second version to keep in step.
+HOSTED="firmware/p4/managed_components/espressif__esp_hosted"
+CP="$HOSTED/examples/wifi/sta/cp"
+if [ ! -d "$CP" ]; then
+    echo "ERROR: esp_hosted is not fetched — run (cd firmware/p4 && idf.py reconfigure) first"; exit 1
+fi
+python "$HOSTED/tools/eh.py" patch-idf --idf-path "$IDF_PATH" >/dev/null
+(cd "$CP" && { [ -d build ] || idf.py set-target esp32c6 >/dev/null; } && idf.py build >/dev/null)
+CP_BIN=$(ls "$CP"/build/*.bin 2>/dev/null | grep -v -E 'bootloader|partition-table|ota_data' | head -1)
+[ -n "$CP_BIN" ] || { echo "ERROR: the co-processor build produced no image"; exit 1; }
+cp "$CP_BIN" firmware/p4/main/radio_image.bin
+echo "radio image: $(basename "$CP_BIN"), $(wc -c < firmware/p4/main/radio_image.bin) bytes"
+
 (cd firmware/p4 && idf.py fullclean >/dev/null && idf.py build)
 [ -f "$BIN_CAR" ] || { echo "ERROR: $BIN_CAR not built"; exit 1; }
+# A release whose car image does not actually contain the radio's is the silent version of the
+# bug this whole change removes: it would look current and strand a pin bump anyway.
+if ! riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep -q _binary_radio_image_bin_start; then
+    echo "ERROR: the car image does not embed a radio image"; exit 1
+fi
+EMBEDDED=$(wc -c < firmware/p4/main/radio_image.bin)
+[ "$EMBEDDED" -gt 4096 ] || { echo "ERROR: the embedded radio image is $EMBEDDED bytes — not an image"; exit 1; }
 # The dongle is an Xtensa target; the car and its radio are both RISC-V, so an ESP-IDF installed
 # for the car alone has no compiler for it. Say so rather than letting a toolchain error look
 # like a firmware problem.
