@@ -12,37 +12,10 @@ import Network
 ///
 /// `URLSession` cannot express that binding, which is why the car's traffic runs on
 /// `Network.framework`. Both transports build their parameters here so the rule cannot drift.
+///
+/// *Which* wire that is used to be a guess about interface types, and the guess was wrong on
+/// hardware. `CarInterface` now answers it by address instead; this file only applies the answer.
 enum CarNet {
-    /// **U1, unresolved.** The spec assumes the dongle's CDC-NCM interface reports to
-    /// `Network.framework` as `.wiredEthernet`; nobody has looked. The other candidate is
-    /// `.other`, which is where iOS parks USB network hardware it does not recognise as
-    /// Ethernet proper. This cannot be settled from the simulator — there is no USB there — only
-    /// from a device: the bench step is Task 3 Step 4 in
-    /// `docs/superpowers/plans/2026-08-31-dongle-p5-app.md`, a throwaway build that logs
-    /// `NWPath.availableInterfaces` with the dongle attached. Get this wrong and nothing fails
-    /// loudly: every socket the app opens pins to an interface type nothing on the phone ever
-    /// reports, so every connection sits in `.waiting` and times out — silence indistinguishable
-    /// from a broken relay.
-    static let dongleInterface: NWInterface.InterfaceType = .wiredEthernet
-
-    /// The interface actually pinned to and monitored — `dongleInterface`, unless the bench
-    /// escape hatch (`CarHost.direct`) says the car is addressed directly over the phone's own
-    /// Wi-Fi. Folded into one value *here*, not in `CarHost`, because `CarPath`'s monitor needs
-    /// it too and `CarHost.direct` does not exist on the simulator branch — this file already
-    /// owns the `#if` both call sites have to agree with. `pinToCarInterface` and `CarPath` are
-    /// the only two readers; a socket pinned to one candidate while the monitor watches the
-    /// other is exactly the split this constant exists to prevent.
-    static var carInterface: NWInterface.InterfaceType {
-        #if !targetEnvironment(simulator)
-        return CarHost.direct ? .wifi : dongleInterface
-        #else
-        // Never actually consulted for pinning or for `state` on this branch (both go through
-        // `generalPath` instead — see `CarPath`), but `CarPath`'s `dongle` monitor is a stored
-        // property created unconditionally, so this still has to return something that compiles.
-        return dongleInterface
-        #endif
-    }
-
     /// REST: `/status`, `/calib*`, `/ota` and the five config domains.
     static func tcpParams() -> NWParameters { pinToCarInterface(.tcp) }
 
@@ -51,9 +24,19 @@ enum CarNet {
     /// the stream for a 1.5 s TCP retransmission — five times the car's watchdog deadline.
     static func udpParams() -> NWParameters { pinToCarInterface(.udp) }
 
+    /// Pin to the dongle's wire — the concrete one `CarInterface` found by address, not a type
+    /// anybody guessed. When it cannot be identified the socket is left unpinned rather than
+    /// pinned to nothing: see `CarInterface.current` for why that case is legitimate and why
+    /// routing still delivers. Cellular stays prohibited either way — the car is never out there.
     private static func pinToCarInterface(_ p: NWParameters) -> NWParameters {
         #if !targetEnvironment(simulator)
-        p.requiredInterfaceType = carInterface
+        if CarHost.direct {
+            // The bench escape hatch reaches the car over the phone's own Wi-Fi, where the
+            // interface type is known rather than assumed, so pinning by type is still right.
+            p.requiredInterfaceType = .wifi
+        } else if let wire = CarInterface.current {
+            p.requiredInterface = wire
+        }
         p.prohibitedInterfaceTypes = [.cellular]
         #else
         // Deliberately absent in the simulator: the car there is the mock, which may be on

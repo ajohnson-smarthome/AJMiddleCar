@@ -20,11 +20,10 @@ enum CarHost {
     /// because both failures look identical from here (nothing connects). `-carHost` addresses
     /// the car directly over the phone's own Wi-Fi, exactly as the app did before the dongle
     /// existed; given nothing, the app addresses the dongle. It selects a pair, not just a host:
-    /// `CarNet.carInterface` folds this same `direct` decision into the interface type that both
-    /// `CarNet`'s socket pinning and `CarPath`'s monitor read, so host and interface cannot
-    /// disagree — the folding happens in `CarNet` rather than here because `CarPath` needs it
-    /// too, and this flag does not exist on the simulator branch. It comes out once
-    /// `firmware/s3/README.md`'s bench table records a drive through the relay.
+    /// both `CarNet`'s socket pinning and `CarPath`'s presence test branch on this same `direct`
+    /// flag, so host and wire cannot disagree — direct mode pins to Wi-Fi by type, where the type
+    /// is known; dongle mode asks `CarInterface` which wire carries the dongle's address. It comes
+    /// out once `firmware/s3/README.md`'s bench table records a drive through the relay.
     static let direct = launchArgument("-carHost") != nil
 
     static let host = direct ? launchArgument("-carHost")! : DongleContract.host

@@ -20,14 +20,11 @@ import Network
 /// answers reads the same as a car that never answers).
 ///
 /// **Which interface — Ruling 1 in the plan's ledger.** This calls `CarNet.tcpParams()`, the public
-/// function, rather than reaching for `requiredInterfaceType` itself. Task 3 repointed the pin at
-/// the dongle's own interface (`CarNet.dongleInterface`), so by construction — and by code review —
-/// this now pins to the same interface as every other request to the car. **Still unverified**:
-/// whether iOS actually reports a CDC-NCM device as that interface type is U1
-/// (`app/AJMiddleCar/CarNet.swift`), open until the pending bench row in `firmware/s3/README.md` is
-/// filled in — nothing on this branch has run on a device with the dongle attached. Calling
-/// `CarNet.tcpParams()` here rather than duplicating the seam means that answer, whichever way it
-/// lands, changes `CarNet` and nothing in this file.
+/// function, rather than reaching for `requiredInterfaceType` itself, so it pins exactly as every
+/// other request to the car does. That indirection earned itself on 2026-08-31: U1 came back from
+/// the bench answered "not that way at all" — pinning to a guessed *interface type* could not open
+/// a socket to a dongle the phone was demonstrably talking to — and the repair landed entirely in
+/// `CarNet` and the new `CarInterface`, with not a line changed here.
 ///
 /// **No credential state.** Neither `join` nor `retryJoin` remembers a password between calls —
 /// this file is handed opaque strings by its caller and has no idea whose network they are, let

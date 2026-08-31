@@ -254,8 +254,8 @@ final class UpdateClient: NSObject, ObservableObject {
     enum UploadOutcome: Equatable { case ok, cancelled, failed(String?) }
 
     /// Uploads over `CarTransport`, pinned to the dongle's interface like every request to the
-    /// car (`CarNet.carInterface`) — the phone reaches the car through the dongle, not over
-    /// Wi-Fi. 45 s, not 180: the car itself abandons a stalled upload after ~30 s, so anything
+    /// car (`CarNet.tcpParams()`, which asks `CarInterface` which wire that is) — the phone
+    /// reaches the car through the dongle, not over Wi-Fi. 45 s, not 180: the car itself abandons a stalled upload after ~30 s, so anything
     /// beyond that is the phone watching a corpse (decision 15). The car's error envelope is
     /// surfaced, not swallowed (decision 14) — but only when it really is the car's own
     /// envelope; see `UploadOutcome`.
