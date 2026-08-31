@@ -105,14 +105,22 @@ static uint8_t radio_attempts_load(void) {
     return n;
 }
 
-static void radio_attempts_store(uint8_t n) {
+/* Returns whether the value actually reached flash. The gate needs to know: an attempt that
+   cannot be counted is an uncounted loop. */
+static bool radio_attempts_store(uint8_t n) {
     nvs_handle_t h;
     if (nvs_open(RADIO_NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
         ESP_LOGW(TAG, "cannot open NVS for the radio attempt counter");
-        return;
+        return false;
     }
-    if (nvs_set_u8(h, RADIO_NVS_KEY, n) == ESP_OK) nvs_commit(h);
+    esp_err_t err = nvs_set_u8(h, RADIO_NVS_KEY, n);
+    if (err == ESP_OK) err = nvs_commit(h);
     nvs_close(h);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "cannot persist the radio attempt counter: %s", esp_err_to_name(err));
+        return false;
+    }
+    return true;
 }
 
 static void radio_gate(void) {
@@ -121,21 +129,35 @@ static void radio_gate(void) {
     const bool match = (strcmp(running, RADIO_EXPECTED_FW) == 0);
     const uint8_t attempts = radio_attempts_load();
 
-    /* Charged BEFORE the flash, deliberately: radio_flash_apply() restarts the car, so a
-       counter written after it would never be written at all. */
-    const uint8_t next = (uint8_t)radio_ota_next_attempts(match, attempts);
-    if (next != attempts) radio_attempts_store(next);
-
+    if (match) {
+        /* Clear on a match however it came about — a bench reflash counts too, and the next
+           genuine mismatch deserves a fresh budget. A failed write here costs nothing: the count
+           stays where it was, which errs toward giving up sooner rather than later. */
+        if (attempts != 0) radio_attempts_store(0);
+        return;
+    }
     if (!radio_ota_should_flash(running, RADIO_EXPECTED_FW,
                                 attempts, RADIO_OTA_MAX_ATTEMPTS, have_image)) {
-        if (!match && have_image) {
+        if (have_image) {
             ESP_LOGW(TAG, "radio %s vs expected %s: %d attempts spent, giving up and booting on",
                      running, RADIO_EXPECTED_FW, (int)attempts);
         }
         return;
     }
+    /* Charged only on the path that actually flashes, and only if the charge persisted.
+       Charging any earlier spends the budget on mismatches nothing can act on: an ordinary
+       build carries no embedded image, so three boots of one would silently leave a car unable
+       to accept the release build that could finally have fixed its radio.
+       Refusing when the write fails is the other half. radio_flash_apply() restarts and never
+       returns, so a counter that cannot be written means flash, restart, read zero, flash again
+       — forever, on a car that never reaches rt_link_start() and has no cable attached. */
+    if (!radio_attempts_store((uint8_t)radio_ota_next_attempts(false, attempts))) {
+        ESP_LOGE(TAG, "radio needs %s but the attempt counter will not persist — not flashing",
+                 RADIO_EXPECTED_FW);
+        return;
+    }
     ESP_LOGW(TAG, "radio %s, expected %s — flashing (attempt %d of %d)",
-             running, RADIO_EXPECTED_FW, (int)next, RADIO_OTA_MAX_ATTEMPTS);
+             running, RADIO_EXPECTED_FW, (int)attempts + 1, RADIO_OTA_MAX_ATTEMPTS);
     radio_flash_apply();   /* does not return */
 }
 
