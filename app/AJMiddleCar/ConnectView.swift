@@ -27,11 +27,12 @@ struct ConnectView: View {
         case dongleUpdateFailed
         /// The dongle is current and pointed at the car's own network. Either its credentials
         /// are being sent for the first time (including a re-point, if it was pointed at some
-        /// other network), or it is between join attempts — both read as "connecting" from
-        /// here; see `DongleLink.DongleStep.sendCredentials`/`.waiting`.
+        /// other network), or the radio is working through its own join budget — both read as
+        /// "connecting" from here; see `DongleLink.DongleStep.sendCredentials`/`.waiting`.
         case dongleConfiguring
-        /// The dongle's join attempt budget ran out. `AppFlow` retries it on the next poll with
-        /// no button to press — the credentials are already stored and correct.
+        /// The dongle will not reach the car on its own: the join budget ran out, or its state
+        /// machine never left `idle`. `AppFlow` asks the radio to try again, a bounded number of
+        /// times — see `.dongleJoinFailed`'s button below for what happens after that.
         case dongleJoinFailed
         /// The dongle's bootloader reverted its last update. Standing until `onSkipRollback` is
         /// used — the flag itself does not clear on its own, so without that escape hatch this

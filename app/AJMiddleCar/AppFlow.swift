@@ -39,12 +39,13 @@ final class AppFlow: ObservableObject {
         case dongleRolledBack
         /// The dongle is current and pointed at the car's own network. Either its credentials
         /// are being sent for the first time (including a re-point, if it was pointed at some
-        /// other network), or it is between join attempts (`idle`/`joining`/an unrecognised
-        /// state) — both render the same "connecting" screen; see
+        /// other network), or the radio is working through its own join budget (`joining`, or a
+        /// state this build does not recognise) — both render the same "connecting" screen; see
         /// `DongleLink.DongleStep.sendCredentials`/`.waiting`.
         case dongleConfiguring
-        /// `net.state == .failed`: the join attempt budget ran out. The credentials are already
-        /// stored; `dongleGate()` retries the join itself, on the next poll, without a button.
+        /// The dongle will not get any further on its own: the join budget ran out (`failed`),
+        /// or its state machine never left `idle` — see `DongleStep.retryJoin`. The credentials
+        /// are already stored; `dongleGate()` asks the radio to try again.
         case dongleJoinFailed
         case checkInternet, noInternet, checkUpdate, checkFailed, downloading
         /// The gate has passed; the car has not identified itself yet. What is on screen while

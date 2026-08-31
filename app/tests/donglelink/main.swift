@@ -66,17 +66,27 @@ check(DongleLink.next(status: status(fw: current, rollback: false, ssid: "someOt
                       latestTag: latest, expectedSSID: carSSID) == .sendCredentials,
       "a dongle connected to the wrong network is re-pointed, not treated as ready")
 
-// -- configured, net idle or joining: wait, do not re-POST ------------------------------
-// `idle` here is the documented edge case (wifi_sta.c: esp_wifi_set_config failed, so the
-// state machine never stepped to `.joining`) rather than "never configured" — that path
-// already returned above because ssid matches the car's here. A wrong implementation that
-// treats any `idle` as "unconfigured" would send credentials again instead of waiting.
-check(DongleLink.next(status: status(fw: current, rollback: false, ssid: carSSID, state: DongleNetState.idle),
-                      latestTag: latest, expectedSSID: carSSID) == .waiting,
-      "configured but idle waits rather than re-sending credentials")
+// -- configured, net joining: wait, do not re-POST ---------------------------------------
+// The radio is working through its own bounded budget; nothing has failed yet, so a re-POST
+// would only restart a budget that is already running.
 check(DongleLink.next(status: status(fw: current, rollback: false, ssid: carSSID, state: DongleNetState.joining),
                       latestTag: latest, expectedSSID: carSSID) == .waiting,
       "configured and joining waits, not sendCredentials and not retryJoin")
+
+// -- configured, net idle: ask again — waiting here waits forever ------------------------
+// `idle` on a dongle whose stored SSID is the car's own is not "never configured" (that path
+// returns .sendCredentials above, and the fixture below proves the difference: same state,
+// different ssid). It is the edge wifi_sta.c documents: esp_wifi_set_config failed, so
+// wifi_sta_join returned early and left the state machine in IDLE while GET /net already
+// reports the network it was told. IDLE's only exit is WIFI_EV_CONFIGURED (wifi_state.c),
+// which only a POST /net raises — so an implementation that answers .waiting here (as this
+// one did) parks the app on a "connecting" screen that nothing on the dongle will ever end.
+check(DongleLink.next(status: status(fw: current, rollback: false, ssid: carSSID, state: DongleNetState.idle),
+                      latestTag: latest, expectedSSID: carSSID) == .retryJoin,
+      "configured but idle asks the radio again — nothing else can leave IDLE")
+check(DongleLink.next(status: status(fw: current, rollback: false, ssid: "", state: DongleNetState.idle),
+                      latestTag: latest, expectedSSID: carSSID) == .sendCredentials,
+      "an idle dongle with no stored SSID is still the configure step, not the retry step")
 
 // -- net failed: the retry step, not the configure step ----------------------------------
 // This is where U2 lands: the stored credentials are already correct, so the fix is asking

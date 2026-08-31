@@ -34,13 +34,15 @@ public enum DongleStep: Equatable {
     /// credentials either way; see `next(...)`'s doc for why comparing against the expected
     /// SSID, not just checking emptiness, is what this case now means.
     case sendCredentials
-    /// Pointed at the right network and the radio is between attempts (`idle`, `joining`, or an
-    /// `unknown` value this build does not recognise) — wait. Never re-POST from here: a
-    /// re-POST is a retry request, and nothing failed yet.
+    /// Pointed at the right network and the radio is still working: `joining` (its own bounded
+    /// budget is running) or an `unknown` value this build does not recognise. Wait. Never
+    /// re-POST from here: a re-POST is a retry request, and nothing has failed yet.
     case waiting
-    /// `net.state == .failed`, pointed at the right network: the budget the dongle's own join
-    /// policy allows ran out. The credentials are already stored and correct — what failed was
-    /// the radio reaching the car — so this is the retry step, not the configure step.
+    /// Pointed at the right network, and the dongle will not get any further on its own:
+    /// `net.state == .failed` (the budget its own join policy allows ran out) or `.idle` (its
+    /// state machine never left IDLE — see `next(...)`'s branch for how a CONFIGURED dongle
+    /// gets there). The credentials are already stored and correct; what is needed is asking
+    /// the radio to try again, which is a POST, which is what this step is.
     case retryJoin
     /// Pointed at the right network and `net.state == .connected`: the pipe is up. Hand off to
     /// the car's own existing gate, unchanged — this step exists so the flow knows to stop
@@ -95,14 +97,24 @@ public enum DongleLink {
 
         switch status.net.state {
         case .connected: return .readyForCar
-        case .failed: return .retryJoin
-        // `idle` here is not "never configured" — that case already returned above. It is the
-        // one documented edge where a configured dongle can still read idle: `wifi_sta_join`
-        // logs and returns early when `esp_wifi_set_config` itself fails, leaving the state
-        // machine "reflecting the previous attempt" rather than stepping to `.joining`
-        // (`firmware/s3/main/wifi_sta.c`). Treating it the same as `.joining` — wait, do not
-        // re-POST — is correct either way: nothing failed that a re-POST would fix.
-        case .idle, .joining, .unknown: return .waiting
+        // Both of these mean "the dongle will not get any further by itself".
+        //
+        // `failed` is the plain one: the join budget ran out. `idle` is the edge — and it is
+        // NOT "never configured", which already returned above on the SSID comparison. It is
+        // the case `wifi_sta.c` documents at the very line this branch used to cite for the
+        // opposite conclusion: when `esp_wifi_set_config` fails, `wifi_sta_join` logs, returns
+        // early and leaves the state machine untouched — "net.state still reflects the previous
+        // attempt, not this request... The two legitimately disagree until this is retried (a
+        // corrected POST /net, which restarts the whole budget)". And IDLE has exactly one exit,
+        // `WIFI_EV_CONFIGURED` (`firmware/s3/main/wifi_state.c`), raised only by
+        // `wifi_sta_join`, which only a POST /net (or a boot) calls. So nothing the dongle does
+        // on its own leaves this state: waiting here waits forever. Reachable from a stored
+        // network the radio refused at boot, and from a POST /net that stored the config and
+        // then answered 500.
+        case .failed, .idle: return .retryJoin
+        // `joining` is the radio working through its own bounded budget; `unknown` is a state
+        // this build does not know. Neither is a failure that a re-POST would fix.
+        case .joining, .unknown: return .waiting
         }
     }
 }
