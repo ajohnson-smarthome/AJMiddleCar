@@ -48,10 +48,15 @@ public struct DongleNetStatus: Decodable, Equatable {
     public let state: State
     public let rssi: Int
 
-    /// The contract's four states, plus `unknown` — so a firmware that grows a fifth state does
-    /// not make the app fail to parse a document it otherwise understands.
+    /// The contract's states, plus `unknown` — so a firmware that grows another one does not
+    /// make the app fail to parse a document it otherwise understands.
     public enum State: Equatable, Decodable {
         case idle
+        /// Scanning: the radio has not seen the car's network on the air yet. Split out of
+        /// `joining` because the two are different things to be told — one means "the car may
+        /// simply be switched off", the other means "found it, connecting" — and the startup
+        /// sequence gives them a screen each.
+        case searching
         case joining
         case connected
         case failed
@@ -61,6 +66,7 @@ public struct DongleNetStatus: Decodable, Equatable {
             let raw = try decoder.singleValueContainer().decode(String.self)
             switch raw {
             case DongleNetState.idle: self = .idle
+            case DongleNetState.searching: self = .searching
             case DongleNetState.joining: self = .joining
             case DongleNetState.connected: self = .connected
             case DongleNetState.failed: self = .failed

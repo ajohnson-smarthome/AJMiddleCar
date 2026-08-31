@@ -48,6 +48,19 @@ static _Atomic bool s_join_in_flight;
  * lock is busy, in car.c's _Atomic idiom (see s_trim_pct there). */
 static _Atomic wifi_state_t s_state_view = WIFI_IDLE;
 
+/* Whether the radio has actually associated with an access point, as opposed to still looking
+ * for one. WIFI_JOINING covers both — the pure state machine models the join as one state,
+ * correctly, because from its point of view they are one — but they are entirely different
+ * things to tell a person: "I cannot find the car" usually means the car is switched off, and
+ * "connecting" means it has been found. WIFI_EVENT_STA_CONNECTED is exactly the boundary, and
+ * it is knowledge that belongs here rather than in wifi_state.c, which is pure and host-tested
+ * and has no business knowing what an association is.
+ *
+ * _Atomic and not s_lock-guarded, in this file's established idiom (see s_join_in_flight): a
+ * store that cannot fail to happen is worth more here than one that is ordered with the state
+ * machine, because the only reader turns it into a label. */
+static _Atomic bool s_associated;
+
 static bool lock_take(void)
 {
     return s_lock != NULL && xSemaphoreTake(s_lock, pdMS_TO_TICKS(WIFI_STA_LOCK_MS)) == pdTRUE;
@@ -84,6 +97,9 @@ static void handle_disconnected(const wifi_event_sta_disconnected_t *ev)
         ESP_LOGE(TAG, "state lock busy — the station will not retry");
         return;
     }
+    /* Cleared before the step, not after: a disconnect always means the association is gone,
+     * whether this ends in a retry or in WIFI_FAILED, and a retry starts by scanning again. */
+    atomic_store(&s_associated, false);
     wifi_state_t prev = s_sm.state;
     bool retry = wifi_state_step(&s_sm, WIFI_EV_DISCONNECTED);
     bool entered_failed = (prev != WIFI_FAILED && s_sm.state == WIFI_FAILED);
@@ -147,6 +163,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
             handle_disconnected((const wifi_event_sta_disconnected_t *)data);
         } else if (id == WIFI_EVENT_STA_START) {
             handle_start();
+        } else if (id == WIFI_EVENT_STA_CONNECTED) {
+            /* Associated, but with no address yet. The state machine deliberately does not move
+             * here — WIFI_EV_GOT_IP is what completes a join — so this only sharpens the label
+             * /status reports, from "searching" to "joining". */
+            atomic_store(&s_associated, true);
+            ESP_LOGI(TAG, "associated; waiting for an address");
         }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         handle_got_ip((const ip_event_got_ip_t *)data);
@@ -249,6 +271,10 @@ esp_err_t wifi_sta_join(const net_cfg_t *cfg)
     }
 
     if (lock_take()) {
+        /* A fresh join starts by scanning, whatever the radio was doing a moment ago. Without
+         * this, a re-point while associated to some other network would report "joining" from
+         * the first millisecond and never pass through "searching" at all. */
+        atomic_store(&s_associated, false);
         wifi_state_step(&s_sm, WIFI_EV_CONFIGURED);
         publish_state_locked();
         lock_give();
@@ -287,6 +313,16 @@ bool wifi_sta_connected(void)
     return atomic_load(&s_state_view) == WIFI_CONNECTED;
 }
 
+/* Split WIFI_JOINING into the two things a person needs told apart. Everything else the pure
+ * state machine names is already as specific as it can be. */
+static const char *refine(const char *name)
+{
+    if (strcmp(name, DONGLE_STATE_JOINING) == 0 && !atomic_load(&s_associated)) {
+        return DONGLE_STATE_SEARCHING;
+    }
+    return name;
+}
+
 const char *wifi_sta_state_name(void)
 {
     if (!lock_take()) {
@@ -295,11 +331,11 @@ const char *wifi_sta_state_name(void)
          * blocking the HTTP task /status runs on. */
         ESP_LOGE(TAG, "state lock busy — /status reports the last-known state");
         wifi_sm_t view = { .state = atomic_load(&s_state_view), .attempts = 0 };
-        return wifi_state_name(&view);
+        return refine(wifi_state_name(&view));
     }
     const char *name = wifi_state_name(&s_sm);
     lock_give();
-    return name;
+    return refine(name);
 }
 
 int8_t wifi_sta_rssi(void)

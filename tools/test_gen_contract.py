@@ -376,7 +376,12 @@ class TestDongleSchema(unittest.TestCase):
             self.assertNotIn(forbidden, blob)
 
     def test_state_vocabulary_is_the_documented_one(self):
-        self.assertEqual(self.s["net_states"], ["idle", "joining", "connected", "failed"])
+        # `searching` is a split of `joining`, not a new place in the machine: the pure state
+        # machine in wifi_state.c still has four states, and wifi_sta.c refines the label using
+        # WIFI_EVENT_STA_CONNECTED. It is listed between the two states it sits between so the
+        # order still reads as the sequence a join actually walks.
+        self.assertEqual(self.s["net_states"],
+                         ["idle", "searching", "joining", "connected", "failed"])
 
     def test_usb_state_vocabulary_is_the_documented_one(self):
         # usb had a key (status_fields) but no enumerated values until this fix — status_api.c
@@ -533,7 +538,8 @@ class TestDongleEmitters(unittest.TestCase):
         self.assertIn('public static let netPath = "/net"', out)
         self.assertIn('public static let otaPath = "/ota"', out)
         self.assertIn("public static let ssidMax = 32", out)
-        self.assertIn('public static let all = ["idle", "joining", "connected", "failed"]', out)
+        self.assertIn(
+            'public static let all = ["idle", "searching", "joining", "connected", "failed"]', out)
 
     def test_swift_exposes_the_usb_state(self):
         out = self.g.emit_dongle_swift(self.s)

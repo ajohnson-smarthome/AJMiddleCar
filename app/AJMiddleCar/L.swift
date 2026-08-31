@@ -30,6 +30,14 @@ enum L {
     static var dongleJoinFailedSub: String { s("dongle.joinFailedSub") }
     static var dongleRolledBackTitle: String { s("dongle.rolledBackTitle") }
     static var dongleRolledBackSub: String { s("dongle.rolledBackSub") }
+    static var dongleFindingTitle: String { s("dongle.findingTitle") }
+    static var dongleFindingSub: String { s("dongle.findingSub") }
+    static var dongleUpdCheckTitle: String { s("dongle.updCheckTitle") }
+    static var dongleUpdCheckSub: String { s("dongle.updCheckSub") }
+    static var carFindingTitle: String { s("car.findingTitle") }
+    static var carFindingSub: String { s("car.findingSub") }
+    static var carUpdCheckTitle: String { s("car.updCheckTitle") }
+    static var carUpdCheckSub: String { s("car.updCheckSub") }
     static var dongleCheckingTitle: String { s("dongle.checkingTitle") }
     static var dongleCheckingSub: String { s("dongle.checkingSub") }
     static var dongleFaultTitle: String { s("dongle.faultTitle") }

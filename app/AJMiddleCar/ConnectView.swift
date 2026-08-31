@@ -16,6 +16,19 @@ import Network
 struct ConnectView: View {
     enum Situation: Equatable {
         case searching
+        /// Step 1 of the startup ladder: nothing has answered at the adapter's address yet.
+        /// Shows the adapter faint — the same drawing the next step makes solid, which is what
+        /// turns the pair into one movement forward rather than two unrelated pictures.
+        case findingAdapter
+        /// Step 3: the adapter is ours and healthy; asking GitHub whether it is current. Had no
+        /// screen at all before — `dongleGate()` did this silently, so a launch that stopped
+        /// here looked like a launch that had stopped for no reason.
+        case adapterUpdateCheck
+        /// Step 4: the radio is scanning and has not seen the car's network yet. Distinct from
+        /// `.dongleConfiguring`, which is the association that follows — see `WifiState`.
+        case findingCar
+        /// Step 6: the car is reachable; asking GitHub about the car's own firmware.
+        case carUpdateCheck
         /// The first frame of a launch: the dongle has been asked and has not answered yet.
         /// Its own line, because `.searching`'s says the CAR is not answering — an assertion
         /// about a device nothing has spoken to yet, made before the adapter in front of it
@@ -94,7 +107,29 @@ struct ConnectView: View {
         // different cable, and the sweep would promise otherwise.
         case .dongleRolledBack, .dongleUpdateFailed, .wrongDongle:
             FirmwareCarView(phase: .failed, palette: p)
-        default:
+        // The adapter's own three steps. Only two dials move across them: the body goes from
+        // faint to solid when it is found, and the rings turn inward when something is arriving.
+        case .findingAdapter, .noDongle:
+            DeviceScene(palette: p, rings: .wait(), presence: 0.34) { AdapterBody(palette: p) }
+        case .checkingDongle:
+            DeviceScene(palette: p, rings: .wait(),
+                        chip: (glyph: "cpu", tint: p.accent)) { AdapterBody(palette: p) }
+        case .dongleFault:
+            // Answering, but wrongly: the adapter is present, so it is drawn present, and the
+            // chip carries the fault. The radar used to sit here and promised a search nobody
+            // was performing.
+            DeviceScene(palette: p, rings: .wait(),
+                        chip: (glyph: "exclamationmark", tint: p.warn)) { AdapterBody(palette: p) }
+        case .adapterUpdateCheck, .dongleUpdating:
+            DeviceScene(palette: p, rings: .inward,
+                        chip: (glyph: "arrow.down", tint: p.accent)) { AdapterBody(palette: p) }
+        case .carUpdateCheck:
+            DeviceScene(palette: p, rings: .inward,
+                        chip: (glyph: "arrow.down", tint: p.accent)) { CarBody(palette: p) }
+        case .dongleConfiguring:
+            LinkScene(palette: p)
+        // Everything left is a search of the air, which is the one thing the sweep means.
+        case .searching, .findingCar, .localNetworkDenied, .dongleJoinFailed:
             ConnectCarView(palette: p)
         }
     }
@@ -102,6 +137,10 @@ struct ConnectView: View {
     private var title: String {
         switch situation {
         case .searching: return L.connectTitle
+        case .findingAdapter: return L.dongleFindingTitle
+        case .adapterUpdateCheck: return L.dongleUpdCheckTitle
+        case .findingCar: return L.carFindingTitle
+        case .carUpdateCheck: return L.carUpdCheckTitle
         case .checkingDongle: return L.dongleCheckingTitle
         case .noDongle: return L.linkNoDongleTitle
         case .localNetworkDenied: return L.linkDeniedTitle
@@ -118,6 +157,10 @@ struct ConnectView: View {
     private var message: String {
         switch situation {
         case .searching: return L.connectBody
+        case .findingAdapter: return L.dongleFindingSub
+        case .adapterUpdateCheck: return L.dongleUpdCheckSub
+        case .findingCar: return L.carFindingSub
+        case .carUpdateCheck: return L.carUpdCheckSub
         case .checkingDongle: return L.dongleCheckingSub
         case .noDongle: return L.linkNoDongleSub
         case .localNetworkDenied: return L.linkDeniedSub
@@ -176,7 +219,8 @@ struct ConnectView: View {
                 pillButton(L.fwRetry, tint: p.warn, action: onRetryJoin)
             }
         case .searching, .checkingDongle, .noDongle, .dongleUpdating, .dongleConfiguring,
-             .dongleFault, .wrongDongle:
+             .dongleFault, .wrongDongle,
+             .findingAdapter, .adapterUpdateCheck, .findingCar, .carUpdateCheck:
             EmptyView()
         }
     }
@@ -197,69 +241,93 @@ struct ConnectView: View {
 }
 
 /// Dimmed car with a radar sweep behind it — "searching for the car".
+///
+/// Only the sweep is drawn here now. The car and the stage come from `DeviceArt`, so this
+/// screen and the firmware screen build their car from one description instead of two copies of
+/// the same numbers. The rings stay wider than the firmware screen's, and deliberately:
+/// `DeviceArt.fieldD` is the air being searched, `ringD` is the device itself. Making them one
+/// set was tried and the beam lost the room it needs.
+///
+/// The car is a sibling layer rather than something this file paints, which also gets the
+/// occlusion for free: an opaque body over the beam is what makes the sweep read as passing
+/// *under* the car instead of across it.
 struct ConnectCarView: View {
     let palette: Palette
-    private var metal: Color { palette.metal }
-    private let carW: CGFloat = 34
-    private let carLen: CGFloat = 72
-    private let wheelW: CGFloat = 11
-    private let wheelH: CGFloat = 15
+    /// One turn. The period is load-bearing for the whole screen's feel, and it is the number
+    /// every other timing here is derived from.
+    private static let period: Double = 2.6
+    /// Where the returns sit: bearing in radians, range in points. Fixed rather than random —
+    /// a radar whose echoes wander is a lava lamp, not an instrument.
+    private static let blips: [(a: Double, r: Double)] =
+        [(-0.6, 54), (2.1, 68), (3.6, 41), (5.2, 70)]
 
     var body: some View {
-        TimelineView(.animation) { tl in
-            Canvas { ctx, size in
-                render(&ctx, size, time: tl.date.timeIntervalSinceReferenceDate)
+        ZStack {
+            TimelineView(.animation) { tl in
+                let t = tl.date.timeIntervalSinceReferenceDate
+                ZStack {
+                    Canvas { ctx, size in sweep(&ctx, size, time: t) }
+                        .frame(width: DeviceArt.stage.width, height: DeviceArt.stage.height)
+                    // The car is a return like any other: bright just after the beam has passed
+                    // over it, fading until the next turn. A target lit constantly would say the
+                    // search is already over, which is the opposite of what this screen means.
+                    CarBody(palette: palette).opacity(carWash(time: t))
+                }
             }
         }
-        .frame(width: 160, height: 210)
-        .scaleEffect(1.6)
+        .scaleEffect(DeviceArt.scale)
+        .frame(width: DeviceArt.stage.width, height: DeviceArt.stage.height)
     }
 
-    private func render(_ ctx: inout GraphicsContext, _ size: CGSize, time: Double) {
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        // radar grid: three faint rings
-        for r in [46.0, 60.0, 74.0] {
-            let rect = CGRect(x: center.x - r, y: center.y - r, width: 2 * r, height: 2 * r)
-            ctx.stroke(Path(ellipseIn: rect), with: .color(palette.accent.opacity(0.16)), lineWidth: 1.5)
+    /// How lit the car is: a function of the angle between the beam and the car's own bearing,
+    /// so it is exactly as impossible for the two to drift apart as it is for the returns.
+    private func carWash(time: Double) -> Double {
+        let head = -(time * 360 / Self.period).truncatingRemainder(dividingBy: 360) * .pi / 180
+        var delta = (head + .pi / 2).truncatingRemainder(dividingBy: 2 * .pi)
+        if delta < 0 { delta += 2 * .pi }
+        return 0.30 + 0.62 * exp(-2.2 * (delta / (2 * .pi) * Self.period))
+    }
+
+    private func sweep(_ ctx: inout GraphicsContext, _ size: CGSize, time: Double) {
+        let c = CGPoint(x: size.width / 2, y: size.height / 2)
+        let outer = DeviceArt.fieldD.last! / 2
+        for d in DeviceArt.fieldD {
+            let r = d / 2
+            ctx.stroke(Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r)),
+                       with: .color(palette.accent.opacity(0.16)), lineWidth: 1.5)
         }
-        // rotating beam: 70° sector with a fading conic tail, full turn ≈ 2.6 s,
-        // sweeping counter-clockwise (user preference)
+
+        // The beam is a tail, not a wedge: brightest at the leading edge and decaying
+        // exponentially over 120°, which is what a sweep actually looks like and what makes the
+        // direction of travel readable without any other cue. A flat sector reads as a rotating
+        // slice of pie — it was the single biggest thing making this screen look cheap.
+        let head = -(time * 360 / Self.period).truncatingRemainder(dividingBy: 360)
+        let arc = 1.0 / 3.0
+        var stops: [Gradient.Stop] = (0...8).map { i in
+            let f = Double(i) / 8
+            return .init(color: palette.accent.opacity(0.32 * exp(-3.4 * f)), location: f * arc)
+        }
+        stops.append(.init(color: palette.accent.opacity(0), location: arc))
+        stops.append(.init(color: palette.accent.opacity(0), location: 1))
+
         var beam = ctx
-        beam.translateBy(x: center.x, y: center.y)
-        beam.rotate(by: .degrees(-(time * 360 / 2.6).truncatingRemainder(dividingBy: 360)))
-        var sector = Path()
-        sector.move(to: .zero)
-        sector.addArc(center: .zero, radius: 74,
-                      startAngle: .degrees(-70), endAngle: .degrees(0), clockwise: false)
-        sector.closeSubpath()
-        // CCW sweep → leading (bright) edge at -70°, tail fades toward 0°
-        beam.fill(sector, with: .conicGradient(
-            Gradient(colors: [palette.accent.opacity(0.35), palette.accent.opacity(0.0)]),
-            center: .zero, angle: .degrees(-70)))
-        // dimmed car on top — opaque base so the beam reads as passing UNDER the car
-        drawCar(&ctx, center: center)
-    }
+        beam.translateBy(x: c.x, y: c.y)
+        beam.rotate(by: .degrees(head))
+        beam.fill(Path(ellipseIn: CGRect(x: -outer, y: -outer, width: 2 * outer, height: 2 * outer)),
+                  with: .conicGradient(Gradient(stops: stops), center: .zero, angle: .degrees(0)))
 
-    private func drawCar(_ ctx: inout GraphicsContext, center: CGPoint) {
-        // Opaque bg fills occlude the beam; the "dimmed" look comes from muted colour mixes,
-        // not from layer transparency (which would let the beam shine through the body).
-        let body = CGRect(x: center.x - carW / 2, y: center.y - carLen / 2, width: carW, height: carLen)
-        let bp = Path(roundedRect: body, cornerRadius: 11)
-        ctx.fill(bp, with: .color(palette.bg))
-        ctx.fill(bp, with: .color(palette.panel.opacity(0.6)))
-        ctx.stroke(bp, with: .color(metal.opacity(0.6)), lineWidth: 1)
-        let wind = CGRect(x: center.x - 11, y: body.minY + 7, width: 22, height: 9)
-        ctx.fill(Path(roundedRect: wind, cornerRadius: 3), with: .color(palette.bg.opacity(0.85)))
-        let wx = carW / 2 + 1
-        let wy = carLen / 2 - 16
-        for dx in [-wx, wx] {                       // wheels on top of the body, as in the reference
-            for dy in [-wy, wy] {
-                let r = CGRect(x: center.x + dx - wheelW / 2, y: center.y + dy - wheelH / 2,
-                               width: wheelW, height: wheelH)
-                let wp = Path(roundedRect: r, cornerRadius: 3)
-                ctx.fill(wp, with: .color(palette.bg))
-                ctx.fill(wp, with: .color(metal.opacity(0.6)))
-            }
+        // Returns: brightest just after the beam has crossed their bearing, then fading over the
+        // rest of the turn. Brightness comes from the angle between the beam and the target, so
+        // the flare and the sweep cannot drift out of step the way two timers would.
+        let headRad = head * .pi / 180
+        for b in Self.blips {
+            var delta = (headRad - b.a).truncatingRemainder(dividingBy: 2 * .pi)
+            if delta < 0 { delta += 2 * .pi }
+            let lum = exp(-1.5 * (delta / (2 * .pi) * Self.period))
+            guard lum > 0.02 else { continue }
+            let p = CGPoint(x: c.x + cos(b.a) * b.r, y: c.y + sin(b.a) * b.r)
+            ctx.fill(Path(ellipseIn: CGRect(x: p.x - 2.2, y: p.y - 2.2, width: 4.4, height: 4.4)),
+                     with: .color(palette.accent.opacity(0.85 * lum)))
         }
     }
 }

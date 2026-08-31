@@ -24,6 +24,17 @@ final class AppFlow: ObservableObject {
         /// Nothing answered `/status` — `DongleLink.next(reply: .silent, ...)`'s own step, not
         /// an error the flow invents separately.
         case dongleAbsent
+        /// Step 2. Something answered at the adapter's address and is being looked over. Brief
+        /// by nature — the reply is already in hand when this is set — which is exactly why
+        /// `PhasePacer` exists: without it this step would never be legible.
+        case dongleChecking
+        /// Step 3. Asking GitHub whether the adapter's own firmware is current. Had no phase at
+        /// all before, so this wait happened behind whatever screen preceded it.
+        case dongleUpdateCheck
+        /// Step 4. The adapter's radio is scanning and has not seen the car's network yet —
+        /// `DongleStep.searchingCar`. Distinct from `.dongleConfiguring`, which is the
+        /// association that follows: this one usually means the car is switched off.
+        case carFinding
         /// Something answered at the dongle's address and it was not usable — an HTTP error, a
         /// truncated stream, a body that would not decode. Deliberately not `.dongleAbsent`:
         /// the one instruction that screen gives is the one thing already done.
@@ -82,7 +93,8 @@ final class AppFlow: ObservableObject {
         var opensLink: Bool {
             switch self {
             case .updateRequired, .awaitingCar, .ready: return true
-            case .checkDongle, .dongleAbsent, .dongleFault, .dongleDenied, .dongleWrong,
+            case .checkDongle, .dongleAbsent, .dongleChecking, .dongleUpdateCheck, .carFinding,
+                 .dongleFault, .dongleDenied, .dongleWrong,
                  .dongleUpdating, .dongleUpdateFailed, .dongleRolledBack,
                  .dongleConfiguring, .dongleJoinFailed,
                  .checkInternet, .noInternet, .checkUpdate, .checkFailed, .downloading: return false
@@ -91,6 +103,13 @@ final class AppFlow: ObservableObject {
     }
 
     @Published var phase: Phase = .checkDongle
+    /// What is actually on screen. Lags `phase` by at most `PhasePacer.minVisible` per step, so
+    /// a launch whose steps resolve instantly is a readable sequence rather than one frame of
+    /// strobing. Everything that renders reads this; everything that decides reads `phase`.
+    @Published private(set) var shown: Phase = .checkDongle
+    private var shownAt = Date()
+    private var queued: [Phase] = []
+    private var pacing = false
     @Published var latestTag: String?
     let client = UpdateClient()
     private let dongle = DongleClient()
@@ -143,6 +162,9 @@ final class AppFlow: ObservableObject {
     private var dongleRelease: UpdateClient.Release?
     private var dongleLatestTag: String?
     private var checkedForDongleUpdate = false
+    /// Whether `/status` has ever answered this launch — the trigger for step 2, and nothing
+    /// else. Separate from `checkedForDongleUpdate`, which gates a network round trip.
+    private var sawDongle = false
     private var dongleUpdateAttempts = 0
     private var dongleUpdateGaveUp = false
     private var dongleJoinAttempts = 0
@@ -224,8 +246,15 @@ final class AppFlow: ObservableObject {
         // nothing plugged in wait on a network round trip just to be told to plug something in.
         while true {
             let reply = await readStatus()
+            // Step 2, once: something is there and is being looked over. Guarded, because this
+            // loop re-reads /status forever and must not walk the ladder backwards on every poll.
+            if case .status = reply, !sawDongle {
+                sawDongle = true
+                setPhase(.dongleChecking)
+            }
             if case .status = reply, !checkedForDongleUpdate {
                 checkedForDongleUpdate = true
+                setPhase(.dongleUpdateCheck)          // step 3
                 dongleRelease = await client.latestRelease(for: .dongle)
                 // Same offline fallback `carGate()` uses below, aimed at the dongle's own cache:
                 // without internet, "the last release this phone downloaded FOR THE DONGLE, while
@@ -279,6 +308,8 @@ final class AppFlow: ObservableObject {
                 // constants, read and handed over, never logged or shown (see DongleClient's own
                 // doc for why `join`/`retryJoin` are shaped this way).
                 await askDongleToJoin(retry: false)
+            case .searchingCar:
+                setPhase(.carFinding)
             case .waiting:
                 setPhase(.dongleConfiguring)
             case .retryJoin:
@@ -303,7 +334,25 @@ final class AppFlow: ObservableObject {
     /// screen. `carIdentified` guards against exactly this three lines from here, for exactly
     /// the same reason, at a higher rate.
     private func setPhase(_ next: Phase) {
-        if phase != next { phase = next }
+        guard phase != next else { return }
+        phase = next
+        queued.append(next)
+        guard !pacing else { return }
+        pacing = true
+        // Strong capture on purpose: `AppFlow` is a `@StateObject` that outlives every launch
+        // this drains, and a weak one would only add a way for the queue to stop halfway with
+        // a stale screen on display.
+        Task { @MainActor in
+            while !self.queued.isEmpty {
+                let wait = PhasePacer.wait(shownAt: self.shownAt.timeIntervalSinceReferenceDate,
+                                           now: Date().timeIntervalSinceReferenceDate)
+                if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+                guard !self.queued.isEmpty else { break }
+                self.shown = self.queued.removeFirst()
+                self.shownAt = Date()
+            }
+            self.pacing = false
+        }
     }
 
     /// One `/status` read, classified rather than collapsed into a bare optional, and logged
@@ -450,14 +499,14 @@ final class AppFlow: ObservableObject {
     /// bypass) says there is a car to talk to.
     private func carGate() async {
         UpdateClient.migrateCacheIfNeeded()
-        phase = .checkInternet
+        setPhase(.checkInternet)
         guard await UpdateClient.internetReachable() else {
-            phase = offlineFallback(or: .noInternet)
+            setPhase(offlineFallback(or: .noInternet))
             return
         }
-        phase = .checkUpdate
+        setPhase(.checkUpdate)
         guard let rel = await client.latestRelease() else {
-            phase = offlineFallback(or: .checkFailed)
+            setPhase(offlineFallback(or: .checkFailed))
             return
         }
         latestTag = rel.tag
@@ -465,18 +514,18 @@ final class AppFlow: ObservableObject {
         if UpdateClient.needsDownload(latestBuild: latestBuild,
                                       cachedBuild: UpdateClient.cachedBuild,
                                       hasCachedFile: UpdateClient.hasCachedFile) {
-            phase = .downloading
+            setPhase(.downloading)
             let t0 = Date()
             let recordAs = latestBuild.map { (build: $0, tag: rel.tag) }
             guard await client.download(rel.assetURL, recordAs: recordAs) != nil else {
                 // The two failure paths above fall back to the cache; a failed download of a
                 // NEWER release must not strand a phone that still holds the previous one.
-                phase = offlineFallback(or: .checkFailed)
+                setPhase(offlineFallback(or: .checkFailed))
                 return
             }
             await UpdateClient.holdAtLeast(UpdateClient.downloadMinDisplay, since: t0)
         }
-        phase = .awaitingCar
+        setPhase(.awaitingCar)
     }
 
     /// GitHub unreachable or unusable: a cached image is enough to drive — and enough to
@@ -508,14 +557,15 @@ final class AppFlow: ObservableObject {
         guard let fw else { return }
         guard phase == .awaitingCar || phase == .ready || phase == .updateRequired else { return }
         let next: Phase = UpdateClient.mustUpdate(carFw: fw, latestTag: latestTag) ? .updateRequired : .ready
-        // Only on a real change: this is re-asked on every telemetry frame, and `@Published`
-        // emits on assignment whether or not the value moved — five root-tree invalidations a
-        // second for a phase that has not changed since launch.
-        if phase != next { phase = next }
+        // `setPhase` already writes only on a real change, which matters here more than
+        // anywhere: this is re-asked on every telemetry frame, and `@Published` emits on
+        // assignment whether or not the value moved — five root-tree invalidations a second for
+        // a phase that has not changed since launch.
+        setPhase(next)
     }
 
     /// Forced FirmwareView signals completion.
-    func updateFinished() { if phase == .updateRequired { phase = .ready } }
+    func updateFinished() { if phase == .updateRequired { setPhase(.ready) } }
 
     func retry() { Task { await startupCheck() } }
 }

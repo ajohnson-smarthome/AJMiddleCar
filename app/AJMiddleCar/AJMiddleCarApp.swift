@@ -41,7 +41,7 @@ struct AJMiddleCarApp: App {
                     // has not met yet. And the gate decides whether there is a link to open at
                     // all — starting behind the no-internet screen opened an invisible session
                     // that streamed zeros and outranked the bench console.
-                    if flow.phase.opensLink { link.start() }
+                    if flow.shown.opensLink { link.start() }
                 case .inactive:
                     // Only on the way down. On the way up (.background → .inactive → .active)
                     // the link is already stopped, and a stop enqueued here would cancel the
@@ -73,19 +73,22 @@ struct AJMiddleCarApp: App {
     }
 
     @ViewBuilder private var root: some View {
-        switch flow.phase {
-        case .checkDongle:
-            // Its own line, not the radar's default one. `.searching`'s copy says the car is
-            // not answering — which, on the first frame of every launch, is an assertion about
-            // a device nothing has spoken to yet, made while the thing actually being asked is
-            // the adapter in front of it. (That copy was also rewritten on this branch, so the
-            // claim that this reused the pre-cutover screen's wording stopped being true.)
+        // `shown`, not `phase`: what renders is the paced view of the flow, so a step that
+        // resolves in milliseconds still gets its moment instead of strobing past. Decisions
+        // elsewhere keep reading `phase`, which is the truth without the pacing.
+        switch flow.shown {
+        // Steps 1 and 2 of the ladder. Both draw the same adapter; the first draws it faint and
+        // the second makes it solid, which is the whole reason they are two screens and not one
+        // — the movement between them IS the information. Whether nothing has answered yet or
+        // nothing is there is not a distinction worth separate copy, so both land on step 1.
+        case .checkDongle, .dongleAbsent:
+            ConnectView(situation: .findingAdapter)
+        case .dongleChecking:
             ConnectView(situation: .checkingDongle)
-        case .dongleAbsent:
-            // Reuses the same "plug it in" copy CarLink's own noDongle situation shows later —
-            // whether nothing answered because the interface is not there or because nothing on
-            // it has spoken yet is not a distinction worth two screens for the same instruction.
-            ConnectView(situation: .noDongle(.notAvailable))
+        case .dongleUpdateCheck:
+            ConnectView(situation: .adapterUpdateCheck)
+        case .carFinding:
+            ConnectView(situation: .findingCar)
         case .dongleFault:
             ConnectView(situation: .dongleFault)
         case .dongleDenied:
@@ -107,8 +110,13 @@ struct AJMiddleCarApp: App {
             ConnectView(situation: .dongleConfiguring)
         case .dongleJoinFailed:
             ConnectView(situation: .dongleJoinFailed, onRetryJoin: { flow.retryDongleJoin() })
-        case .checkInternet, .checkUpdate, .downloading, .checkFailed:
-            UpdateCheckView(palette: p, phase: flow.phase, client: flow.client) { flow.retry() }
+        // Step 6 of the ladder: the car's own release check, which now says what it is doing
+        // and to whom. `UpdateCheckView` keeps the two states that are not a step — a download
+        // with a progress bar, and a failure with a button.
+        case .checkInternet, .checkUpdate:
+            ConnectView(situation: .carUpdateCheck)
+        case .downloading, .checkFailed:
+            UpdateCheckView(palette: p, phase: flow.shown, client: flow.client) { flow.retry() }
         case .noInternet:
             NoInternetView(palette: p) { flow.retry() }
         case .updateRequired:

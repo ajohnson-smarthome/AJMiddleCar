@@ -53,6 +53,10 @@ public enum DongleStep: Equatable {
     /// Pointed at the right network and the radio is still working: `joining` (its own bounded
     /// budget is running) or an `unknown` value this build does not recognise. Wait. Never
     /// re-POST from here: a re-POST is a retry request, and nothing has failed yet.
+    /// The radio is scanning and has not seen the car's network. Not a failure — the budget is
+    /// still running — but a different thing to say than `waiting`, because the likely cause is
+    /// a car that is switched off rather than a connection in progress.
+    case searchingCar
     case waiting
     /// Pointed at the right network, and the dongle will not get any further on its own:
     /// `net.state == .failed` (the budget its own join policy allows ran out) or `.idle` (its
@@ -224,8 +228,10 @@ public enum DongleLink {
         // network the radio refused at boot, and from a POST /net that stored the config and
         // then answered 500.
         case .failed, .idle: return .retryJoin
-        // `joining` is the radio working through its own bounded budget; `unknown` is a state
-        // this build does not know. Neither is a failure that a re-POST would fix.
+        case .searching: return .searchingCar
+        // `joining` is the radio working through its own bounded budget with the network in
+        // sight; `unknown` is a state this build does not know. Neither is a failure a re-POST
+        // would fix.
         case .joining, .unknown: return .waiting
         }
     }

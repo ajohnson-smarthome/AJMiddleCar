@@ -33,6 +33,7 @@
 #define DONGLE_NETKEY_CONFIGURED "configured"
 
 #define DONGLE_STATE_IDLE "idle"
+#define DONGLE_STATE_SEARCHING "searching"
 #define DONGLE_STATE_JOINING "joining"
 #define DONGLE_STATE_CONNECTED "connected"
 #define DONGLE_STATE_FAILED "failed"

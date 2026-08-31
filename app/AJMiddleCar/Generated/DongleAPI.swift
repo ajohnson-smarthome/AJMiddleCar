@@ -37,10 +37,11 @@ public enum DongleStatusKey {
 /// What the dongle's radio is doing, as `/status` reports it.
 public enum DongleNetState {
     public static let idle = "idle"
+    public static let searching = "searching"
     public static let joining = "joining"
     public static let connected = "connected"
     public static let failed = "failed"
-    public static let all = ["idle", "joining", "connected", "failed"]
+    public static let all = ["idle", "searching", "joining", "connected", "failed"]
 }
 
 /// What the dongle's USB link is doing, as `/status` reports it.

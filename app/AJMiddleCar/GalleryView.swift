@@ -5,7 +5,19 @@ import SwiftUI
 /// `-gallery` launch argument (see AJMiddleCarApp). Not compiled into release builds.
 struct GalleryView: View {
     @Environment(\.colorScheme) private var colorScheme
-    @State private var index = 0
+    /// Seeded from `-galleryIndex N`, so a screenshot run can address a frame directly. The
+    /// gallery is otherwise driven by tapping, which a CLI session cannot do — and rebuilding once
+    /// per frame to move a hardcoded default is minutes per screen. Taps still work from here.
+    @State private var index = Self.seededIndex
+    private static var addressed: Bool {
+        ProcessInfo.processInfo.arguments.contains("-galleryIndex")
+    }
+    private static var seededIndex: Int {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-galleryIndex"), i + 1 < args.count,
+              let n = Int(args[i + 1]) else { return 0 }
+        return n
+    }
     private var p: Palette { Theme.current(colorScheme) }
 
     var body: some View {
@@ -22,13 +34,17 @@ struct GalleryView: View {
                 Color.clear.contentShape(Rectangle())
                     .onTapGesture { index = (index + 1) % frames.count }
             }
+            // Hidden when a frame is addressed explicitly: that is a screenshot run, and the
+            // capsule is debug chrome the app itself never shows.
             VStack {
+                if !Self.addressed {
                 Text("\(index + 1) / \(frames.count)  \u{00B7}  \(frames[index].label)")
                     .font(.system(size: 11, weight: .medium)).monospacedDigit()
                     .foregroundStyle(p.text)
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .background(Capsule().fill(p.panel.opacity(0.9)))
                     .padding(.top, 8)
+                }
                 Spacer()
             }
         }
@@ -63,6 +79,12 @@ struct GalleryView: View {
         return [
             ("Connect (radar)",         AnyView(ConnectView())),
             ("Checking dongle",         AnyView(ConnectView(situation: .checkingDongle))),
+            // The startup ladder, in the order a launch walks it. Steps 2 and 5 are the two
+            // rows above and below this block — they already had frames.
+            ("Step 1 finding adapter",  AnyView(ConnectView(situation: .findingAdapter))),
+            ("Step 3 adapter update",   AnyView(ConnectView(situation: .adapterUpdateCheck))),
+            ("Step 4 finding car",      AnyView(ConnectView(situation: .findingCar))),
+            ("Step 6 car update",       AnyView(ConnectView(situation: .carUpdateCheck))),
             ("No dongle",               AnyView(ConnectView(situation: .noDongle(.notAvailable)))),
             ("Local network denied",    AnyView(ConnectView(situation: .localNetworkDenied))),
             ("Dongle updating",         AnyView(ConnectView(situation: .dongleUpdating))),
