@@ -4,6 +4,35 @@ import Foundation
 /// `UpdateClient` keeps the sockets, the cache files and the sessions; this answers "which
 /// version wins" and "what may enter the firmware cache".
 enum UpdateRules {
+    /// Which firmware image: the car's, or the dongle's. `tools/release.sh` has attached both
+    /// `ajmiddlecar.bin` and `ajdongle.bin` to every release under one tag since branch P3 — one
+    /// release, two images, one version between them. This is the only vocabulary that
+    /// distinguishes them; `mustUpdate`, `isUpdateAvailable`, `needsDownload` and `isValidImage`
+    /// below stay untouched because they only ever compare version strings or bytes, and neither
+    /// cares whose they are.
+    enum Device: String, CaseIterable {
+        case car
+        case dongle
+
+        /// The release asset's exact name — the contract's own device string plus the firmware
+        /// extension, so it is derived rather than hand-spelled here. A release has carried both
+        /// images under one tag since branch P3 (`tools/release.sh`); matching "first file ending
+        /// in .bin" would silently hand back whichever the GitHub API happened to list first.
+        /// That is the live situation on every release now, not a hazard being guarded against.
+        var assetName: String {
+            switch self {
+            case .car: return "\(CarContract.device).bin"
+            case .dongle: return "\(DongleContract.device).bin"
+            }
+        }
+
+        /// The local cache's filename — the asset name itself, not a second literal. A car image
+        /// and a dongle image can only ever collide on disk if their asset names collide, and
+        /// `assetName` above guarantees they never do: a stale image cached under one device's
+        /// name can never be found, let alone offered, under the other's.
+        var cacheFileName: String { assetName }
+    }
+
     /// Normalize a version like "v1.2" / "v1.2-3-gabc" → "1.2" for comparison.
     static func normalize(_ v: String?) -> String {
         guard let v else { return "" }
@@ -36,6 +65,12 @@ enum UpdateRules {
 
     /// Forced update required iff the latest release carries a build number AND either the
     /// running firmware predates versioning (no build number) or its build is lower.
+    ///
+    /// Already answerable for either device despite the `carFw` label (kept because
+    /// `UpdateClient.mustUpdate(carFw:latestTag:)` is a fielded call site): this only ever
+    /// compares two version strings, and one release tags both images identically, so calling
+    /// this with the dongle's own running firmware and the same `latestTag` answers the dongle's
+    /// gate — independently of the car's, since neither call carries or mutates any state.
     static func mustUpdate(carFw: String?, latestTag: String?) -> Bool {
         guard let latest = buildNumber(latestTag) else { return false }
         guard let car = buildNumber(carFw) else { return true }

@@ -20,11 +20,11 @@ import Network
 /// answers reads the same as a car that never answers).
 ///
 /// **Which interface — Ruling 1 in the plan's ledger.** This calls `CarNet.tcpParams()`, the public
-/// function, rather than reaching for `requiredInterfaceType` itself. Today that still pins
-/// `.wifi`, which is momentarily the wrong interface for the dongle — harmless, because no device
-/// build exists between this task and Task 3, and the simulator branch pins nothing — and it is
-/// much better than duplicating here the seam Task 3 exists to create: when Task 3 repoints the pin
-/// at the dongle's own interface, this file needs no change at all.
+/// function, rather than reaching for `requiredInterfaceType` itself. Task 3 repointed the pin at
+/// the dongle's own interface (`CarNet.dongleInterface`), so this now pins correctly, and a device
+/// build exists to prove it. It is still much better than duplicating the seam here: whatever
+/// interface carries the car next, `CarNet` is the one place that needs to change, and this file
+/// still needs none.
 ///
 /// **No credential state.** Neither `join` nor `retryJoin` remembers a password between calls —
 /// this file is handed opaque strings by its caller and has no idea whose network they are, let
