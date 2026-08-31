@@ -214,6 +214,29 @@ powered over USB while the motors run from the battery, which is presumably why.
 Worth not over-reading: one run, wheels off the ground. Under real load on the floor the answer may
 differ.
 
+### Both processors updated themselves over the air (2026-09-01)
+
+Both boards were flashed by cable at `v1.0+747`, release `v1.0+749` was published, and nothing
+touched either board again. They are now both running `v1.0+749`. The only route from one to the
+other is the app.
+
+That closes three debts at once, all of which had stood since the dongle was built:
+
+- **The adapter's OTA had never run.** It has now.
+- **The car's image crossed the adapter's TCP relay at 1.83 MB** — the image that carries the C6's
+  firmware inside it, and roughly three times the largest payload the relay had handled before.
+- **The unified firmware screen ran live**, having only ever been seen in the debug gallery.
+
+The car's boot after it reads `radio firmware 3.0.6` with no line from `radio_flash` and no
+rollback notice: the radio gate took its ordinary path on an image that carries a co-processor
+firmware, compared, matched, and did nothing — and the new image was accepted by the bootloader.
+
+**What this does NOT establish.** Nobody was watching, so there is no timing: whether the car's
+upload finished inside the app's budget with room to spare or barely, whether anything retried,
+and what the screens showed. The upload budget was widened from a flat 45 s to scale with the
+image while this was in flight, so it is not even known which build performed it. Watching one
+happen, with both consoles recording, is still owed.
+
 ### The radio gate ran for the first time, and said nothing (2026-09-01)
 
 The car now carries the C6's image inside its own and offers it to a mismatched radio at boot
