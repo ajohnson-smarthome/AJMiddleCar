@@ -1,9 +1,9 @@
 import Foundation
 
-/// The launch sequence's dongle half, as one pure decision: given what the dongle last said
-/// about itself, the latest release this phone knows about, the network the car actually
-/// expects, and whether a standing rollback has already been acknowledged, what does the app do
-/// next.
+/// The launch sequence's dongle half, as one pure decision: given what the last read of
+/// `/status` produced (`DongleReply`), the latest release this phone knows about, the network
+/// the car actually expects, and what the user has already said about a standing rollback
+/// (`RollbackChoice`), what does the app do next.
 ///
 /// Pure by design — no `async`, no networking, no `@MainActor` — so every branch is
 /// host-tested rather than reasoned about against a device that may or may not be on the

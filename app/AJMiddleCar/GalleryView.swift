@@ -62,6 +62,7 @@ struct GalleryView: View {
         }
         return [
             ("Connect (radar)",         AnyView(ConnectView())),
+            ("Checking dongle",         AnyView(ConnectView(situation: .checkingDongle))),
             ("No dongle",               AnyView(ConnectView(situation: .noDongle(.notAvailable)))),
             ("Local network denied",    AnyView(ConnectView(situation: .localNetworkDenied))),
             ("Dongle updating",         AnyView(ConnectView(situation: .dongleUpdating))),

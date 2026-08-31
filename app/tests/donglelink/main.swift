@@ -1,4 +1,4 @@
-// Host test for DongleLink.next(reply:latestTag:expectedSSID:rollbackAcknowledged:) and
+// Host test for DongleLink.next(reply:latestTag:expectedSSID:rollback:) and
 // DongleReply.of(_:) — the pure decisions behind "find the dongle, update it, point it at the
 // car, then drive". Run with swiftc; no XCTest, no simulator.
 //
@@ -239,9 +239,9 @@ check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: carSSID, 
 // Same status, two different latestTags either side of the running build: the output must
 // differ. Catches an implementation that hardcodes .waiting/.readyForCar and ignores
 // latestTag entirely.
-let steadyStatus = reply(fw: current, rollback: false, ssid: carSSID, state: DongleNetState.connected)
-check(DongleLink.next(reply: steadyStatus, latestTag: latest, expectedSSID: carSSID) !=
-      DongleLink.next(reply: steadyStatus, latestTag: "v1.0+900", expectedSSID: carSSID),
+let steady = reply(fw: current, rollback: false, ssid: carSSID, state: DongleNetState.connected)
+check(DongleLink.next(reply: steady, latestTag: latest, expectedSSID: carSSID) !=
+      DongleLink.next(reply: steady, latestTag: "v1.0+900", expectedSSID: carSSID),
       "a newer latestTag changes the answer for the same status")
 // No latestTag at all (offline, nothing cached either — GateRule already covers the offline
 // fallback that fills this in) must not force an update: mustUpdate(_, latestTag: nil) is
@@ -254,8 +254,8 @@ check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: "", state
 // differ. Catches an implementation that ignores expectedSSID entirely (Important 4's own
 // case above already proves the mismatch path exists; this proves the parameter is what
 // drives it, not the fixture's absolute string).
-check(DongleLink.next(reply: steadyStatus, latestTag: latest, expectedSSID: carSSID) !=
-      DongleLink.next(reply: steadyStatus, latestTag: latest, expectedSSID: "someOtherNetwork"),
+check(DongleLink.next(reply: steady, latestTag: latest, expectedSSID: carSSID) !=
+      DongleLink.next(reply: steady, latestTag: latest, expectedSSID: "someOtherNetwork"),
       "a different expectedSSID changes the answer for the same status")
 
 if failures == 0 { print("test_donglelink: OK") } else { exit(1) }

@@ -8,14 +8,19 @@ import Network
 /// be.
 ///
 /// Extended for the dongle's own launch sequence (`AppFlow.dongleGate()`, `DongleLink`): before
-/// the car is even reachable, the dongle itself can be updating, waiting to be told a network,
-/// or unable to reach one it was already told. Those four cases render here too, on the same
-/// radar, rather than as a second screen family — from the seat this is watched from, "the car
-/// is not answering yet" and "the adapter is not ready yet" are the same wait with a different
-/// reason underneath.
+/// the car is even reachable, the dongle itself can be being looked for, updating, rolled back,
+/// answering badly, somebody else's adapter entirely, waiting to be told a network, or unable to
+/// reach one it was already told. All of those render here, on the same radar, rather than as a
+/// second screen family — from the seat this is watched from, "the car is not answering yet" and
+/// "the adapter is not ready yet" are the same wait with a different reason underneath.
 struct ConnectView: View {
     enum Situation: Equatable {
         case searching
+        /// The first frame of a launch: the dongle has been asked and has not answered yet.
+        /// Its own line, because `.searching`'s says the CAR is not answering — an assertion
+        /// about a device nothing has spoken to yet, made before the adapter in front of it
+        /// has even been found.
+        case checkingDongle
         case noDongle(NWPath.UnsatisfiedReason)
         case localNetworkDenied
         /// Something answered at the dongle's address and it was not usable — an HTTP error, a
@@ -97,6 +102,7 @@ struct ConnectView: View {
     private var title: String {
         switch situation {
         case .searching: return L.connectTitle
+        case .checkingDongle: return L.dongleCheckingTitle
         case .noDongle: return L.linkNoDongleTitle
         case .localNetworkDenied: return L.linkDeniedTitle
         case .dongleFault: return L.dongleFaultTitle
@@ -112,6 +118,7 @@ struct ConnectView: View {
     private var message: String {
         switch situation {
         case .searching: return L.connectBody
+        case .checkingDongle: return L.dongleCheckingSub
         case .noDongle: return L.linkNoDongleSub
         case .localNetworkDenied: return L.linkDeniedSub
         case .dongleFault: return L.dongleFaultSub
@@ -168,7 +175,7 @@ struct ConnectView: View {
             if let onRetryJoin {
                 pillButton(L.fwRetry, tint: p.warn, action: onRetryJoin)
             }
-        case .searching, .noDongle, .dongleUpdating, .dongleConfiguring,
+        case .searching, .checkingDongle, .noDongle, .dongleUpdating, .dongleConfiguring,
              .dongleFault, .wrongDongle:
             EmptyView()
         }

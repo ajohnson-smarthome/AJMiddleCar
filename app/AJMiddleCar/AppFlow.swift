@@ -147,6 +147,9 @@ final class AppFlow: ObservableObject {
     private var dongleUpdateGaveUp = false
     private var dongleJoinAttempts = 0
     private var dongleJoinGaveUp = false
+    /// The last `/status` failure written to the log — see `readStatus()` for why it is
+    /// remembered at all.
+    private var lastStatusFailure: String?
 
     /// Entry point. Re-entrant calls while a run is already in flight are ignored — see
     /// `gateRunning`'s own doc.
@@ -203,7 +206,7 @@ final class AppFlow: ObservableObject {
         gateRunning = true
         defer { gateRunning = false }
         await dongleGate()
-        phase = .awaitingCar
+        setPhase(.awaitingCar)
         #endif
     }
 
@@ -238,32 +241,32 @@ final class AppFlow: ObservableObject {
             switch DongleLink.next(reply: reply, latestTag: dongleLatestTag,
                                    expectedSSID: CarContract.ssid, rollback: rollbackChoice) {
             case .plugIn:
-                phase = .dongleAbsent
+                setPhase(.dongleAbsent)
             case .faulty:
-                phase = .dongleFault
+                setPhase(.dongleFault)
             case .accessDenied:
-                phase = .dongleDenied
+                setPhase(.dongleDenied)
             case .wrongDongle(let device):
-                phase = .dongleWrong(device: device)
+                setPhase(.dongleWrong(device: device))
             case .rolledBack:
                 // One look per ask: a recheck that found nothing newer is spent here, so the
                 // screen comes back with both its buttons instead of re-asking GitHub on every
                 // poll from a permission the user gave once.
                 consumeRollbackRecheck()
-                phase = .dongleRolledBack
+                setPhase(.dongleRolledBack)
             case .updating:
                 consumeRollbackRecheck()
                 if dongleUpdateGaveUp {
-                    phase = .dongleUpdateFailed
+                    setPhase(.dongleUpdateFailed)
                 } else {
-                    phase = .dongleUpdating
+                    setPhase(.dongleUpdating)
                     if await performDongleUpdate(release: dongleRelease) {
                         dongleUpdateAttempts = 0
                     } else {
                         dongleUpdateAttempts += 1
                         if dongleUpdateAttempts >= Self.maxDongleUpdateAttempts {
                             dongleUpdateGaveUp = true
-                            phase = .dongleUpdateFailed
+                            setPhase(.dongleUpdateFailed)
                         }
                     }
                 }
@@ -271,15 +274,15 @@ final class AppFlow: ObservableObject {
                 // Once the budget is spent this is the same dead end `.retryJoin` reaches, and
                 // it says so: a dongle that keeps reporting a network other than the car's
                 // after being told the car's is not "configuring", it is failing to configure.
-                phase = dongleJoinGaveUp ? .dongleJoinFailed : .dongleConfiguring
+                setPhase(dongleJoinGaveUp ? .dongleJoinFailed : .dongleConfiguring)
                 // No credential state lives here or in DongleClient — CarContract's are opaque
                 // constants, read and handed over, never logged or shown (see DongleClient's own
                 // doc for why `join`/`retryJoin` are shaped this way).
                 await askDongleToJoin(retry: false)
             case .waiting:
-                phase = .dongleConfiguring
+                setPhase(.dongleConfiguring)
             case .retryJoin:
-                phase = .dongleJoinFailed
+                setPhase(.dongleJoinFailed)
                 await askDongleToJoin(retry: true)
             case .readyForCar:
                 // The join worked, so the budget that got here is spent on nothing: reset it,
@@ -290,6 +293,17 @@ final class AppFlow: ObservableObject {
             }
             try? await Task.sleep(for: Self.donglePollInterval)
         }
+    }
+
+    /// Write `phase` only when it actually moves.
+    ///
+    /// `dongleGate()` re-decides the phase on every poll and assigns it unconditionally, and
+    /// `@Published` emits on assignment whether or not the value changed — so an unplugged
+    /// phone re-invalidated the whole root tree at 0.67 Hz, indefinitely, to redraw the same
+    /// screen. `carIdentified` guards against exactly this three lines from here, for exactly
+    /// the same reason, at a higher rate.
+    private func setPhase(_ next: Phase) {
+        if phase != next { phase = next }
     }
 
     /// One `/status` read, classified rather than collapsed into a bare optional, and logged
@@ -304,11 +318,21 @@ final class AppFlow: ObservableObject {
     /// `UpdateClient.upload` already logs its own failures for exactly this reason.
     private func readStatus() async -> DongleReply {
         do {
-            return .status(try await dongle.status())
+            let status = try await dongle.status()
+            lastStatusFailure = nil
+            return .status(status)
         } catch {
-            let reply = DongleReply.of(error)
-            print("dongle \(DongleContract.statusPath) failed: \(Self.describe(error))")
-            return reply
+            // Once per distinct failure, not once per poll: this loop runs at
+            // `donglePollInterval` for as long as the cable is out, and a log that repeats the
+            // same line forever is as unreadable as the silence it replaced. A CHANGE of
+            // failure is the interesting event — "no dongle" becoming "http 500" is the dongle
+            // arriving and refusing, which is exactly what a bench operator is watching for.
+            let what = Self.describe(error)
+            if what != lastStatusFailure {
+                lastStatusFailure = what
+                print("dongle \(DongleContract.statusPath) failed: \(what)")
+            }
+            return DongleReply.of(error)
         }
     }
 

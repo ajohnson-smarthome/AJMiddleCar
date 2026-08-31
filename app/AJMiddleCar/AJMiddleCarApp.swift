@@ -75,10 +75,12 @@ struct AJMiddleCarApp: App {
     @ViewBuilder private var root: some View {
         switch flow.phase {
         case .checkDongle:
-            // Nothing has been asked yet — the default, unadorned radar reads as "checking",
-            // the same copy the pre-cutover screen used before there was a dongle sequence in
-            // front of it at all.
-            ConnectView()
+            // Its own line, not the radar's default one. `.searching`'s copy says the car is
+            // not answering — which, on the first frame of every launch, is an assertion about
+            // a device nothing has spoken to yet, made while the thing actually being asked is
+            // the adapter in front of it. (That copy was also rewritten on this branch, so the
+            // claim that this reused the pre-cutover screen's wording stopped being true.)
+            ConnectView(situation: .checkingDongle)
         case .dongleAbsent:
             // Reuses the same "plug it in" copy CarLink's own noDongle situation shows later —
             // whether nothing answered because the interface is not there or because nothing on
