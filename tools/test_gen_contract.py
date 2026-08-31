@@ -426,6 +426,36 @@ class TestDongleAgreesWithTheCar(unittest.TestCase):
                       "car's REST traffic to a port the app does not use, with nothing "
                       "here to catch it")
 
+    def test_relay_http_port_is_the_number_the_car_actually_serves(self):
+        """The value half of the tie, which the symbol assertion above cannot make.
+
+        That one proves CarHost.port TAKES its number from DongleContract.relayHttpPort, and
+        test_swift_exposes_the_same_vocabulary proves the constant carries what this schema
+        says. Neither of them says the schema's number is the CAR's REST port. Between them the
+        loop stayed open, and relay_tcp.c aims at that same constant for the car-side
+        destination — so editing the one number moves both ends together: the app asks the
+        dongle on a port the dongle really serves, the dongle forwards to a port the car does
+        not, and every test in this file passes while the car is unreachable. That is the
+        failure this test is named for, and it is the one it could no longer see.
+
+        contract/car-api.json cannot close it — it carries no HTTP port at all — so the car's
+        own firmware does. http_server.c takes HTTPD_DEFAULT_CONFIG()'s port and never assigns
+        config.server_port, and that default is 80: the number this schema has to carry, and
+        the assertion that fails the day either side of it moves.
+        """
+        httpd_default_port = 80          # esp_http_server's HTTPD_DEFAULT_CONFIG()
+        car_http = (ROOT / "firmware" / "p4" / "main" / "http_server.c").read_text()
+        self.assertIn("HTTPD_DEFAULT_CONFIG()", car_http,
+                      "the car's REST server no longer starts from HTTPD_DEFAULT_CONFIG, so "
+                      "its port is no longer the default this test ties the relay to")
+        self.assertNotIn("server_port", car_http,
+                         "the car's REST server now sets its own port — contract/"
+                         "dongle-api.json's relay.http_port has to move with it, or the relay "
+                         "forwards the car's REST traffic into nothing")
+        self.assertEqual(self.dongle["relay"]["http_port"], httpd_default_port,
+                         "relay.http_port is not the port the car actually serves; the relay "
+                         "would forward REST to a port nothing listens on")
+
 
 class TestDongleEmitters(unittest.TestCase):
     def setUp(self):
