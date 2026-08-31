@@ -214,6 +214,35 @@ powered over USB while the motors run from the battery, which is presumably why.
 Worth not over-reading: one run, wheels off the ground. Under real load on the floor the answer may
 differ.
 
+### The radio gate ran for the first time, and said nothing (2026-09-01)
+
+The car now carries the C6's image inside its own and offers it to a mismatched radio at boot
+(`docs/superpowers/specs/2026-08-31-radio-in-one-image-design.md`). The first build carrying that
+code went on by cable as `v1.0+747`, and the interesting part of the log is what is absent:
+
+```
+I (1480) app_init: App version:      v1.0+747
+I (3730) status_api: radio firmware 3.0.6
+```
+
+No line from `radio_flash`, because the radio already matched. That is the designed ordinary
+path — one string comparison, no RPC beyond the version read the car was already doing, nothing
+written. For code that lives below `esp_ota_mark_app_valid_cancel_rollback()`, where a panic is a
+permanent boot loop on a car with no cable, a first run that changes nothing is the only good
+first run.
+
+Still unproven, and only provable by breaking something on purpose: the flash itself, and the
+three-attempt budget. Reflash the C6 by hand with an older image, reset the car, and watch it
+correct itself; then make the flash impossible and confirm the car gives up and drives.
+
+**A build-number trap worth knowing.** The dongle was reflashed from the same tree and reported
+`v1.0+727` — the previous release's number. Nothing in `firmware/s3` had changed, so CMake never
+reconfigured, and the version string (derived from `git rev-list --count HEAD`) stayed at whatever
+the last configure saw. The image was correct; only its label was stale. `idf.py reconfigure`
+fixes it, and releases are immune because `tools/release.sh` runs `fullclean` first — but an
+ordinary bench build can lie about its own version, which is exactly the kind of thing that wastes
+an afternoon.
+
 ### The radio was updated over SDIO, with no wire at all (2026-08-20)
 
 `firmware/c6/README.md` said the C6 is flashed through its UART header. It can also be updated
