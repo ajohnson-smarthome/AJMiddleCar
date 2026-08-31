@@ -520,6 +520,9 @@ private final class OneShot<T>: @unchecked Sendable {
 
 /// One HTTP request, start to finish. All state is touched only on `queue`, and `finish` is
 /// idempotent so the deadline and the connection callbacks can race without resuming twice.
+///
+/// Has a deliberate twin, `DongleHTTPRequest` in `DongleClient.swift`, aimed at the dongle instead
+/// of the car — a fix to one belongs in both.
 private final class HTTPRequest: @unchecked Sendable {
     static func perform(method: String,
                         path: String,

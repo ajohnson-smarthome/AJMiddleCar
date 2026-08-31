@@ -25,13 +25,18 @@ import Network
 /// build exists between this task and Task 3, and the simulator branch pins nothing — and it is
 /// much better than duplicating here the seam Task 3 exists to create: when Task 3 repoints the pin
 /// at the dongle's own interface, this file needs no change at all.
+///
+/// **No credential state.** Neither `join` nor `retryJoin` remembers a password between calls —
+/// this file is handed opaque strings by its caller and has no idea whose network they are, let
+/// alone anywhere to keep one. `retryJoin` takes the same arguments as `join` for exactly that
+/// reason; see its doc comment.
+///
+/// **No per-path request serialization**, unlike `CarTransport` (whose `httpTail` queues
+/// concurrent calls to the same path). Callers should keep this client single-flight — the
+/// dongle's `httpd` allows three sockets with LRU purge enabled, so overlapping requests are
+/// survivable but not free, and nothing here queues them for you.
 @MainActor
 final class DongleClient {
-    /// What the last `join()` call sent. `retryJoin()` has nothing else to resend — see below —
-    /// and this file never reads credentials from anywhere but its own callers: it is handed
-    /// opaque strings and has no idea whose network this is.
-    private var lastCredentials: (ssid: String, password: String)?
-
     init() {}
 
     func status() async throws -> DongleStatus {
@@ -43,24 +48,27 @@ final class DongleClient {
     }
 
     func join(ssid: String, password: String) async throws {
-        lastCredentials = (ssid, password)
         try await postCredentials(ssid: ssid, password: password)
     }
 
-    /// U2. Today this POSTs the stored credentials again — the same body `join()` last sent —
-    /// which is what the dongle's firmware acts on when the station is not connected. It is a
+    /// U2. Today this re-POSTs the same credentials `join()` would send — the plan's claim is
+    /// that this is what the dongle's firmware acts on when the station is not connected. It is a
     /// separate entry point rather than a second call to `join()` because that behaviour has never
     /// run against real hardware: if the bench shows `POST /net` is not actually the retry lever,
     /// exactly one function changes here, and `join()` and everyone who calls it is untouched.
     ///
-    /// Throws if called before any `join()` in this instance's lifetime — there is nothing stored
-    /// to resend, and silently doing nothing would look identical to a retry that quietly went
-    /// nowhere. A caller that means to retry across an app relaunch must `join()` again first.
-    func retryJoin() async throws {
-        guard let creds = lastCredentials else {
-            throw CarError.malformed("retryJoin() called before any join()")
-        }
-        try await postCredentials(ssid: creds.ssid, password: creds.password)
+    /// Takes `ssid`/`password` rather than remembering them from a prior `join()` call, because
+    /// this client deliberately holds no credential state of its own — the caller (the flow layer,
+    /// which already holds `CarContract`) has them at any instant a retry is needed. That includes
+    /// a cold app launch that finds the dongle already `configured: true, net.state: failed`: that
+    /// state persists on the dongle across relaunches, and it is exactly the case this function
+    /// exists to answer — a version that instead remembered credentials only from a `join()` made
+    /// earlier in the same process could never reach it. `join` and `retryJoin` end up taking the
+    /// same arguments and stay meaningfully distinct anyway, which is honest rather than redundant:
+    /// `join` means "configure this network", `retryJoin` means "ask again with what you already
+    /// have".
+    func retryJoin(ssid: String, password: String) async throws {
+        try await postCredentials(ssid: ssid, password: password)
     }
 
     private func postCredentials(ssid: String, password: String) async throws {
@@ -126,6 +134,11 @@ final class DongleClient {
 /// response head, `CarError` for every way it can fail), aimed at `DongleContract.host` instead of
 /// the car. All state is touched only on `queue`, and `finish` is idempotent so the timeout and the
 /// connection callbacks can race without resuming twice.
+///
+/// A deliberate twin of `CarTransport.swift`'s private `HTTPRequest` rather than a shared type —
+/// extracting a shared, host-parameterized core means editing the car's proven transport in the
+/// middle of a cutover that has never run on hardware, and that trade is wrong before the bench,
+/// right after it. The price is paid knowingly: **a fix to one belongs in both.**
 private final class DongleHTTPRequest: @unchecked Sendable {
     static func perform(method: String,
                         path: String,
