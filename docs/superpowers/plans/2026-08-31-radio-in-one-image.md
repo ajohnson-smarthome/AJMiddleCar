@@ -291,10 +291,11 @@ Run:
 source tools/env-p4.sh && \
   cp firmware/p4/build/bootloader/bootloader.bin firmware/p4/main/radio_image.bin && \
   (cd firmware/p4 && idf.py build 2>&1 | tail -3) && \
-  grep -c "_binary_radio_image_bin_start\|_binary_radio_image_bin_end" firmware/p4/build/radio_image.bin.S
+  grep -c "^\.global _binary_radio_image_bin" firmware/p4/build/radio_image.bin.S
 ```
-Expected: the build succeeds and the grep prints `2` — both symbols defined in the generated
-assembly. Then remove the stand-in: `rm -f firmware/p4/main/radio_image.bin`.
+Expected: the build succeeds and the grep prints `2` — both symbols declared global in the
+generated assembly. Match the `.global` lines specifically: `EMBED_FILES` emits a `.global`
+directive AND a label for each symbol, so a looser pattern counts every symbol twice. Then remove the stand-in: `rm -f firmware/p4/main/radio_image.bin`.
 
 - [ ] **Step 6: Commit**
 
