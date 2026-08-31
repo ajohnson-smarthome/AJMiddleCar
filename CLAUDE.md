@@ -163,9 +163,11 @@ Pure Swift modules are host-tested with `swiftc` directly — no XCTest runtime 
    PWM exists, motors stay silent.
 6. **The app is landscape-locked and every split screen draws its own header** via `SplitScreen`.
    Never add a system `.navigationTitle` to one — it reintroduces the inset that shifts content.
-7. **Simulator screenshots come out rotated 90°** (landscape app, portrait window), and you
-   cannot tap from the CLI — drive the debug gallery (`--args -gallery`) via a temporary
-   `@State index` seed instead.
+7. **Simulator screenshots come out rotated 90°** (landscape app, portrait window) — fix with
+   `sips -r -90`. You cannot tap from the CLI, so address a gallery frame directly:
+   `--args -gallery -galleryIndex N`. It also hides the gallery's own caption, so the capture is
+   only what a user would see. One build, then one launch per frame; the old advice here was to
+   re-seed a `@State` default, which costs a full rebuild per screen.
 8. **Free Apple-ID signing expires every 7 days.** Re-run from Xcode. There is no web pult.
 9. **Both Type-C ports go to the P4, not to the C6.** esptool reports the same MAC on each; one is
    the native USB (`usbmodem*`), the other the CH343P bridge on UART0 (`wchusbserial*`). The C6 has
