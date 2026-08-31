@@ -18,6 +18,14 @@ struct ConnectView: View {
         case searching
         case noDongle(NWPath.UnsatisfiedReason)
         case localNetworkDenied
+        /// Something answered at the dongle's address and it was not usable — an HTTP error, a
+        /// truncated stream, a body that would not decode (`DongleStep.faulty`). The radar
+        /// stays: the flow keeps polling and one bad answer is often a dongle mid-boot.
+        case dongleFault
+        /// A USB-Ethernet adapter answered and it is not ours — `status.device` disagrees with
+        /// `DongleContract.device`. The dongle's analogue of `WrongCarView`, and like it, it
+        /// names what answered rather than leaving the user to guess.
+        case wrongDongle(String)
         /// The dongle's own firmware is behind the latest release; it is downloading and
         /// flashing it before anything else in the sequence touches the car.
         case dongleUpdating
@@ -65,7 +73,9 @@ struct ConnectView: View {
     /// does.
     @ViewBuilder private var leftPanel: some View {
         switch situation {
-        case .dongleRolledBack, .dongleUpdateFailed:
+        // `.wrongDongle` joins them: nothing about it resolves by waiting either — the fix is a
+        // different cable, and the sweep would promise otherwise.
+        case .dongleRolledBack, .dongleUpdateFailed, .wrongDongle:
             FirmwareCarView(phase: .failed, palette: p)
         default:
             ConnectCarView(palette: p)
@@ -77,6 +87,8 @@ struct ConnectView: View {
         case .searching: return L.connectTitle
         case .noDongle: return L.linkNoDongleTitle
         case .localNetworkDenied: return L.linkDeniedTitle
+        case .dongleFault: return L.dongleFaultTitle
+        case .wrongDongle: return L.dongleWrongTitle
         case .dongleUpdating: return L.dongleUpdatingTitle
         case .dongleUpdateFailed: return L.fwFailTitle
         case .dongleConfiguring: return L.dongleConfiguringTitle
@@ -90,6 +102,8 @@ struct ConnectView: View {
         case .searching: return L.connectBody
         case .noDongle: return L.linkNoDongleSub
         case .localNetworkDenied: return L.linkDeniedSub
+        case .dongleFault: return L.dongleFaultSub
+        case .wrongDongle(let device): return L.dongleWrongSub(device)
         case .dongleUpdating: return L.dongleUpdatingSub
         case .dongleUpdateFailed: return L.dongleUpdateFailedSub
         case .dongleConfiguring: return L.dongleConfiguringSub
@@ -131,7 +145,8 @@ struct ConnectView: View {
             if let onRetryDongleUpdate {
                 pillButton(L.fwRetry, tint: p.warn, action: onRetryDongleUpdate)
             }
-        case .searching, .noDongle, .dongleUpdating, .dongleConfiguring, .dongleJoinFailed:
+        case .searching, .noDongle, .dongleUpdating, .dongleConfiguring, .dongleJoinFailed,
+             .dongleFault, .wrongDongle:
             EmptyView()
         }
     }

@@ -10,14 +10,29 @@ import Foundation
 /// bench. The impure flow (`AppFlow`) owns the polling, the HTTP calls this implies, and the
 /// screen that renders each `DongleStep`; this file owns only which step is next.
 ///
-/// The sequence, in the order the spec states it: presence, then the dongle's own update,
-/// then whether it has been told the RIGHT network, then the join, then — once `.readyForCar` —
-/// the car's own existing gate takes over unchanged.
+/// The sequence, in the order the spec states it: presence, then identity, then the dongle's
+/// own update, then whether it has been told the RIGHT network, then the join, then — once
+/// `.readyForCar` — the car's own existing gate takes over unchanged.
 public enum DongleStep: Equatable {
-    /// No dongle answered `/status` at all — not "an error", just the step that tells the
-    /// user to plug one in. `DongleLink.next(status: nil, ...)` is exactly this: the pure
-    /// module owns "absent" as a decision, not something the flow special-cases separately.
+    /// Nothing answered at the dongle's address — not "an error", just the step that tells the
+    /// user to plug one in. `DongleReply.silent` is exactly this: the pure module owns
+    /// "absent" as a decision, not something the flow special-cases separately.
     case plugIn
+    /// Something answered and it was not usable — an HTTP error, a truncated stream, a body
+    /// that would not decode (`DongleReply.faulty`). Distinct from `.plugIn` because the one
+    /// instruction `.plugIn` gives is the one thing already done: the cable is in and something
+    /// on the other end is talking.
+    case faulty
+    /// Local-network access is denied, so nothing this app sends ever leaves the phone
+    /// (`DongleReply.denied`). Not a wait — the user has to change it in Settings — and
+    /// certainly not "plug in an adapter".
+    case accessDenied
+    /// Something is answering at the dongle's address and it is not our dongle: `status.device`
+    /// disagrees with `DongleContract.device`. The spec names that field for exactly this —
+    /// "how the app tells this apart from any other USB-Ethernet adapter the user might plug
+    /// in" — and this is its analogue of the car's own wrong-car screen. `device` is what
+    /// answered, so the screen can name it.
+    case wrongDongle(device: String)
     /// The bootloader reverted the dongle's last update (`DongleStatus.rollback`). Reported
     /// ahead of the update check that would otherwise re-offer the very image that just failed,
     /// forever — see `next(...)`'s own doc for the ordering. Standing until `rollbackAcknowledged`
@@ -50,13 +65,53 @@ public enum DongleStep: Equatable {
     case readyForCar
 }
 
+/// What the last attempt to read `/status` produced.
+///
+/// "Nothing usable came back" is three different situations with three different things to say,
+/// and the flow used to collapse all of them into one `nil` with `try?` — which then rendered as
+/// "plug in an adapter" at a user whose adapter is plugged in and answering an HTTP 500. On a
+/// branch whose whole justification is that the app half and the dongle half fail in the same
+/// place with the same symptom, the reason the dongle gave is the one signal that tells them
+/// apart, and it is not something to throw away.
+public enum DongleReply {
+    /// A `/status` document this build could decode. Whether it describes OUR dongle is
+    /// `next(...)`'s first question, not this one's.
+    case status(DongleStatus)
+    /// Nothing answered: no cable, a refused connection, a deadline that expired with no bytes.
+    case silent
+    /// Something answered and it was not usable: an HTTP error status, a truncated stream, or a
+    /// body that did not decode. Whatever else is true, a device is there and talking.
+    case faulty
+    /// iOS refused to let the request leave the phone at all: local-network access is denied.
+    case denied
+
+    /// Classify what `DongleClient.status()` threw. Pure, and here rather than in the flow so
+    /// the rule is host-tested — the flow's job is to catch, log and pass it on.
+    public static func of(_ error: Error) -> DongleReply {
+        if let e = error as? CarError {
+            switch e {
+            // Bytes arrived, and they were the far end answering for itself.
+            case .http, .truncated: return .faulty
+            case .denied: return .denied
+            // `.malformed` sits on this side deliberately: `CarError.from` uses it for any
+            // `NWError` that is neither an unsatisfied path nor ECONNREFUSED, and
+            // `DongleClient`'s request type uses it for a connection that closed without a
+            // parseable head. Neither is evidence that a dongle answered.
+            case .noDongle, .refused, .timeout, .malformed: return .silent
+            }
+        }
+        // A `DecodingError` is a complete body this build could not read — something answered.
+        // Anything else, a cancellation most of all, is evidence of nothing.
+        return error is DecodingError ? .faulty : .silent
+    }
+}
+
 /// The one function `AppFlow` switches on.
 public enum DongleLink {
     /// - Parameters:
-    ///   - status: The dongle's last `/status`, or `nil` when nothing answered — a timeout, a
-    ///     refusal, or simply no cable in yet all read the same to this function, because the
-    ///     flow that calls it collapses every way of "the dongle did not answer" into one nil
-    ///     before asking.
+    ///   - reply: What the last read of `/status` produced — a decoded document, or one of the
+    ///     three ways it can fail to be one. See `DongleReply`: the flow classifies, this
+    ///     decides, and neither collapses "nothing answered" into "answered badly".
     ///   - latestTag: The latest release tag this phone knows about (possibly from an offline
     ///     cache — see `GateRule`), fed straight into `UpdateRules.mustUpdate`, which already
     ///     answers either device from the same comparison since one release tags both images
@@ -72,9 +127,25 @@ public enum DongleLink {
     ///     Once true, a standing rollback stops being reported and stops blocking the update
     ///     check's `false` path — see the doc below for exactly what that unblocks and why it
     ///     does not include quietly retrying the update that just failed.
-    public static func next(status: DongleStatus?, latestTag: String?, expectedSSID: String,
+    public static func next(reply: DongleReply, latestTag: String?, expectedSSID: String,
                             rollbackAcknowledged: Bool = false) -> DongleStep {
-        guard let status else { return .plugIn }
+        let status: DongleStatus
+        switch reply {
+        case .status(let s): status = s
+        case .silent: return .plugIn
+        case .faulty: return .faulty
+        case .denied: return .accessDenied
+        }
+
+        // Identity first, before a single other field of this document is believed. The spec
+        // puts `device` in `/status` for one reason — "how the app tells this apart from any
+        // other USB-Ethernet adapter the user might plug in" — and a foreign adapter's `fw`,
+        // `rollback` and `net` describe a device this app knows nothing about. Reading them
+        // anyway ends in one of two places: flashing our image onto it, or handing it the car's
+        // credentials. Both are worse than a screen that says which adapter answered.
+        guard status.device == DongleContract.device else {
+            return .wrongDongle(device: status.device)
+        }
 
         if status.rollback {
             if !rollbackAcknowledged { return .rolledBack }

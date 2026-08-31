@@ -21,9 +21,20 @@ final class AppFlow: ObservableObject {
         /// after actually asking): the two would otherwise flash "plug it in" at every cold
         /// launch, dongle attached or not, for as long as the first request takes.
         case checkDongle
-        /// No dongle answered `/status` — `DongleLink.next(status: nil, ...)`'s own step, not an
-        /// error the flow invents separately.
+        /// Nothing answered `/status` — `DongleLink.next(reply: .silent, ...)`'s own step, not
+        /// an error the flow invents separately.
         case dongleAbsent
+        /// Something answered at the dongle's address and it was not usable — an HTTP error, a
+        /// truncated stream, a body that would not decode. Deliberately not `.dongleAbsent`:
+        /// the one instruction that screen gives is the one thing already done.
+        case dongleFault
+        /// Local-network access is denied, so no request this app makes ever leaves the phone.
+        /// Renders the same screen `CarLink` shows for it later, with the same button — the
+        /// gate had no way to say it at all before, and said "plug in an adapter" instead.
+        case dongleDenied
+        /// Something is answering at the dongle's address and it is not our dongle
+        /// (`DongleStep.wrongDongle`). Carries what it called itself, so the screen can name it.
+        case dongleWrong(device: String)
         /// The dongle's own firmware is behind the latest release; downloading and flashing it,
         /// before anything else in this sequence touches the car. Reused for the short reboot
         /// that follows a successful flash — see `performDongleUpdate()`.
@@ -63,7 +74,8 @@ final class AppFlow: ObservableObject {
         var opensLink: Bool {
             switch self {
             case .updateRequired, .awaitingCar, .ready: return true
-            case .checkDongle, .dongleAbsent, .dongleUpdating, .dongleUpdateFailed, .dongleRolledBack,
+            case .checkDongle, .dongleAbsent, .dongleFault, .dongleDenied, .dongleWrong,
+                 .dongleUpdating, .dongleUpdateFailed, .dongleRolledBack,
                  .dongleConfiguring, .dongleJoinFailed,
                  .checkInternet, .noInternet, .checkUpdate, .checkFailed, .downloading: return false
             }
@@ -154,8 +166,8 @@ final class AppFlow: ObservableObject {
         var checkedForUpdate = false
 
         while true {
-            let status = try? await dongle.status()
-            if status != nil, !checkedForUpdate {
+            let reply = await readStatus()
+            if case .status = reply, !checkedForUpdate {
                 checkedForUpdate = true
                 release = await client.latestRelease(for: .dongle)
                 // Same offline fallback `carGate()` uses below, aimed at the dongle's own cache:
@@ -169,10 +181,16 @@ final class AppFlow: ObservableObject {
                     hasCachedFile: UpdateClient.hasCachedFile(for: .dongle),
                     cachedBuild: UpdateClient.cachedBuild(for: .dongle))
             }
-            switch DongleLink.next(status: status, latestTag: tag, expectedSSID: CarContract.ssid,
+            switch DongleLink.next(reply: reply, latestTag: tag, expectedSSID: CarContract.ssid,
                                    rollbackAcknowledged: rollbackAcknowledged) {
             case .plugIn:
                 phase = .dongleAbsent
+            case .faulty:
+                phase = .dongleFault
+            case .accessDenied:
+                phase = .dongleDenied
+            case .wrongDongle(let device):
+                phase = .dongleWrong(device: device)
             case .rolledBack:
                 phase = .dongleRolledBack
             case .updating:
@@ -195,18 +213,65 @@ final class AppFlow: ObservableObject {
                 // No credential state lives here or in DongleClient — CarContract's are opaque
                 // constants, read and handed over, never logged or shown (see DongleClient's own
                 // doc for why `join`/`retryJoin` are shaped this way).
-                try? await dongle.join(ssid: CarContract.ssid, password: CarContract.password)
+                await askDongleToJoin(retry: false)
             case .waiting:
                 phase = .dongleConfiguring
             case .retryJoin:
                 phase = .dongleJoinFailed
-                try? await dongle.retryJoin(ssid: CarContract.ssid, password: CarContract.password)
+                await askDongleToJoin(retry: true)
             case .readyForCar:
                 await carGate()
                 return
             }
             try? await Task.sleep(for: Self.donglePollInterval)
         }
+    }
+
+    /// One `/status` read, classified rather than collapsed into a bare optional, and logged
+    /// either way.
+    ///
+    /// `try?` here was the wrong trade on this branch specifically. Its whole justification is
+    /// that the app half and the dongle half fail in the same place with the same symptom, so a
+    /// rejected SSID (400), "stored, but the radio refused the join" (500), an undecodable body
+    /// and no cable at all were four different faults with four different fixes — flattened
+    /// into one `nil`, rendered as one screen telling the user to plug in a dongle that is
+    /// plugged in and answering, with nothing written to the log either.
+    /// `UpdateClient.upload` already logs its own failures for exactly this reason.
+    private func readStatus() async -> DongleReply {
+        do {
+            return .status(try await dongle.status())
+        } catch {
+            let reply = DongleReply.of(error)
+            print("dongle \(DongleContract.statusPath) failed: \(Self.describe(error))")
+            return reply
+        }
+    }
+
+    /// One POST asking the dongle to join the car's network — `join` the first time, `retryJoin`
+    /// afterwards (`DongleClient` keeps them apart on purpose; see `retryJoin`'s doc). Failures
+    /// are logged, never swallowed: a 400 means the dongle rejected the credentials outright and
+    /// a 500 means it stored them and the radio refused, which are the same screen but very
+    /// different bench sessions.
+    private func askDongleToJoin(retry: Bool) async {
+        do {
+            if retry {
+                try await dongle.retryJoin(ssid: CarContract.ssid, password: CarContract.password)
+            } else {
+                try await dongle.join(ssid: CarContract.ssid, password: CarContract.password)
+            }
+        } catch {
+            // `logDescription` names the failure's shape and nothing else — no body, and
+            // nothing of what was sent. The credentials never reach a log.
+            print("dongle \(DongleContract.netPath) (\(retry ? "retry" : "configure")) failed: "
+                  + Self.describe(error))
+        }
+    }
+
+    /// `CarError.logDescription` when it is one — the same vocabulary `UpdateClient.upload`
+    /// logs — and a plain description otherwise, which is how a `DecodingError` from a body
+    /// this build could not read says which key it choked on.
+    private static func describe(_ error: Error) -> String {
+        (error as? CarError)?.logDescription ?? String(describing: error)
     }
 
     /// The user chose to proceed on the dongle's current, reverted firmware rather than being

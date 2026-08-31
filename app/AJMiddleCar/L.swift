@@ -30,6 +30,10 @@ enum L {
     static var dongleJoinFailedSub: String { s("dongle.joinFailedSub") }
     static var dongleRolledBackTitle: String { s("dongle.rolledBackTitle") }
     static var dongleRolledBackSub: String { s("dongle.rolledBackSub") }
+    static var dongleFaultTitle: String { s("dongle.faultTitle") }
+    static var dongleFaultSub: String { s("dongle.faultSub") }
+    static var dongleWrongTitle: String { s("dongle.wrongTitle") }
+    static func dongleWrongSub(_ found: String) -> String { s("dongle.wrongSub", found) }
     static var configNotRead: String { s("config.notRead") }
     static var configRetry: String { s("config.retry") }
     static var calibSpinFailTitle: String { s("calib.spinFailTitle") }

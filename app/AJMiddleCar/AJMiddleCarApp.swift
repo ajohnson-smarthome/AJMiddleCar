@@ -77,6 +77,15 @@ struct AJMiddleCarApp: App {
             // whether nothing answered because the interface is not there or because nothing on
             // it has spoken yet is not a distinction worth two screens for the same instruction.
             ConnectView(situation: .noDongle(.notAvailable))
+        case .dongleFault:
+            ConnectView(situation: .dongleFault)
+        case .dongleDenied:
+            // The same screen, with the same Settings button, `CarLink` shows for a denial once
+            // the gate has handed over. The gate could not say it at all before this: a denied
+            // request threw, the throw became nil, and nil said "plug in an adapter".
+            ConnectView(situation: .localNetworkDenied)
+        case .dongleWrong(let device):
+            ConnectView(situation: .wrongDongle(device))
         case .dongleUpdating:
             ConnectView(situation: .dongleUpdating)
         case .dongleUpdateFailed:

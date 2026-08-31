@@ -69,6 +69,8 @@ struct GalleryView: View {
             ("Dongle configuring",      AnyView(ConnectView(situation: .dongleConfiguring))),
             ("Dongle join failed",      AnyView(ConnectView(situation: .dongleJoinFailed))),
             ("Dongle rolled back",      AnyView(ConnectView(situation: .dongleRolledBack, onSkipRollback: {}))),
+            ("Dongle fault",            AnyView(ConnectView(situation: .dongleFault))),
+            ("Wrong dongle",            AnyView(ConnectView(situation: .wrongDongle("some-other-adapter")))),
             ("NoInternet",              AnyView(NoInternetView(palette: p, onRetry: {}))),
             ("WrongCar",                AnyView(WrongCarView(palette: p, kind: .foreignDevice("esp32-car"), onRetry: {}))),
             ("WrongProto",              AnyView(WrongCarView(palette: p, kind: .protoMismatch(theirs: CarContract.proto + 1), onRetry: {}))),
