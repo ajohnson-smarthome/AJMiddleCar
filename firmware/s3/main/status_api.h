@@ -8,10 +8,12 @@
  *
  * NOT bound to the USB interface — httpd_start listens on INADDR_ANY, and IDF's
  * esp_http_server offers no interface-binding option (httpd_config_t has server_port
- * and ctrl_port, nothing address-shaped). This surface is USB-only today only
- * because no other netif exists. Plan 4 adds a station, and from Plan 2 this server
- * carries a car's password: whoever links a radio must reject non-USB peers here
- * first (getsockname on httpd_req_to_sockfd, or httpd_config_t.open_fn). */
+ * and ctrl_port, nothing address-shaped). Since the station came up this surface is
+ * reachable from the car's network as well as USB, and this server carries a car's
+ * password (POST /net) and an unauthenticated firmware-write endpoint (POST /ota).
+ * What makes that safe: status_api_start sets httpd_config_t.open_fn to
+ * api_guard_open (api_guard.h), which refuses every accepted connection that did not
+ * land on DONGLE_HOST, before a single request byte is read. */
 esp_err_t status_api_start(void);
 
 /* The running server, so another module can register its handlers on it rather than

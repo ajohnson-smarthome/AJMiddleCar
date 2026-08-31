@@ -6,6 +6,11 @@
     "port": 8080,
     "doc": "The dongle's own address on the USB wire, and the port it serves. Port 80 and the real-time port are reserved for the car, forwarded through untouched."
   },
+  "relay": {
+    "http_port": 80,
+    "rt_port": 4210,
+    "doc": "The ports the dongle listens on for the car's traffic, on its own address. The car keeps its native numbers so contract/car-api.json and CarHost.port do not move; only CarHost.host does. What speaks on them is not the dongle's business."
+  },
   "endpoints": {
     "status": "/status",
     "net": "/net",

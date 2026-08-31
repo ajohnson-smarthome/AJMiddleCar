@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -6,6 +7,7 @@
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_netif_net_stack.h"
+#include "lwip/sockets.h"
 
 #include "tinyusb.h"
 #include "tinyusb_default_config.h"
@@ -122,6 +124,43 @@ esp_netif_t *usb_net_netif(void)
     return s_netif;
 }
 
+/* See usb_net.h for why an interface pin is a different thing from a bind, and why the
+ * relays depend on this one rather than on their bind address. The name is the lwIP netif
+ * name esp_netif_get_netif_impl_name reports, which its own documentation names as the value
+ * to hand setsockopt for exactly this purpose; struct ifreq's ifr_name is NETIF_NAMESIZE (6)
+ * bytes, the size that call is documented to write into. */
+esp_err_t usb_net_bind_socket(int fd)
+{
+    if (s_netif == NULL) {
+        ESP_LOGE(TAG, "cannot pin fd %d: the USB interface is not up yet", fd);
+        return ESP_ERR_INVALID_STATE;
+    }
+    struct ifreq iface = { 0 };
+    ESP_RETURN_ON_ERROR(esp_netif_get_netif_impl_name(s_netif, iface.ifr_name), TAG,
+                        "cannot read the USB interface name");
+    /* esp_netif_get_netif_impl_name's IDF 6.0.2 implementation (esp_netif_lwip.c:2770-2775)
+     * calls netif_index_to_name() but discards its NULL-on-failure return and always reports
+     * ESP_OK back to us, so a lookup failure does not fail the ESP_RETURN_ON_ERROR above — it
+     * just leaves iface.ifr_name untouched, still all-zero from the initializer. That matters
+     * here more than a normal ignored error would: lwIP's own SO_BINDTODEVICE handler
+     * (sockets.c, the SO_BINDTODEVICE case) treats ifr_name[0] == 0 as "no netif" and calls
+     * tcp_bind_netif(pcb, NULL), which CLEARS any pin rather than leaving one in place or
+     * failing the call — setsockopt returns 0 either way. An empty name is therefore worse
+     * than a failed lookup: it would make this function report ESP_OK while silently handing
+     * back an unpinned socket, which is the one outcome a caller relying on fail-closed
+     * isolation cannot tell apart from success. Caught explicitly rather than trusted to
+     * setsockopt, the same way ping_sock.c:271-274 checks its own name lookup before using it. */
+    if (iface.ifr_name[0] == '\0') {
+        ESP_LOGE(TAG, "cannot pin fd %d: the USB interface has no name", fd);
+        return ESP_FAIL;
+    }
+    if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, &iface, sizeof(iface)) != 0) {
+        ESP_LOGE(TAG, "SO_BINDTODEVICE(%s) on fd %d: errno %d", iface.ifr_name, fd, errno);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
 esp_err_t usb_net_start(void)
 {
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "cannot init esp_netif");
@@ -133,7 +172,18 @@ esp_err_t usb_net_start(void)
      * This interface must never become the host's default route — the whole point of
      * the dongle is that plugging it in costs the phone nothing; it keeps its own
      * Wi-Fi/cellular default route untouched. The DHCP-server option calls below back
-     * this up at the wire level, not just in this config struct. */
+     * this up at the wire level, not just in this config struct.
+     *
+     * LOAD-BEARING BEYOND USABILITY, and this is the record of it. api_guard.c can only
+     * check that a connection was ADDRESSED to USB_NET_ADDR, not which wire delivered it
+     * (see api_guard.h — esp_http_server gives no way to pin its listener to an interface).
+     * What actually stops a station on the car's network from completing a handshake to
+     * USB_NET_ADDR:8080 is this zero: the SYN-ACK is routed by source address (IDF's
+     * ip4_route_src_hook) onto this netif, and etharp_output then has no gateway through
+     * which to reach an off-link destination, so the reply is dropped and the handshake
+     * never finishes. Give this interface a gateway one day and that stops being true, and
+     * api_guard silently degrades to an address check with nothing behind it. If a gateway
+     * is ever wanted here, api_guard needs a real interface filter first. */
 
     esp_netif_inherent_config_t base = ESP_NETIF_INHERENT_DEFAULT_ETH();
     base.if_key = "USBNCM";
@@ -226,11 +276,23 @@ esp_err_t usb_net_start(void)
      * Espressif OUI never starts with that bit already on; the code is written for
      * what it does, not for what happens to coincide with it today.
      *
-     * net_cfg.mac_addr — the address the host sees, above — is a different, still-open
-     * concern: it borrows the real, per-device station MAC from the efuse block.
-     * Borrowing it costs nothing today because this firmware never brings up a
-     * station. A later plan that does must revisit it — a station and this USB
-     * interface on the same MAC would be two interfaces claiming one address. */
+     * net_cfg.mac_addr — the address the host sees, above — borrows the real, per-device
+     * station MAC from the efuse block. This used to say "a later plan that brings up a
+     * station must revisit it". That plan is this one, and the answer is that the sharing
+     * is harmless: the address collision would matter only if the two interfaces could ever
+     * appear on one L2 segment, and they cannot. The USB wire and the car's Wi-Fi are
+     * separate segments with nothing bridging them — no NAPT, no forwarding, no promiscuous
+     * mode; both relays operate at the socket layer, opening their own connection toward the
+     * car rather than passing frames between netifs, which is the whole reason the relay
+     * exists (see relay_udp.h / relay_tcp.h and the design note's NAPT section). No ARP
+     * request for this MAC ever crosses from one to the other, so nothing on either side
+     * sees two devices answering to one address.
+     *
+     * Two things this does NOT claim, so they are not mistaken for settled. It is a privacy
+     * exposure, unchanged by this plan: the station's probe requests and association carry
+     * the same efuse MAC that the USB host sees, so the two are trivially correlatable. And
+     * it stops being safe the moment anything bridges the two segments — a future plan that
+     * adds forwarding must give the USB side a MAC of its own first. */
     uint8_t our_mac[6];
     memcpy(our_mac, net_cfg.mac_addr, sizeof(our_mac));
     our_mac[0] |= 0x02;

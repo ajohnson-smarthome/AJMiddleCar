@@ -6,6 +6,8 @@
 #define DONGLE_DEVICE "ajdongle"
 #define DONGLE_HOST "192.168.7.1"
 #define DONGLE_PORT 8080
+#define DONGLE_RELAY_HTTP_PORT 80
+#define DONGLE_RELAY_RT_PORT 4210
 
 #define DONGLE_PATH_STATUS "/status"
 #define DONGLE_PATH_NET "/net"

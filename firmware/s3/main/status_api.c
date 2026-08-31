@@ -8,10 +8,12 @@
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 
+#include "api_guard.h"
 #include "dongle_contract.inc"
 #include "net_api.h"
 #include "status_api.h"
 #include "usb_net.h"
+#include "wifi_sta.h"
 
 static const char *TAG = "status_api";
 
@@ -58,14 +60,25 @@ static esp_err_t status_get(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    /* `state` is always "idle" in this firmware, and honestly so: there is no radio yet,
-     * so there is nothing that could be joining, connected or failed. The field is here
-     * rather than added later because its SHAPE is final — Plan 4 gives it the other
-     * values without moving a key or changing a caller. */
-    /* 320, not 256. Worst case with the rollback field: 103 bytes of literal template,
+    /* Read into locals, in this order, rather than passed as two arguments to one snprintf.
+     * C does not order argument evaluation, and these two are not one snapshot: state is taken
+     * under wifi_sta's lock, rssi is an unlocked esp_wifi_sta_get_ap_info. Evaluated
+     * right-to-left, rssi could be sampled while the station was still down and state a moment
+     * later once it was up, publishing {"state":"connected","rssi":0} out of two readings that
+     * were each correct. Taking state FIRST leaves only the honest version of that pairing: if
+     * state says connected, rssi was read afterwards, so a 0 means the link genuinely dropped
+     * in between. Not atomicity — there is no lock spanning both — but an ordering that cannot
+     * invent a contradiction.
+     *
+     * `rssi` is a real reading from the dongle's own receiver, not a placeholder: 0 when not
+     * connected, whatever esp_wifi_sta_get_ap_info reports otherwise. */
+    const char *net_state = wifi_sta_state_name();
+    int net_rssi = (int)wifi_sta_rssi();
+    /* 320, not 256. Worst case with the rollback and net fields: 98 bytes of literal template,
      * + 31 (esp_app_desc_t.version is char[32]) + 31 (idf_ver, likewise) + 5 ("false")
-     * + 64 (a 32-byte SSID whose every byte escapes to two) + NUL = 235. The margin is
-     * deliberate: adding one field should not also be a buffer calculation. */
+     * + 64 (a 32-byte SSID whose every byte escapes to two) + 9 ("connected") + 4 ("-128")
+     * + NUL = 243. The margin is deliberate: adding one field should not also be a buffer
+     * calculation. */
     char body[320];
     int n = snprintf(body, sizeof(body),
                      "{\"" DONGLE_KEY_DEVICE "\":\"" DONGLE_DEVICE "\","
@@ -75,9 +88,10 @@ static esp_err_t status_get(httpd_req_t *req)
                      "\"" DONGLE_KEY_ROLLBACK "\":%s,"
                      "\"" DONGLE_KEY_NET "\":{"
                      "\"" DONGLE_KEY_NET_SSID "\":\"%s\","
-                     "\"" DONGLE_KEY_NET_STATE "\":\"" DONGLE_STATE_IDLE "\","
-                     "\"" DONGLE_KEY_NET_RSSI "\":0}}",
-                     app->version, app->idf_ver, s_rollback ? "true" : "false", ssid_esc);
+                     "\"" DONGLE_KEY_NET_STATE "\":\"%s\","
+                     "\"" DONGLE_KEY_NET_RSSI "\":%d}}",
+                     app->version, app->idf_ver, s_rollback ? "true" : "false", ssid_esc,
+                     net_state, net_rssi);
     if (n < 0 || (size_t)n >= sizeof(body)) {
         /* Same rule as the car's own /status: truncated JSON parses as something else or
          * nothing, and shipping it under a 200 hides exactly that. Only reachable if a
@@ -95,13 +109,75 @@ esp_err_t status_api_start(void)
     read_rollback_state();
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    /* 8080, not 80: port 80 belongs to the car. Plan 4 forwards it straight through to
-     * the car's own REST surface so that CarHost.port and the car's contract never move —
-     * the dongle is the new thing in the system, so the dongle takes the unusual port. */
+    /* 8080, not 80: port 80 belongs to the car. relay_tcp.c listens there and forwards
+     * straight through to the car's own REST surface, so CarHost.port and the car's contract
+     * never move — the dongle is the new thing in the system, so the dongle takes the unusual
+     * port. */
     cfg.server_port = DONGLE_PORT;
-    /* /status, GET /net, POST /net, and room for Plan 4's additions — sized so that a
-     * new endpoint is not also a config change. */
+    /* Four are registered: GET /status here, GET and POST /net (net_api.c), POST /ota
+     * (ota_api.c). Six is deliberate headroom, so adding an endpoint is not also a config
+     * change — and it is the whole story now rather than a placeholder: the relays added no
+     * URI handlers at all, being raw sockets on their own ports, and the API guard is an
+     * open_fn rather than a handler. Nothing further is pending against this number. */
     cfg.max_uri_handlers = 6;
+    /* Lowered from esp_http_server's default of 7: this device's whole lwIP socket table
+     * (CONFIG_LWIP_MAX_SOCKETS, sdkconfig.defaults) is shared with relay_udp.c and
+     * relay_tcp.c, which is where the full budget arithmetic lives — the comment there is
+     * the one to read for why this number is what it is. This server answers an admin API
+     * (/status, /net, /ota), not proxied REST traffic, so a couple of concurrent clients is
+     * already generous; it does not need the default's share of a table the relays need
+     * far more of. */
+    cfg.max_open_sockets = 3;
+    /* With max_open_sockets this low, LRU purging is not a nicety — it is what keeps the
+     * admin API reachable. HTTPD_DEFAULT_CONFIG leaves lru_purge_enable false, and with it
+     * false httpd_server does not even put listen_fd in its read set once every session slot
+     * is taken (esp_http_server/src/httpd_main.c: `if (hd->config.lru_purge_enable ||
+     * httpd_is_sess_available(hd))`). Three stranded keep-alive sessions — a phone unplugged
+     * mid-request, three times — would therefore make /status, /net and POST /ota permanently
+     * unreachable, with new connections hanging unaccepted rather than being refused, until a
+     * power cycle. POST /ota is the only cable-free way to repair a device that lives in a
+     * pocket, so "unreachable until a power cycle" is the one outcome worth spending a
+     * session for.
+     *
+     * Checked against the source, then checked again after review found the first check
+     * incomplete: httpd_sess_close_lru does pick its victim through httpd_sess_enum's
+     * HTTPD_TASK_FIND_LOWEST_LRU case (httpd_sess.c), which skips a session with
+     * `for_async_req == true` — but that guard does not cover an OTA upload in this
+     * firmware. ota_api.c reads its body with the synchronous httpd_req_recv, never the
+     * async request API, so for_async_req stays false for the whole upload; a purge sweep
+     * would not skip it on that basis. What actually makes eviction impossible:
+     * httpd_accept_conn — where a purge happens — and the handler currently blocked in
+     * httpd_req_recv both run on the same single httpd task (httpd_main.c:272
+     * httpd_server(), :311 where it hands ready sessions to their handlers). That task
+     * cannot be back in its own select()/accept loop while it is still inside the handler
+     * reading the upload's body, so no accept — and therefore no LRU purge — can land
+     * mid-upload. */
+    cfg.lru_purge_enable = true;
+    /* httpd_config_t has no bind-address field in IDF 6.0.2, so this server always listens on
+     * INADDR_ANY — USB and, since the station came up, the car's Wi-Fi too. api_guard_open is
+     * what stands in front of that: it runs on every accepted connection, before a request
+     * byte is parsed, and refuses (closes the socket) any connection that did not land on
+     * DONGLE_HOST. Without it, POST /net (a password) and POST /ota (unauthenticated firmware
+     * writes) would both be plainly reachable from the car's network. Read api_guard.h for
+     * what that check does and does not establish — it is an address check, not an
+     * arrival-interface check, and the difference is written down there rather than glossed
+     * over here.
+     *
+     * close_fn is not optional company for open_fn. Installing an open_fn that can fail
+     * reaches a double close() inside esp_http_server on every rejection: httpd_sess_new calls
+     * httpd_sess_delete (httpd_sess.c), which closes the fd, and control then returns to
+     * httpd_accept_conn (httpd_main.c), whose `exit:` closes the same fd number again. The gap
+     * between them is not a few instructions — esp_http_server_dispatch_event -> esp_event_post
+     * sits in it with CONFIG_HTTPD_SERVER_EVENT_POST_TIMEOUT (2000 ms in this build), blocking
+     * the httpd task with the fd already freed whenever the event queue is full, plus an
+     * unthrottled ESP_LOGE to a 115200-baud UART. A relay accepting a connection in that window
+     * gets handed the freed fd number and has it closed underneath it — and the consequence is
+     * not a lost socket: lwip_select returns EBADF the instant any fd in its sets is dead, and
+     * a select() loop that treats an error as a log line and falls through has no wait left in
+     * the pass. api_guard_close closes that hole; both relays also grew a bounded delay on a
+     * select() error, so neither depends on this being right. */
+    cfg.open_fn = api_guard_open;
+    cfg.close_fn = api_guard_close;
 
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &cfg), TAG, "cannot start the server");
 

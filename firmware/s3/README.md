@@ -135,6 +135,19 @@ The script that produces this, `firmware/s3/verify-on-host.sh`, is checked in fo
 the deliverable and the regression in the same run, so a returning route capture is caught by a test
 rather than by losing somebody's connectivity.
 
+## Bench
+
+Measurements taken as each plan lands, rather than assumed.
+
+| Check | Result | Date |
+|---|---|---|
+| Built image size with the station radio (`esp_wifi` + the join state machine), SoftAP support compiled out (`CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n`) | 819 KB (`ajdongle.bin`, 838,592 bytes / 0xccbc0) in a 4 MB OTA slot — 20% used, 3.20 MB free | 2026-08-30 |
+| `curl http://<dongle's station address>:8080/status` from a machine on the car's network — must be refused (`api_guard.c`'s `open_fn`, checked by `getsockname` against `DONGLE_HOST`) | *(needs a car and a second machine on its network — the only test of the guard; record what you observed)* | |
+
+The app was 395 KB before this plan added the radio; roughly double, as expected, and comfortable
+against the slot — the earlier 1 MB partition this project considered and discarded would have been
+tight.
+
 ## Build
 
 ```bash

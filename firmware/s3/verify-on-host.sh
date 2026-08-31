@@ -98,6 +98,14 @@ for i in $(seq 1 300); do
       ping -c 4 -W 1000 -t 6 "$LAN_ROUTER" 2>&1 | tail -1 | sed 's/^/  /'
       echo "dongle traffic counters (a quiet device, not a chatty one):"
       netstat -ibn -I "$IF" 2>/dev/null | tail -1 | sed 's/^/  /'
+      echo
+      echo "=== 3. THE GUARD (api_guard.c / open_fn) ==="
+      echo "USB side must still answer -- this connection lands on DONGLE_HOST, which open_fn admits:"
+      curl -s --max-time 5 -w "\n  [HTTP %{http_code} in %{time_total}s]\n" http://192.168.7.1:8080/status 2>&1 | sed 's/^/  /'
+      echo "NOT testable from this bench: a request to the dongle's STATION address on :8080 must"
+      echo "be refused (open_fn rejects any connection whose local address is not DONGLE_HOST)."
+      echo "That needs the dongle joined to a car and a second machine on the car's network --"
+      echo "see the pending row in firmware/s3/README.md's bench table."
     } >> "$OUT" 2>&1
     break
   fi
