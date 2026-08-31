@@ -517,6 +517,13 @@ caught, so move it. Create `firmware/p4/main/radio_expected.h`:
 
 ```c
 #pragma once
+/* The component's own version macros come from here. status_api.c got them incidentally, via the
+ * esp_hosted headers it already includes; main.c includes none of those, and without this the
+ * stringify below expands to the macro NAMES instead of "3.0.6" — a comparison that can never
+ * match, so the car would offer the radio an image on every single boot until the attempt budget
+ * ran out. */
+#include "eh_common_fw_version.h"
+
 /* The expected slave version is the HOST library's version: esp_hosted requires the pair
  * matched, and deriving the string from the component's own macros makes drift between
  * idf_component.yml and this check impossible. Shared between status_api.c, which reports it,
@@ -620,9 +627,12 @@ this and could not — the linker was correctly throwing away an image nobody ha
 ```bash
 source tools/env-p4.sh && \
   cp firmware/p4/build/bootloader/bootloader.bin firmware/p4/main/radio_image.bin && \
-  (cd firmware/p4 && idf.py build >/dev/null 2>&1) && \
+  (cd firmware/p4 && idf.py reconfigure >/dev/null && idf.py build >/dev/null 2>&1) && \
   riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep radio_image_bin
 ```
+`reconfigure` is not optional: the CMake block that turns an absent image into an empty one runs
+at configure time, so swapping the file under an existing build tree needs CMake to look again.
+
 Expected: both `_binary_radio_image_bin_start` and `_binary_radio_image_bin_end` are listed. If
 they are still absent here, that is a real defect rather than the linker being reasonable — stop
 and report it, because the whole design rests on the image reaching the flash.
@@ -637,7 +647,8 @@ from:
 
 ```bash
 rm -f firmware/p4/main/radio_image.bin && \
-  source tools/env-p4.sh && (cd firmware/p4 && idf.py build >/dev/null 2>&1) && \
+  source tools/env-p4.sh && \
+  (cd firmware/p4 && idf.py reconfigure >/dev/null && idf.py build >/dev/null 2>&1) && \
   riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep radio_image_bin
 ```
 Expected: two lines whose addresses are identical — start and end at the same place, so the
