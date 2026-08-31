@@ -20,6 +20,9 @@
 - **`firmware/p4/main/radio_image.bin` is git-ignored.** It is a build product of a pinned dependency; checking it in would create the second version this work exists to remove.
 - **An everyday `idf.py build` must succeed without the radio image present.**
 - Run `tools/test-all.sh` before every commit; it must stay green.
+- **Read symbols with `riscv32-esp-elf-nm`, never the system `nm`.** `ajmiddlecar.elf` is a
+  RISC-V ELF and macOS's `nm` reads Mach-O; the toolchain's is on PATH after
+  `source tools/env-p4.sh`.
 
 ---
 
@@ -279,7 +282,7 @@ Run:
 cd /Users/adamjohnson/VSCode/esp32-p4-car && \
   head -c 4096 /dev/urandom > firmware/p4/main/radio_image.bin && \
   source tools/env-p4.sh && (cd firmware/p4 && idf.py build 2>&1 | tail -3) && \
-  nm firmware/p4/build/ajmiddlecar.elf | grep radio_image_bin
+  riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep radio_image_bin
 ```
 Expected: both `_binary_radio_image_bin_start` and `_binary_radio_image_bin_end` are listed.
 Then remove the dummy: `rm -f firmware/p4/main/radio_image.bin`.
@@ -602,7 +605,7 @@ from:
 ```bash
 rm -f firmware/p4/main/radio_image.bin && \
   source tools/env-p4.sh && (cd firmware/p4 && idf.py build >/dev/null 2>&1) && \
-  nm firmware/p4/build/ajmiddlecar.elf | grep radio_image_bin
+  riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep radio_image_bin
 ```
 Expected: two lines whose addresses are identical — start and end at the same place, so the
 image is zero bytes and `radio_ota_should_flash` refuses on `have_image == false`.
@@ -654,7 +657,7 @@ After the existing `[ -f "$BIN_CAR" ] || { ... }` check, add:
 ```bash
 # A release whose car image does not actually contain the radio's is the silent version of the
 # bug this whole change removes: it would look current and strand a pin bump anyway.
-if ! nm firmware/p4/build/ajmiddlecar.elf | grep -q _binary_radio_image_bin_start; then
+if ! riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep -q _binary_radio_image_bin_start; then
     echo "ERROR: the car image does not embed a radio image"; exit 1
 fi
 EMBEDDED=$(wc -c < firmware/p4/main/radio_image.bin)
