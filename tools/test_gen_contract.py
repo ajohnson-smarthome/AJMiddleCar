@@ -409,13 +409,18 @@ class TestDongleAgreesWithTheCar(unittest.TestCase):
         # car-api.json carries no HTTP port: the car's http_server.c leaves
         # HTTPD_DEFAULT_CONFIG's 80 alone. Before the dongle cutover (Plan 5 Task 3) this
         # asserted CarHost.port's device branch carried that same number as its own literal;
-        # now it takes the number from DongleContract.relayHttpPort instead of respelling
-        # it, which is what this checks for — a symbol, not a literal, so a hand-edited
-        # divergence between the two schemas cannot silently coexist with this test still
-        # passing. test_swift_exposes_the_same_vocabulary below is what still guards the
-        # constant's own value against contract/dongle-api.json.
+        # now it takes the number from DongleContract.relayHttpPort instead of respelling it —
+        # generated from this schema's relay.http_port, which is the tie back to the number
+        # this test is named for. Checked as a whole line, not a substring: a substring search
+        # would also match the symbol sitting in a comment, or on the simulator branch, without
+        # telling the device branch's own assignment apart from either — exactly the trap
+        # assertEmitsLine's docstring (below, in TestDongleEmitters) documents as having already
+        # bitten a port assertion once. test_swift_exposes_the_same_vocabulary is what still
+        # guards the constant's own value against contract/dongle-api.json; this test only
+        # guards that CarHost.port still takes it from there.
         source = (ROOT / "app" / "AJMiddleCar" / "CarHost.swift").read_text()
-        self.assertIn("DongleContract.relayHttpPort", source,
+        want = "    static let port: UInt16 = directPort ?? DongleContract.relayHttpPort"
+        self.assertIn(want, source.splitlines(),
                       "CarHost.swift's device branch no longer takes its REST port from "
                       "DongleContract.relayHttpPort — the relay could again forward the "
                       "car's REST traffic to a port the app does not use, with nothing "

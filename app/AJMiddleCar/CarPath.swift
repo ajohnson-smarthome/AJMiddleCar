@@ -17,7 +17,10 @@ import Network
 final class CarPath: ObservableObject {
     @Published private(set) var state: PathState = .noDongle(.notAvailable)
 
-    private let dongle = NWPathMonitor(requiredInterfaceType: CarNet.dongleInterface)
+    /// Restricted to `CarNet.carInterface` — normally the dongle's interface, or Wi-Fi under the
+    /// bench escape hatch (`CarHost.direct`); see that constant for why the choice is folded
+    /// there rather than read from `CarHost` directly.
+    private let dongle = NWPathMonitor(requiredInterfaceType: CarNet.carInterface)
     private let general = NWPathMonitor()
     private let queue = DispatchQueue(label: "car.path")
     private var donglePath: NWPath?

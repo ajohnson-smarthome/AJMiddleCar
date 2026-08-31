@@ -25,6 +25,24 @@ enum CarNet {
     /// from a broken relay.
     static let dongleInterface: NWInterface.InterfaceType = .wiredEthernet
 
+    /// The interface actually pinned to and monitored — `dongleInterface`, unless the bench
+    /// escape hatch (`CarHost.direct`) says the car is addressed directly over the phone's own
+    /// Wi-Fi. Folded into one value *here*, not in `CarHost`, because `CarPath`'s monitor needs
+    /// it too and `CarHost.direct` does not exist on the simulator branch — this file already
+    /// owns the `#if` both call sites have to agree with. `pinToCarInterface` and `CarPath` are
+    /// the only two readers; a socket pinned to one candidate while the monitor watches the
+    /// other is exactly the split this constant exists to prevent.
+    static var carInterface: NWInterface.InterfaceType {
+        #if !targetEnvironment(simulator)
+        return CarHost.direct ? .wifi : dongleInterface
+        #else
+        // Never actually consulted for pinning or for `state` on this branch (both go through
+        // `generalPath` instead — see `CarPath`), but `CarPath`'s `dongle` monitor is a stored
+        // property created unconditionally, so this still has to return something that compiles.
+        return dongleInterface
+        #endif
+    }
+
     /// REST: `/status`, `/calib*`, `/ota` and the five config domains.
     static func tcpParams() -> NWParameters { pinToCarInterface(.tcp) }
 
@@ -33,13 +51,9 @@ enum CarNet {
     /// the stream for a 1.5 s TCP retransmission — five times the car's watchdog deadline.
     static func udpParams() -> NWParameters { pinToCarInterface(.udp) }
 
-    /// Pinned to `dongleInterface` — or, under the bench escape hatch, to `.wifi`, because
-    /// `CarHost.direct` addresses the car directly over the phone's own Wi-Fi, exactly as the
-    /// app did before the dongle existed. `CarHost` picks the host and this picks the interface;
-    /// both read the one `CarHost.direct` decision so the pair cannot disagree.
     private static func pinToCarInterface(_ p: NWParameters) -> NWParameters {
         #if !targetEnvironment(simulator)
-        p.requiredInterfaceType = CarHost.direct ? .wifi : dongleInterface
+        p.requiredInterfaceType = carInterface
         p.prohibitedInterfaceTypes = [.cellular]
         #else
         // Deliberately absent in the simulator: the car there is the mock, which may be on

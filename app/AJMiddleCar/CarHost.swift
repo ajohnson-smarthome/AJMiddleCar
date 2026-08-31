@@ -20,19 +20,21 @@ enum CarHost {
     /// because both failures look identical from here (nothing connects). `-carHost` addresses
     /// the car directly over the phone's own Wi-Fi, exactly as the app did before the dongle
     /// existed; given nothing, the app addresses the dongle. It selects a pair, not just a host:
-    /// `CarNet` reads this same `direct` flag to decide which interface to pin to, because
-    /// addressing the car over the dongle's interface would fail exactly as surely as addressing
-    /// the dongle over Wi-Fi — one flag, read in both places, so the two cannot disagree. It
-    /// comes out once `firmware/s3/README.md`'s bench table records a drive through the relay.
+    /// `CarNet.carInterface` folds this same `direct` decision into the interface type that both
+    /// `CarNet`'s socket pinning and `CarPath`'s monitor read, so host and interface cannot
+    /// disagree — the folding happens in `CarNet` rather than here because `CarPath` needs it
+    /// too, and this flag does not exist on the simulator branch. It comes out once
+    /// `firmware/s3/README.md`'s bench table records a drive through the relay.
     static let direct = launchArgument("-carHost") != nil
 
     static let host = direct ? launchArgument("-carHost")! : DongleContract.host
-    /// Direct mode falls back to the car's own AP port (`80`), matching how this build addressed
-    /// the car before the dongle existed. Dongle mode takes the relay's port from the contract —
-    /// numerically what the car's own port already was, since the relay listens on it unchanged.
-    static let port: UInt16 = direct
-        ? (launchArgument("-carPort").flatMap(UInt16.init) ?? 80)
-        : DongleContract.relayHttpPort
+    /// `-carPort` overrides the port only in direct mode, alongside `-carHost` — the pairing is
+    /// both arguments together or neither. The fallback is `DongleContract.relayHttpPort` either
+    /// way, and for the same reason in both modes: the relay listens on the car's own REST port
+    /// unchanged, and `car-api.json` carries no HTTP port of its own to spell instead — the
+    /// dongle's contract is the only non-literal source for that number, direct or not.
+    private static var directPort: UInt16? { direct ? launchArgument("-carPort").flatMap(UInt16.init) : nil }
+    static let port: UInt16 = directPort ?? DongleContract.relayHttpPort
     /// Direct mode falls back to the contract's port, for a bench mock standing in for the car;
     /// dongle mode takes the relay's RT port, numerically the same value under a different name.
     static let rtPort: UInt16 = direct
