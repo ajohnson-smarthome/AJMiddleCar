@@ -80,4 +80,66 @@ check(UpdateRules.mustUpdate(carFw: "v1.0+400", latestTag: latest),
 check(!UpdateRules.mustUpdate(carFw: "v1.0+700", latestTag: latest),
       "car ahead (dev build) → free, does not mask a dongle that is behind")
 
+// -- flashPlan: the pure decision behind AppFlow.performDongleUpdate's device confusion risk --
+// Everything below is the one guarantee Task 4's own review flagged as unproven until a call
+// site existed to test: given a release and a cache state for a SPECIFIC device, flashPlan must
+// carry THAT device through to whatever it returns, so a caller that names it once at the top
+// (`flashPlan(for: .dongle, ...)`) has nothing left to independently mis-type downstream.
+let dongleURL = URL(string: "https://example.invalid/ajdongle.bin")!
+let carURL = URL(string: "https://example.invalid/ajmiddlecar.bin")!
+
+// A fresh release, nothing cached yet: must download, and must carry .dongle through untouched.
+switch UpdateRules.flashPlan(for: .dongle, release: (tag: "v1.0+200", assetURL: dongleURL),
+                             cachedBuild: nil, hasCachedFile: false) {
+case .download(let device, let url, let recordBuild, let tag):
+    check(device == .dongle, "a plan built for .dongle carries .dongle, not .car")
+    check(url == dongleURL, "the download URL is the one passed in for this device")
+    check(recordBuild == 200, "the build to record is parsed from the release tag")
+    check(tag == "v1.0+200", "the tag to record is the release's own tag")
+default:
+    check(false, "no cache and a newer release → .download")
+}
+
+// The identical inputs, requested for .car instead: must carry .car, not silently reuse .dongle
+// from a shared default or a copy-paste of the case above.
+switch UpdateRules.flashPlan(for: .car, release: (tag: "v1.0+200", assetURL: carURL),
+                             cachedBuild: nil, hasCachedFile: false) {
+case .download(let device, let url, _, _):
+    check(device == .car, "a plan built for .car carries .car, not .dongle")
+    check(url == carURL, "the download URL is the one passed in for .car, not .dongle's")
+default:
+    check(false, "no cache and a newer release → .download")
+}
+
+// Already current, already cached: reuse the cache, still carrying the right device.
+switch UpdateRules.flashPlan(for: .dongle, release: (tag: "v1.0+200", assetURL: dongleURL),
+                             cachedBuild: 200, hasCachedFile: true) {
+case .useCache(let device):
+    check(device == .dongle, "a cache-reuse plan for .dongle carries .dongle")
+default:
+    check(false, "current build, already cached → .useCache")
+}
+
+// No fresh release (GitHub unreachable) but a cache that is already current: reuse it — this is
+// the offline path dongleGate()'s GateRule fallback feeds into flashPlan.
+switch UpdateRules.flashPlan(for: .dongle, release: nil, cachedBuild: 150, hasCachedFile: true) {
+case .useCache(let device):
+    check(device == .dongle, "an offline cache-reuse plan still carries the right device")
+default:
+    check(false, "no release info at all, but a cached file exists and nothing says it is stale → .useCache")
+}
+
+// A newer release exists but there is nothing to fetch it from (offline) and nothing cached
+// either: genuinely nothing to flash. This is the case that used to loop forever re-showing
+// "updating" without ever making progress.
+check(UpdateRules.flashPlan(for: .dongle, release: nil, cachedBuild: nil, hasCachedFile: false) == .unavailable,
+      "nothing fresh, nothing cached → .unavailable, not an infinite retry")
+
+// No fresh release AND no cached file, even with a recorded build number left over from some
+// earlier session (e.g. the file was since cleared): a bare number is not something to flash.
+// GateRule's own offline-fallback precondition (`hasCachedFile`) should make this unreachable
+// on the path dongleGate() actually takes, but flashPlan does not trust that from here either.
+check(UpdateRules.flashPlan(for: .dongle, release: nil, cachedBuild: 100, hasCachedFile: false) == .unavailable,
+      "a recorded build with no backing file is not something to flash")
+
 if failures == 0 { print("test_update: OK") } else { exit(1) }

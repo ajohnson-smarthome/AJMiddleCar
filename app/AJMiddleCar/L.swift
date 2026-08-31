@@ -23,6 +23,7 @@ enum L {
     static var linkDeniedSub: String { s("link.deniedSub") }
     static var dongleUpdatingTitle: String { s("dongle.updatingTitle") }
     static var dongleUpdatingSub: String { s("dongle.updatingSub") }
+    static var dongleUpdateFailedSub: String { s("dongle.updateFailedSub") }
     static var dongleConfiguringTitle: String { s("dongle.configuringTitle") }
     static var dongleConfiguringSub: String { s("dongle.configuringSub") }
     static var dongleJoinFailedTitle: String { s("dongle.joinFailedTitle") }

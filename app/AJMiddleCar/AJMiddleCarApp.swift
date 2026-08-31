@@ -67,6 +67,11 @@ struct AJMiddleCarApp: App {
 
     @ViewBuilder private var root: some View {
         switch flow.phase {
+        case .checkDongle:
+            // Nothing has been asked yet — the default, unadorned radar reads as "checking",
+            // the same copy the pre-cutover screen used before there was a dongle sequence in
+            // front of it at all.
+            ConnectView()
         case .dongleAbsent:
             // Reuses the same "plug it in" copy CarLink's own noDongle situation shows later —
             // whether nothing answered because the interface is not there or because nothing on
@@ -74,8 +79,10 @@ struct AJMiddleCarApp: App {
             ConnectView(situation: .noDongle(.notAvailable))
         case .dongleUpdating:
             ConnectView(situation: .dongleUpdating)
+        case .dongleUpdateFailed:
+            ConnectView(situation: .dongleUpdateFailed, onRetryDongleUpdate: { flow.retryDongleUpdate() })
         case .dongleRolledBack:
-            ConnectView(situation: .dongleRolledBack)
+            ConnectView(situation: .dongleRolledBack, onSkipRollback: { flow.skipDongleRollback() })
         case .dongleConfiguring:
             ConnectView(situation: .dongleConfiguring)
         case .dongleJoinFailed:

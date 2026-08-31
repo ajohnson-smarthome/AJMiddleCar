@@ -19,7 +19,7 @@ enum SessionState: Equatable {
     case none
     case adopted(device: String, fw: String)
     /// A car answered, but it is not ours. Both cars are a softAP serving the same API at the
-    /// same address, so a wrong network finds a car exactly where one is expected.
+    /// same address: whichever one the dongle is joined to is the one that answers here.
     case foreign(device: String)
     /// A car answered our hello naming a protocol version this app does not speak. The car
     /// answers a mismatched hello on purpose so this state can exist rather than a silent radar.

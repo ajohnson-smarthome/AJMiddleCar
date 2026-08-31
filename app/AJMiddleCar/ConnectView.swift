@@ -21,19 +21,31 @@ struct ConnectView: View {
         /// The dongle's own firmware is behind the latest release; it is downloading and
         /// flashing it before anything else in the sequence touches the car.
         case dongleUpdating
-        /// The dongle is current and either sending the car's credentials for the first time or
-        /// between join attempts — both read as "connecting" from here; see
-        /// `DongleLink.DongleStep.sendCredentials`/`.waiting`.
+        /// `performDongleUpdate()` failed `maxDongleUpdateAttempts` times running — no usable
+        /// internet or cache, or the upload itself kept failing. `onRetryDongleUpdate` gives a
+        /// way to ask for a fresh budget rather than watching it loop forever.
+        case dongleUpdateFailed
+        /// The dongle is current and pointed at the car's own network. Either its credentials
+        /// are being sent for the first time (including a re-point, if it was pointed at some
+        /// other network), or it is between join attempts — both read as "connecting" from
+        /// here; see `DongleLink.DongleStep.sendCredentials`/`.waiting`.
         case dongleConfiguring
         /// The dongle's join attempt budget ran out. `AppFlow` retries it on the next poll with
         /// no button to press — the credentials are already stored and correct.
         case dongleJoinFailed
-        /// The dongle's bootloader reverted its last update. Shown once, standing, so the app
-        /// does not silently offer the same failing image again.
+        /// The dongle's bootloader reverted its last update. Standing until `onSkipRollback` is
+        /// used — the flag itself does not clear on its own, so without that escape hatch this
+        /// would be a locked room rather than a message.
         case dongleRolledBack
     }
 
     var situation: Situation = .searching
+    /// `.dongleRolledBack` only. The car's own forced-update gate keeps an identical skip
+    /// (`FirmwareView.skipButton`) for the identical reason: a gate that failed must not be a
+    /// dead end.
+    var onSkipRollback: (() -> Void)? = nil
+    /// `.dongleUpdateFailed` only.
+    var onRetryDongleUpdate: (() -> Void)? = nil
     @Environment(\.colorScheme) private var colorScheme
     private var p: Palette { Theme.current(colorScheme) }
 
@@ -46,14 +58,15 @@ struct ConnectView: View {
     }
 
     /// The radar sweep reads as "still looking, will resolve on its own" — true of every
-    /// situation here except `.dongleRolledBack`, which is a standing failure nothing here
-    /// retries automatically. That one borrows `WrongCarView`'s static failed-car image instead,
-    /// the same way `WrongCarView` does, so a state that will not clear on its own does not look
-    /// like one that will.
+    /// situation here except the two that hand control to a button (`.dongleRolledBack`,
+    /// `.dongleUpdateFailed`): neither retries itself, so neither should look like it will.
+    /// Both borrow `WrongCarView`'s static failed-car image instead, the same way `WrongCarView`
+    /// does.
     @ViewBuilder private var leftPanel: some View {
-        if situation == .dongleRolledBack {
+        switch situation {
+        case .dongleRolledBack, .dongleUpdateFailed:
             FirmwareCarView(phase: .failed, palette: p)
-        } else {
+        default:
             ConnectCarView(palette: p)
         }
     }
@@ -64,6 +77,7 @@ struct ConnectView: View {
         case .noDongle: return L.linkNoDongleTitle
         case .localNetworkDenied: return L.linkDeniedTitle
         case .dongleUpdating: return L.dongleUpdatingTitle
+        case .dongleUpdateFailed: return L.fwFailTitle
         case .dongleConfiguring: return L.dongleConfiguringTitle
         case .dongleJoinFailed: return L.dongleJoinFailedTitle
         case .dongleRolledBack: return L.dongleRolledBackTitle
@@ -76,6 +90,7 @@ struct ConnectView: View {
         case .noDongle: return L.linkNoDongleSub
         case .localNetworkDenied: return L.linkDeniedSub
         case .dongleUpdating: return L.dongleUpdatingSub
+        case .dongleUpdateFailed: return L.dongleUpdateFailedSub
         case .dongleConfiguring: return L.dongleConfiguringSub
         case .dongleJoinFailed: return L.dongleJoinFailedSub
         case .dongleRolledBack: return L.dongleRolledBackSub
@@ -88,24 +103,50 @@ struct ConnectView: View {
             Text(message).font(.system(size: 13)).foregroundStyle(p.muted)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 260, alignment: .leading)
+            actionButton
+        }
+    }
+
+    /// The one button each situation can offer, if any. `.localNetworkDenied` opens Settings;
+    /// `.dongleRolledBack` and `.dongleUpdateFailed` are the two dongle-side escapes from a gate
+    /// that will not clear on its own — see their `Situation` doc comments for why each needs
+    /// one at all.
+    @ViewBuilder private var actionButton: some View {
+        switch situation {
+        case .localNetworkDenied:
             // `openSettingsURLString` opens *this app's* pane by definition — which is precisely
             // where the Local Network switch lives, so it is offered where it helps and not
             // where it would only look like a button.
-            if situation == .localNetworkDenied {
-                Button {
-                    if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
-                } label: {
-                    Text(L.openSettings)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(p.accent)
-                        .padding(.horizontal, 16).padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(p.accent.opacity(0.15)))
-                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(p.accent.opacity(0.55), lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 3)
+            pillButton(L.openSettings, tint: p.accent) {
+                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
             }
+        case .dongleRolledBack:
+            // Ghost styling, matching `FirmwareView.skipButton`'s own choice for the identical
+            // situation: continuing on the reverted firmware is the fallback, not the offer.
+            if let onSkipRollback {
+                pillButton(L.fwSkip, tint: p.muted, filled: false, action: onSkipRollback)
+            }
+        case .dongleUpdateFailed:
+            if let onRetryDongleUpdate {
+                pillButton(L.fwRetry, tint: p.warn, action: onRetryDongleUpdate)
+            }
+        case .searching, .noDongle, .dongleUpdating, .dongleConfiguring, .dongleJoinFailed:
+            EmptyView()
         }
+    }
+
+    private func pillButton(_ text: String, tint: Color, filled: Bool = true,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(text)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(tint)
+                .padding(.horizontal, 16).padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 10).fill(filled ? tint.opacity(0.15) : Color.clear))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(filled ? tint.opacity(0.55) : p.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 3)
     }
 }
 

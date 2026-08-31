@@ -43,6 +43,48 @@ enum UpdateRules {
         dir.appendingPathComponent(device.cacheFileName)
     }
 
+    /// What a caller shaped like `AppFlow.performDongleUpdate` should do to obtain the bytes to
+    /// flash: fetch a specific asset, reuse what is already on disk, or give up because neither
+    /// is available. Pure — the caller still performs the actual download and disk read; this
+    /// only decides which of those three shapes applies.
+    ///
+    /// Every case carries `device` straight through from `flashPlan(for:...)`'s own argument
+    /// rather than making the caller re-name it at each downstream use
+    /// (`UpdateClient.download(device:)`, `UpdateClient.cachedBinURL(for:)`). That is the whole
+    /// point of returning a value instead of a bare URL: the ONE place a caller can name the
+    /// wrong device is the `flashPlan(for:...)` call itself, which a host test reaches, rather
+    /// than that plus every place its result gets used, which only a bench with the wrong
+    /// firmware pushed to it would ever catch.
+    enum FlashPlan: Equatable {
+        /// Fetch `url` and record it, on success, as `device`'s own cached build/tag.
+        case download(device: Device, url: URL, recordBuild: Int?, tag: String)
+        /// A previously downloaded, previously validated image for `device` is already on
+        /// disk — `UpdateClient.cachedBinURL(for: device)` names it.
+        case useCache(device: Device)
+        /// No fresh release and nothing usable already cached. Nothing to flash this round.
+        case unavailable
+    }
+
+    /// - Parameters:
+    ///   - device: Whose image this decides for — carried into every non-`unavailable` case of
+    ///     the result, unchanged.
+    ///   - release: The freshly fetched release for `device` specifically (its own tag and its
+    ///     own asset URL — `UpdateClient.latestRelease(for: device)`), or `nil` when GitHub was
+    ///     unreachable or unusable.
+    ///   - cachedBuild: `UpdateClient.cachedBuild(for: device)` — `device`'s own recorded build,
+    ///     never the other device's.
+    ///   - hasCachedFile: `UpdateClient.hasCachedFile(for: device)` — `device`'s own cache file.
+    static func flashPlan(for device: Device, release: (tag: String, assetURL: URL)?,
+                          cachedBuild: Int?, hasCachedFile: Bool) -> FlashPlan {
+        let latestBuild = buildNumber(release?.tag)
+        if needsDownload(latestBuild: latestBuild, cachedBuild: cachedBuild, hasCachedFile: hasCachedFile) {
+            guard let release else { return .unavailable }
+            return .download(device: device, url: release.assetURL,
+                             recordBuild: buildNumber(release.tag), tag: release.tag)
+        }
+        return hasCachedFile ? .useCache(device: device) : .unavailable
+    }
+
     /// Normalize a version like "v1.2" / "v1.2-3-gabc" → "1.2" for comparison.
     static func normalize(_ v: String?) -> String {
         guard let v else { return "" }

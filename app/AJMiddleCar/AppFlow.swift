@@ -16,19 +16,32 @@ import Foundation
 @MainActor
 final class AppFlow: ObservableObject {
     enum Phase: Equatable {
+        /// Before the first `/status` has come back at all — not yet known whether a dongle is
+        /// even attached. Distinct from `.dongleAbsent` (which is a definite "nothing answered"
+        /// after actually asking): the two would otherwise flash "plug it in" at every cold
+        /// launch, dongle attached or not, for as long as the first request takes.
+        case checkDongle
         /// No dongle answered `/status` — `DongleLink.next(status: nil, ...)`'s own step, not an
         /// error the flow invents separately.
         case dongleAbsent
         /// The dongle's own firmware is behind the latest release; downloading and flashing it,
         /// before anything else in this sequence touches the car. Reused for the short reboot
-        /// that follows the flash — see `performDongleUpdate()`.
+        /// that follows a successful flash — see `performDongleUpdate()`.
         case dongleUpdating
-        /// The dongle's bootloader reverted its last update. Shown once, standing, until a
-        /// working image changes it — never re-offered as `.dongleUpdating` in a loop.
+        /// `performDongleUpdate()` failed `maxDongleUpdateAttempts` times in a row (no internet
+        /// and no usable cache, or the upload itself kept failing) — `dongleGate()` stops
+        /// retrying automatically and waits for `retryDongleUpdate()` instead of re-downloading
+        /// from GitHub every poll forever.
+        case dongleUpdateFailed
+        /// The dongle's bootloader reverted its last update. Standing until `skipDongleRollback()`
+        /// is called — the rollback flag itself does not clear until a LATER OTA to that slot
+        /// succeeds, so without an acknowledgement path this phase would never release.
         case dongleRolledBack
-        /// The dongle is current. Either its credentials are being sent for the first time, or
-        /// it is between join attempts (`idle`/`joining`/an unrecognised state) — both render the
-        /// same "connecting" screen; see `DongleLink.DongleStep.sendCredentials`/`.waiting`.
+        /// The dongle is current and pointed at the car's own network. Either its credentials
+        /// are being sent for the first time (including a re-point, if it was pointed at some
+        /// other network), or it is between join attempts (`idle`/`joining`/an unrecognised
+        /// state) — both render the same "connecting" screen; see
+        /// `DongleLink.DongleStep.sendCredentials`/`.waiting`.
         case dongleConfiguring
         /// `net.state == .failed`: the join attempt budget ran out. The credentials are already
         /// stored; `dongleGate()` retries the join itself, on the next poll, without a button.
@@ -49,13 +62,14 @@ final class AppFlow: ObservableObject {
         var opensLink: Bool {
             switch self {
             case .updateRequired, .awaitingCar, .ready: return true
-            case .dongleAbsent, .dongleUpdating, .dongleRolledBack, .dongleConfiguring, .dongleJoinFailed,
+            case .checkDongle, .dongleAbsent, .dongleUpdating, .dongleUpdateFailed, .dongleRolledBack,
+                 .dongleConfiguring, .dongleJoinFailed,
                  .checkInternet, .noInternet, .checkUpdate, .checkFailed, .downloading: return false
             }
         }
     }
 
-    @Published var phase: Phase = .dongleAbsent
+    @Published var phase: Phase = .checkDongle
     @Published var latestTag: String?
     let client = UpdateClient()
     private let dongle = DongleClient()
@@ -73,12 +87,38 @@ final class AppFlow: ObservableObject {
     /// during a reboot that was never a real disconnect.
     private static let dongleRebootGrace: Duration = .seconds(4)
 
-    /// Entry point. On the simulator there has never been a dongle and the spec is explicit that
-    /// this plan does not build one to stand in for it — the simulator keeps talking to
-    /// `tools/mock_car` directly, exactly as it did before this sequence existed — so the whole
-    /// dongle half is skipped there and only on there.
+    /// A judgement, not a measurement, matching the same shape as the firmware's own
+    /// `WIFI_JOIN_ATTEMPTS`: enough that a single flaky download or upload does not give up
+    /// early, few enough that a phone with no usable internet and no cache is told so within a
+    /// few tries rather than re-fetching from GitHub on every poll forever.
+    private static let maxDongleUpdateAttempts = 3
+
+    /// Guards against a second `startupCheck()` running while one is already in flight — a
+    /// second tap on a retry button whose screen has not yet updated `phase` (`dongleGate()`'s
+    /// first act is an `await` on `/status`, up to its timeout, before it writes anything) would
+    /// otherwise spawn a second poll loop issuing requests at the dongle's fixed address
+    /// alongside the first, which is exactly what `DongleClient` asks callers not to do — and if
+    /// the first loop has already handed off to a live drive session, the second would still be
+    /// out there writing `phase` out from under it on its own next poll.
+    private var gateRunning = false
+
+    /// Set by `skipDongleRollback()`. See `Phase.dongleRolledBack`'s doc for why this has to
+    /// exist at all: the bootloader's rollback flag does not clear on its own.
+    private var rollbackAcknowledged = false
+    private var dongleUpdateAttempts = 0
+    private var dongleUpdateGaveUp = false
+
+    /// Entry point. Re-entrant calls while a run is already in flight are ignored — see
+    /// `gateRunning`'s own doc.
     func startupCheck() async {
+        guard !gateRunning else { return }
+        gateRunning = true
+        defer { gateRunning = false }
         #if targetEnvironment(simulator)
+        // On the simulator there has never been a dongle and the spec is explicit that this
+        // plan does not build one to stand in for it — the simulator keeps talking to
+        // `tools/mock_car` directly, exactly as it did before this sequence existed — so the
+        // whole dongle half is skipped there and only on there.
         await carGate()
         #else
         await dongleGate()
@@ -116,14 +156,27 @@ final class AppFlow: ObservableObject {
                     hasCachedFile: UpdateClient.hasCachedFile(for: .dongle),
                     cachedBuild: UpdateClient.cachedBuild(for: .dongle))
             }
-            switch DongleLink.next(status: status, latestTag: tag) {
+            switch DongleLink.next(status: status, latestTag: tag, expectedSSID: CarContract.ssid,
+                                   rollbackAcknowledged: rollbackAcknowledged) {
             case .plugIn:
                 phase = .dongleAbsent
             case .rolledBack:
                 phase = .dongleRolledBack
             case .updating:
-                phase = .dongleUpdating
-                await performDongleUpdate(release: release)
+                if dongleUpdateGaveUp {
+                    phase = .dongleUpdateFailed
+                } else {
+                    phase = .dongleUpdating
+                    if await performDongleUpdate(release: release) {
+                        dongleUpdateAttempts = 0
+                    } else {
+                        dongleUpdateAttempts += 1
+                        if dongleUpdateAttempts >= Self.maxDongleUpdateAttempts {
+                            dongleUpdateGaveUp = true
+                            phase = .dongleUpdateFailed
+                        }
+                    }
+                }
             case .sendCredentials:
                 phase = .dongleConfiguring
                 // No credential state lives here or in DongleClient — CarContract's are opaque
@@ -143,28 +196,55 @@ final class AppFlow: ObservableObject {
         }
     }
 
+    /// The user chose to proceed on the dongle's current, reverted firmware rather than being
+    /// stuck on `.dongleRolledBack` forever (the car's own forced-update gate keeps the same
+    /// escape hatch — `FirmwareView`'s skip button). Read by `dongleGate()`'s very next poll,
+    /// which is at most `donglePollInterval` away.
+    func skipDongleRollback() { rollbackAcknowledged = true }
+
+    /// The user asked `dongleGate()` to try updating the dongle again after it gave up —
+    /// `maxDongleUpdateAttempts` consecutive failures with no progress. Clears both counters so
+    /// the very next `.updating` step gets a fresh budget.
+    func retryDongleUpdate() {
+        dongleUpdateGaveUp = false
+        dongleUpdateAttempts = 0
+    }
+
     /// Download (or reuse the cached image) and flash the dongle's own firmware, then give it a
-    /// moment to reboot before `dongleGate()`'s loop resumes polling. Goes through
-    /// `UpdateRules.Device.dongle`'s own cache path end to end — `client.download(device:)` and
-    /// `UpdateClient.cachedBinURL(for:)` — so a stale car image can never be found, let alone
-    /// offered to `DongleClient.uploadFirmware`, under the dongle's file, or vice versa.
-    private func performDongleUpdate(release: UpdateClient.Release?) async {
+    /// moment to reboot before `dongleGate()`'s loop resumes polling normally. Returns whether
+    /// the upload was actually accepted; `dongleGate()` uses that to bound retries instead of
+    /// silently re-downloading from GitHub on every poll forever.
+    ///
+    /// The decision of what to flash — download `release`'s asset, reuse what is already
+    /// cached, or give up because neither is available — is `UpdateRules.flashPlan(for:...)`,
+    /// pure and host-tested; this function performs only the network/disk work that plan names,
+    /// and always for the device the plan itself carries (see `flashPlan`'s own doc for why that
+    /// is the whole point of it returning a value rather than a bare URL).
+    private func performDongleUpdate(release: UpdateClient.Release?) async -> Bool {
+        let plan = UpdateRules.flashPlan(for: .dongle,
+                                         release: release.map { (tag: $0.tag, assetURL: $0.assetURL) },
+                                         cachedBuild: UpdateClient.cachedBuild(for: .dongle),
+                                         hasCachedFile: UpdateClient.hasCachedFile(for: .dongle))
         let binURL: URL?
-        if let release {
-            let recordAs = UpdateRules.buildNumber(release.tag).map { (build: $0, tag: release.tag) }
-            binURL = await client.download(release.assetURL, recordAs: recordAs, device: .dongle)
-        } else if UpdateClient.hasCachedFile(for: .dongle) {
-            // Reachable only when `dongleGate()`'s offline fallback supplied `tag`: that path
-            // (`GateRule.offlineLatestTag`) itself requires `hasCachedFile` to return anything
-            // other than nil, so landing here with `release == nil` and `.updating` chosen means
-            // a previously downloaded, previously validated image is already on disk.
-            binURL = UpdateClient.cachedBinURL(for: .dongle)
-        } else {
+        switch plan {
+        case .download(let device, let url, let recordBuild, let tag):
+            let recordAs = recordBuild.map { (build: $0, tag: tag) }
+            binURL = await client.download(url, recordAs: recordAs, device: device)
+        case .useCache(let device):
+            binURL = UpdateClient.cachedBinURL(for: device)
+        case .unavailable:
             binURL = nil
         }
-        guard let binURL, let data = try? Data(contentsOf: binURL) else { return }
-        try? await dongle.uploadFirmware(data) { _ in }
+        guard let binURL, let data = try? Data(contentsOf: binURL) else { return false }
+        do {
+            try await dongle.uploadFirmware(data) { _ in }
+        } catch {
+            // Not swallowed into "success": a failed upload must count against the attempt
+            // budget above, and must not earn the reboot grace below — nothing rebooted.
+            return false
+        }
         try? await Task.sleep(for: Self.dongleRebootGrace)
+        return true
     }
 
     /// The pre-existing pre-connect gate for the CAR's own firmware (internet probe → latest
