@@ -133,7 +133,7 @@ static void radio_gate(void) {
         /* Clear on a match however it came about — a bench reflash counts too, and the next
            genuine mismatch deserves a fresh budget. A failed write here costs nothing: the count
            stays where it was, which errs toward giving up sooner rather than later. */
-        if (attempts != 0) radio_attempts_store(0);
+        if (attempts != 0) radio_attempts_store((uint8_t)radio_ota_next_attempts(true, attempts));
         return;
     }
     if (!radio_ota_should_flash(running, RADIO_EXPECTED_FW,

@@ -86,6 +86,21 @@ CP="$HOSTED/examples/wifi/sta/cp"
 if [ ! -d "$CP" ]; then
     echo "ERROR: esp_hosted is not fetched — run (cd firmware/p4 && idf.py reconfigure) first"; exit 1
 fi
+# Re-resolve the component before building anything from it. The car's own build does this at
+# line ~104, but by then the co-processor image is already built and copied — so a pin bumped
+# since the last fetch would ship an OLD radio image inside a car expecting the NEW version.
+# Every guard below would pass, and every car in the field would flash the wrong image three
+# times and give up.
+(cd firmware/p4 && idf.py reconfigure >/dev/null)
+# Belt and braces: prove the fetched component is the pinned one. flash-radio.sh makes the same
+# comparison for the manual path and merely warns; here it is fatal, because nobody is standing
+# over a release watching for a prompt.
+PIN=$(grep -E 'espressif/esp_hosted:' firmware/p4/main/idf_component.yml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) || true
+GOT=$(grep -E '^version:' "$HOSTED/idf_component.yml" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) || true
+[ -n "$PIN" ] || { echo "ERROR: no esp_hosted pin found in firmware/p4/main/idf_component.yml"; exit 1; }
+[ -n "$GOT" ] || { echo "ERROR: cannot read the fetched esp_hosted version"; exit 1; }
+[ "$PIN" = "$GOT" ] || { echo "ERROR: esp_hosted pin is $PIN but the fetched component is $GOT — the radio image would be built from the wrong one"; exit 1; }
+echo "radio component: esp_hosted $GOT (matches the pin)"
 # The co-processor's SDIO datapath sends frames larger than stock ESP-IDF allows. This is the
 # vendor's own patch, it is idempotent, and without it the build stops with an explicit error —
 # the same line firmware/c6/flash-radio.sh runs for the same reason.
@@ -103,8 +118,10 @@ echo "radio image: $(basename "$CP_BIN"), $(wc -c < firmware/p4/main/radio_image
 
 (cd firmware/p4 && idf.py fullclean >/dev/null && idf.py build)
 [ -f "$BIN_CAR" ] || { echo "ERROR: $BIN_CAR not built"; exit 1; }
-# A release whose car image does not actually contain the radio's is the silent version of the
-# bug this whole change removes: it would look current and strand a pin bump anyway.
+# This only catches EMBED_FILES being removed altogether: the _start/_end symbols appear in the
+# ELF even for a zero-length embed (they're just equal), so this check alone proves nothing about
+# size. The size check below is what actually proves an image is present; the two together cover
+# both failure modes.
 if ! riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep -q _binary_radio_image_bin_start; then
     echo "ERROR: the car image does not embed a radio image"; exit 1
 fi

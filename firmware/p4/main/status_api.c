@@ -12,7 +12,6 @@
 #include <string.h>
 #include "esp_ota_ops.h"
 #include "api_util.h"
-#include "eh_common_fw_version.h"   /* esp_hosted's own version macros — the single source */
 #include "radio_flash.h"
 #include "radio_expected.h"
 
@@ -56,7 +55,8 @@ static void read_radio_version(void) {
         /* No longer an instruction to fetch a cable: main.c's boot gate offers the embedded
          * image first, and only a spent attempt budget or a build with no image reaches here
          * still mismatched. */
-        ESP_LOGW(TAG, "radio firmware %s, expected %s — the car could not correct it",
+        ESP_LOGW(TAG, "radio firmware %s, expected %s — the car could not correct it; "
+                      "the manual route is firmware/c6/README.md",
                  s_radio_fw, RADIO_EXPECTED_FW);
     }
 }

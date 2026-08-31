@@ -45,10 +45,12 @@ void radio_flash_apply(void)
     ESP_LOGW(TAG, "flashing the radio: %u bytes over SDIO", (unsigned)total);
 
     if (esp_hosted_cp_ota_begin() != ESP_OK) {
-        /* Nothing was written, so nothing is at risk. Restart anyway: the attempt is already
-         * charged, and the next boot re-reads the version and decides again. */
-        ESP_LOGE(TAG, "ota begin refused — restarting without writing");
-        esp_restart();
+        /* Nothing was written and no SDIO state changed, so there is nothing to recover from by
+         * restarting — and a restart here would cost the owner a whole boot cycle, three times
+         * over, before the car serves at all. The attempt is already charged; let this boot
+         * carry on and let the next one try again. */
+        ESP_LOGE(TAG, "ota begin refused — leaving the radio alone this boot");
+        return;
     }
 
     size_t sent = 0;

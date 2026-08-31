@@ -61,11 +61,15 @@ The car's `main/CMakeLists.txt` embeds that file with `EMBED_FILES`. The name is
 renaming those.
 
 **An everyday `idf.py build` must not require it.** Nobody working on the mixer should have to
-build a co-processor image first. When the file is absent, the build embeds a zero-length
-placeholder and defines `RADIO_IMAGE_ABSENT`; the firmware then behaves exactly as it does today —
-it detects the mismatch, logs it, and tells the reader to reach for `firmware/c6/README.md`. The
-one place that must never ship without the image is the release, and `release.sh` verifies the
-embedded length is non-zero before it uploads anything.
+build a co-processor image first. When the file is absent, the build embeds a zero-length region,
+and `radio_flash_image_size()` — reading nothing more than the gap between the `_start` and `_end`
+symbols `EMBED_FILES` always defines — reports it as 0. There is deliberately no second flag such
+as `RADIO_IMAGE_ABSENT`: the zero length already *is* the signal, and a boolean sitting next to it
+would only be a second thing that could say something different from the length it is supposed to
+describe. The firmware then behaves exactly as it does today — it detects the mismatch, logs it,
+and tells the reader to reach for `firmware/c6/README.md`. The one place that must never ship
+without the image is the release, and `release.sh` verifies the embedded length is non-zero before
+it uploads anything.
 
 ### When the radio is flashed
 
