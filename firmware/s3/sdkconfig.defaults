@@ -45,7 +45,7 @@ CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
 #
-# Dynamic TX buffers, stated the only way that actually takes. This line used to read
+# Static TX buffers, stated the only way that actually takes. This line used to read
 # CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1, which is a silent no-op: that symbol has no prompt and is
 # derived (esp_wifi/Kconfig) from the promptable choice below it —
 #   config ESP_WIFI_TX_BUFFER_TYPE
@@ -53,18 +53,26 @@ CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
 #       default 0 if ESP_WIFI_STATIC_TX_BUFFER
 #       default 1 if ESP_WIFI_DYNAMIC_TX_BUFFER
 # — so kconfiglib recomputes it from the choice and discards whatever was written here,
-# without a warning. Setting it to 0 produced 1 all the same. The value was right only by
-# coincidence with the choice's own unforced default (ESP_WIFI_DYNAMIC_TX_BUFFER), which a
-# later IDF is free to move.
+# without a warning. Whichever value was written here, the choice below decided the outcome.
 #
-# Dynamic and not static, with a caveat worth knowing: the choice's help says "If PSRAM is
-# enabled, 'Static' should be selected to guarantee enough WiFi TX buffers", and PSRAM is
-# enabled here. Dynamic is kept because it is what this firmware has been built and bench-run
-# with, and because the dongle's Wi-Fi carries relayed REST and a 10 Hz control stream rather
-# than the sustained bulk TX that advice is aimed at. If TX buffer exhaustion is ever seen on
-# hardware, CONFIG_ESP_WIFI_STATIC_TX_BUFFER=y plus a STATIC_TX_BUFFER_NUM is the first thing
-# to try — and now it will actually take effect.
-CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER=y
+# Static, because the bench said so. The choice's help says "If PSRAM is enabled, 'Static'
+# should be selected to guarantee enough WiFi TX buffers", and PSRAM is enabled here. This
+# file used to keep Dynamic anyway, reasoning that the dongle's Wi-Fi carries relayed REST
+# and a 10 Hz control stream rather than the sustained bulk TX that advice is aimed at. That
+# reasoning was wrong, and the failure it caused was expensive to read: with Dynamic, EVERY
+# packet the relays sent toward the car failed with errno 12 (ENOMEM) and TCP connects timed
+# out, while the dongle itself looked perfectly healthy — associated, addressed, both relays
+# bound, its own /status answering. The heap was not exhausted (230 KB internal free, 152 KB
+# largest block) and routing was correct (ip4_route picked the station netif). The refusal
+# came from below lwIP: esp_wifi_internal_tx could not get a DMA-capable buffer, wlanif's
+# low_level_output turned that into ERR_MEM, and the socket layer surfaced it as ENOMEM.
+# Flipping this one choice took the relayed /status from a 5 s timeout to a 0.49 s 200, and
+# the whole rt conformance suite from unreachable to passing.
+#
+# So: do not "simplify" this back to Dynamic. With PSRAM on, Dynamic does not merely risk
+# exhaustion under load — on this board it never transmits at all.
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER=y
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=16
 CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
 
 # The relays forward between two interfaces, so lwIP must be willing to hold more sockets than

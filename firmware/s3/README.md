@@ -144,11 +144,30 @@ Measurements taken as each plan lands, rather than assumed.
 | Built image size with the station radio (`esp_wifi` + the join state machine), SoftAP support compiled out (`CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n`) | 819 KB (`ajdongle.bin`, 838,592 bytes / 0xccbc0) in a 4 MB OTA slot — 20% used, 3.20 MB free | 2026-08-30 |
 | `curl http://<dongle's station address>:8080/status` from a machine on the car's network — must be refused (`api_guard.c`'s `open_fn`, checked by `getsockname` against `DONGLE_HOST`) | *(needs a car and a second machine on its network — the only test of the guard; record what you observed)* | |
 | Which `NWInterface.InterfaceType` iOS reports for the dongle's CDC-NCM interface (`.wiredEthernet` or `.other`) — decides `CarNet.dongleInterface` (U1, `app/AJMiddleCar/CarNet.swift`) | *(needs a device with the dongle attached; one throwaway build logging `NWPath.availableInterfaces` — do not guess from the simulator, it has no USB; record what you observed)* | |
-| A drive through the relay, from the app, with no `-carHost` argument | *(needs a working relay end to end; this is the row that retires the bench escape hatch — `CarHost.direct` — once it is checked off; record what you observed)* | |
+| A drive through the relay, from the app, with no `-carHost` argument | *(needs a device build; this is the row that retires the bench escape hatch — `CarHost.direct` — once it is checked off; record what you observed)* | |
+| The station joins the car and keeps its credentials across a reboot (`/net` in NVS) | `joined: ip=192.168.4.2 gw=192.168.4.1`, and it rejoined by itself after a cable reflash with no second `POST /net` | 2026-08-31 |
+| `tools/conformance.py http://192.168.7.1` — the car's whole REST surface, relayed | Every endpoint passed except one pre-existing car-vs-mock divergence, unrelated to the relay: `POST /calib/save` with string `pair`s is correctly rejected `400`, but the car's envelope names `field:"pair"` where the mock and the test expect `"wheels"`. `docs/protocol.md` says `field` names *the offending key*, so the car is right and the mock and `conformance.py` are the ones to correct. First time this suite had ever run against real hardware | 2026-08-31 |
+| `tools/conformance_rt.py 192.168.7.1:4210` — the real-time channel, relayed | All checks passed: hello, wrong-proto rejection, telemetry, datagram drops measured by `rx_fps`, the session cap, eviction, `bye`. The Mac has no route to `192.168.4.1`, so every one of those frames went through the dongle | 2026-08-31 |
+| Relayed `GET /status` round trip | 0.489 s cold (Wi-Fi association plus the upstream connect), well inside the app's budget | 2026-08-31 |
 
 The app was 395 KB before this plan added the radio; roughly double, as expected, and comfortable
 against the slot — the earlier 1 MB partition this project considered and discarded would have been
 tight.
+
+### What the bench caught that no host test could
+
+The relays did not work on first power-up, and the way they failed is worth keeping. The dongle
+looked entirely healthy — associated, addressed by the car's DHCP, both relays bound and logging,
+its own `/status` answering in milliseconds — while **every** packet either relay sent toward the
+car failed with `errno 12` (`ENOMEM`) and TCP connects timed out after five seconds. The heap was
+not exhausted (230 KB internal free, a 152 KB largest block) and routing was not confused
+(`ip4_route(192.168.4.1)` returned the station netif, address `192.168.4.2`). The refusal came
+from below lwIP: with PSRAM enabled and `CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER`, `esp_wifi_internal_tx`
+could not obtain a DMA-capable buffer, `wlanif`'s `low_level_output` returned `ERR_MEM`, and the
+socket layer surfaced that as `ENOMEM`. Switching to `CONFIG_ESP_WIFI_STATIC_TX_BUFFER` fixed it
+outright — see the comment at that line in `sdkconfig.defaults`, which now records this so nobody
+switches it back. The lesson for the next radio-bearing board in this project: with PSRAM on,
+static TX buffers are not a tuning preference, they are a requirement.
 
 ## Build
 
