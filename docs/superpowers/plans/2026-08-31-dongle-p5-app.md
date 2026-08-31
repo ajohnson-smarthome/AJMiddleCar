@@ -33,6 +33,46 @@ never run. If the bench shows otherwise, the app's retry lever changes shape and
 contract. Task 2 therefore treats "ask the dongle to try again" as its own function with one
 implementation, so a change lands in one place.
 
+## This is a cutover, and the old path does not survive it
+
+**Named here because the tasks below are written as replacements, not additions.** After Task 3 a
+device build addresses the dongle and nothing else: `CarHost` no longer knows the car's address,
+`CarNet` no longer pins to Wi-Fi, and `ConnectView` no longer tells anyone to join a network. The
+spec is the authority for that — "The dongle replaces the direct Wi-Fi path. The app no longer
+joins the car's softAP" — and this plan does not argue with it.
+
+What the spec does not say, and what matters for the order this work happens in:
+
+**The replacement is unproven.** Not one instruction of the dongle's station or either relay has
+executed on hardware. So the moment Task 3 lands, the app's only working path to the car has been
+removed in favour of one nobody has seen work, on a device that cannot be debugged from the app
+side because a failure there could belong to either half.
+
+**The simulator does not cover it.** By design: simulator builds keep talking to `tools/mock_car`
+directly and there is no dongle there. So the new path has no automated exercise at all — the host
+tests cover the decisions, and nothing covers the sockets.
+
+### The escape hatch, and why it is not "keeping the old path"
+
+`CarHost` already reads launch arguments — `-carHost`, `-carPort`, `-carRtPort` — but only inside
+`#if targetEnvironment(simulator)`. Task 3 extends that to device builds, so a build can be pointed
+at the car directly, over Wi-Fi, exactly as today.
+
+This is not a product feature and must not be presented as one: no setting, no screen, no
+persistence. It is a bench instrument. Its whole value is answering one question during the
+sessions that follow — *is this failure the app or the dongle?* — which is otherwise the most
+expensive question in the system, because the two halves fail in the same place with the same
+symptom. Without it, a wrong `CarNet.dongleInterface` (U1) and a broken relay look identical from
+the app: nothing connects.
+
+The direct mode must carry the interface pin with it — addressing the car over the dongle's
+interface type would fail as surely as addressing the dongle over Wi-Fi — so the argument selects
+a pair, not just a host.
+
+**It comes out when the bench says the relay works.** That is a real deletion with a real trigger,
+and the plan records it rather than leaving a permanent second path nobody removes: the row in
+`firmware/s3/README.md` proving a drive through the relay is what retires it.
+
 ## Global Constraints
 
 - **The app is the only place the two contracts meet.** It reads `CarContract` for the car's
@@ -67,6 +107,9 @@ implementation, so a change lands in one place.
 | `app/AJMiddleCar/CarNet.swift` | *modify* — the interface seam (U1) |
 | `app/AJMiddleCar/CarHost.swift` | *modify* — device builds address the dongle |
 | `app/AJMiddleCar/CarPath.swift`, `LinkState.swift` | *modify* — the dongle's presence replaces "is there Wi-Fi" |
+| `app/AJMiddleCar/CarError.swift`, `CarLink.swift`, `CarTransport.swift` | *modify* — the `noWiFi` case and every branch on it |
+| `app/AJMiddleCar/AJMiddleCarApp.swift`, `GalleryView.swift`, `NoInternetView.swift` | *modify* — the screens that switch on it |
+| `app/AJMiddleCar/Localizable.xcstrings` (or wherever `L` resolves) | *modify* — the strings that take the car's SSID and password as arguments |
 | `app/AJMiddleCar/UpdateClient.swift` | *modify* — a second asset and a second cache path |
 | `app/AJMiddleCar/AppFlow.swift` | *modify* — phases for finding and updating the dongle |
 | `app/AJMiddleCar/ConnectView.swift` | *modify* — "plug in the dongle" replaces "join network X" |
@@ -250,6 +293,17 @@ cross-schema test added on branch P4 is what guards them.
 
 Leave the simulator branch alone in full: it reaches the mock and there is no dongle there.
 
+**Then add the bench escape hatch.** Move the `launchArgument` helper out of the simulator-only
+block and let a device build read `-carHost`, `-carPort` and `-carRtPort` too. A device build given
+`-carHost` addresses the car directly, over Wi-Fi, exactly as the app does today; given nothing, it
+addresses the dongle. The argument must also select the interface type — `CarNet` reads the same
+decision, because addressing the car over the dongle's interface fails as surely as the reverse —
+so put the choice in one place both read rather than two flags that can disagree.
+
+No setting, no screen, no persistence, and a comment saying all three: this is a bench instrument
+for answering "is this the app or the dongle", and the plan's cutover section records the row in
+`firmware/s3/README.md` that retires it.
+
 - [ ] **Step 3: `CarPath` monitors the dongle's interface**
 
 Replace the Wi-Fi monitor with one on `CarNet.dongleInterface`, and rewrite the type's doc comment:
@@ -259,8 +313,24 @@ the phone's own Wi-Fi". The local-network-denial check on both monitors stays ex
 it is the one state waiting cannot fix, and it is unrelated to which interface carries the car.
 
 In `LinkState.swift`, `PathState`'s `.wifiUp` / `.noWifi` no longer name the right thing. Rename to
-say what they now mean — the dongle's wire is up, or it is not — and update every use. Keep
-`localNetworkDenied` unchanged.
+say what they now mean — the dongle's wire is up, or it is not — and keep `localNetworkDenied`
+unchanged.
+
+**The rename ripples further than `LinkState`, and the file list above is the full extent.** A
+`noWiFi` case and branches on it live in `CarError.swift`, `CarLink.swift` and `CarTransport.swift`
+(where `pathBlocked` is set from it, and a comment reasons about "the Wi-Fi path is not there"), and
+the screens that switch on it are `AJMiddleCarApp.swift`, `GalleryView.swift` and
+`NoInternetView.swift`. Rename every one; a compile error is the mechanism that finds them, so let
+the build tell you rather than grepping and hoping.
+
+**The localisation strings are the part that is not a rename.** `ConnectView` currently renders
+`L.connectBody(CarContract.ssid, CarContract.password)` and `L.linkNoWifiSub(...)` — strings that
+take the car's network name and password as arguments and put them on screen for the user to type
+into iOS Settings. After the cutover nobody types them anywhere: the dongle joins the network, and
+the app hands it the credentials over USB. Those strings do not get new arguments, they get
+replaced by ones that describe a cable. Removing the arguments is the point, not a detail — an app
+that still displays a Wi-Fi password it no longer needs the user to know is showing a credential
+for no reason.
 
 - [ ] **Step 4: The bench step that settles U1 — write it down, do not guess**
 
@@ -270,6 +340,10 @@ dongle presents on a real device*. The measurement is one throwaway build that l
 
 Do **not** attempt to answer it from the simulator: there is no USB there, and a simulator answer
 would be a wrong answer that looks like a right one.
+
+Add a second pending row while you are there: *a drive through the relay, from the app, with no
+`-carHost` argument*. That row is what retires the escape hatch — the cutover section says the
+hatch comes out when the bench says the relay works, and this is the line that will say it.
 
 - [ ] **Step 5: Build both, then commit**
 
