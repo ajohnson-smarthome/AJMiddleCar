@@ -1,6 +1,7 @@
 firmware/p4/build/
 firmware/c6/build/
 firmware/s3/build/
+firmware/p4/main/radio_image.bin
 sdkconfig
 sdkconfig.old
 *.o
