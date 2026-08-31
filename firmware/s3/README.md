@@ -143,8 +143,10 @@ Measurements taken as each plan lands, rather than assumed.
 |---|---|---|
 | Built image size with the station radio (`esp_wifi` + the join state machine), SoftAP support compiled out (`CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n`) | 819 KB (`ajdongle.bin`, 838,592 bytes / 0xccbc0) in a 4 MB OTA slot — 20% used, 3.20 MB free | 2026-08-30 |
 | `curl http://<dongle's station address>:8080/status` from a machine on the car's network — must be refused (`api_guard.c`'s `open_fn`, checked by `getsockname` against `DONGLE_HOST`) | *(needs a car and a second machine on its network — the only test of the guard; record what you observed)* | |
-| Which `NWInterface.InterfaceType` iOS reports for the dongle's CDC-NCM interface (`.wiredEthernet` or `.other`) — decides `CarNet.dongleInterface` (U1, `app/AJMiddleCar/CarNet.swift`) | *(needs a device with the dongle attached; one throwaway build logging `NWPath.availableInterfaces` — do not guess from the simulator, it has no USB; record what you observed)* | |
-| A drive through the relay, from the app, with no `-carHost` argument | *(needs a device build; this is the row that retires the bench escape hatch — `CarHost.direct` — once it is checked off; record what you observed)* | |
+| Which `NWInterface.InterfaceType` iOS reports for the dongle's CDC-NCM interface (U1) | **Not `.wiredEthernet`** — that pin could not open a socket to a dongle the phone was demonstrably talking to. Which type it *is* was never established, because the question was removed rather than answered: `CarInterface` now finds the wire by the address it carries. See the write-up below | 2026-08-31 |
+| The phone enumerates the dongle and gets an address | `esp_netif_lwip: DHCP server assigned IP to a client, IP is: 192.168.7.2` — iOS brought up CDC-NCM unaided, and the dongle drew enough from the phone alone | 2026-08-31 |
+| Safari on the phone → `192.168.7.1:8080/status` and `192.168.7.1/status` | Both answered — the dongle and, through the relay, the car. This is what proved the fault was the app's and not the firmware's, and it cost no build at all | 2026-08-31 |
+| The app talks to the car through the relay, on a device, with no `-carHost` argument | Works. The escape hatch is kept for now anyway — see below | 2026-08-31 |
 | The station joins the car and keeps its credentials across a reboot (`/net` in NVS) | `joined: ip=192.168.4.2 gw=192.168.4.1`, and it rejoined by itself after a cable reflash with no second `POST /net` | 2026-08-31 |
 | `tools/conformance.py http://192.168.7.1` — the car's whole REST surface, relayed | Every endpoint passed except one pre-existing car-vs-mock divergence, unrelated to the relay: `POST /calib/save` with string `pair`s is correctly rejected `400`, but the car's envelope names `field:"pair"` where the mock and the test expect `"wheels"`. `docs/protocol.md` says `field` names *the offending key*, so the car is right and the mock and `conformance.py` are the ones to correct. First time this suite had ever run against real hardware | 2026-08-31 |
 | `tools/conformance_rt.py 192.168.7.1:4210` — the real-time channel, relayed | All checks passed: hello, wrong-proto rejection, telemetry, datagram drops measured by `rx_fps`, the session cap, eviction, `bye`. The Mac has no route to `192.168.4.1`, so every one of those frames went through the dongle | 2026-08-31 |
@@ -153,6 +155,29 @@ Measurements taken as each plan lands, rather than assumed.
 The app was 395 KB before this plan added the radio; roughly double, as expected, and comfortable
 against the slot — the earlier 1 MB partition this project considered and discarded would have been
 tight.
+
+### The app's turn: a guess that could not be tested off a device
+
+The firmware worked and the app still said "no adapter" with the cable plugged in. The app pinned
+every socket to an interface *type* the spec assumed iOS reports for CDC-NCM (`.wiredEthernet`).
+Ruling that out cost no builds at all, which is the part worth copying: the dongle's own console
+showed the phone taking a DHCP lease, and **Safari on the same phone loaded both the dongle's
+`/status` and the car's through the relay**. Two free observations, and everything below the app
+was exonerated — leaving exactly one difference between Safari and us, the pin.
+
+The repair was to stop asking the question. `app/AJMiddleCar/CarInterface.swift` defines the
+dongle's wire as *the interface holding an address on the dongle's subnet* — a subnet this project
+owns end to end, since `DongleContract.host` is generated from the contract and the dongle's own
+DHCP server hands the phone the neighbouring address. Whatever iOS calls that interface, it is
+found by the address on it. `CarNet` pins to that concrete `NWInterface`, or leaves the socket
+unpinned when Network.framework does not offer the wire at all — legitimate here, because the
+dongle advertises neither gateway nor DNS by design, and routing still delivers on-link.
+
+The general lesson: **an assumption that cannot be tested without the hardware it is about will
+survive every review and fail on the bench.** The type-based pin was reviewed repeatedly and
+recorded as a known unknown (U1) — which did not help, because a known unknown is still an
+unknown. Replacing it with a definition that any machine can check (the host test finds `lo0` by
+asking for `127.0.0.0/24`) is what actually retired it.
 
 ### What the bench caught that no host test could
 

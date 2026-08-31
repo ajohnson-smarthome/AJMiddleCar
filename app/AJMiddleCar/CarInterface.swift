@@ -84,30 +84,4 @@ enum CarInterface {
         guard !names.isEmpty else { return nil }
         return monitor.currentPath.availableInterfaces.first { names.contains($0.name) }
     }
-
-    /// A one-line inventory for the bench, rendered on the "no adapter" screen.
-    ///
-    /// Bench instrumentation, like `CarHost.direct`: it exists so that a failure here can be read
-    /// off the phone instead of costing another device build, and it comes out with the same
-    /// README row that retires the escape hatch.
-    static func inventory() -> String {
-        let names = attachedNames().sorted()
-        let offered = monitor.currentPath.availableInterfaces
-            .map { "\($0.name)/\(describe($0.type))\(names.contains($0.name) ? "*" : "")" }
-            .joined(separator: " ")
-        return "subnet \(names.isEmpty ? "—" : names.joined(separator: ","))"
-            + " · offered \(offered.isEmpty ? "—" : offered)"
-            + " · pin \(current?.name ?? "none")"
-    }
-
-    private static func describe(_ t: NWInterface.InterfaceType) -> String {
-        switch t {
-        case .wifi: return "wifi"
-        case .cellular: return "cell"
-        case .wiredEthernet: return "wired"
-        case .loopback: return "loop"
-        case .other: return "other"
-        @unknown default: return "?"
-        }
-    }
 }

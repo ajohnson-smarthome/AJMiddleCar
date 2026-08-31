@@ -85,19 +85,7 @@ struct AJMiddleCarApp: App {
             // Reuses the same "plug it in" copy CarLink's own noDongle situation shows later —
             // whether nothing answered because the interface is not there or because nothing on
             // it has spoken yet is not a distinction worth two screens for the same instruction.
-            //
-            // The inventory underneath is bench instrumentation, like `CarHost.direct`, and comes
-            // out with it: this screen is where the app lands when it cannot reach the dongle, and
-            // reading why off the phone is what saves a device build. It names every interface
-            // Network.framework offers, marks the one carrying the dongle's subnet, and says which
-            // one the sockets are actually pinned to.
             ConnectView(situation: .noDongle(.notAvailable))
-                .overlay(alignment: .bottom) {
-                    Text(CarInterface.inventory())
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .padding(6)
-                }
         case .dongleFault:
             ConnectView(situation: .dongleFault)
         case .dongleDenied:
