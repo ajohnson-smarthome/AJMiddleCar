@@ -19,9 +19,11 @@ Both are alive; they share a protocol and a design language, and their code dive
 **The C6 is a modem, not a brain.** It runs Espressif's `esp_hosted` slave image — a vendor
 artifact we pin, never author. Application code calls the ordinary `esp_wifi` API and
 `esp_wifi_remote` marshals it over SDIO, so `wifi_ap.c` is chip-agnostic. The radio's image is
-built by `firmware/c6/flash-radio.sh` and can be delivered either over the C6's UART header or —
-as was actually done — over the SDIO link itself, from the host; `/status` reports its version so
-a pinned-version mismatch is visible rather than mysterious.
+built into the car's own firmware and delivered over SDIO by the car itself: a mismatch at boot
+makes the car push the embedded image at the C6 and restart, so one OTA updates both processors
+and an `esp_hosted` pin bump no longer means a bench visit
+(`docs/superpowers/specs/2026-08-31-radio-in-one-image-design.md`). The UART header remains the
+recovery path, and `firmware/c6/flash-radio.sh` still builds the image standalone.
 
 ### Motor channel mapping (sequential, stride 2)
 

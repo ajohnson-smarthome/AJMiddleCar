@@ -32,6 +32,11 @@ what builds it.
 
 ## Flashing over SDIO, from the host
 
+> **This is now automatic.** The car carries the C6's image inside its own and offers it to a
+> mismatched radio at boot — see `docs/superpowers/specs/2026-08-31-radio-in-one-image-design.md`.
+> What follows is the mechanism that runs underneath, and the manual route for a car that has
+> spent its three attempts.
+
 **This is the route that was actually used** (2026-08-20), and it needs no adapter, no connector
 and nothing physical — the image travels over the SDIO link that already exists. The host API is
 `esp_hosted_cp_ota_begin()` → `_write()` in chunks of at most 1536 bytes → `_end()` →
