@@ -4,7 +4,7 @@ LDLIBS = -lm
 # The schema itself, for the two wire values the C generator emits no symbol for.
 CONTRACT = $(abspath ../../../contract/car-api.json)
 
-all: test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel test_cfg_table test_link test_rt_session test_rt_glue test_contract_wire
+all: test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel test_cfg_table test_link test_rt_session test_rt_glue test_contract_wire test_radio_ota
 
 test_mixer: test_mixer.c ../main/mixer.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
@@ -25,6 +25,9 @@ test_ramp: test_ramp.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
 test_trim: test_trim.c
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+test_radio_ota: test_radio_ota.c ../main/radio_ota.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
 test_telemetry: test_telemetry.c
@@ -56,7 +59,7 @@ test_rt_glue: test_rt_glue.c ../main/rt_glue.h ../main/rt_link.h ../main/link.h
 	$(CC) $(CFLAGS) -o $@ test_rt_glue.c $(LDLIBS)
 
 run: all
-	./test_mixer && ./test_motors && ./test_control_proto && ./test_watchdog && ./test_calibration && ./test_ramp && ./test_trim && ./test_telemetry && ./test_recovery && ./test_wheel && ./test_cfg_table && ./test_link && ./test_rt_session && ./test_rt_glue && ./test_contract_wire
+	./test_mixer && ./test_motors && ./test_control_proto && ./test_watchdog && ./test_calibration && ./test_ramp && ./test_trim && ./test_radio_ota && ./test_telemetry && ./test_recovery && ./test_wheel && ./test_cfg_table && ./test_link && ./test_rt_session && ./test_rt_glue && ./test_contract_wire
 
 clean:
-	rm -f test_contract_wire test_rt_session test_rt_glue test_link test_cfg_table test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel
+	rm -f test_contract_wire test_rt_session test_rt_glue test_link test_cfg_table test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_radio_ota test_telemetry test_recovery test_wheel
