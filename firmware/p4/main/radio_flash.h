@@ -11,7 +11,13 @@
 
 /* The co-processor's running version, e.g. "3.0.6". Read once over RPC on the first call and
  * cached: against a mismatched slave that call costs up to five seconds, and the answer cannot
- * change without a reboot. Returns "unavailable" when the RPC failed. */
+ * change without a reboot. Returns "unavailable" when the RPC failed.
+ *
+ * The first call performs the RPC and primes the cache; every later call only reads it.
+ * That first call must happen before anything else can call it — in this firmware that is
+ * main.c's boot gate, which runs before rt_link_start() and http_server_start(), so the two
+ * later readers (the boot gate itself and status_api.c's handler) are ordered by boot, not
+ * by a lock. A caller introduced outside that ordering would need a lock added here. */
 const char *radio_flash_version(void);
 
 /* How many bytes of radio image this build carries. Zero means it carries none — an ordinary
