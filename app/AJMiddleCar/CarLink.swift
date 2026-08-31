@@ -89,6 +89,14 @@ final class CarLink: ObservableObject {
 
     /// Open the channel. Idempotent; the transport owns the reconnect loop.
     func start() {
+        // Presence, re-asked at the one moment assuming it is certainly wrong: whoever calls this
+        // has just decided there is something to talk to. `CarPath`'s monitors can be seconds
+        // behind the wire actually coming up (its own doc says why), and until one of them fires,
+        // `pathState` still holds the `.noDongle` it was born with — which `LinkRule.compose`
+        // turns into the no-adapter screen, painted over a dongle the launch gate has only just
+        // finished a conversation with. Synchronous, so the corrected verdict is already in
+        // `pathState` before the pump this enqueues starts.
+        path?.refresh()
         enqueue { [weak self] in await self?.beginPumping() }
     }
 
