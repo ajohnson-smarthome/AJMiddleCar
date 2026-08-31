@@ -277,15 +277,24 @@ Expected: BUILD SUCCEEDS, and the configure output contains
 
 - [ ] **Step 5: Verify a build with an image embeds it**
 
+The stand-in is the project's own bootloader image — a real ESP binary of a known size that the
+build has already produced, so this proves the embed against the kind of file the field will
+actually carry rather than against noise.
+
+The check reads the assembly `EMBED_FILES` generates, **not** the linked ELF. The symbols do not
+reach `ajmiddlecar.elf` until something references them, because the linker discards unreferenced
+sections — and the first reference arrives in Task 3. Looking for them in the ELF here fails on a
+perfectly correct build, which is a check that teaches an implementer to delete checks.
+
 Run:
 ```bash
-cd /Users/adamjohnson/VSCode/esp32-p4-car && \
-  head -c 4096 /dev/urandom > firmware/p4/main/radio_image.bin && \
-  source tools/env-p4.sh && (cd firmware/p4 && idf.py build 2>&1 | tail -3) && \
-  riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep radio_image_bin
+source tools/env-p4.sh && \
+  cp firmware/p4/build/bootloader/bootloader.bin firmware/p4/main/radio_image.bin && \
+  (cd firmware/p4 && idf.py build 2>&1 | tail -3) && \
+  grep -c "_binary_radio_image_bin_start\|_binary_radio_image_bin_end" firmware/p4/build/radio_image.bin.S
 ```
-Expected: both `_binary_radio_image_bin_start` and `_binary_radio_image_bin_end` are listed.
-Then remove the dummy: `rm -f firmware/p4/main/radio_image.bin`.
+Expected: the build succeeds and the grep prints `2` — both symbols defined in the generated
+assembly. Then remove the stand-in: `rm -f firmware/p4/main/radio_image.bin`.
 
 - [ ] **Step 6: Commit**
 
@@ -448,6 +457,18 @@ cd /Users/adamjohnson/VSCode/esp32-p4-car && source tools/env-p4.sh && \
 ```
 Expected: BUILD SUCCEEDS. If `esp_hosted.h` or `esp_hosted_ota.h` is not found, add
 `espressif__esp_hosted` to `REQUIRES` in the same `idf_component_register(...)` and rebuild.
+
+Then confirm the embedded symbols now reach the linked image — this file is their first
+reference, and until it existed the linker discarded them as unreferenced:
+
+```bash
+source tools/env-p4.sh && \
+  cp firmware/p4/build/bootloader/bootloader.bin firmware/p4/main/radio_image.bin && \
+  (cd firmware/p4 && idf.py build >/dev/null 2>&1) && \
+  riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep radio_image_bin
+```
+Expected: both `_binary_radio_image_bin_start` and `_binary_radio_image_bin_end` are listed. Then
+remove the stand-in: `rm -f firmware/p4/main/radio_image.bin`.
 
 - [ ] **Step 5: Commit**
 
