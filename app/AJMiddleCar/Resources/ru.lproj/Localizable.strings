@@ -185,7 +185,7 @@
 "car.findingTitle"        = "Ищу машинку";
 "car.findingSub"          = "Адаптер готов. Он осматривает эфир: включена ли машинка и видно ли её сеть.";
 "car.updCheckTitle"       = "Проверяю обновления машинки";
-"car.updCheckSub"         = "Связь есть. Смотрю, не вышла ли новая прошивка для самой машинки. Дальше — руль.";
+"car.updCheckSub"         = "Адаптер подключён к машинке. Сначала спрашиваю сервер, не вышла ли новая прошивка, — и только потом здороваюсь с самой машинкой.";
 
 /* Its own line, not the generic fw.failTitle: three different screens said "Не удалось"
    and left the user to work out which of them had. */

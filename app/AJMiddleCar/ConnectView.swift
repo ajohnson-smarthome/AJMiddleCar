@@ -34,7 +34,12 @@ struct ConnectView: View {
         /// Step 4: the radio is scanning and has not seen the car's network yet. Distinct from
         /// `.dongleConfiguring`, which is the association that follows — see `WifiState`.
         case findingCar
-        /// Step 6: the car is reachable; asking GitHub about the car's own firmware.
+        /// Step 6: asking GitHub about the car's own firmware — over the internet, not over the
+        /// link to the car. Nothing has spoken to the car at this point; `carGate()` only fetches
+        /// the release and, if needed, downloads it. The car's own version arrives one screen
+        /// later, in its reply to the hello, which is why this step must not claim a connection:
+        /// saying "связь есть" here and then greeting the car on the next screen is what made the
+        /// sequence read backwards.
         case carUpdateCheck
         /// The first frame of a launch: the dongle has been asked and has not answered yet.
         /// Its own line, because `.searching`'s says the CAR is not answering — an assertion
