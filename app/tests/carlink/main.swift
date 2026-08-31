@@ -23,6 +23,14 @@ check(compose(.dongleUp, .none, fresh, 0.1) == .searching, "telemetry without a 
 
 // The path outranks everything: no amount of remembered telemetry survives losing the interface.
 check(compose(.noDongle(.notAvailable), adopted, fresh, 0.1) == .noDongle(.notAvailable), "no dongle wins")
+// And the root view reads that state as a transition — "was gone, is back" is what re-enters
+// the dongle gate after a replug, so a predicate that answered anything else would either
+// re-gate a live session on every telemetry frame or never re-gate at all.
+check(compose(.noDongle(.notAvailable), adopted, fresh, 0.1).isNoDongle, "a lost interface says so")
+check(!compose(.dongleUp, adopted, fresh, 0.1).isNoDongle, "a live link does not")
+check(!compose(.dongleUp, .none, nil, nil).isNoDongle, "and neither does merely searching")
+check(!compose(.localNetworkDenied, adopted, fresh, 0.1).isNoDongle,
+      "nor a denial — replugging the cable is not what fixes that one")
 check(compose(.localNetworkDenied, adopted, fresh, 0.1) == .localNetworkDenied, "denial wins")
 check(compose(.localNetworkDenied, .foreign(device: "esp32-car"), nil, nil) == .localNetworkDenied,
       "denial outranks a foreign car")

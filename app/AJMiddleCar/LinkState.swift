@@ -57,6 +57,12 @@ enum Link: Equatable {
     case live(Telemetry)
 
     var isLive: Bool { if case .live = self { return true }; return false }
+    /// Whether the interface itself is gone — asked as a transition (`was`, `is no longer`) by
+    /// the root view, which turns it into "the wire came back" and re-enters the dongle gate.
+    /// A predicate rather than two `if case`s at the call site for the reason
+    /// `SessionState.survivingSessionEnd` is one function: the copy that gets forgotten is the
+    /// second one.
+    var isNoDongle: Bool { if case .noDongle = self { return true }; return false }
     var telemetry: Telemetry? { if case .live(let t) = self { return t }; return nil }
 }
 

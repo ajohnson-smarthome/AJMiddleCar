@@ -174,15 +174,46 @@ final class AppFlow: ObservableObject {
             return
         }
         await dongleGate()
+        await carGate()
+        #endif
+    }
+
+    /// The dongle's interface came back after going away.
+    ///
+    /// Unplugging mid-drive is handled correctly all the way down — `CarPath` goes unsatisfied,
+    /// `CarLink` says the wire is gone, the screen says so — but `dongleGate()` returned for
+    /// good when it handed over, so nothing is left watching the dongle. If the dongle comes
+    /// back having failed to rejoin the car (the car was switched off in the meantime, so its
+    /// own join budget ran out while nobody was asking), it sits in `net.state: failed`
+    /// answering nobody, and `CarLink` radars indefinitely with no path back to the join logic.
+    /// This is that path, and it is the only hole in an otherwise complete unplug story.
+    ///
+    /// Only the dongle half re-runs. The car's own gate already answered this session and
+    /// `latestTag` is still held, so re-running it would re-probe GitHub and could strand a
+    /// live session on `.noInternet` over a cable that was out for two seconds. Handing back to
+    /// `.awaitingCar` is enough: `carIdentified` restores `.ready`/`.updateRequired` on the
+    /// next hello, which is where the phase was before the wire went.
+    func dongleReturned() async {
+        #if !targetEnvironment(simulator)
+        // No dongle in the escape hatch's path at all, and nothing to re-ask if the gate never
+        // handed over in the first place — a flap during the launch gate is that gate's own
+        // business, and `gateRunning` keeps two loops from polling the same address.
+        guard !CarHost.direct, !gateRunning else { return }
+        guard phase == .awaitingCar || phase == .ready || phase == .updateRequired else { return }
+        gateRunning = true
+        defer { gateRunning = false }
+        await dongleGate()
+        phase = .awaitingCar
         #endif
     }
 
     /// Poll the dongle until it reports `.readyForCar`, acting on whatever `DongleLink` says is
-    /// next at each step, then hand over to `carGate()` — the pre-existing pre-connect gate,
-    /// unchanged below. One release tags both images identically (`UpdateRules.Device`), so the
-    /// tag fetched here for the dongle's own comparison is a separate call from the one
-    /// `carGate()` makes for the car's — decoupled on purpose, so neither device's gate reads a
-    /// tag fetched for the other's asset URL.
+    /// next at each step, and return. What follows is the caller's: `startupCheck()` hands over
+    /// to `carGate()`, and `dongleReturned()` — a re-entry after the wire came back — does not,
+    /// because the car's gate has already answered. One release tags both images identically
+    /// (`UpdateRules.Device`), so the tag fetched here for the dongle's own comparison is a
+    /// separate call from the one `carGate()` makes for the car's — decoupled on purpose, so
+    /// neither device's gate reads a tag fetched for the other's asset URL.
     private func dongleGate() async {
         // Fetched once, lazily, the first time `/status` actually answers — not up front. The
         // spec's own order is "check whether a dongle is there... if it is, check for a newer
@@ -255,7 +286,6 @@ final class AppFlow: ObservableObject {
                 // for this session and for anyone who re-enters this loop later.
                 dongleJoinAttempts = 0
                 dongleJoinGaveUp = false
-                await carGate()
                 return
             }
             try? await Task.sleep(for: Self.donglePollInterval)

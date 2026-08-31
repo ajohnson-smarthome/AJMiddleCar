@@ -58,10 +58,17 @@ struct AJMiddleCarApp: App {
                 }
             }
             .onChange(of: link.fw) { _, fw in flow.carIdentified(fw: fw) }
-            .onChange(of: link.state) { _, _ in
+            .onChange(of: link.state) { old, new in
                 // The identity may already be known when the gate finishes; re-asking is cheap
                 // and closes the race where the hello landed before `startupCheck` returned.
-                if case .live = link.state { flow.carIdentified(fw: link.fw) }
+                if case .live = new { flow.carIdentified(fw: link.fw) }
+                // The wire came back. Everything the dongle was asked at launch has to be asked
+                // again — above all whether it is still joined to the car — and the gate that
+                // asked returned for good when it handed over. Without this, a dongle replugged
+                // after the car was switched off answers "failed" to nobody at all.
+                if old.isNoDongle, !new.isNoDongle {
+                    Task { await flow.dongleReturned() }
+                }
             }
     }
 
