@@ -147,6 +147,27 @@ enum UpdateRules {
         return latest > car
     }
 
+    /// How long the phone waits for an upload of `bytes` before giving up on it.
+    ///
+    /// This is a BACKSTOP, not the detector. `CarTransport`'s timeout is a total deadline armed
+    /// once when the connection opens — it does not reset on progress — so it cannot tell a slow
+    /// transfer from a dead one. What can is the device: both `/ota` implementations abandon a
+    /// transfer that goes SILENT for about thirty seconds, and reset that budget on every chunk
+    /// that arrives. That rule is the real detector, and it is on the right side of the wire.
+    ///
+    /// It was a flat 45 s, justified by "the device abandons a stalled upload after ~30 s, so
+    /// anything longer is the phone watching a corpse". The premise was a misreading — stalled is
+    /// not the same as slow — and the number was sized for a 0.76 MB car image. That image now
+    /// carries the radio's too and is 1.83 MB, and it crosses a Wi-Fi hop and a USB relay to get
+    /// there. At 45 s flat the phone would kill an upload the car was happily receiving.
+    ///
+    /// So: allow at least 10 KB/s, with a floor for the small transfers. Generous on purpose —
+    /// being wrong in this direction costs a longer wait before a failure the device has already
+    /// detected; being wrong the other way fails an update that was working.
+    static func uploadTimeout(bytes: Int) -> TimeInterval {
+        max(60, Double(bytes) / 10_000)
+    }
+
     /// Decision 6: what may enter the firmware cache. An ESP application image starts with
     /// 0xE9 and the car rejects anything under 4 KB — a GitHub error page satisfies neither,
     /// and caching one used to poison the cache until a strictly newer release existed.

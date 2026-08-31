@@ -279,8 +279,8 @@ final class UpdateClient: NSObject, ObservableObject {
 
     /// Uploads over `CarTransport`, pinned to the dongle's interface like every request to the
     /// car (`CarNet.tcpParams()`, which asks `CarInterface` which wire that is) — the phone
-    /// reaches the car through the dongle, not over Wi-Fi. 45 s, not 180: the car itself abandons a stalled upload after ~30 s, so anything
-    /// beyond that is the phone watching a corpse (decision 15). The car's error envelope is
+    /// reaches the car through the dongle, not over Wi-Fi. The wait scales with the image — see
+    /// `UpdateRules.uploadTimeout`, and why a flat 45 s stopped being safe. The car's error envelope is
     /// surfaced, not swallowed (decision 14) — but only when it really is the car's own
     /// envelope; see `UploadOutcome`.
     func upload(_ binURL: URL) async -> UploadOutcome {
@@ -289,7 +289,7 @@ final class UpdateClient: NSObject, ObservableObject {
         do {
             _ = try await CarTransport.shared.post("/ota", body: data,
                                                    contentType: "application/octet-stream",
-                                                   timeout: 45) { [weak self] p in
+                                                   timeout: UpdateRules.uploadTimeout(bytes: data.count)) { [weak self] p in
                 Task { @MainActor in self?.uploadProgress = p }
             }
             return .ok

@@ -90,14 +90,11 @@ final class DongleClient {
         _ = try await post(DongleContract.otaPath,
                            body: data,
                            contentType: "application/octet-stream",
-                           timeout: Self.otaTimeout) { p in
+                           timeout: UpdateRules.uploadTimeout(bytes: data.count)) { p in
             Task { @MainActor in progress(p) }
         }
     }
 
-    /// Matches the car's own `/ota` budget (`UpdateClient.upload`): the device abandons a stalled
-    /// transfer well inside this window, so anything longer is the phone watching a corpse.
-    private static let otaTimeout: TimeInterval = 45
 
     // MARK: - REST
 
