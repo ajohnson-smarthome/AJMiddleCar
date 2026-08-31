@@ -43,9 +43,11 @@ struct ConnectView: View {
         /// times and then holds here, so this screen carries `onRetryJoin` — without it, the
         /// hold would be a dead end and the retries would have to run forever to avoid one.
         case dongleJoinFailed
-        /// The dongle's bootloader reverted its last update. Standing until `onSkipRollback` is
-        /// used — the flag itself does not clear on its own, so without that escape hatch this
-        /// would be a locked room rather than a message.
+        /// The dongle's bootloader reverted its last update. Standing until the user answers —
+        /// the flag itself does not clear on its own, so without an answer this would be a
+        /// locked room rather than a message. Two answers: `onRecheckRollback` asks whether a
+        /// newer release exists yet (the only path back to an update, since the app is the
+        /// dongle's only OTA path), `onSkipRollback` drives on what is running.
         case dongleRolledBack
     }
 
@@ -54,6 +56,11 @@ struct ConnectView: View {
     /// (`FirmwareView.skipButton`) for the identical reason: a gate that failed must not be a
     /// dead end.
     var onSkipRollback: (() -> Void)? = nil
+    /// `.dongleRolledBack` only, beside the skip — exactly as `FirmwareView`'s rolled-back car
+    /// screen offers `fw.retry` beside its own. Without it the skip is the only exit, and it is
+    /// a one-way one: the dongle's rollback flag only clears when a later OTA succeeds, and
+    /// this app is the only thing that can perform one.
+    var onRecheckRollback: (() -> Void)? = nil
     /// `.dongleUpdateFailed` only.
     var onRetryDongleUpdate: (() -> Void)? = nil
     /// `.dongleJoinFailed` only. The same offer as `onRetryDongleUpdate`, for the other bounded
@@ -141,10 +148,17 @@ struct ConnectView: View {
                 if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
             }
         case .dongleRolledBack:
-            // Ghost styling, matching `FirmwareView.skipButton`'s own choice for the identical
-            // situation: continuing on the reverted firmware is the fallback, not the offer.
-            if let onSkipRollback {
-                pillButton(L.fwSkip, tint: p.muted, filled: false, action: onSkipRollback)
+            HStack(spacing: 10) {
+                // The offer, prominent, like `FirmwareView`'s own `fw.retry` on the same
+                // situation: ask whether a newer release exists yet.
+                if let onRecheckRollback {
+                    pillButton(L.fwRetry, tint: p.warn, action: onRecheckRollback)
+                }
+                // Ghost styling, matching `FirmwareView.skipButton`'s own choice for the
+                // identical situation: continuing on the reverted firmware is the fallback.
+                if let onSkipRollback {
+                    pillButton(L.fwSkip, tint: p.muted, filled: false, action: onSkipRollback)
+                }
             }
         case .dongleUpdateFailed:
             if let onRetryDongleUpdate {

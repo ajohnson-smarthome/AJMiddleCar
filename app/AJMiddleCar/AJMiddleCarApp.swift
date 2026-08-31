@@ -91,7 +91,9 @@ struct AJMiddleCarApp: App {
         case .dongleUpdateFailed:
             ConnectView(situation: .dongleUpdateFailed, onRetryDongleUpdate: { flow.retryDongleUpdate() })
         case .dongleRolledBack:
-            ConnectView(situation: .dongleRolledBack, onSkipRollback: { flow.skipDongleRollback() })
+            ConnectView(situation: .dongleRolledBack,
+                        onSkipRollback: { flow.skipDongleRollback() },
+                        onRecheckRollback: { flow.recheckDongleRollback() })
         case .dongleConfiguring:
             ConnectView(situation: .dongleConfiguring)
         case .dongleJoinFailed:

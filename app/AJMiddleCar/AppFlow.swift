@@ -44,9 +44,12 @@ final class AppFlow: ObservableObject {
         /// retrying automatically and waits for `retryDongleUpdate()` instead of re-downloading
         /// from GitHub every poll forever.
         case dongleUpdateFailed
-        /// The dongle's bootloader reverted its last update. Standing until `skipDongleRollback()`
-        /// is called — the rollback flag itself does not clear until a LATER OTA to that slot
-        /// succeeds, so without an acknowledgement path this phase would never release.
+        /// The dongle's bootloader reverted its last update. Standing until the user answers —
+        /// the rollback flag itself does not clear until a LATER OTA to that slot succeeds, so
+        /// without an answer this phase would never release. Two answers, both needed:
+        /// `skipDongleRollback()` drives on what is running, and `recheckDongleRollback()` asks
+        /// whether a newer release exists yet, which is the only path back to the app's own OTA
+        /// — and the app is the only OTA path the dongle has.
         case dongleRolledBack
         /// The dongle is current and pointed at the car's own network. Either its credentials
         /// are being sent for the first time (including a re-point, if it was pointed at some
@@ -129,9 +132,17 @@ final class AppFlow: ObservableObject {
     /// out there writing `phase` out from under it on its own next poll.
     private var gateRunning = false
 
-    /// Set by `skipDongleRollback()`. See `Phase.dongleRolledBack`'s doc for why this has to
-    /// exist at all: the bootloader's rollback flag does not clear on its own.
-    private var rollbackAcknowledged = false
+    /// Set by `skipDongleRollback()` / `recheckDongleRollback()`. See `Phase.dongleRolledBack`
+    /// and `RollbackChoice` for why this has to exist at all: the bootloader's rollback flag
+    /// does not clear on its own, and the app is the dongle's only OTA path.
+    private var rollbackChoice: RollbackChoice = .unanswered
+
+    /// The dongle's release and the tag `DongleLink` compares against — fetched once, lazily,
+    /// the first time `/status` answers, and held on the flow rather than inside `dongleGate()`
+    /// so `recheckDongleRollback()` can reopen the fetch (that is what "check again" means).
+    private var dongleRelease: UpdateClient.Release?
+    private var dongleLatestTag: String?
+    private var checkedForDongleUpdate = false
     private var dongleUpdateAttempts = 0
     private var dongleUpdateGaveUp = false
     private var dongleJoinAttempts = 0
@@ -177,28 +188,24 @@ final class AppFlow: ObservableObject {
         // spec's own order is "check whether a dongle is there... if it is, check for a newer
         // version": fetching GitHub before the first presence check would make a phone with
         // nothing plugged in wait on a network round trip just to be told to plug something in.
-        var release: UpdateClient.Release?
-        var tag: String?
-        var checkedForUpdate = false
-
         while true {
             let reply = await readStatus()
-            if case .status = reply, !checkedForUpdate {
-                checkedForUpdate = true
-                release = await client.latestRelease(for: .dongle)
+            if case .status = reply, !checkedForDongleUpdate {
+                checkedForDongleUpdate = true
+                dongleRelease = await client.latestRelease(for: .dongle)
                 // Same offline fallback `carGate()` uses below, aimed at the dongle's own cache:
                 // without internet, "the last release this phone downloaded FOR THE DONGLE, while
                 // that image is still on disk" is the only tag worth comparing against —
                 // GateRule.canProceedOffline's own precondition (`hasCachedFile`) is exactly what
                 // makes `performDongleUpdate()` below able to flash from cache when it lands in
                 // `.updating` by this path.
-                tag = release?.tag ?? GateRule.offlineLatestTag(
+                dongleLatestTag = dongleRelease?.tag ?? GateRule.offlineLatestTag(
                     cachedTag: UpdateClient.cachedTag(for: .dongle),
                     hasCachedFile: UpdateClient.hasCachedFile(for: .dongle),
                     cachedBuild: UpdateClient.cachedBuild(for: .dongle))
             }
-            switch DongleLink.next(reply: reply, latestTag: tag, expectedSSID: CarContract.ssid,
-                                   rollbackAcknowledged: rollbackAcknowledged) {
+            switch DongleLink.next(reply: reply, latestTag: dongleLatestTag,
+                                   expectedSSID: CarContract.ssid, rollback: rollbackChoice) {
             case .plugIn:
                 phase = .dongleAbsent
             case .faulty:
@@ -208,13 +215,18 @@ final class AppFlow: ObservableObject {
             case .wrongDongle(let device):
                 phase = .dongleWrong(device: device)
             case .rolledBack:
+                // One look per ask: a recheck that found nothing newer is spent here, so the
+                // screen comes back with both its buttons instead of re-asking GitHub on every
+                // poll from a permission the user gave once.
+                consumeRollbackRecheck()
                 phase = .dongleRolledBack
             case .updating:
+                consumeRollbackRecheck()
                 if dongleUpdateGaveUp {
                     phase = .dongleUpdateFailed
                 } else {
                     phase = .dongleUpdating
-                    if await performDongleUpdate(release: release) {
+                    if await performDongleUpdate(release: dongleRelease) {
                         dongleUpdateAttempts = 0
                     } else {
                         dongleUpdateAttempts += 1
@@ -307,7 +319,23 @@ final class AppFlow: ObservableObject {
     /// stuck on `.dongleRolledBack` forever (the car's own forced-update gate keeps the same
     /// escape hatch — `FirmwareView`'s skip button). Read by `dongleGate()`'s very next poll,
     /// which is at most `donglePollInterval` away.
-    func skipDongleRollback() { rollbackAcknowledged = true }
+    func skipDongleRollback() { rollbackChoice = .proceed }
+
+    /// The user asked whether a newer release exists yet — `FirmwareView`'s rolled-back car
+    /// screen keeps the same offer beside its skip. Two halves, both required: re-open the
+    /// release fetch (a tag fetched before the rollback screen appeared is exactly the tag that
+    /// cannot help), and record what was on offer at the time so `DongleLink` can tell a
+    /// genuinely newer image from the one that just rolled back.
+    func recheckDongleRollback() {
+        rollbackChoice = .recheck(from: dongleLatestTag)
+        checkedForDongleUpdate = false
+    }
+
+    /// A recheck is one look, not a standing permission — spent as soon as `DongleLink` has
+    /// answered with it, whichever way it answered.
+    private func consumeRollbackRecheck() {
+        if case .recheck = rollbackChoice { rollbackChoice = .unanswered }
+    }
 
     /// The user asked for another join attempt from the join-failed screen — either after the
     /// budget above ran out, or just to stop waiting for the next poll. Both are the same

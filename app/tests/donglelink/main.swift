@@ -177,22 +177,53 @@ check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, st
                       latestTag: latest, expectedSSID: carSSID) == .rolledBack,
       "rollback true is reported even when the net looks fully connected")
 
-// -- rollback acknowledged: the app is not permanently bricked ---------------------------
+// -- rollback answered "proceed": the app is not permanently bricked ---------------------
 // The bootloader's rollback flag is sticky across every reboot until a LATER OTA to that slot
 // succeeds (status_api.c reads it once at boot from the other partition's state) — so without
-// an acknowledgement path, one failed OTA would report .rolledBack forever and never let the
-// flow reach the car again, on the SAME firmware it was happily running before the update was
-// ever offered. Once the user has been told and chooses to proceed, `next` must stop reporting
-// it and must not silently re-offer the failed update either.
+// an answer, one failed OTA would report .rolledBack forever and never let the flow reach the
+// car again, on the SAME firmware it was happily running before the update was ever offered.
+// Once the user has been told and chooses to proceed, `next` must stop reporting it and must
+// not silently re-offer the failed update either.
 check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: DongleNetState.connected),
-                      latestTag: latest, expectedSSID: carSSID, rollbackAcknowledged: true) == .readyForCar,
-      "an acknowledged rollback proceeds to the car instead of reporting rollback forever")
+                      latestTag: latest, expectedSSID: carSSID, rollback: .proceed) == .readyForCar,
+      "a rollback answered \"proceed\" reaches the car instead of reporting rollback forever")
 check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: "", state: DongleNetState.idle),
-                      latestTag: latest, expectedSSID: carSSID, rollbackAcknowledged: true) == .sendCredentials,
-      "an acknowledged rollback still needs credentials sent if it never got any")
+                      latestTag: latest, expectedSSID: carSSID, rollback: .proceed) == .sendCredentials,
+      "a rollback answered \"proceed\" still needs credentials sent if it never got any")
 check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: DongleNetState.connected),
-                      latestTag: latest, expectedSSID: carSSID, rollbackAcknowledged: false) == .rolledBack,
-      "rollbackAcknowledged defaults to false — a caller that forgets to pass it still sees rolledBack")
+                      latestTag: latest, expectedSSID: carSSID) == .rolledBack,
+      "the choice defaults to .unanswered — a caller that forgets to pass it still sees rolledBack")
+
+// -- rollback answered "check again": the way back to an update --------------------------
+// The other half, and the one that stops "proceed" from being a one-way exit. The flag is
+// sticky and this app is the dongle's ONLY OTA path, so a model where the acknowledgement
+// permanently suppresses .updating leaves a bench reflash as the sole way out — which is the
+// thing rollback exists to prevent. A release NEWER than the one that was on offer when the
+// user asked is a different image, and it is offered.
+let newer = "v1.0+900"
+check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: DongleNetState.connected),
+                      latestTag: newer, expectedSSID: carSSID,
+                      rollback: .recheck(from: latest)) == .updating,
+      "a release newer than the one that rolled back is offered when the user asks for it")
+// The same ask against the same release that just failed must NOT re-flash it: that is the
+// loop the rollback report exists to break, and it would look identical to the user.
+check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: DongleNetState.connected),
+                      latestTag: latest, expectedSSID: carSSID,
+                      rollback: .recheck(from: latest)) == .rolledBack,
+      "checking again with nothing newer returns to the report, it does not re-flash the same image")
+// Asked while nothing was known (offline, no cache), answered once a tag exists: `from` is nil,
+// so the only remaining question is the ordinary one — is this newer than what is running.
+check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: DongleNetState.connected),
+                      latestTag: latest, expectedSSID: carSSID,
+                      rollback: .recheck(from: nil)) == .updating,
+      "a recheck asked with no tag in hand still takes a release once one is known")
+// A newer TAG that is not newer than the firmware actually running is not an update either —
+// both comparisons have to hold, or a dongle already on the newest build would be told to
+// flash it again.
+check(DongleLink.next(reply: reply(fw: newer, rollback: true, ssid: carSSID, state: DongleNetState.connected),
+                      latestTag: newer, expectedSSID: carSSID,
+                      rollback: .recheck(from: latest)) == .rolledBack,
+      "a recheck on a dongle already running the newest build does not re-flash it")
 
 // -- an unknown net state: not-ready, never treated as connected -------------------------
 // "rebooting" is deliberately not one of the contract's four states — this is the one fixture

@@ -35,9 +35,10 @@ public enum DongleStep: Equatable {
     case wrongDongle(device: String)
     /// The bootloader reverted the dongle's last update (`DongleStatus.rollback`). Reported
     /// ahead of the update check that would otherwise re-offer the very image that just failed,
-    /// forever — see `next(...)`'s own doc for the ordering. Standing until `rollbackAcknowledged`
-    /// is true: the app must give the user a way past this (the car's own forced-update gate
-    /// keeps a skip for the identical reason), not just a message with nowhere to go.
+    /// forever — see `next(...)`'s own doc for the ordering. Standing until the user answers
+    /// (`RollbackChoice`): the app must give a way past this, and — because the flag is sticky
+    /// and the app is the only OTA path — a way back TO an update too, or the only exit left is
+    /// a bench reflash.
     case rolledBack
     /// The dongle's own firmware is behind `latestTag`. Comes before every net/join question
     /// on purpose — the spec's own words: "The dongle updates before the car... Settle the
@@ -63,6 +64,30 @@ public enum DongleStep: Equatable {
     /// the car's own existing gate, unchanged — this step exists so the flow knows to stop
     /// asking the dongle anything further, not to replace what happens next.
     case readyForCar
+}
+
+/// What the user has already said about a standing rollback — the third input to the rollback
+/// branch of `next(...)`, and what keeps that branch from being a one-way exit.
+///
+/// The dongle's rollback flag is sticky: `status_api.c` reads `ESP_OTA_IMG_ABORTED` from the
+/// other partition once at boot, so it clears only when a LATER OTA to that slot succeeds. The
+/// app is the only OTA path there is. So a model where acknowledging the rollback permanently
+/// suppresses `.updating` leaves exactly one exit — a bench reflash — which is the thing the
+/// rollback design exists to prevent.
+public enum RollbackChoice: Equatable {
+    /// Nothing said yet: report the rollback and stop there.
+    case unanswered
+    /// "Drive on what is running." The rollback stops being reported, and the update that
+    /// produced it is not re-offered: from here there is no way to tell "a fixed release has
+    /// since been published" apart from "the same one that just failed".
+    case proceed
+    /// "Check again" — the affordance `FirmwareView`'s own rolled-back car screen keeps beside
+    /// its skip (`fw.retry`). One look at whatever the release feed now says, measured from the
+    /// tag that was on offer when it was asked (`nil` when nothing was known then: offline, no
+    /// cache). A release NEWER than that is a different image and is offered; the same one is
+    /// not re-flashed into the same rollback. The flow consumes this after one decision — one
+    /// look per ask, not a standing permission.
+    case recheck(from: String?)
 }
 
 /// What the last attempt to read `/status` produced.
@@ -122,13 +147,11 @@ public enum DongleLink {
     ///     — and a comparison against `.isEmpty` alone cannot tell that apart from "pointed at
     ///     ours". Comparing against the expected value can, and is what lets a mis-pointed
     ///     dongle be re-pointed automatically instead of only ever failing to configure once.
-    ///   - rollbackAcknowledged: Whether the flow has already shown `.rolledBack` and the user
-    ///     chose to proceed anyway (the dongle's equivalent of the car's forced-update skip).
-    ///     Once true, a standing rollback stops being reported and stops blocking the update
-    ///     check's `false` path — see the doc below for exactly what that unblocks and why it
-    ///     does not include quietly retrying the update that just failed.
+    ///   - rollback: What the user has already said about a standing rollback — see
+    ///     `RollbackChoice`. `.unanswered` reports it, `.proceed` drives on the firmware that is
+    ///     actually running, and `.recheck` is the one path back to an update.
     public static func next(reply: DongleReply, latestTag: String?, expectedSSID: String,
-                            rollbackAcknowledged: Bool = false) -> DongleStep {
+                            rollback: RollbackChoice = .unanswered) -> DongleStep {
         let status: DongleStatus
         switch reply {
         case .status(let s): status = s
@@ -148,12 +171,30 @@ public enum DongleLink {
         }
 
         if status.rollback {
-            if !rollbackAcknowledged { return .rolledBack }
-            // Acknowledged: proceed on the firmware the dongle actually has. Deliberately does
-            // NOT fall through to the `mustUpdate` check below — there is no way from here to
-            // tell "a fixed release has since been published" apart from "the same one that
-            // just failed", and re-offering either looks identical to the loop this field
-            // exists to break. The user asked to drive on what is running; that is what happens.
+            switch rollback {
+            case .unanswered:
+                return .rolledBack
+            case .proceed:
+                // Proceed on the firmware the dongle actually has. Deliberately does NOT fall
+                // through to the `mustUpdate` check below — there is no way from here to tell
+                // "a fixed release has since been published" apart from "the same one that just
+                // failed", and re-offering either looks identical to the loop this exists to
+                // break. The user asked to drive on what is running; that is what happens.
+                break
+            case .recheck(let from):
+                // The one path back to the app's own OTA. Newer than what was on offer when
+                // they asked, AND newer than what the dongle is running: the first keeps the
+                // image that just rolled back from being re-flashed into the same rollback, the
+                // second is the ordinary update question. Both, or nothing happens.
+                if UpdateRules.isUpdateAvailable(running: from, latest: latestTag),
+                   UpdateRules.mustUpdate(carFw: status.fw, latestTag: latestTag) {
+                    return .updating
+                }
+                // Nothing newer to try. Back to the standing report and its two buttons rather
+                // than proceeding as though they had asked to skip: the question was "is there
+                // a fix yet", and the answer is no.
+                return .rolledBack
+            }
         } else if UpdateRules.mustUpdate(carFw: status.fw, latestTag: latestTag) {
             return .updating
         }
