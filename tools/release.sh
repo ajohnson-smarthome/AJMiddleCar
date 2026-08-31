@@ -86,9 +86,17 @@ CP="$HOSTED/examples/wifi/sta/cp"
 if [ ! -d "$CP" ]; then
     echo "ERROR: esp_hosted is not fetched — run (cd firmware/p4 && idf.py reconfigure) first"; exit 1
 fi
+# The co-processor's SDIO datapath sends frames larger than stock ESP-IDF allows. This is the
+# vendor's own patch, it is idempotent, and without it the build stops with an explicit error —
+# the same line firmware/c6/flash-radio.sh runs for the same reason.
 python "$HOSTED/tools/eh.py" patch-idf --idf-path "$IDF_PATH" >/dev/null
 (cd "$CP" && { [ -d build ] || idf.py set-target esp32c6 >/dev/null; } && idf.py build >/dev/null)
-CP_BIN=$(ls "$CP"/build/*.bin 2>/dev/null | grep -v -E 'bootloader|partition-table|ota_data' | head -1)
+# `|| true` is load-bearing under `set -euo pipefail`: pipefail reports the pipeline's rightmost
+# non-zero status, so an unexpanded glob or a grep that filters everything makes this assignment
+# fail — and a bare VAR=$(...) failing under `set -e` kills the script with no output at all,
+# leaving the explicit error on the next line unreachable. The radio-pin block deleted from this
+# script carried a comment warning about exactly this.
+CP_BIN=$(ls "$CP"/build/*.bin 2>/dev/null | grep -v -E 'bootloader|partition-table|ota_data' | head -1) || true
 [ -n "$CP_BIN" ] || { echo "ERROR: the co-processor build produced no image"; exit 1; }
 cp "$CP_BIN" firmware/p4/main/radio_image.bin
 echo "radio image: $(basename "$CP_BIN"), $(wc -c < firmware/p4/main/radio_image.bin) bytes"
