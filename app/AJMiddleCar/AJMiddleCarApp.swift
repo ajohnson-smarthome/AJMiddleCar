@@ -84,8 +84,8 @@ struct AJMiddleCarApp: App {
     /// Past the gate, the screen is whatever `CarLink` currently is. There is no second opinion.
     @ViewBuilder private var carRoot: some View {
         switch link.state {
-        case .noWiFi(let reason):
-            ConnectView(situation: .noWiFi(reason))
+        case .noDongle(let reason):
+            ConnectView(situation: .noDongle(reason))
         case .localNetworkDenied:
             ConnectView(situation: .localNetworkDenied)
         case .wrongCar(let device):

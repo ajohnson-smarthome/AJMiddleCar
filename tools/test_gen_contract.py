@@ -407,18 +407,19 @@ class TestDongleAgreesWithTheCar(unittest.TestCase):
 
     def test_relay_http_port_is_the_cars_rest_port(self):
         # car-api.json carries no HTTP port: the car's http_server.c leaves
-        # HTTPD_DEFAULT_CONFIG's 80 alone, so the number's only other written home is
-        # CarHost.port on the device branch. Checked against that source rather than against
-        # a literal here, so that changing either one alone fails in this file instead of on
-        # a bench. Matched with its indentation, which is what distinguishes the device
-        # branch's `static let port: UInt16 = 80` from the simulator branch's launch-argument
-        # line just above it.
+        # HTTPD_DEFAULT_CONFIG's 80 alone. Before the dongle cutover (Plan 5 Task 3) this
+        # asserted CarHost.port's device branch carried that same number as its own literal;
+        # now it takes the number from DongleContract.relayHttpPort instead of respelling
+        # it, which is what this checks for — a symbol, not a literal, so a hand-edited
+        # divergence between the two schemas cannot silently coexist with this test still
+        # passing. test_swift_exposes_the_same_vocabulary below is what still guards the
+        # constant's own value against contract/dongle-api.json.
         source = (ROOT / "app" / "AJMiddleCar" / "CarHost.swift").read_text()
-        want = f"    static let port: UInt16 = {self.dongle['relay']['http_port']}"
-        self.assertIn(want, source.splitlines(),
-                      "contract/dongle-api.json's relay.http_port and CarHost.port "
-                      "(the non-simulator branch) disagree; the relay would forward the "
-                      "car's REST traffic to a port the app does not use")
+        self.assertIn("DongleContract.relayHttpPort", source,
+                      "CarHost.swift's device branch no longer takes its REST port from "
+                      "DongleContract.relayHttpPort — the relay could again forward the "
+                      "car's REST traffic to a port the app does not use, with nothing "
+                      "here to catch it")
 
 
 class TestDongleEmitters(unittest.TestCase):

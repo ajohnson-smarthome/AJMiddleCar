@@ -3,12 +3,13 @@ import UIKit
 import Network
 
 /// "The car is not answering" — and, since the link layer can now tell them apart, the three
-/// other reasons a car is not answering: Wi-Fi is off, local-network access was denied, or we are
-/// simply still looking. One radar for all of them is what this screen used to be.
+/// other reasons a car is not answering: the dongle is unplugged, local-network access was
+/// denied, or we are simply still looking. One radar for all of them is what this screen used to
+/// be.
 struct ConnectView: View {
     enum Situation: Equatable {
         case searching
-        case noWiFi(NWPath.UnsatisfiedReason)
+        case noDongle(NWPath.UnsatisfiedReason)
         case localNetworkDenied
     }
 
@@ -27,15 +28,15 @@ struct ConnectView: View {
     private var title: String {
         switch situation {
         case .searching: return L.connectTitle
-        case .noWiFi: return L.linkNoWifiTitle
+        case .noDongle: return L.linkNoDongleTitle
         case .localNetworkDenied: return L.linkDeniedTitle
         }
     }
 
     private var message: String {
         switch situation {
-        case .searching: return L.connectBody(CarContract.ssid, CarContract.password)
-        case .noWiFi: return L.linkNoWifiSub(CarContract.ssid, CarContract.password)
+        case .searching: return L.connectBody
+        case .noDongle: return L.linkNoDongleSub
         case .localNetworkDenied: return L.linkDeniedSub
         }
     }

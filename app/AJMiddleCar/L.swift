@@ -16,9 +16,9 @@ enum L {
     static func wrongProtoSub(_ theirs: Int, _ ours: Int) -> String { s("wrongProto.sub", theirs, ours) }
     static var wrongProtoHint: String { s("wrongProto.hint") }
     static func wrongCarHint(_ ssid: String) -> String { s("wrongCar.hint", ssid) }
-    static func connectBody(_ ssid: String, _ password: String) -> String { s("connect.body", ssid, password) }
-    static var linkNoWifiTitle: String { s("link.noWifiTitle") }
-    static func linkNoWifiSub(_ ssid: String, _ password: String) -> String { s("link.noWifiSub", ssid, password) }
+    static var connectBody: String { s("connect.body") }
+    static var linkNoDongleTitle: String { s("link.noDongleTitle") }
+    static var linkNoDongleSub: String { s("link.noDongleSub") }
     static var linkDeniedTitle: String { s("link.deniedTitle") }
     static var linkDeniedSub: String { s("link.deniedSub") }
     static var configNotRead: String { s("config.notRead") }

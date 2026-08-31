@@ -62,7 +62,7 @@ struct GalleryView: View {
         }
         return [
             ("Connect (radar)",         AnyView(ConnectView())),
-            ("No Wi-Fi",                AnyView(ConnectView(situation: .noWiFi(.notAvailable)))),
+            ("No dongle",               AnyView(ConnectView(situation: .noDongle(.notAvailable)))),
             ("Local network denied",    AnyView(ConnectView(situation: .localNetworkDenied))),
             ("NoInternet",              AnyView(NoInternetView(palette: p, onRetry: {}))),
             ("WrongCar",                AnyView(WrongCarView(palette: p, kind: .foreignDevice("esp32-car"), onRetry: {}))),

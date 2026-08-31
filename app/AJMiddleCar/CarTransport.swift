@@ -170,7 +170,7 @@ actor CarTransport {
             do {
                 try await session()
             } catch let e as CarError {
-                if case .noWiFi = e { pathBlocked = true }
+                if case .noDongle = e { pathBlocked = true }
                 if case .denied = e { pathBlocked = true }
             } catch {
                 // Any other failure ends the session; the difference is only in the log.
@@ -358,9 +358,9 @@ actor CarTransport {
                         // goes `.ready` as an open socket nothing observes.
                         socket.cancel()
                     case .waiting(let e):
-                        // With the interface pinned, waiting means the Wi-Fi path is not there
-                        // yet. Fail now and let the backoff retry rather than sit in a state
-                        // that may never resolve.
+                        // With the interface pinned, waiting means the dongle's interface is not
+                        // there yet — unplugged, or not yet enumerated. Fail now and let the
+                        // backoff retry rather than sit in a state that may never resolve.
                         once.resume(.failure(CarError.from(e, path: socket.currentPath)))
                         socket.cancel()
                     case .cancelled:

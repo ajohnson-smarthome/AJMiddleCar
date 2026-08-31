@@ -3,12 +3,12 @@ import Network
 
 /// Where the phone's network stands. `CarPath` produces it from two `NWPathMonitor`s.
 ///
-/// Wi-Fi off, local network denied, and a Wi-Fi that is up but has no car on it are three
-/// different problems with three different fixes, and the app used to render all of them as one
-/// endless radar.
+/// The dongle unplugged, local network denied, and the dongle plugged in but with no car
+/// answering are three different problems with three different fixes, and the app used to
+/// render all of them as one endless radar.
 enum PathState: Equatable {
-    case wifiUp
-    case noWifi(NWPath.UnsatisfiedReason)
+    case dongleUp
+    case noDongle(NWPath.UnsatisfiedReason)
     /// The user denied local-network access. Nothing we send leaves the phone, and no amount of
     /// waiting changes that — its only signal is `unsatisfiedReason`, which nothing used to read.
     case localNetworkDenied
@@ -47,7 +47,7 @@ enum SessionState: Equatable {
 /// The one liveness truth. Everything on screen — the status pill, the signal bars, the searching
 /// overlay, the launch gate — reads this and nothing else.
 enum Link: Equatable {
-    case noWiFi(NWPath.UnsatisfiedReason)
+    case noDongle(NWPath.UnsatisfiedReason)
     case localNetworkDenied
     case searching
     case wrongCar(device: String)
@@ -75,8 +75,8 @@ enum LinkRule {
                         age: TimeInterval?) -> Link {
         switch path {
         case .localNetworkDenied: return .localNetworkDenied
-        case .noWifi(let reason): return .noWiFi(reason)
-        case .wifiUp: break
+        case .noDongle(let reason): return .noDongle(reason)
+        case .dongleUp: break
         }
         // Identity beats liveness: a car that answers with someone else's name — or in another
         // protocol version — must not be driven, however fresh its telemetry is.
