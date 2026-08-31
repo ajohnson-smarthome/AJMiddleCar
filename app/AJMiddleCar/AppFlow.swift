@@ -111,6 +111,12 @@ final class AppFlow: ObservableObject {
     private var queued: [Phase] = []
     private var pacing = false
     @Published var latestTag: String?
+    /// How far the adapter's own update has got, while one is running — and `nil` whenever that
+    /// cannot be answered honestly. It covers the upload half only: the download half is a fetch
+    /// from GitHub whose progress `UpdateClient` already publishes for its own screen, and a
+    /// cache hit has no download at all. An invented figure would be worse than none, because it
+    /// teaches the user not to believe the next one.
+    @Published private(set) var dongleUpdateProgress: Double?
     let client = UpdateClient()
     private let dongle = DongleClient()
 
@@ -482,8 +488,12 @@ final class AppFlow: ObservableObject {
             binURL = nil
         }
         guard let binURL, let data = try? Data(contentsOf: binURL) else { return false }
+        dongleUpdateProgress = 0
+        defer { dongleUpdateProgress = nil }
         do {
-            try await dongle.uploadFirmware(data) { _ in }
+            try await dongle.uploadFirmware(data) { fraction in
+                Task { @MainActor in self.dongleUpdateProgress = fraction }
+            }
         } catch {
             // Not swallowed into "success": a failed upload must count against the attempt
             // budget above, and must not earn the reboot grace below — nothing rebooted.

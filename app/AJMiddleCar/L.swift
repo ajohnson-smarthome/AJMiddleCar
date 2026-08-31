@@ -30,6 +30,7 @@ enum L {
     static var dongleJoinFailedSub: String { s("dongle.joinFailedSub") }
     static var dongleRolledBackTitle: String { s("dongle.rolledBackTitle") }
     static var dongleRolledBackSub: String { s("dongle.rolledBackSub") }
+    static var dongleUpdFailTitle: String { s("dongle.updFailTitle") }
     static var dongleFindingTitle: String { s("dongle.findingTitle") }
     static var dongleFindingSub: String { s("dongle.findingSub") }
     static var dongleUpdCheckTitle: String { s("dongle.updCheckTitle") }

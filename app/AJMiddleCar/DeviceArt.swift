@@ -51,6 +51,10 @@ enum RingMode: Equatable {
 struct DeviceRingsView: View {
     let mode: RingMode
     let palette: Palette
+    /// Almost always the accent. `NoInternetView` wants them warm, and used to draw a whole
+    /// second set of rings — and a second car — for want of this one parameter.
+    var tint: Color? = nil
+    private var ink: Color { tint ?? palette.accent }
 
     var body: some View {
         switch mode {
@@ -73,7 +77,7 @@ struct DeviceRingsView: View {
                         let ph = ((t + Double(i) * 0.9) / 1.8).truncatingRemainder(dividingBy: 1)
                         // Inward runs the same phase backwards and brightens as it lands, so
                         // arrival is the loud moment; outward is brightest as it leaves.
-                        Circle().stroke(palette.accent, lineWidth: 2)
+                        Circle().stroke(ink, lineWidth: 2)
                             .frame(width: 60, height: 60)
                             .scaleEffect(mode == .inward ? 1.9 - ph : 0.9 + ph)
                             .opacity(0.6 * (mode == .inward ? ph : 1 - ph))
@@ -91,7 +95,7 @@ struct DeviceRingsView: View {
     private func rings(scale: Double, opacity: [Double]) -> some View {
         ZStack {
             ForEach(0..<3, id: \.self) { i in
-                Circle().stroke(palette.accent, lineWidth: 1.5)
+                Circle().stroke(ink, lineWidth: 1.5)
                     .frame(width: DeviceArt.ringD[i], height: DeviceArt.ringD[i])
                     .opacity(opacity[i])
                     .scaleEffect(scale)
@@ -185,21 +189,39 @@ struct AdapterBody: View {
 struct DeviceScene<Device: View>: View {
     let palette: Palette
     var rings: RingMode = .wait()
+    /// Ring colour, when the accent is not the right thing to say. Declared beside `rings`
+    /// because it configures them, and because Swift's memberwise initialiser takes arguments
+    /// in declaration order — a dial that reads as unrelated ends up in an odd place at every
+    /// call site.
+    var ringTint: Color? = nil
     var presence: Double = 1
     var chip: (glyph: String, tint: Color)? = nil
     /// The chip's halo. One screen wants it wider — a finished update is the one moment in the
     /// app worth a little celebration — so it is a dial rather than a constant.
     var chipHalo: CGFloat = 5
+    /// A measured wait, drawn as an arc around the chip. Only screens that genuinely know how
+    /// far along they are may pass this — a bar that invents its own progress is worse than no
+    /// bar, because it teaches the user not to believe the next one.
+    var progress: Double? = nil
     var offset: CGSize = .zero
     @ViewBuilder var device: () -> Device
 
     var body: some View {
         ZStack {
-            DeviceRingsView(mode: rings, palette: palette).offset(offset)
+            DeviceRingsView(mode: rings, palette: palette, tint: ringTint).offset(offset)
             device().opacity(presence).offset(offset)
             if let chip {
                 ChipBadge(glyph: chip.glyph, tint: chip.tint, palette: palette,
                           haloRadius: chipHalo).offset(offset)
+                if let progress {
+                    Circle()
+                        .trim(from: 0, to: max(0, min(1, progress)))
+                        .stroke(chip.tint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 34, height: 34)
+                        .offset(offset)
+                        .animation(.linear(duration: 0.2), value: progress)
+                }
             }
         }
         .scaleEffect(DeviceArt.scale)
@@ -215,10 +237,29 @@ struct DeviceScene<Device: View>: View {
 /// another — and it is legible before a word of the title is read.
 struct LinkScene: View {
     let palette: Palette
+    /// The same two devices with nothing travelling between them. Stillness is the message: this
+    /// screen is a hold with a button, not a wait that resolves itself, and a wave leaving the
+    /// adapter would promise otherwise.
+    var failed: Bool = false
     private static let adapterX: CGFloat = -44
     private static let carX: CGFloat = 40
 
     var body: some View {
+        if failed {
+            ZStack {
+                CarBody(palette: palette).opacity(0.3).offset(x: Self.carX)
+                AdapterBody(palette: palette).offset(x: Self.adapterX)
+                ChipBadge(glyph: "exclamationmark", tint: palette.warn, palette: palette)
+                    .offset(x: Self.adapterX)
+            }
+            .scaleEffect(DeviceArt.scale)
+            .frame(width: DeviceArt.stage.width, height: DeviceArt.stage.height)
+        } else {
+            live
+        }
+    }
+
+    private var live: some View {
         TimelineView(.animation) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             // Two waves, half a period apart, and the car's brightness read from the nearer of

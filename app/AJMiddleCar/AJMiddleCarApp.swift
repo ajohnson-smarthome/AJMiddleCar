@@ -99,7 +99,7 @@ struct AJMiddleCarApp: App {
         case .dongleWrong(let device):
             ConnectView(situation: .wrongDongle(device))
         case .dongleUpdating:
-            ConnectView(situation: .dongleUpdating)
+            ConnectView(situation: .dongleUpdating, updateProgress: flow.dongleUpdateProgress)
         case .dongleUpdateFailed:
             ConnectView(situation: .dongleUpdateFailed, onRetryDongleUpdate: { flow.retryDongleUpdate() })
         case .dongleRolledBack:

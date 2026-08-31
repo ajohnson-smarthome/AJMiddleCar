@@ -84,6 +84,10 @@ struct ConnectView: View {
     /// `.dongleJoinFailed` only. The same offer as `onRetryDongleUpdate`, for the other bounded
     /// wait — asking again now, and with a fresh budget.
     var onRetryJoin: (() -> Void)? = nil
+    /// `.dongleUpdating` only, and optional even there: the download half reports progress, the
+    /// upload half reports progress, and a cache hit reports none because there is nothing to
+    /// measure. Absent means the rings carry the wait alone.
+    var updateProgress: Double? = nil
     @Environment(\.colorScheme) private var colorScheme
     private var p: Palette { Theme.current(colorScheme) }
 
@@ -105,8 +109,34 @@ struct ConnectView: View {
         switch situation {
         // `.wrongDongle` joins them: nothing about it resolves by waiting either — the fix is a
         // different cable, and the sweep would promise otherwise.
-        case .dongleRolledBack, .dongleUpdateFailed, .wrongDongle:
-            FirmwareCarView(phase: .failed, palette: p)
+        // Every one of these is about the ADAPTER, and every one of them used to draw the car
+        // with an exclamation mark — not carelessly, but because until the adapter existed in
+        // this vocabulary the car was the only object there was. The glyphs differ because the
+        // situations do: a foreign adapter is a question, a failed update is a fault, and a
+        // rollback is a reversal. The rings are `.deco` — present but motionless: what promises
+        // work is movement, not the rings themselves, and an object alone in the frame reads as
+        // an oversight rather than as stillness. `FirmwareCarView` uses the same mode for the
+        // same reason, on states that are resting rather than working.
+        case .wrongDongle:
+            DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
+                        chip: (glyph: "questionmark", tint: p.warn)) { AdapterBody(palette: p) }
+        case .dongleUpdateFailed:
+            DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
+                        chip: (glyph: "exclamationmark", tint: p.warn)) { AdapterBody(palette: p) }
+        case .dongleRolledBack:
+            DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
+                        chip: (glyph: "arrow.uturn.backward", tint: p.warn)) { AdapterBody(palette: p) }
+        case .localNetworkDenied:
+            // The one state in the whole sequence that does not pass on its own: iOS refused to
+            // let the request leave the phone, and no amount of waiting changes that. It used to
+            // sweep a radar over it, promising exactly the work that is not happening.
+            DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
+                        chip: (glyph: "lock", tint: p.warn)) { AdapterBody(palette: p) }
+        case .dongleJoinFailed:
+            // Both devices present and nothing travelling between them. The radar used to sit
+            // here; now that step 4 owns it, "looking for the car" and "could not reach it"
+            // would have been the same picture.
+            LinkScene(palette: p, failed: true)
         // The adapter's own three steps. Only two dials move across them: the body goes from
         // faint to solid when it is found, and the rings turn inward when something is arriving.
         case .findingAdapter, .noDongle:
@@ -120,16 +150,26 @@ struct ConnectView: View {
             // was performing.
             DeviceScene(palette: p, rings: .wait(),
                         chip: (glyph: "exclamationmark", tint: p.warn)) { AdapterBody(palette: p) }
-        case .adapterUpdateCheck, .dongleUpdating:
+        case .adapterUpdateCheck:
             DeviceScene(palette: p, rings: .inward,
                         chip: (glyph: "arrow.down", tint: p.accent)) { AdapterBody(palette: p) }
+        case .dongleUpdating:
+            // Asking whether there is an update and installing one were, until this change, the
+            // same frame down to the pixel — my own regression, and exactly the defect this
+            // redesign existed to remove. They are separated the way the vocabulary already
+            // allows: `.inward` is an answer arriving, `.active` is work actually moving. The
+            // progress arc is the real one, and it is what makes the difference impossible to
+            // miss rather than merely present.
+            DeviceScene(palette: p, rings: .active,
+                        chip: (glyph: "arrow.down", tint: p.accent),
+                        progress: updateProgress) { AdapterBody(palette: p) }
         case .carUpdateCheck:
             DeviceScene(palette: p, rings: .inward,
                         chip: (glyph: "arrow.down", tint: p.accent)) { CarBody(palette: p) }
         case .dongleConfiguring:
             LinkScene(palette: p)
         // Everything left is a search of the air, which is the one thing the sweep means.
-        case .searching, .findingCar, .localNetworkDenied, .dongleJoinFailed:
+        case .searching, .findingCar:
             ConnectCarView(palette: p)
         }
     }
@@ -147,7 +187,7 @@ struct ConnectView: View {
         case .dongleFault: return L.dongleFaultTitle
         case .wrongDongle: return L.dongleWrongTitle
         case .dongleUpdating: return L.dongleUpdatingTitle
-        case .dongleUpdateFailed: return L.fwFailTitle
+        case .dongleUpdateFailed: return L.dongleUpdFailTitle
         case .dongleConfiguring: return L.dongleConfiguringTitle
         case .dongleJoinFailed: return L.dongleJoinFailedTitle
         case .dongleRolledBack: return L.dongleRolledBackTitle

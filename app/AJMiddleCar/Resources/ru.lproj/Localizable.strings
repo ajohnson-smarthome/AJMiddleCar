@@ -1,5 +1,5 @@
-"connect.title"      = "Поиск машинки…";
-"connect.body"       = "Машинка не отвечает. Проверь, что она включена и адаптер подключён.";
+"connect.title"      = "Здороваюсь с машинкой";
+"connect.body"       = "Адаптер на связи. Жду, пока машинка ответит — если молчит, проверь, что она включена.";
 "common.openSettings"= "Открыть настройки";
 "link.noDongleTitle" = "Нет адаптера";
 "link.noDongleSub"   = "Подключи USB-адаптер к телефону.";
@@ -184,3 +184,7 @@
 "car.findingSub"          = "Адаптер готов. Он осматривает эфир: включена ли машинка и видно ли её сеть.";
 "car.updCheckTitle"       = "Проверяю обновления машинки";
 "car.updCheckSub"         = "Связь есть. Смотрю, не вышла ли новая прошивка для самой машинки. Дальше — руль.";
+
+/* Its own line, not the generic fw.failTitle: three different screens said "Не удалось"
+   and left the user to work out which of them had. */
+"dongle.updFailTitle"     = "Не удалось обновить адаптер";
