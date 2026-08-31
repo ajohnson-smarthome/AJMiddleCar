@@ -64,6 +64,25 @@ check(UpdateRules.cacheURL(for: .car, in: supportDir) != UpdateRules.cacheURL(fo
       "a URL built for one device is never the URL built for the other — the property that matters")
 check(UpdateRules.cacheURL(for: .car, in: supportDir).lastPathComponent == UpdateRules.Device.car.assetName,
       "the join actually uses the device's asset name, not some other distinct-but-wrong name")
+// -- the migration's own list of places to look ------------------------------------------
+// The per-device rename orphaned the installed base once already: the migration knew only
+// Caches/firmware-latest.bin, while every phone that had already migrated once was holding
+// Application Support/firmware-latest.bin — invisible from the moment the rename landed, and
+// invisible in testing too, because nothing shows it until a launch with no internet.
+let cachesDir = URL(fileURLWithPath: "/tmp/caches")
+let legacy = UpdateRules.legacyCacheURLs(caches: cachesDir, appSupport: supportDir)
+check(legacy.contains(supportDir.appendingPathComponent(UpdateRules.legacyCacheFileName)),
+      "the Application Support copy — the one the rename orphaned — is looked for")
+check(legacy.contains(cachesDir.appendingPathComponent(UpdateRules.legacyCacheFileName)),
+      "and so is the original Caches copy, which the first migration moved")
+check(legacy.first == supportDir.appendingPathComponent(UpdateRules.legacyCacheFileName),
+      "the newer of the two locations is preferred when a phone somehow holds both")
+check(!legacy.contains(UpdateRules.cacheURL(for: .car, in: supportDir)),
+      "and none of them is the destination, which is what makes this a move and not a loop")
+check(UpdateRules.legacyCacheFileName != UpdateRules.Device.car.cacheFileName &&
+      UpdateRules.legacyCacheFileName != UpdateRules.Device.dongle.cacheFileName,
+      "the legacy name is nobody's current name — a phone can hold both files at once")
+
 check(UpdateRules.cacheURL(for: .dongle, in: supportDir).lastPathComponent == UpdateRules.Device.dongle.assetName,
       "the join actually uses the device's asset name, not some other distinct-but-wrong name")
 

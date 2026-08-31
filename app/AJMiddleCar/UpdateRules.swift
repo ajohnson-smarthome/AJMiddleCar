@@ -33,6 +33,24 @@ enum UpdateRules {
         var cacheFileName: String { assetName }
     }
 
+    /// The one file name every build before the per-device split used for the car's cached
+    /// image. Nothing writes it any more; it only has to be FOUND, in either of the two
+    /// directories it has lived in.
+    static let legacyCacheFileName = "firmware-latest.bin"
+
+    /// Where an older build's car image can still be sitting, newest location first.
+    ///
+    /// Two, not one, and that is the whole point of this being a list with a test: the cache
+    /// moved twice. First out of `Caches` (which iOS may purge under storage pressure) into
+    /// Application Support; then, with the dongle's own image, into a per-device name. A phone
+    /// that installed anywhere between those two moves holds Application
+    /// Support/`firmware-latest.bin` — the location the migration knew nothing about, so the
+    /// file went invisible and the launch gate lost its offline lifeline with it.
+    static func legacyCacheURLs(caches: URL, appSupport: URL) -> [URL] {
+        [appSupport.appendingPathComponent(legacyCacheFileName),
+         caches.appendingPathComponent(legacyCacheFileName)]
+    }
+
     /// The local cache's full path for `device`, under `dir` (the caller's Application Support
     /// directory — `UpdateClient` owns finding and creating it; this only joins the two). Pure,
     /// and host-tested here rather than only at the `Device.cacheFileName` value layer: the risk

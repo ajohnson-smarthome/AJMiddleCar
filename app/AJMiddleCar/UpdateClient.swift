@@ -90,12 +90,16 @@ final class UpdateClient: NSObject, ObservableObject {
     }
 
     /// Storage keys, per device — suffixed with `UpdateRules.Device.rawValue` so caching one
-    /// device's build/tag can never be read back, or overwrite, the other's.
+    /// device's build/tag can never be read back, or overwrite, the other's. The bare,
+    /// unsuffixed prefixes are the keys every build before that split wrote, which is why they
+    /// are named here rather than spelled again inside the migration below.
+    private static let kBuildLegacy = "cachedLatestBuild"
+    private static let kTagLegacy = "cachedLatestTag"
     private static func kBuild(_ device: UpdateRules.Device) -> String {
-        "cachedLatestBuild-\(device.rawValue)"
+        "\(kBuildLegacy)-\(device.rawValue)"
     }
     private static func kTag(_ device: UpdateRules.Device) -> String {
-        "cachedLatestTag-\(device.rawValue)"
+        "\(kTagLegacy)-\(device.rawValue)"
     }
 
     /// Application Support, not Caches: this file is the offline gate's lifeline (GateRule),
@@ -116,18 +120,54 @@ final class UpdateClient: NSObject, ObservableObject {
     /// The car's cache — the only device this existed for before branch P4's dongle images.
     static var cachedBinURL: URL { cachedBinURL(for: .car) }
 
-    /// One-time move of a pre-existing cache from the old Caches location. Called at launch;
-    /// a no-op when there is nothing to migrate or the new file already exists. Car-only: the
-    /// old, undifferentiated `firmware-latest.bin` could only ever have been the car's — the
-    /// dongle's own cache did not exist before this per-device split.
+    /// One-time move of a pre-existing cache from wherever an older build left it, plus the
+    /// keys that describe it. Called at launch; a no-op when there is nothing to migrate.
+    /// Car-only: the undifferentiated `firmware-latest.bin` could only ever have been the
+    /// car's — the dongle's own cache did not exist before this per-device split.
+    ///
+    /// BOTH old locations, which is the fix. This knew only `Caches/firmware-latest.bin` while
+    /// the per-device rename moved the car's file out from under Application
+    /// Support/`firmware-latest.bin` — where every phone that had already migrated once was
+    /// holding it. That file went invisible, and `GateRule` reads the consequences: no cached
+    /// file means `canProceedOffline` is false, so a launch with no internet lands on
+    /// `.noInternet` where it used to proceed, and `latestTag` stays nil, so the forced update
+    /// gate silently never fires. Those are the two failures that decision exists to prevent,
+    /// and nothing shows them until someone launches offline.
     static func migrateCacheIfNeeded() {
-        let old = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("firmware-latest.bin")
-        let new = cachedBinURL
-        guard FileManager.default.fileExists(atPath: old.path),
-              !FileManager.default.fileExists(atPath: new.path) else { return }
-        try? FileManager.default.moveItem(at: old, to: new)
-        excludeFromBackup(new)
+        let fm = FileManager.default
+        let new = cachedBinURL              // also creates Application Support, if it is new
+        let legacy = UpdateRules.legacyCacheURLs(
+            caches: fm.urls(for: .cachesDirectory, in: .userDomainMask)[0],
+            appSupport: fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
+        for old in legacy where fm.fileExists(atPath: old.path) {
+            guard !fm.fileExists(atPath: new.path) else {
+                // The image is already under its per-device name, so anything left under the
+                // old one can never be read again — and it is the better part of a megabyte.
+                try? fm.removeItem(at: old)
+                continue
+            }
+            try? fm.moveItem(at: old, to: new)
+            excludeFromBackup(new)
+        }
+        migrateCacheKeysIfNeeded()
+    }
+
+    /// The other half of that rename: the build and tag the cached file is described BY. A file
+    /// without them is not a usable cache — `GateRule.canProceedOffline` wants both — so moving
+    /// one without the other would have fixed nothing.
+    ///
+    /// Mirrored rather than moved, and only where the per-device key is unset: an older build
+    /// of this app run again on the same phone still reads the unsuffixed keys, and a newer
+    /// download that has already recorded its own must never be overwritten by an older value.
+    private static func migrateCacheKeysIfNeeded() {
+        let d = UserDefaults.standard
+        if d.object(forKey: kBuild(.car)) == nil,
+           let legacy = d.object(forKey: kBuildLegacy) as? Int, legacy != 0 {
+            d.set(legacy, forKey: kBuild(.car))
+        }
+        if d.string(forKey: kTag(.car)) == nil, let legacy = d.string(forKey: kTagLegacy) {
+            d.set(legacy, forKey: kTag(.car))
+        }
     }
 
     private static func excludeFromBackup(_ url: URL) {
