@@ -122,9 +122,12 @@ echo "radio image: $(basename "$CP_BIN"), $(wc -c < firmware/p4/main/radio_image
 # ELF even for a zero-length embed (they're just equal), so this check alone proves nothing about
 # size. The size check below is what actually proves an image is present; the two together cover
 # both failure modes.
-if ! riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep -q _binary_radio_image_bin_start; then
-    echo "ERROR: the car image does not embed a radio image"; exit 1
-fi
+# `grep -c`, not `grep -q`, and the `|| true` is not optional. Under `set -euo pipefail` the -q
+# form fails ON SUCCESS: grep exits at the first match and closes the pipe, nm dies of SIGPIPE
+# with 141, and pipefail reports that as the pipeline's status. This check rejected a perfectly
+# good build the first time it ran. -c reads all of the input, so there is no early close.
+EMBED_SYMS=$(riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep -c _binary_radio_image_bin_start) || true
+[ "${EMBED_SYMS:-0}" -gt 0 ] || { echo "ERROR: the car image does not embed a radio image"; exit 1; }
 EMBEDDED=$(wc -c < firmware/p4/main/radio_image.bin)
 [ "$EMBEDDED" -gt 4096 ] || { echo "ERROR: the embedded radio image is $EMBEDDED bytes — not an image"; exit 1; }
 # The dongle is an Xtensa target; the car and its radio are both RISC-V, so an ESP-IDF installed
