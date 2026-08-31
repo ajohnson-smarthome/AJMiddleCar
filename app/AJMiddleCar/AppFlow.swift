@@ -35,6 +35,12 @@ final class AppFlow: ObservableObject {
         /// `DongleStep.searchingCar`. Distinct from `.dongleConfiguring`, which is the
         /// association that follows: this one usually means the car is switched off.
         case carFinding
+        /// The adapter's newest release could not be established — no internet, or a release
+        /// with no build number in it. A hold, not a failure: `dongleGate()` keeps asking, so
+        /// this clears itself the moment the network returns. That is also why it is not
+        /// `.noInternet`, whose screen offers a Retry: while this loop is running `retry()` is
+        /// refused by `gateRunning`, and a button that does nothing is worse than no button.
+        case dongleOffline
         /// Something answered at the dongle's address and it was not usable — an HTTP error, a
         /// truncated stream, a body that would not decode. Deliberately not `.dongleAbsent`:
         /// the one instruction that screen gives is the one thing already done.
@@ -58,9 +64,10 @@ final class AppFlow: ObservableObject {
         /// The dongle's bootloader reverted its last update. Standing until the user answers —
         /// the rollback flag itself does not clear until a LATER OTA to that slot succeeds, so
         /// without an answer this phase would never release. Two answers, both needed:
-        /// `skipDongleRollback()` drives on what is running, and `recheckDongleRollback()` asks
-        /// whether a newer release exists yet, which is the only path back to the app's own OTA
-        /// — and the app is the only OTA path the dongle has.
+        /// `recheckDongleRollback()` asks whether a newer release exists yet, and it is the only
+        /// answer there is: the option to drive on the reverted firmware was removed with the
+        /// rest of the escapes. The app is the dongle's only OTA path, so a release that keeps
+        /// rolling back holds here until a newer one ships.
         case dongleRolledBack
         /// The dongle is current and pointed at the car's own network. Either its credentials
         /// are being sent for the first time (including a re-point, if it was pointed at some
@@ -94,6 +101,7 @@ final class AppFlow: ObservableObject {
             switch self {
             case .updateRequired, .awaitingCar, .ready: return true
             case .checkDongle, .dongleAbsent, .dongleChecking, .dongleUpdateCheck, .carFinding,
+                 .dongleOffline,
                  .dongleFault, .dongleDenied, .dongleWrong,
                  .dongleUpdating, .dongleUpdateFailed, .dongleRolledBack,
                  .dongleConfiguring, .dongleJoinFailed,
@@ -157,7 +165,7 @@ final class AppFlow: ObservableObject {
     /// out there writing `phase` out from under it on its own next poll.
     private var gateRunning = false
 
-    /// Set by `skipDongleRollback()` / `recheckDongleRollback()`. See `Phase.dongleRolledBack`
+    /// Set by `recheckDongleRollback()`. See `Phase.dongleRolledBack`
     /// and `RollbackChoice` for why this has to exist at all: the bootloader's rollback flag
     /// does not clear on its own, and the app is the dongle's only OTA path.
     private var rollbackChoice: RollbackChoice = .unanswered
@@ -167,9 +175,8 @@ final class AppFlow: ObservableObject {
     /// so `recheckDongleRollback()` can reopen the fetch (that is what "check again" means).
     private var dongleRelease: UpdateClient.Release?
     private var dongleLatestTag: String?
-    private var checkedForDongleUpdate = false
     /// Whether `/status` has ever answered this launch — the trigger for step 2, and nothing
-    /// else. Separate from `checkedForDongleUpdate`, which gates a network round trip.
+    /// else.
     private var sawDongle = false
     private var dongleUpdateAttempts = 0
     private var dongleUpdateGaveUp = false
@@ -258,8 +265,11 @@ final class AppFlow: ObservableObject {
                 sawDongle = true
                 setPhase(.dongleChecking)
             }
-            if case .status = reply, !checkedForDongleUpdate {
-                checkedForDongleUpdate = true
+            // Step 3, and a gate rather than a formality: the adapter's newest release must be
+            // established before anything is decided about it. Retried on every poll until it
+            // is — a launch that could not reach GitHub must not proceed on the assumption that
+            // nothing has changed, which is exactly what it used to do.
+            if case .status = reply, dongleLatestTag == nil {
                 setPhase(.dongleUpdateCheck)          // step 3
                 dongleRelease = await client.latestRelease(for: .dongle)
                 // Same offline fallback `carGate()` uses below, aimed at the dongle's own cache:
@@ -268,10 +278,13 @@ final class AppFlow: ObservableObject {
                 // GateRule.canProceedOffline's own precondition (`hasCachedFile`) is exactly what
                 // makes `performDongleUpdate()` below able to flash from cache when it lands in
                 // `.updating` by this path.
-                dongleLatestTag = dongleRelease?.tag ?? GateRule.offlineLatestTag(
-                    cachedTag: UpdateClient.cachedTag(for: .dongle),
-                    hasCachedFile: UpdateClient.hasCachedFile(for: .dongle),
-                    cachedBuild: UpdateClient.cachedBuild(for: .dongle))
+                dongleLatestTag = dongleRelease?.tag
+                guard GateRule.canVerify(
+                        latestBuild: UpdateClient.buildNumber(dongleLatestTag)) else {
+                    setPhase(.dongleOffline)
+                    try? await Task.sleep(for: Self.donglePollInterval)
+                    continue
+                }
             }
             switch DongleLink.next(reply: reply, latestTag: dongleLatestTag,
                                    expectedSSID: CarContract.ssid, rollback: rollbackChoice) {
@@ -428,7 +441,6 @@ final class AppFlow: ObservableObject {
     /// stuck on `.dongleRolledBack` forever (the car's own forced-update gate keeps the same
     /// escape hatch — `FirmwareView`'s skip button). Read by `dongleGate()`'s very next poll,
     /// which is at most `donglePollInterval` away.
-    func skipDongleRollback() { rollbackChoice = .proceed }
 
     /// The user asked whether a newer release exists yet — `FirmwareView`'s rolled-back car
     /// screen keeps the same offer beside its skip. Two halves, both required: re-open the
@@ -437,7 +449,9 @@ final class AppFlow: ObservableObject {
     /// genuinely newer image from the one that just rolled back.
     func recheckDongleRollback() {
         rollbackChoice = .recheck(from: dongleLatestTag)
-        checkedForDongleUpdate = false
+        // Clearing the tag is what makes the next poll re-ask GitHub: the fetch is guarded on
+        // `dongleLatestTag == nil`, so this is the recheck actually happening.
+        dongleLatestTag = nil
     }
 
     /// A recheck is one look, not a standing permission — spent as soon as `DongleLink` has
@@ -510,17 +524,25 @@ final class AppFlow: ObservableObject {
     private func carGate() async {
         UpdateClient.migrateCacheIfNeeded()
         setPhase(.checkInternet)
+        // No fallback any more. A cached image says what this phone downloaded once, not what
+        // the newest release is now, and letting it stand in for a check was the whole leak.
         guard await UpdateClient.internetReachable() else {
-            setPhase(offlineFallback(or: .noInternet))
+            setPhase(.noInternet)
             return
         }
         setPhase(.checkUpdate)
         guard let rel = await client.latestRelease() else {
-            setPhase(offlineFallback(or: .checkFailed))
+            setPhase(.checkFailed)
             return
         }
         latestTag = rel.tag
         let latestBuild = UpdateClient.buildNumber(rel.tag)
+        // A release whose tag carries no build number is not a verification either: there is
+        // nothing to compare against, and "could not tell" must never read as "current".
+        guard GateRule.canVerify(latestBuild: latestBuild) else {
+            setPhase(.checkFailed)
+            return
+        }
         if UpdateClient.needsDownload(latestBuild: latestBuild,
                                       cachedBuild: UpdateClient.cachedBuild,
                                       hasCachedFile: UpdateClient.hasCachedFile) {
@@ -530,7 +552,7 @@ final class AppFlow: ObservableObject {
             guard await client.download(rel.assetURL, recordAs: recordAs) != nil else {
                 // The two failure paths above fall back to the cache; a failed download of a
                 // NEWER release must not strand a phone that still holds the previous one.
-                setPhase(offlineFallback(or: .checkFailed))
+                setPhase(.checkFailed)
                 return
             }
             await UpdateClient.holdAtLeast(UpdateClient.downloadMinDisplay, since: t0)
@@ -542,17 +564,6 @@ final class AppFlow: ObservableObject {
     /// force with. Seeding `latestTag` from the cache is what keeps the forced gate armed
     /// offline (decision 4a); without it `mustUpdate` compared against nil and every car,
     /// pre-versioning ones included, drove unforced whenever the launch had no internet.
-    private func offlineFallback(or failure: Phase) -> Phase {
-        guard GateRule.canProceedOffline(hasCachedFile: UpdateClient.hasCachedFile,
-                                         cachedBuild: UpdateClient.cachedBuild) else {
-            return failure
-        }
-        latestTag = GateRule.offlineLatestTag(cachedTag: UpdateClient.cachedTag,
-                                              hasCachedFile: UpdateClient.hasCachedFile,
-                                              cachedBuild: UpdateClient.cachedBuild)
-        return .awaitingCar
-    }
-
     /// The car said who it is, in its hello reply. Re-evaluated every time, not once: a car that
     /// reboots into a different build after an OTA is the same question asked again.
     ///
@@ -566,7 +577,9 @@ final class AppFlow: ObservableObject {
     func carIdentified(fw: String?) {
         guard let fw else { return }
         guard phase == .awaitingCar || phase == .ready || phase == .updateRequired else { return }
-        let next: Phase = UpdateClient.mustUpdate(carFw: fw, latestTag: latestTag) ? .updateRequired : .ready
+        let next: Phase = GateRule.mayDrive(deviceBuild: UpdateClient.buildNumber(fw),
+                                           latestBuild: UpdateClient.buildNumber(latestTag))
+            ? .ready : .updateRequired
         // `setPhase` already writes only on a real change, which matters here more than
         // anywhere: this is re-asked on every telemetry frame, and `@Published` emits on
         // assignment whether or not the value moved — five root-tree invalidations a second for

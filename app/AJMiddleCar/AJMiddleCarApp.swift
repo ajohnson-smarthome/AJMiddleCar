@@ -89,6 +89,8 @@ struct AJMiddleCarApp: App {
             ConnectView(situation: .adapterUpdateCheck)
         case .carFinding:
             ConnectView(situation: .findingCar)
+        case .dongleOffline:
+            ConnectView(situation: .offline)
         case .dongleFault:
             ConnectView(situation: .dongleFault)
         case .dongleDenied:
@@ -104,7 +106,6 @@ struct AJMiddleCarApp: App {
             ConnectView(situation: .dongleUpdateFailed, onRetryDongleUpdate: { flow.retryDongleUpdate() })
         case .dongleRolledBack:
             ConnectView(situation: .dongleRolledBack,
-                        onSkipRollback: { flow.skipDongleRollback() },
                         onRecheckRollback: { flow.recheckDongleRollback() })
         case .dongleConfiguring:
             ConnectView(situation: .dongleConfiguring)

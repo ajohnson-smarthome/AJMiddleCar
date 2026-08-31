@@ -177,19 +177,24 @@ check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, st
                       latestTag: latest, expectedSSID: carSSID) == .rolledBack,
       "rollback true is reported even when the net looks fully connected")
 
-// -- rollback answered "proceed": the app is not permanently bricked ---------------------
-// The bootloader's rollback flag is sticky across every reboot until a LATER OTA to that slot
-// succeeds (status_api.c reads it once at boot from the other partition's state) — so without
-// an answer, one failed OTA would report .rolledBack forever and never let the flow reach the
-// car again, on the SAME firmware it was happily running before the update was ever offered.
-// Once the user has been told and chooses to proceed, `next` must stop reporting it and must
-// not silently re-offer the failed update either.
-check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: DongleNetState.connected),
-                      latestTag: latest, expectedSSID: carSSID, rollback: .proceed) == .readyForCar,
-      "a rollback answered \"proceed\" reaches the car instead of reporting rollback forever")
-check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: "", state: DongleNetState.idle),
-                      latestTag: latest, expectedSSID: carSSID, rollback: .proceed) == .sendCredentials,
-      "a rollback answered \"proceed\" still needs credentials sent if it never got any")
+// -- rollback: there is no answer that drives on the reverted firmware ------------------
+// There used to be a `.proceed` — "drive on what is running" — and the test here pinned the
+// property that it stopped the app being permanently bricked. That property is gone by
+// decision: being on the newest firmware is a precondition for driving, with no exception for
+// the case where updating turns out to be impossible. The bootloader's flag is sticky until a
+// LATER OTA to that slot succeeds, so a release that keeps rolling back holds the launch here
+// until a newer one ships. What is pinned now is the absence of a way out.
+//
+// Exhaustive on purpose: every answer the type can carry is tried against a rolled-back
+// adapter, so re-adding an escape without re-reading this decision fails to compile rather
+// than quietly restoring the old behaviour.
+for choice in [RollbackChoice.unanswered, .recheck(from: latest), .recheck(from: nil)] {
+    let step = DongleLink.next(
+        reply: reply(fw: behind, rollback: true, ssid: carSSID, state: DongleNetState.connected),
+        latestTag: latest, expectedSSID: carSSID, rollback: choice)
+    check(step != .readyForCar,
+          "no rollback answer reaches the car on the reverted firmware (\(choice))")
+}
 check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: DongleNetState.connected),
                       latestTag: latest, expectedSSID: carSSID) == .rolledBack,
       "the choice defaults to .unanswered — a caller that forgets to pass it still sees rolledBack")

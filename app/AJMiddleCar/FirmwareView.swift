@@ -67,7 +67,11 @@ struct FirmwareView: View {
                 title(L.fwRebootTitle); sub(L.fwRebootWait)
             case .flashed:
                 title(L.fwFlashedTitle); sub(L.fwFlashedSub)
-                if forced { skipButton }
+                // Re-check, not skip. The image is written and the gate clears itself the moment
+                // the car reports the new build — `carIdentified` re-asks on every telemetry
+                // frame — so the only thing a person can usefully do here is ask again. Skipping
+                // was the other option and is gone: see `GateRule`.
+                if forced { fwButton(L.fwRetry, prominent: false) { Task { await check() } } }
             case .done:
                 title(L.fwDoneTitle); sub(L.fwDoneSub(current))
                 if forced { Color.clear.frame(width: 0, height: 0).onAppear { onDone?() } }
@@ -76,7 +80,6 @@ struct FirmwareView: View {
                 sub(rolledBack && link.rollback != false ? L.fwRollbackSub
                     : failReason.map { L.fwFailReason($0) } ?? L.fwFailSub)
                 fwButton(L.fwRetry, prominent: true) { Task { await check() } }
-                if forced && flashAttempted { skipButton }
             }
             radioLine
         }
@@ -122,13 +125,6 @@ struct FirmwareView: View {
         .buttonStyle(.plain)
         .disabled(disabled)
         .padding(.top, 3)
-    }
-
-    /// Decision 5's escape hatch: a forced gate that failed (or could not confirm) a flash
-    /// must not be a locked room. Ghost styling — continuing unupdated is the fallback, not
-    /// the offer.
-    private var skipButton: some View {
-        fwButton(L.fwSkip, prominent: false) { onDone?() }
     }
 
     private func check() async {

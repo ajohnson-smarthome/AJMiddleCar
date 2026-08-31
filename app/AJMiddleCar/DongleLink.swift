@@ -75,16 +75,16 @@ public enum DongleStep: Equatable {
 ///
 /// The dongle's rollback flag is sticky: `status_api.c` reads `ESP_OTA_IMG_ABORTED` from the
 /// other partition once at boot, so it clears only when a LATER OTA to that slot succeeds. The
-/// app is the only OTA path there is. So a model where acknowledging the rollback permanently
-/// suppresses `.updating` leaves exactly one exit — a bench reflash — which is the thing the
-/// rollback design exists to prevent.
+/// app is the only OTA path there is.
+///
+/// There used to be a `.proceed` here — "drive on what is running" — and it is gone by decision:
+/// being on the newest firmware is a precondition for driving, with no exception for the case
+/// where updating turns out to be impossible. The consequence was weighed and accepted: an image
+/// the bootloader keeps rejecting leaves the adapter behind and the car undriveable until a newer
+/// release ships. `.recheck` is the only answer, and a newer release the only way out.
 public enum RollbackChoice: Equatable {
     /// Nothing said yet: report the rollback and stop there.
     case unanswered
-    /// "Drive on what is running." The rollback stops being reported, and the update that
-    /// produced it is not re-offered: from here there is no way to tell "a fixed release has
-    /// since been published" apart from "the same one that just failed".
-    case proceed
     /// "Check again" — the affordance `FirmwareView`'s own rolled-back car screen keeps beside
     /// its skip (`fw.retry`). One look at whatever the release feed now says, measured from the
     /// tag that was on offer when it was asked (`nil` when nothing was known then: offline, no
@@ -178,13 +178,6 @@ public enum DongleLink {
             switch rollback {
             case .unanswered:
                 return .rolledBack
-            case .proceed:
-                // Proceed on the firmware the dongle actually has. Deliberately does NOT fall
-                // through to the `mustUpdate` check below — there is no way from here to tell
-                // "a fixed release has since been published" apart from "the same one that just
-                // failed", and re-offering either looks identical to the loop this exists to
-                // break. The user asked to drive on what is running; that is what happens.
-                break
             case .recheck(let from):
                 // The one path back to the app's own OTA. Newer than what was on offer when
                 // they asked, AND newer than what the dongle is running: the first keeps the

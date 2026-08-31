@@ -19,6 +19,9 @@ struct ConnectView: View {
         /// Step 1 of the startup ladder: nothing has answered at the adapter's address yet.
         /// Shows the adapter faint — the same drawing the next step makes solid, which is what
         /// turns the pair into one movement forward rather than two unrelated pictures.
+        /// The newest release could not be established, so nothing may proceed. No button: the
+        /// gate loop is still asking and clears this itself the moment the network returns.
+        case offline
         case findingAdapter
         /// Step 3: the adapter is ours and healthy; asking GitHub whether it is current. Had no
         /// screen at all before — `dongleGate()` did this silently, so a launch that stopped
@@ -70,14 +73,10 @@ struct ConnectView: View {
     }
 
     var situation: Situation = .searching
-    /// `.dongleRolledBack` only. The car's own forced-update gate keeps an identical skip
-    /// (`FirmwareView.skipButton`) for the identical reason: a gate that failed must not be a
-    /// dead end.
-    var onSkipRollback: (() -> Void)? = nil
-    /// `.dongleRolledBack` only, beside the skip — exactly as `FirmwareView`'s rolled-back car
-    /// screen offers `fw.retry` beside its own. Without it the skip is the only exit, and it is
-    /// a one-way one: the dongle's rollback flag only clears when a later OTA succeeds, and
-    /// this app is the only thing that can perform one.
+    /// `.dongleRolledBack` only, and now the screen's only button: the option to drive on the
+    /// reverted firmware is gone. This asks whether a newer release exists yet — the dongle's
+    /// rollback flag clears only when a later OTA succeeds, and this app is the only thing that
+    /// can perform one.
     var onRecheckRollback: (() -> Void)? = nil
     /// `.dongleUpdateFailed` only.
     var onRetryDongleUpdate: (() -> Void)? = nil
@@ -144,6 +143,9 @@ struct ConnectView: View {
         case .checkingDongle:
             DeviceScene(palette: p, rings: .wait(),
                         chip: (glyph: "cpu", tint: p.accent)) { AdapterBody(palette: p) }
+        case .offline:
+            DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
+                        chip: (glyph: "wifi.exclamationmark", tint: p.warn)) { AdapterBody(palette: p) }
         case .dongleFault:
             // Answering, but wrongly: the adapter is present, so it is drawn present, and the
             // chip carries the fault. The radar used to sit here and promised a search nobody
@@ -177,6 +179,7 @@ struct ConnectView: View {
     private var title: String {
         switch situation {
         case .searching: return L.connectTitle
+        case .offline: return L.gateNoInternetTitle
         case .findingAdapter: return L.dongleFindingTitle
         case .adapterUpdateCheck: return L.dongleUpdCheckTitle
         case .findingCar: return L.carFindingTitle
@@ -197,6 +200,7 @@ struct ConnectView: View {
     private var message: String {
         switch situation {
         case .searching: return L.connectBody
+        case .offline: return L.gateNoInternetSub
         case .findingAdapter: return L.dongleFindingSub
         case .adapterUpdateCheck: return L.dongleUpdCheckSub
         case .findingCar: return L.carFindingSub
@@ -238,17 +242,8 @@ struct ConnectView: View {
                 if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
             }
         case .dongleRolledBack:
-            HStack(spacing: 10) {
-                // The offer, prominent, like `FirmwareView`'s own `fw.retry` on the same
-                // situation: ask whether a newer release exists yet.
-                if let onRecheckRollback {
-                    pillButton(L.fwRetry, tint: p.warn, action: onRecheckRollback)
-                }
-                // Ghost styling, matching `FirmwareView.skipButton`'s own choice for the
-                // identical situation: continuing on the reverted firmware is the fallback.
-                if let onSkipRollback {
-                    pillButton(L.fwSkip, tint: p.muted, filled: false, action: onSkipRollback)
-                }
+            if let onRecheckRollback {
+                pillButton(L.fwRetry, tint: p.warn, action: onRecheckRollback)
             }
         case .dongleUpdateFailed:
             if let onRetryDongleUpdate {
@@ -260,7 +255,7 @@ struct ConnectView: View {
             }
         case .searching, .checkingDongle, .noDongle, .dongleUpdating, .dongleConfiguring,
              .dongleFault, .wrongDongle,
-             .findingAdapter, .adapterUpdateCheck, .findingCar, .carUpdateCheck:
+             .findingAdapter, .adapterUpdateCheck, .findingCar, .carUpdateCheck, .offline:
             EmptyView()
         }
     }

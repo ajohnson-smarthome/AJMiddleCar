@@ -102,7 +102,6 @@ enum L {
     static var fwFlashedTitle: String { s("fw.flashedTitle") }
     static var fwFlashedSub: String { s("fw.flashedSub") }
     static var fwRollbackSub: String { s("fw.rollbackSub") }
-    static var fwSkip: String { s("fw.skip") }
     static var driveConnected: String { s("drive.connected") }
     static var rampTitle: String { s("ramp.title") }
     static var rampHeadline: String { s("ramp.headline") }
