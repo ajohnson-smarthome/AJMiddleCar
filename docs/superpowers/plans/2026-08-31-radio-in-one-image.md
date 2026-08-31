@@ -459,17 +459,10 @@ cd /Users/adamjohnson/VSCode/esp32-p4-car && source tools/env-p4.sh && \
 Expected: BUILD SUCCEEDS. If `esp_hosted.h` or `esp_hosted_ota.h` is not found, add
 `espressif__esp_hosted` to `REQUIRES` in the same `idf_component_register(...)` and rebuild.
 
-Then confirm the embedded symbols now reach the linked image — this file is their first
-reference, and until it existed the linker discarded them as unreferenced:
-
-```bash
-source tools/env-p4.sh && \
-  cp firmware/p4/build/bootloader/bootloader.bin firmware/p4/main/radio_image.bin && \
-  (cd firmware/p4 && idf.py build >/dev/null 2>&1) && \
-  riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep radio_image_bin
-```
-Expected: both `_binary_radio_image_bin_start` and `_binary_radio_image_bin_end` are listed. Then
-remove the stand-in: `rm -f firmware/p4/main/radio_image.bin`.
+The embedded symbols still will not appear in `ajmiddlecar.elf` after this task, and that is
+correct: nothing calls `radio_flash_apply()` yet, so the linker discards this whole object and the
+reference in it. `main.c` is what calls it, in Task 4, and `main.c` cannot be discarded — the ELF
+check lives there.
 
 - [ ] **Step 5: Commit**
 
@@ -618,7 +611,25 @@ cd /Users/adamjohnson/VSCode/esp32-p4-car && tools/test-all.sh 2>&1 | tail -3 &&
 ```
 Expected: `== all green ==` and BUILD SUCCEEDS.
 
-- [ ] **Step 6: Verify the ordinary build is inert**
+- [ ] **Step 6: Verify the embedded image finally reaches the linked image**
+
+`main.c` is the first thing that cannot be discarded and that calls into `radio_flash.c`, so this
+is the first build where the embedded symbols survive to the ELF. Two earlier tasks tried to check
+this and could not — the linker was correctly throwing away an image nobody had asked for yet.
+
+```bash
+source tools/env-p4.sh && \
+  cp firmware/p4/build/bootloader/bootloader.bin firmware/p4/main/radio_image.bin && \
+  (cd firmware/p4 && idf.py build >/dev/null 2>&1) && \
+  riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep radio_image_bin
+```
+Expected: both `_binary_radio_image_bin_start` and `_binary_radio_image_bin_end` are listed. If
+they are still absent here, that is a real defect rather than the linker being reasonable — stop
+and report it, because the whole design rests on the image reaching the flash.
+
+Then remove the stand-in: `rm -f firmware/p4/main/radio_image.bin`.
+
+- [ ] **Step 7: Verify the ordinary build is inert**
 
 With no `radio_image.bin` present, the embedded region is empty and the gate must do nothing.
 Confirm the symbols exist and are equal — which is what `radio_flash_image_size()` returns zero
@@ -632,7 +643,7 @@ rm -f firmware/p4/main/radio_image.bin && \
 Expected: two lines whose addresses are identical — start and end at the same place, so the
 image is zero bytes and `radio_ota_should_flash` refuses on `have_image == false`.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add firmware/p4/main/main.c firmware/p4/main/status_api.c firmware/p4/main/radio_expected.h
