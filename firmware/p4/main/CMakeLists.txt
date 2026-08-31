@@ -15,7 +15,7 @@ if(NOT EXISTS "${RADIO_IMAGE}")
 endif()
 
 idf_component_register(
-    SRCS "ota_api.c" "main.c" "pca9685.c" "mixer.c" "motors.c" "car.c" "calibration.c" "wifi_ap.c" "http_server.c" "control_proto.c" "rt_link.c" "recovery.c" "calib_api.c" "status_api.c" "ramp.c" "link.c" "cfg_api.c" "telemetry.c" "wheel.c" "dims.c" "cfg_json.c" "api_util.c" "radio_ota.c"
+    SRCS "ota_api.c" "main.c" "pca9685.c" "mixer.c" "motors.c" "car.c" "calibration.c" "wifi_ap.c" "http_server.c" "control_proto.c" "rt_link.c" "recovery.c" "calib_api.c" "status_api.c" "ramp.c" "link.c" "cfg_api.c" "telemetry.c" "wheel.c" "dims.c" "cfg_json.c" "api_util.c" "radio_ota.c" "radio_flash.c"
     INCLUDE_DIRS "."
     EMBED_FILES "radio_image.bin"
     REQUIRES esp_wifi esp_netif esp_event nvs_flash esp_http_server esp_timer heap esp_app_format app_update lwip
