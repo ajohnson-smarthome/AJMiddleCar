@@ -56,7 +56,12 @@ final class AppFlow: ObservableObject {
         case dongleConfiguring
         /// The dongle will not get any further on its own: the join budget ran out (`failed`),
         /// or its state machine never left `idle` — see `DongleStep.retryJoin`. The credentials
-        /// are already stored; `dongleGate()` asks the radio to try again.
+        /// are already stored; `dongleGate()` asks the radio to try again, at most
+        /// `maxDongleJoinAttempts` times, and then holds here with a button. The spec is
+        /// explicit that this state is "reached and held rather than retried forever… A radio
+        /// that hunts for an absent car indefinitely is drawing the phone's battery for
+        /// nothing", and that after a few attempts the app says the car is not found and offers
+        /// a Retry.
         case dongleJoinFailed
         case checkInternet, noInternet, checkUpdate, checkFailed, downloading
         /// The gate has passed; the car has not identified itself yet. What is on screen while
@@ -106,6 +111,15 @@ final class AppFlow: ObservableObject {
     /// few tries rather than re-fetching from GitHub on every poll forever.
     private static let maxDongleUpdateAttempts = 3
 
+    /// The same shape, for the other unbounded loop: how many times `dongleGate()` will POST
+    /// the car's network at the dongle — the first configure and every retry together — before
+    /// it stops and waits for `retryDongleJoin()`. Nothing here was bounded at all: `.retryJoin`
+    /// re-POSTed on every poll forever, which is precisely the radio the spec says must not
+    /// hunt for an absent car indefinitely. Three is the update path's number and roughly the
+    /// firmware's own `WIFI_JOIN_ATTEMPTS` shape; each attempt costs a full join budget on the
+    /// dongle's side, so this is minutes of honest trying, not seconds.
+    private static let maxDongleJoinAttempts = 3
+
     /// Guards against a second `startupCheck()` running while one is already in flight — a
     /// second tap on a retry button whose screen has not yet updated `phase` (`dongleGate()`'s
     /// first act is an `await` on `/status`, up to its timeout, before it writes anything) would
@@ -120,6 +134,8 @@ final class AppFlow: ObservableObject {
     private var rollbackAcknowledged = false
     private var dongleUpdateAttempts = 0
     private var dongleUpdateGaveUp = false
+    private var dongleJoinAttempts = 0
+    private var dongleJoinGaveUp = false
 
     /// Entry point. Re-entrant calls while a run is already in flight are ignored — see
     /// `gateRunning`'s own doc.
@@ -209,7 +225,10 @@ final class AppFlow: ObservableObject {
                     }
                 }
             case .sendCredentials:
-                phase = .dongleConfiguring
+                // Once the budget is spent this is the same dead end `.retryJoin` reaches, and
+                // it says so: a dongle that keeps reporting a network other than the car's
+                // after being told the car's is not "configuring", it is failing to configure.
+                phase = dongleJoinGaveUp ? .dongleJoinFailed : .dongleConfiguring
                 // No credential state lives here or in DongleClient — CarContract's are opaque
                 // constants, read and handed over, never logged or shown (see DongleClient's own
                 // doc for why `join`/`retryJoin` are shaped this way).
@@ -220,6 +239,10 @@ final class AppFlow: ObservableObject {
                 phase = .dongleJoinFailed
                 await askDongleToJoin(retry: true)
             case .readyForCar:
+                // The join worked, so the budget that got here is spent on nothing: reset it,
+                // for this session and for anyone who re-enters this loop later.
+                dongleJoinAttempts = 0
+                dongleJoinGaveUp = false
                 await carGate()
                 return
             }
@@ -253,6 +276,12 @@ final class AppFlow: ObservableObject {
     /// a 500 means it stored them and the radio refused, which are the same screen but very
     /// different bench sessions.
     private func askDongleToJoin(retry: Bool) async {
+        // Bounded, and the bound covers BOTH kinds of ask: a dongle that never stores what it
+        // is told loops through `.sendCredentials` exactly as tirelessly as a radio that cannot
+        // reach the car loops through `.retryJoin`, and neither may run forever.
+        guard !dongleJoinGaveUp else { return }
+        dongleJoinAttempts += 1
+        if dongleJoinAttempts >= Self.maxDongleJoinAttempts { dongleJoinGaveUp = true }
         do {
             if retry {
                 try await dongle.retryJoin(ssid: CarContract.ssid, password: CarContract.password)
@@ -279,6 +308,14 @@ final class AppFlow: ObservableObject {
     /// escape hatch — `FirmwareView`'s skip button). Read by `dongleGate()`'s very next poll,
     /// which is at most `donglePollInterval` away.
     func skipDongleRollback() { rollbackAcknowledged = true }
+
+    /// The user asked for another join attempt from the join-failed screen — either after the
+    /// budget above ran out, or just to stop waiting for the next poll. Both are the same
+    /// request: a fresh budget, spent from the next `.sendCredentials`/`.retryJoin` step.
+    func retryDongleJoin() {
+        dongleJoinGaveUp = false
+        dongleJoinAttempts = 0
+    }
 
     /// The user asked `dongleGate()` to try updating the dongle again after it gave up —
     /// `maxDongleUpdateAttempts` consecutive failures with no progress. Clears both counters so

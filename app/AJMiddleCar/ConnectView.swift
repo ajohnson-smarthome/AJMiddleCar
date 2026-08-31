@@ -39,8 +39,9 @@ struct ConnectView: View {
         /// "connecting" from here; see `DongleLink.DongleStep.sendCredentials`/`.waiting`.
         case dongleConfiguring
         /// The dongle will not reach the car on its own: the join budget ran out, or its state
-        /// machine never left `idle`. `AppFlow` asks the radio to try again, a bounded number of
-        /// times — see `.dongleJoinFailed`'s button below for what happens after that.
+        /// machine never left `idle`. `AppFlow` asks the radio to try again a bounded number of
+        /// times and then holds here, so this screen carries `onRetryJoin` — without it, the
+        /// hold would be a dead end and the retries would have to run forever to avoid one.
         case dongleJoinFailed
         /// The dongle's bootloader reverted its last update. Standing until `onSkipRollback` is
         /// used — the flag itself does not clear on its own, so without that escape hatch this
@@ -55,6 +56,9 @@ struct ConnectView: View {
     var onSkipRollback: (() -> Void)? = nil
     /// `.dongleUpdateFailed` only.
     var onRetryDongleUpdate: (() -> Void)? = nil
+    /// `.dongleJoinFailed` only. The same offer as `onRetryDongleUpdate`, for the other bounded
+    /// wait — asking again now, and with a fresh budget.
+    var onRetryJoin: (() -> Void)? = nil
     @Environment(\.colorScheme) private var colorScheme
     private var p: Palette { Theme.current(colorScheme) }
 
@@ -67,10 +71,11 @@ struct ConnectView: View {
     }
 
     /// The radar sweep reads as "still looking, will resolve on its own" — true of every
-    /// situation here except the two that hand control to a button (`.dongleRolledBack`,
-    /// `.dongleUpdateFailed`): neither retries itself, so neither should look like it will.
-    /// Both borrow `WrongCarView`'s static failed-car image instead, the same way `WrongCarView`
-    /// does.
+    /// situation here except the ones that hand control to a button (`.dongleRolledBack`,
+    /// `.dongleUpdateFailed`, `.wrongDongle`): none of them retries itself, so none should look
+    /// like it will. They borrow `WrongCarView`'s static failed-car image instead, the same way
+    /// `WrongCarView` does. `.dongleJoinFailed` keeps the sweep: its retries are bounded but
+    /// real, and while they are running the screen is telling the truth.
     @ViewBuilder private var leftPanel: some View {
         switch situation {
         // `.wrongDongle` joins them: nothing about it resolves by waiting either — the fix is a
@@ -145,7 +150,11 @@ struct ConnectView: View {
             if let onRetryDongleUpdate {
                 pillButton(L.fwRetry, tint: p.warn, action: onRetryDongleUpdate)
             }
-        case .searching, .noDongle, .dongleUpdating, .dongleConfiguring, .dongleJoinFailed,
+        case .dongleJoinFailed:
+            if let onRetryJoin {
+                pillButton(L.fwRetry, tint: p.warn, action: onRetryJoin)
+            }
+        case .searching, .noDongle, .dongleUpdating, .dongleConfiguring,
              .dongleFault, .wrongDongle:
             EmptyView()
         }

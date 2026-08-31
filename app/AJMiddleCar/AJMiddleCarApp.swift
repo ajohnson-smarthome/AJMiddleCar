@@ -95,7 +95,7 @@ struct AJMiddleCarApp: App {
         case .dongleConfiguring:
             ConnectView(situation: .dongleConfiguring)
         case .dongleJoinFailed:
-            ConnectView(situation: .dongleJoinFailed)
+            ConnectView(situation: .dongleJoinFailed, onRetryJoin: { flow.retryDongleJoin() })
         case .checkInternet, .checkUpdate, .downloading, .checkFailed:
             UpdateCheckView(palette: p, phase: flow.phase, client: flow.client) { flow.retry() }
         case .noInternet:

@@ -67,7 +67,7 @@ struct GalleryView: View {
             ("Dongle updating",         AnyView(ConnectView(situation: .dongleUpdating))),
             ("Dongle update failed",    AnyView(ConnectView(situation: .dongleUpdateFailed, onRetryDongleUpdate: {}))),
             ("Dongle configuring",      AnyView(ConnectView(situation: .dongleConfiguring))),
-            ("Dongle join failed",      AnyView(ConnectView(situation: .dongleJoinFailed))),
+            ("Dongle join failed",      AnyView(ConnectView(situation: .dongleJoinFailed, onRetryJoin: {}))),
             ("Dongle rolled back",      AnyView(ConnectView(situation: .dongleRolledBack, onSkipRollback: {}))),
             ("Dongle fault",            AnyView(ConnectView(situation: .dongleFault))),
             ("Wrong dongle",            AnyView(ConnectView(situation: .wrongDongle("some-other-adapter")))),
