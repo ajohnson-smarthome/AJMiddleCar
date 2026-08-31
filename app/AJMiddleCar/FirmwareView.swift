@@ -4,9 +4,13 @@ import SwiftUI
 ///
 /// It renders whatever `FirmwareFlow` says and nothing else, which is what makes updating the
 /// adapter look exactly like updating the car: same phases, same words, same buttons, same
-/// place on the screen. The only things that differ are the object under the chip, chosen by
-/// `flow.device`, and the radio line below — which the car has because it carries a second
-/// processor and the adapter does not.
+/// place on the screen. The only thing that differs is the object under the chip, chosen by
+/// `flow.device`.
+///
+/// It used to carry one more line: the radio co-processor's version, car-only, kept because it
+/// was the app's sole view of a pinned-version mismatch. That reason expired when the car learned
+/// to correct its own radio at boot — a mismatch is now a transient state during one reboot
+/// rather than something a person has to notice and act on.
 struct FirmwareView: View {
     @StateObject private var flow: FirmwareFlow
     let palette: Palette
@@ -15,8 +19,6 @@ struct FirmwareView: View {
     /// choice to offer, and a button would be theatre.
     var forced: Bool = false
     var onDone: (() -> Void)? = nil
-    /// The car's radio co-processor. Nil for the adapter, which has none.
-    var radio: CarLink.RadioStatus? = nil
     /// Gallery only: hold a phase, with no network behind it.
     var debugPhase: FwPhase? = nil
 
@@ -25,7 +27,7 @@ struct FirmwareView: View {
     private var device: UpdateRules.Device { flow.device }
 
     init(palette: Palette, flow: @autoclosure @escaping () -> FirmwareFlow, forced: Bool = false,
-         onDone: (() -> Void)? = nil, radio: CarLink.RadioStatus? = nil, debugPhase: FwPhase? = nil) {
+         onDone: (() -> Void)? = nil, debugPhase: FwPhase? = nil) {
         self.palette = palette
         // `StateObject(wrappedValue:)` takes an autoclosure and evaluates it once, on the first
         // render — so the flow (and the `UpdateClient` inside it) survives the struct being
@@ -33,7 +35,6 @@ struct FirmwareView: View {
         _flow = StateObject(wrappedValue: flow())
         self.forced = forced
         self.onDone = onDone
-        self.radio = radio
         self.debugPhase = debugPhase
     }
 
@@ -106,25 +107,6 @@ struct FirmwareView: View {
                     : flow.failReason.map { L.fwFailReason(device, $0) } ?? L.fwFailSub)
                 fwButton(L.fwRetry, prominent: true) { Task { await flow.check() } }
             }
-            radioLine
-        }
-    }
-
-    /// The car's radio co-processor. Kept car-only on purpose: the adapter has no second
-    /// processor to report, and this is the app's only view of a pinned-version mismatch —
-    /// dropping it to make the two screens match to the pixel would trade real information for
-    /// tidiness.
-    @ViewBuilder private var radioLine: some View {
-        switch radio {
-        case .known(let fw, true):
-            Text(L.fwRadio(fw)).font(.system(size: 12)).foregroundStyle(p.muted)
-        case .known(let fw, false):
-            Text(L.fwRadioMismatch(fw)).font(.system(size: 12)).foregroundStyle(p.warn)
-                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 260, alignment: .leading)
-        case .unavailable:
-            Text(L.fwRadioUnknown).font(.system(size: 12)).foregroundStyle(p.muted)
-        case nil:
-            EmptyView()
         }
     }
 

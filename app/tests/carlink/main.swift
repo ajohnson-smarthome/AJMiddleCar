@@ -17,7 +17,7 @@ func compose(_ p: PathState, _ s: SessionState, _ t: Telemetry?, _ age: TimeInte
 
 // All three, or it is not live.
 check(compose(.dongleUp, adopted, fresh, 0.1) == .live(fresh), "path + session + fresh frame = live")
-check(compose(.dongleUp, adopted, fresh, 5) == .searching, "stale telemetry is not live")
+check(compose(.dongleUp, adopted, fresh, 5) == .searching, "long-stale telemetry is not live")
 check(compose(.dongleUp, adopted, nil, nil) == .searching, "adopted but silent is not live")
 check(compose(.dongleUp, .none, fresh, 0.1) == .searching, "telemetry without a session is not live")
 
@@ -65,8 +65,13 @@ check(compose(.dongleUp, SessionState.protoMismatch(theirs: 2).survivingSessionE
 check(compose(.dongleUp, SessionState.foreign(device: "esp32-car").survivingSessionEnd, nil, nil)
         == .wrongCar(device: "esp32-car"), "the wrong-car screen holds across a session end")
 
-// The staleness threshold is the contract's telemetry rate, not a number picked here.
-check(LinkRule.staleAfter == 5 / Double(CarContract.telemetryHz), "staleness from the contract")
+// The staleness threshold is a frame count against the contract's telemetry rate, not a duration
+// picked here — and it is deliberately generous. A gap that costs one screen swap and back is
+// worse than a late notice: the car's own 300 ms control watchdog is what protects the driving.
+check(LinkRule.staleAfter == 12 / Double(CarContract.telemetryHz), "staleness from the contract")
+// The gap that used to tear the drive screen down. Twelve frames is what makes it survivable.
+check(compose(.dongleUp, adopted, fresh, 1.0).isLive,
+      "a one-second gap no longer replaces the drive screen — UDP over a relay does that")
 check(compose(.dongleUp, adopted, fresh, LinkRule.staleAfter - 0.01).isLive, "just inside the window")
 check(!compose(.dongleUp, adopted, fresh, LinkRule.staleAfter).isLive, "the boundary is not live")
 

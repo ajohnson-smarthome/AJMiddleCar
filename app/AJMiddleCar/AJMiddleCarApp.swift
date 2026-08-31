@@ -5,9 +5,6 @@ struct AJMiddleCarApp: App {
     @StateObject private var link = CarLink()
     @StateObject private var intent = ControlIntent()
     @StateObject private var flow = AppFlow()
-    @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.colorScheme) private var colorScheme
-    private var p: Palette { Theme.current(colorScheme) }
 
     var body: some Scene {
         WindowGroup {
@@ -15,13 +12,34 @@ struct AJMiddleCarApp: App {
             if ProcessInfo.processInfo.arguments.contains("-gallery") {
                 GalleryView()
             } else {
-                appRoot
+                RootView(link: link, intent: intent, flow: flow)
             }
             #else
-            appRoot
+            RootView(link: link, intent: intent, flow: flow)
             #endif
         }
     }
+}
+
+/// Everything the app shows, and the reason it is a `View` rather than properties on the `App`.
+///
+/// `@Environment(\.colorScheme)` declared on an `App` does not track the window's appearance: it
+/// reads a default and never updates. The palette derived from it was therefore always the light
+/// one, and every screen handed that palette from above — the firmware screen, the update check,
+/// settings, the no-internet screen — rendered light inside a dark app, while `ConnectView` and
+/// `DriveView`, which read the environment themselves from inside the hierarchy, rendered
+/// correctly. A launch would go dark, light, dark as it moved between them.
+///
+/// `scenePhase` genuinely does work at `App` level; it moved here only to keep the two together.
+struct RootView: View {
+    @ObservedObject var link: CarLink
+    @ObservedObject var intent: ControlIntent
+    @ObservedObject var flow: AppFlow
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var colorScheme
+    private var p: Palette { Theme.current(colorScheme) }
+
+    var body: some View { appRoot }
 
     private var appRoot: some View {
         root
@@ -125,7 +143,7 @@ struct AJMiddleCarApp: App {
             NoInternetView(palette: p) { flow.retry() }
         case .updateRequired:
             FirmwareView(palette: p, flow: .forCar(link: link), forced: true,
-                         onDone: { flow.updateFinished() }, radio: link.radio)
+                         onDone: { flow.updateFinished() })
                 .onAppear { link.start() }
         case .awaitingCar, .ready:
             // The link opens when the gate hands over, not at launch: until then there is

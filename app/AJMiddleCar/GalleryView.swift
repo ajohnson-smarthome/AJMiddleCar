@@ -78,8 +78,7 @@ struct GalleryView: View {
             let flow = device == .car ? FirmwareFlow.forCar(link: link)
                                       : FirmwareFlow.forDongle(client: DongleClient())
             return AnyView(NavigationStack {
-                FirmwareView(palette: p, flow: flow, forced: forced,
-                             radio: device == .car ? link.radio : nil, debugPhase: phase)
+                FirmwareView(palette: p, flow: flow, forced: forced, debugPhase: phase)
             })
         }
         func calib(_ d: CalibrationView.CalDebug) -> AnyView {
@@ -122,12 +121,6 @@ struct GalleryView: View {
             ("Firmware done",           fw(.done)),
             ("Firmware failed",         fw(.failed)),
             ("Firmware forced",         fw(.available, forced: true)),
-            ("Firmware radio mismatch",  AnyView(NavigationStack { FirmwareView(
-                palette: p, flow: .forCar(link: CarLink.preview(.live(Telemetry()), fw: "v1.0+584")),
-                radio: .known(fw: "2.11.7", ok: false), debugPhase: .upToDate) })),
-            ("Firmware radio unknown",   AnyView(NavigationStack { FirmwareView(
-                palette: p, flow: .forCar(link: CarLink.preview(.live(Telemetry()), fw: "v1.0+584")),
-                radio: .unavailable, debugPhase: .upToDate) })),
             ("Firmware flashed",         fw(.flashed)),
             ("Firmware failed forced",   fw(.failed, forced: true)),
             // The adapter, through the same screen — this is the unification, visible.

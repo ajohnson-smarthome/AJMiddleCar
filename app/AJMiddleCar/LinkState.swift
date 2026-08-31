@@ -70,7 +70,17 @@ enum Link: Equatable {
 enum LinkRule {
     /// Five missed pushes at the contract's telemetry rate. Telemetry is the only continuous
     /// evidence the car is still there, so its age is what "live" means.
-    static let staleAfter: TimeInterval = 5 / Double(CarContract.telemetryHz)
+    /// How long telemetry may go quiet before the drive screen gives way to "saying hello".
+    ///
+    /// It was five frames — one second at the contract's 5 Hz — and that is too tight for what it
+    /// costs. Telemetry is UDP, and now it crosses a Wi-Fi hop and a USB relay as well; a
+    /// one-second gap is not rare, and each one replaced the whole drive screen with a connection
+    /// screen and then took it back. The link was fine the entire time.
+    ///
+    /// Twelve frames instead. Nothing safety-critical rests on this number: the car's own control
+    /// watchdog is 300 ms and lives in the firmware, where losing the driver actually matters.
+    /// This one governs a screen, and a screen that flickers teaches its reader to distrust it.
+    static let staleAfter: TimeInterval = 12 / Double(CarContract.telemetryHz)
 
     /// `.live` requires all three: the path is satisfied, the car adopted our session, and the
     /// newest telemetry is fresh. Any one of them missing is `.searching` — never `.live` with a
