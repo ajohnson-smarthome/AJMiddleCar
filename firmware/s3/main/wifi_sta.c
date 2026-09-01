@@ -347,21 +347,21 @@ const char *wifi_sta_state_name(void)
     return refine(name);
 }
 
-int8_t wifi_sta_rssi(void)
-{
-    wifi_ap_record_t info;
-    if (esp_wifi_sta_get_ap_info(&info) != ESP_OK) {
-        return 0;
-    }
-    return info.rssi;
-}
-
-/* The joined network's primary channel — the same "real reading, 0 when not connected" contract
- * as wifi_sta_rssi() just above, not a placeholder. */
-uint8_t wifi_sta_channel(void)
+bool wifi_sta_ap_info(int8_t *rssi, uint8_t *channel)
 {
     wifi_ap_record_t ap;
-    return esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.primary : 0;
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+        /* Zeroed rather than left alone: the sentinel is the answer to "what is the signal
+         * when there is no link", and a caller that reads its own uninitialised locals
+         * because it forgot to check the return value should see that answer, not a number
+         * off the stack. */
+        *rssi = 0;
+        *channel = 0;
+        return false;
+    }
+    *rssi = ap.rssi;
+    *channel = ap.primary;
+    return true;
 }
 
 /* The consumed attempts of the current budget, out of WIFI_JOIN_ATTEMPTS.

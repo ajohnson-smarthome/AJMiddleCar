@@ -69,22 +69,27 @@ static esp_err_t status_get(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    /* Read into locals, in this order, rather than passed as two arguments to one snprintf.
-     * C does not order argument evaluation, and these two are not one snapshot: state is taken
-     * under wifi_sta's lock, rssi is an unlocked esp_wifi_sta_get_ap_info. Evaluated
-     * right-to-left, rssi could be sampled while the station was still down and state a moment
-     * later once it was up, publishing {"state":"connected","rssi":0} out of two readings that
-     * were each correct. Taking state FIRST leaves only the honest version of that pairing: if
-     * state says connected, rssi was read afterwards, so a 0 means the link genuinely dropped
-     * in between. Not atomicity — there is no lock spanning both — but an ordering that cannot
-     * invent a contradiction.
+    /* Read into locals, in this order, rather than passed as arguments to one snprintf.
+     * C does not order argument evaluation, and these are not one snapshot: state is taken
+     * under wifi_sta's lock, the radio's figures are an unlocked esp_wifi_sta_get_ap_info.
+     * Evaluated right-to-left, they could be sampled while the station was still down and
+     * state a moment later once it was up, publishing {"state":"connected","rssi":0} out of
+     * two readings that were each correct. Taking state FIRST leaves only the honest version
+     * of that pairing: if state says connected, the radio was read afterwards, so a 0 means
+     * the link genuinely dropped in between. Not atomicity — there is no lock spanning both —
+     * but an ordering that cannot invent a contradiction.
      *
-     * `rssi` is a real reading from the dongle's own receiver, not a placeholder: 0 when not
-     * connected, whatever esp_wifi_sta_get_ap_info reports otherwise. */
+     * `rssi` and `channel` are real readings from the dongle's own receiver, not placeholders:
+     * 0 when not connected, whatever esp_wifi_sta_get_ap_info reports otherwise. They come
+     * from one call because they are one reading — see wifi_sta_ap_info's own comment for what
+     * two calls could publish. */
     const char *net_state = wifi_sta_state_name();
-    int net_rssi = (int)wifi_sta_rssi();
+    int8_t ap_rssi;
+    uint8_t ap_channel;
+    wifi_sta_ap_info(&ap_rssi, &ap_channel);
+    int net_rssi = (int)ap_rssi;
 
-    /* Independent of the net pair above, and of each other: none of these can disagree with
+    /* Independent of the net trio above, and of each other: none of these can disagree with
      * another the way state/rssi can, so no read-ordering constraint applies among them —
      * each is a single self-contained fact, read once, right here. The one field below that
      * can still come back torn is relay_stats_shared()'s errno/errno_count pair — accepted
@@ -95,7 +100,7 @@ static esp_err_t status_get(httpd_req_t *req)
     long uptime_s = (long)(esp_timer_get_time() / 1000000);
     unsigned heap = (unsigned)esp_get_free_heap_size();
     unsigned attempts = (unsigned)wifi_sta_attempts();
-    unsigned channel = (unsigned)wifi_sta_channel();
+    unsigned channel = (unsigned)ap_channel;
 
     /* 512, not 448. Worst case with the rollback, net and new fields: 243 bytes of literal
      * template (the previous 98, minus the 2-byte "up" literal usb loses by becoming a %s now

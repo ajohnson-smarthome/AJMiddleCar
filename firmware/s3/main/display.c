@@ -93,26 +93,34 @@ _Static_assert(ROW1_BASE + ROW_DESCENT <= PANEL_H - 1, "the lower row must fit t
 #define SPLASH_US       (2000 * 1000LL)
 #define PAGE_HOLD_US    (5000 * 1000LL)
 
-/* Every fifth pass is one second, and two things happen on it: the RSSI history takes the
- * sample screens.h sizes its ring for, and the relay's rate window is closed.
+/* One second, and two things happen on it: the RSSI history takes the sample screens.h sizes
+ * its ring for, and the relay's rate window is closed.
  *
- * The rate window is a second and NOT a pass for a reason worth writing down, because the
- * obvious reading of "sample once per pass" produces a figure that is wrong-looking on glass.
- * relay_stats_sample divides packets by the window, so a 200 ms window quantises the answer to
- * five packets per second per packet: the car's own 10 Hz control stream puts two datagrams in
- * each window, give or take one, and the «Пак/с» row would flicker between 5.0, 10.0 and 15.0
- * five times a second while the link was perfectly steady. A one-second window reads 10.0 and
- * moves by 1.0. The redraw stays at 5 Hz — how often the number is DRAWN and how long it is
- * MEASURED over are separate, and only the second one had to be a second. */
-#define PASSES_PER_SECOND 5
+ * Off the clock, not off a count of passes. vTaskDelayUntil holds the cadence while passes are
+ * quick, but a pass that runs long does not shorten the next one back into line, and
+ * display_hal.c budgets for exactly that: a wedged I2C bus costs 64 transfers of 50 ms, a frame
+ * every 3.2 s. Every fifth pass would then be sixteen seconds. relay_stats_sample divides by
+ * the elapsed milliseconds it is handed, so the RATE would stay honest right through that while
+ * the history's time base stretched underneath it — a strip drawn as 46 seconds of link that
+ * was really twelve minutes of one, and no way to tell from the glass. One clock for both, so
+ * the two cannot disagree about how long a second is.
+ *
+ * Why a second at all and not a pass: relay_stats_sample divides packets by the window, so a
+ * 200 ms window quantises the answer to five packets per second per packet — the car's own
+ * 10 Hz control stream puts two datagrams in each window, give or take one, and the «Пак/с» row
+ * would flicker between 5.0, 10.0 and 15.0 five times a second while the link was perfectly
+ * steady. A one-second window reads 10.0 and moves by 1.0. The redraw stays at 5 Hz: how often
+ * the number is DRAWN and how long it is MEASURED over are separate, and only the second one
+ * had to be a second. */
+#define SECOND_US (1000 * 1000LL)
 
 /* Where the BOOT button has paged to. PAGE_STATE means "showing the state screen", which is
  * both the resting place and where the five-second timeout returns to; 0..diag_pages-1 are the
  * diagnostics pages and diag_pages itself is «Сигнал», the last stop before the wrap. */
 #define PAGE_STATE (-1)
 
-/* wifi_sta_rssi() answers 0 when the station is not connected — a documented sentinel, not a
- * reading. Pushed into the history unchanged it would be the STRONGEST sample the strip can
+/* wifi_sta_ap_info() answers 0 dBm when the station is not connected — a documented sentinel,
+ * not a reading. Pushed into the history unchanged it would be the STRONGEST sample the strip can
  * hold (screens_rssi_pct clamps anything above -25 dBm to 100%), so a dropout would draw as a
  * full bar: the graph would claim a perfect link at exactly the moment there was none.
  * Recorded as -100 dBm instead — below the -85 dBm floor where a join stops holding — so it
@@ -275,20 +283,32 @@ static void view_build(dongle_view_t *v, net_cfg_t *cfg, const esp_app_desc_t *a
 {
     memset(v, 0, sizeof(*v));
 
-    /* The station's state FIRST, the radio's figures after. status_api.c's status_get()
-     * carries the twin of this comment for the same reason, and this is the caller that made
-     * it matter: wifi_sta_channel() and wifi_sta_rssi() are unlocked esp_wifi_sta_get_ap_info
-     * calls rather than reads of wifi_sta's lock-free mirror, so {state, rssi, channel} is not
-     * one snapshot — and /status only ever paired two of them. Reading the state first leaves
-     * only the pessimistic half of the race: a «Связь» screen over a figure that went stale
-     * between the two reads, never a live figure under a state that had already dropped. */
-    v->state = wifi_sta_state_name();
-    v->rssi = wifi_sta_rssi();
-    v->channel = wifi_sta_channel();
+    /* Not one snapshot, and the order is what decides which half of each race can reach the
+     * glass. status_api.c's status_get() carries the twin of the middle paragraph; this is the
+     * caller that made the other two matter.
+     *
+     * The attempt count BEFORE the state, because wifi_sta publishes the two as separate
+     * atomic stores: the failure that spends the last attempt sets the count to the budget and
+     * the state to failed, and a read that caught the new count under the old state would put
+     * «Попытка 6 из 5» on the panel. Taken first, the count can only be older than the state
+     * that frames it — and a count older than a «Поиск сети» was inside the budget.
+     *
+     * The state BEFORE the radio's figures, because wifi_sta_ap_info() is an unlocked
+     * esp_wifi_sta_get_ap_info rather than a read of wifi_sta's mirror. This way round leaves
+     * only the pessimistic half: a «Связь» screen over figures that went stale between the two
+     * reads, never live figures under a state that had already dropped. screens.c is what
+     * makes that harmless — it spells the 0 «нет» and draws no gauge from it.
+     *
+     * Both figures from ONE query, so they cannot contradict each other on the way to a row
+     * that shows them side by side. */
     v->attempts = wifi_sta_attempts();
     v->attempts_max = WIFI_JOIN_ATTEMPTS;
+    v->state = wifi_sta_state_name();
+    wifi_sta_ap_info(&v->rssi, &v->channel);
 
     v->host_attached = usb_net_host_attached();
+    /* An unsynchronised copy of a file-static the httpd task rewrites — deliberately, and
+     * net_api.h's own comment is where the reasoning lives rather than duplicated here. */
     v->ssid = net_api_current(cfg) ? cfg->ssid : NULL;
     v->fw = app->version;
     v->rolled_back = status_api_rolled_back();
@@ -379,14 +399,17 @@ static void display_task(void *arg)
 
     const esp_app_desc_t *app = esp_app_get_description();
     TickType_t last_wake = xTaskGetTickCount();
-    uint32_t tick = 0;
+
+    /* Seeded from the moment display_start() opened the first rate window, not from this
+     * task's first pass. That is what keeps the first second from closing early — a window a
+     * few milliseconds wide, divided into whatever the relays had forwarded — without a
+     * special case for it. */
+    int64_t last_second_us = s_start_us;
 
     for (;;) {
         int64_t now_us = esp_timer_get_time();
-        /* Never on the first pass: display_start() opened the rate window a few milliseconds
-         * ago, and closing it again immediately would divide by that. Both the rate and the
-         * history want a full second behind them. */
-        bool second = tick > 0 && (tick % PASSES_PER_SECOND) == 0;
+        bool second = (now_us - last_second_us) >= SECOND_US;
+        if (second) last_second_us = now_us;
 
         /* Closes the rate window relay_stats.h describes, before the view reads what it
          * latched. This task is its ONLY caller, so GET /status's to_car_x10 / to_phone_x10
@@ -424,9 +447,9 @@ static void display_task(void *arg)
 
         draw(&s);
 
-        tick++;
         /* vTaskDelayUntil, so a slow pass — an I2C bus holding the line, say — costs cadence
-         * and not drift. */
+         * and not drift. What it cannot do is give back the time a slow pass already spent,
+         * which is why the second above is measured rather than counted. */
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(PERIOD_MS));
     }
 }
