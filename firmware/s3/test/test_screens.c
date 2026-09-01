@@ -9,7 +9,7 @@ static void check(int ok, const char *what)
     if (!ok) { printf("FAIL: %s\n", what); failures++; }
 }
 
-/* The font's limit is 12 GLYPHS, and Cyrillic is two bytes each in UTF-8, so strlen() would
+/* The fonts' limits are in GLYPHS, and Cyrillic is two bytes each in UTF-8, so strlen() would
  * measure the wrong thing and reject correct copy. Counting lead bytes counts characters. */
 static size_t glyphs(const char *s)
 {
@@ -18,11 +18,34 @@ static size_t glyphs(const char *s)
     return n;
 }
 
+/* Well-formed UTF-8: every lead byte followed by exactly the continuation bytes its own shape
+ * announces. This is the property a byte-count truncation destroys — it cuts a two-byte
+ * Cyrillic letter in half and leaves a lead byte with nothing after it, which is not a
+ * character at all. */
+static int valid_utf8(const char *s)
+{
+    const unsigned char *p = (const unsigned char *)s;
+    while (*p != '\0') {
+        int extra;
+        if (*p < 0x80) extra = 0;
+        else if ((*p & 0xE0) == 0xC0) extra = 1;
+        else if ((*p & 0xF0) == 0xE0) extra = 2;
+        else if ((*p & 0xF8) == 0xF0) extra = 3;
+        else return 0;
+        p++;
+        for (int i = 0; i < extra; i++, p++)
+            if ((*p & 0xC0) != 0x80) return 0;
+    }
+    return 1;
+}
+
 static void check_fits(const screen_t *s)
 {
-    check(glyphs(s->head) <= 12, "headline fits the 10x20 font");
-    for (int r = 0; r < SCREEN_ROWS; r++)
-        check(glyphs(s->row[r]) <= 21, "row fits the 6x12 font");
+    check(glyphs(s->head) <= SCREEN_HEAD_GLYPHS, "headline fits the 10x20 font");
+    for (int r = 0; r < SCREEN_ROWS; r++) {
+        check(glyphs(s->row[r]) <= SCREEN_ROW_GLYPHS, "row fits the 6x12 font");
+        check(valid_utf8(s->row[r]), "row is a whole string of whole characters");
+    }
 }
 
 static dongle_view_t base(void)
@@ -156,15 +179,71 @@ static void test_update_outranks_rollback(void)
     check(s.gauge == GAUGE_LEVEL && s.gauge_pct == 62, "the rule fills to the transfer");
 }
 
-static void test_searching_shows_the_attempt_budget(void)
+/* dongle_view_t.attempts counts the attempts CONSUMED (wifi_state.h), and this row is an
+ * ordinal — so the two ends of what it can ever show are a join in flight with nothing spent
+ * yet, and the last attempt of the budget. They must read 1 and 5. The whole row, not a
+ * substring: the assertion this replaces set attempts to 3 and checked that the row contained
+ * "3" and "5", which is true of «Попытка 3 из 5» and equally true of the off-by-one that made
+ * the panel open at «Попытка 0 из 5» and never once reach 5. */
+static void test_searching_counts_attempts_from_one(void)
 {
     dongle_view_t v = base();
     v.state = DONGLE_STATE_SEARCHING;
-    v.attempts = 3;
     screen_t s;
+
+    v.attempts = 0;   /* wifi_state.c's own entry value for a fresh configuration */
     screens_for(&v, &s);
     check(s.id == SCREEN_SEARCHING, "searching");
-    check(strstr(s.row[1], "3") && strstr(s.row[1], "5"), "the row carries 3 of 5");
+    check(strcmp(s.row[1], "Попытка 1 из 5") == 0, "a join in flight is the first attempt");
+
+    /* 4 consumed is the fifth attempt running: the failure that takes the count to 5 is the
+     * one that moves the state to «Нет сети», so this is the highest this row can reach. */
+    v.attempts = 4;
+    screens_for(&v, &s);
+    check(strcmp(s.row[1], "Попытка 5 из 5") == 0, "the last attempt reads as the last one");
+}
+
+/* The SSID is the only text on this panel the device does not write itself, and
+ * contract/dongle-api.json caps it at 32 BYTES — which is 32 Latin characters, half again the
+ * row's budget of 21, and 16 Cyrillic ones, which fit whole. Both are at the contract's limit;
+ * only one is past the panel's. */
+static void test_an_ssid_at_the_contract_limit_stays_inside_the_row(void)
+{
+    const char *latin = "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345";   /* 32 bytes, 32 glyphs */
+    const char *cyr   = "АБВГДЕЖЗИКЛМНОПР";                   /* 32 bytes, 16 glyphs */
+    const char *states[] = { DONGLE_STATE_SEARCHING, DONGLE_STATE_CONNECTED };
+
+    for (size_t i = 0; i < sizeof(states) / sizeof(*states); i++) {
+        dongle_view_t v = base();
+        v.state = states[i];
+        screen_t s;
+
+        v.ssid = latin;
+        screens_for(&v, &s);
+        check(glyphs(s.row[0]) <= SCREEN_ROW_GLYPHS, "a 32-character SSID is cut to the row");
+        check(valid_utf8(s.row[0]), "and is still a string");
+        check(strstr(s.row[0], "...") != NULL, "and says that it was cut");
+
+        v.ssid = cyr;
+        screens_for(&v, &s);
+        check(strcmp(s.row[0], cyr) == 0, "16 Cyrillic letters fit whole and are left alone");
+        check(glyphs(s.row[0]) <= SCREEN_ROW_GLYPHS, "well inside the row");
+    }
+}
+
+/* Past anything an SSID can be — 43 bytes, where the contract allows 32 — and here for the
+ * property no SSID can currently exercise: the cut lands BETWEEN characters. One Latin letter
+ * then 21 Cyrillic ones is 22 glyphs in 43 bytes, so a plain snprintf into SCREEN_ROW_MAX
+ * would copy 42 of them and leave the last letter as a lone lead byte. */
+static void test_a_row_is_never_cut_through_a_character(void)
+{
+    dongle_view_t v = base();
+    v.ssid = "AБВГДЕЖЗИКЛМНОПРСТУФХЦ";
+    screen_t s;
+    screens_for(&v, &s);
+    check(glyphs(s.row[0]) <= SCREEN_ROW_GLYPHS, "cut to the row's budget");
+    check(valid_utf8(s.row[0]), "cut between characters, never through one");
+    check(strlen(s.row[0]) < SCREEN_ROW_MAX, "and inside the buffer it was cut for");
 }
 
 static void test_linked_fills_the_rule_from_the_signal(void)
@@ -176,6 +255,53 @@ static void test_linked_fills_the_rule_from_the_signal(void)
     check(s.gauge == GAUGE_LEVEL, "the rule shows the level");
     check(s.gauge_pct == screens_rssi_pct(-53), "filled from RSSI");
     check(strcmp(s.row[0], "AJMiddleCar") == 0, "the network by name");
+}
+
+/* 0 dBm and channel 0 are wifi_sta's not-connected sentinels, and «Сигнал» and the radio
+ * diagnostics page are exactly what a person opens during a dropout. Printed as numbers they
+ * are not merely odd: 0 dBm is above the top of screens_rssi_pct's range, so it reads as — and
+ * fills a gauge to — the strongest link this panel can express, at the moment there is none. */
+static void test_a_dropped_link_reports_no_reading_rather_than_a_perfect_one(void)
+{
+    dongle_view_t v = base();
+    v.rssi = 0;
+    v.channel = 0;
+    screen_t s;
+
+    screens_signal(&v, &s);
+    check(strstr(s.row[0], "dBm") == NULL, "«Сигнал» prints no level it does not have");
+    check(strstr(s.row[0], "нет") != NULL, "it says there is none");
+
+    screens_diag(&v, 1, &s);
+    check(strcmp(s.row[0], "Канал          нет") == 0, "no channel to report");
+    check(strcmp(s.row[1], "Уровень        нет") == 0, "no level to report");
+    check(glyphs(s.row[0]) <= SCREEN_ROW_GLYPHS && glyphs(s.row[1]) <= SCREEN_ROW_GLYPHS,
+          "both rows still fit");
+
+    /* «Связь» is chosen from a state read before the radio's figures, so it can outlive them
+     * by a pass — the one screen where the sentinel meets a gauge. */
+    screens_for(&v, &s);
+    check(s.id == SCREEN_LINKED, "connected, from a state read a moment earlier");
+    check(s.gauge == GAUGE_NONE, "nothing is gauged from a reading that does not exist");
+    check(strstr(s.row[1], "нет") != NULL, "and the row says so rather than showing 0");
+}
+
+/* The same rule for the history's own floor: screens_history_min answers 0 for a ring nothing
+ * has been pushed into, which on a device half a minute out of a reboot would report its worst
+ * signal as the best one it can hold. */
+static void test_an_unfilled_history_reports_no_minimum(void)
+{
+    dongle_view_t v = base();
+    screens_history_t h;
+    screens_history_init(&h);
+    v.history = &h;
+    screen_t s;
+    screens_signal(&v, &s);
+    check(strstr(s.row[0], "мин нет") != NULL, "no worst yet, rather than a worst of zero");
+
+    screens_history_push(&h, -71);
+    screens_signal(&v, &s);
+    check(strstr(s.row[0], "мин -71") != NULL, "and the real one once there is one");
 }
 
 static void test_rssi_maps_over_the_range_that_matters(void)
@@ -311,8 +437,12 @@ int main(void)
     test_no_host_wins_over_every_network_state();
     test_rollback_outranks_the_network();
     test_update_outranks_rollback();
-    test_searching_shows_the_attempt_budget();
+    test_searching_counts_attempts_from_one();
+    test_an_ssid_at_the_contract_limit_stays_inside_the_row();
+    test_a_row_is_never_cut_through_a_character();
     test_linked_fills_the_rule_from_the_signal();
+    test_a_dropped_link_reports_no_reading_rather_than_a_perfect_one();
+    test_an_unfilled_history_reports_no_minimum();
     test_rssi_maps_over_the_range_that_matters();
     test_diagnostics_pages_are_four_and_wrap();
     test_a_quiet_relay_reports_no_error();

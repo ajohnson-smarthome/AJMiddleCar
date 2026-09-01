@@ -16,10 +16,10 @@
  * that happens to log a message is not addressing the person holding the dongle.
  *
  * Two widths this panel is stuck with, because they are the fonts' pixel budgets rather than
- * a preference: a headline is at most 12 GLYPHS (u8g2_font_10x20_t_cyrillic), a row at most 21
- * GLYPHS (u8g2_font_6x12_t_cyrillic). Russian is two bytes per character in UTF-8, so a glyph
- * count and a byte count are two different numbers for every line with a single Cyrillic
- * letter in it — strlen() would answer the wrong question. */
+ * a preference: SCREEN_HEAD_GLYPHS in u8g2_font_10x20_t_cyrillic, SCREEN_ROW_GLYPHS in
+ * u8g2_font_6x12_t_cyrillic. Russian is two bytes per character in UTF-8, so a glyph count and
+ * a byte count are two different numbers for every line with a single Cyrillic letter in it —
+ * strlen() would answer the wrong question. */
 
 /* One sample per second. 46 of them fill the rule's own 92-pixel width at two pixels each, which
  * is why the number is 46 and not a round 60: the screen decides how much history there is
@@ -30,18 +30,25 @@
 /* Two rows beneath the headline and the rule, same as the panel has room for. */
 #define SCREEN_ROWS 2
 
-/* Bytes, not glyphs — and the two are not the same number here. A row's glyph budget is 21,
- * and Cyrillic spends two UTF-8 bytes per glyph, so a row that is entirely Cyrillic needs
- * 21*2 = 42 bytes of payload plus a NUL: 43. Sized from the panel's real limit rather than
- * from any one line of copy, so a future line that happens to run all-Cyrillic to the edge of
- * the row still fits. (A narrower buffer sized only off the shorter mixed-script rows in the
- * table below would silently truncate the all-Cyrillic ones — "Задаёт приложение" alone is 33
- * bytes, already past a 22-byte guess.) */
-#define SCREEN_ROW_MAX 43
+/* The panel's own budgets, in GLYPHS: the fonts are fixed-width, so 128 px holds twelve of the
+ * 10x20 headline's characters and twenty-one of the 6x12 rows'. This is the only limit the
+ * glass enforces — anything past it is drawn off the edge and clipped, with no error and no
+ * mark on the screen to say so. Named here rather than left as literals in the test that
+ * checks them, because screens.c has to cut the two rows it does not author (an SSID and a
+ * version string) against exactly this number, and a budget only the test knows is a budget
+ * the code cannot keep. */
+#define SCREEN_HEAD_GLYPHS 12
+#define SCREEN_ROW_GLYPHS  21
 
-/* Bytes for the headline: 12 Cyrillic glyphs are up to 24 UTF-8 bytes, plus a NUL — 25. The
- * panel's limit is glyphs, the buffer's is bytes, and they are not the same number. */
-#define SCREEN_HEAD_MAX 25
+/* The buffers, in BYTES, derived from those budgets rather than stated beside them — the two
+ * are not the same number. Cyrillic spends two UTF-8 bytes per glyph, so a row that runs
+ * all-Cyrillic to the edge needs 21*2 = 42 bytes of payload plus a NUL: 43; the headline, 25.
+ * Sized from the panel's real limit rather than from any one line of copy, so a future line
+ * that happens to run all-Cyrillic to the edge of the row still fits. (A narrower buffer sized
+ * only off the shorter mixed-script rows in the table below would silently truncate the
+ * all-Cyrillic ones — "Задаёт приложение" alone is 33 bytes, already past a 22-byte guess.) */
+#define SCREEN_ROW_MAX  (2 * SCREEN_ROW_GLYPHS + 1)
+#define SCREEN_HEAD_MAX (2 * SCREEN_HEAD_GLYPHS + 1)
 
 typedef enum {
     SCREEN_SPLASH = 0,     /* the two seconds after boot, and the fallback for a state this
