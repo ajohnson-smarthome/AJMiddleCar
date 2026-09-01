@@ -278,6 +278,33 @@ static void test_a_faulted_relay_names_the_errno_and_the_repeats(void)
     check(strstr(s.row[0], "12") && strstr(s.row[0], "1483"), "the fault and how often");
 }
 
+/* Every earlier test that measured the fault page left last_errno at zero, so it only ever
+ * took the static "нет" branch — the dynamic one, which is the one with an unbounded field
+ * in it, had never actually been rendered by a test. Drives both errno and errno_count past
+ * their clamps at once, since that is the widest row diag_page_fault can ever produce. */
+static void test_the_fault_row_stays_in_budget_at_its_widest(void)
+{
+    dongle_view_t v = base();
+    v.last_errno = 12345;        /* clamps to 999 */
+    v.errno_count = 999999999u;  /* clamps to 99999, marked with a trailing '+' */
+    screen_t s;
+    screens_diag(&v, 3, &s);
+    check(glyphs(s.row[0]) <= 21, "the fault row fits even past both clamps");
+    check(strstr(s.row[0], "999") != NULL, "errno clamps to three digits");
+    check(strstr(s.row[0], "99999+") != NULL, "the count clamps and marks that it did");
+}
+
+/* Same shape, same reason: uptime_s is unbounded too, and every earlier test left it at zero. */
+static void test_the_uptime_row_stays_in_budget_at_its_clamp(void)
+{
+    dongle_view_t v = base();
+    v.uptime_s = 0xFFFFFFFFu;  /* far past the ~11.4-year trigger for a 6th hour digit */
+    screen_t s;
+    screens_diag(&v, 3, &s);
+    check(glyphs(s.row[1]) <= 21, "the uptime row fits even at the clamp");
+    check(strstr(s.row[1], "99999:") != NULL, "the hours field clamps");
+}
+
 int main(void)
 {
     test_every_headline_fits_twelve_characters();
@@ -290,6 +317,8 @@ int main(void)
     test_diagnostics_pages_are_four_and_wrap();
     test_a_quiet_relay_reports_no_error();
     test_a_faulted_relay_names_the_errno_and_the_repeats();
+    test_the_fault_row_stays_in_budget_at_its_widest();
+    test_the_uptime_row_stays_in_budget_at_its_clamp();
     test_history_reads_back_oldest_first();
     test_history_wraps_and_drops_the_oldest();
     test_an_empty_history_has_no_minimum_to_report();

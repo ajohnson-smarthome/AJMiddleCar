@@ -94,7 +94,14 @@ static void fill_updating(const dongle_view_t *v, screen_t *out)
     out->gauge_pct = (uint8_t)pct;
 
     /* Megabytes as this project spells them elsewhere — decimal (bytes / 1e6), two decimal
-     * places, no floating point on a path a display task walks five times a second. */
+     * places, no floating point on a path a display task walks five times a second.
+     *
+     * Unbounded by construction here, and that is fine: ota_done/ota_total cannot exceed the
+     * OTA partition size, because ota_api.c rejects any upload whose content_len is larger
+     * than that partition before this row is ever built (firmware/s3/partitions.csv: ota_0
+     * and ota_1 are each 0x400000 = 4 MB, so this row never needs more than one digit of MB
+     * on either side of the decimal). The bound lives in ota_api.c and partitions.csv, not
+     * here — a larger partition would silently widen this row again. */
     unsigned done_mb = (unsigned)(v->ota_done / 1000000u);
     unsigned done_cs = (unsigned)((v->ota_done % 1000000u) / 10000u);
     unsigned total_mb = (unsigned)(v->ota_total / 1000000u);
@@ -217,6 +224,11 @@ uint8_t screens_diag_pages(void)
 
 static void diag_page_address(const dongle_view_t *v, screen_t *out)
 {
+    /* Unbounded by construction here too: ip_be is always DONGLE_HOST and gw_be is always an
+     * address the DHCP server hands out on the same link, and both are addresses inside a
+     * fixed /24 (firmware/s3/main/usb_net.h: USB_NET_ADDR = DONGLE_HOST, USB_NET_MASK =
+     * 255.255.255.0) — the bound on how wide these octets can ever get lives there, not
+     * here. */
     snprintf(out->row[0], SCREEN_ROW_MAX, "Адрес  %u.%u.%u.%u",
              (unsigned)((v->ip_be >> 24) & 0xFF), (unsigned)((v->ip_be >> 16) & 0xFF),
              (unsigned)((v->ip_be >> 8) & 0xFF), (unsigned)(v->ip_be & 0xFF));
@@ -255,10 +267,30 @@ static void diag_page_fault(const dongle_view_t *v, screen_t *out)
          * errno of zero rather than the absence of one. */
         put_row(out, 0, "errno          нет");
     } else {
-        snprintf(out->row[0], SCREEN_ROW_MAX, "errno %d     x%u",
-                 v->last_errno, (unsigned)v->errno_count);
+        /* errno_count is a uint32_t that only resets when the errno TYPE changes, never on
+         * success, so a fault that never clears counts for as long as the dongle stays up —
+         * roughly 77 to 116 days of continuous failure at 10-15/s before it reaches the
+         * clamp below. errno itself is a small POSIX code in practice, never triple digits
+         * on this port, but clamped anyway rather than trusted to stay that way. Both are
+         * bounded for display, with a trailing '+' marking a clamped count, so the row's
+         * width is bounded by construction rather than by how long a fault has been
+         * running. */
+        int err_disp = v->last_errno;
+        if (err_disp < 0) err_disp = 0;
+        if (err_disp > 999) err_disp = 999;
+        uint32_t count = v->errno_count;
+        const char *plus = "";
+        if (count > 99999u) { count = 99999u; plus = "+"; }
+        snprintf(out->row[0], SCREEN_ROW_MAX, "errno %d  x%u%s", err_disp, (unsigned)count, plus);
     }
+
+    /* uptime_s is a uint32_t seconds counter with the identical shape: unclamped, the hours
+     * field would need a 6th digit past ~11.4 years of continuous uptime (100000 h *
+     * 3600 s/h), which is past this row's budget. Clamped here for the same reason as
+     * errno_count above — bounded by construction, not by the device rebooting often
+     * enough. */
     unsigned h = (unsigned)(v->uptime_s / 3600u);
+    if (h > 99999u) h = 99999u;
     unsigned m = (unsigned)((v->uptime_s / 60u) % 60u);
     unsigned s = (unsigned)(v->uptime_s % 60u);
     snprintf(out->row[1], SCREEN_ROW_MAX, "Аптайм    %02u:%02u:%02u", h, m, s);
