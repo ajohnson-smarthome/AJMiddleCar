@@ -40,6 +40,11 @@ static void read_rollback_state(void)
     if (s_rollback) ESP_LOGW(TAG, "the previous OTA was rolled back by the bootloader");
 }
 
+bool status_api_rolled_back(void)
+{
+    return s_rollback;
+}
+
 /* The identity key is `device`, spelled as the car's contract spells it
  * (contract/car-api.json, device_field). The app's "which device am I talking to" check
  * should not need two spellings for one question. */

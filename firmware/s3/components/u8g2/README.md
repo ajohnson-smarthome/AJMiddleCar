@@ -20,12 +20,20 @@ Being unmodified otherwise — no reformatting, no local fixes, nothing else del
 deliberate: a future update to a newer upstream commit is a `cp -R` of `csrc` followed by
 re-deleting the same two files, not a merge against local edits.
 
-The three fonts this project actually uses (`u8g2_font_10x20_t_cyrillic`,
-`u8g2_font_9x15_t_cyrillic`, `u8g2_font_6x12_t_cyrillic`) are generated separately, from
+The three fonts this project generates (`u8g2_font_10x20_t_cyrillic`,
+`u8g2_font_9x15_t_cyrillic`, `u8g2_font_6x12_t_cyrillic`) come separately, from
 upstream's own BDFs and its own `bdfconv` converter, by `tools/gen_dongle_fonts.sh`. Its
 output is `firmware/s3/main/fonts_cyrillic.c` — generated, never hand-edited. That script
 reads the `Upstream commit:` line above to pin the same revision this component vendors, so
 the generated fonts and the vendored library never drift apart.
+
+Only two of them reach the image. `display.c` draws in the 10x20 and the 6x12; the 9x15 is the
+design's reserve size and no agreed layout uses it, so `--gc-sections` discards it and
+`xtensa-esp32s3-elf-nm build/ajdongle.elf` finds two `t_cyrillic` symbols, not three. That is
+the linker doing its job, not a fault to repair — an earlier `-Wl,-u` flag that forced all
+three to survive was scaffolding for the window when no `.c` file referenced any of them, and
+it was removed once `display.c` did. Referencing the 9x15 from a layout is all it would take to
+bring it back.
 
 ## Why not the component manager
 
