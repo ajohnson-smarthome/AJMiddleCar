@@ -235,9 +235,17 @@ static void diag_page_relay(const dongle_view_t *v, screen_t *out)
 {
     snprintf(out->row[0], SCREEN_ROW_MAX, "Слоты  TCP %u UDP %u",
              (unsigned)v->tcp_used, (unsigned)v->udp_used);
-    snprintf(out->row[1], SCREEN_ROW_MAX, "Пакеты  %u.%u/%u.%u в сек",
-             (unsigned)(v->to_car_x10 / 10), (unsigned)(v->to_car_x10 % 10),
-             (unsigned)(v->to_phone_x10 / 10), (unsigned)(v->to_phone_x10 % 10));
+
+    /* to_car_x10 and to_phone_x10 are each a uint16_t and can reach 6553.5, but the real
+     * ceiling is roughly 40/s — four phone sessions at 10 Hz each. A figure above 99.9 means
+     * something is badly wrong, and its exact value has stopped being the interesting thing:
+     * rendered at 99.9 instead, so the row's width is bounded by construction rather than by
+     * hoping the numbers stay small. "Пак/с" (packets per second) rather than the bare label
+     * this row used to carry — without a unit, a rate reads just as easily as a total. */
+    unsigned to_car = (v->to_car_x10 > 999) ? 999 : (unsigned)v->to_car_x10;
+    unsigned to_phone = (v->to_phone_x10 > 999) ? 999 : (unsigned)v->to_phone_x10;
+    snprintf(out->row[1], SCREEN_ROW_MAX, "Пак/с  %u.%u / %u.%u",
+             to_car / 10, to_car % 10, to_phone / 10, to_phone % 10);
 }
 
 static void diag_page_fault(const dongle_view_t *v, screen_t *out)

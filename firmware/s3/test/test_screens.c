@@ -110,10 +110,14 @@ static void test_every_headline_fits_twelve_characters(void)
         check_fits(&s);
     }
 
-    /* SCREEN_DIAG — all four pages. */
+    /* SCREEN_DIAG — all four pages, at the nominal packet rate rather than the zero the
+     * base fixture leaves it at -- a page checked only at zero never renders the row a
+     * person actually sees. */
     {
         dongle_view_t v = base();
         v.ip_be = 0xC0A80402; v.gw_be = 0xC0A80401;
+        v.to_car_x10 = 100;
+        v.to_phone_x10 = 50;
         for (uint8_t p = 0; p < screens_diag_pages(); p++) {
             screen_t s;
             screens_diag(&v, p, &s);
@@ -188,6 +192,11 @@ static void test_diagnostics_pages_are_four_and_wrap(void)
     dongle_view_t v = base();
     v.ip_be = 0xC0A80402; v.gw_be = 0xC0A80401;   /* 192.168.4.2, 192.168.4.1 */
     v.last_errno = 0;
+    /* The base fixture leaves these at zero, which renders a far shorter packet row than the
+     * one a person actually sees -- 10.0/5.0 pkt/s is the car's nominal 10 Hz control cadence,
+     * so that is the row the glyph limit below must hold at, not an empty one. */
+    v.to_car_x10 = 100;
+    v.to_phone_x10 = 50;
     check(screens_diag_pages() == 4, "four pages");
     for (uint8_t p = 0; p < 4; p++) {
         dongle_view_t d = v;
@@ -198,6 +207,21 @@ static void test_diagnostics_pages_are_four_and_wrap(void)
         check(strcmp(s.head, "Диагностика") == 0, "the same headline on every page");
         check(s.pages == 4 && s.page == p, "the markers say which page");
         check(glyphs(s.row[0]) <= 21 && glyphs(s.row[1]) <= 21, "rows fit");
+    }
+
+    /* The clamp: to_car_x10/to_phone_x10 are each a uint16_t and can reach 6553, far past the
+     * roughly 400 (40.0 pkt/s) four phone sessions at 10 Hz could plausibly produce. Both
+     * rates here are past the 99.9 clamp, so this is the widest row the panel will ever be
+     * asked to draw. */
+    {
+        dongle_view_t d = v;
+        d.state = DONGLE_STATE_CONNECTED;
+        d.to_car_x10 = 6553;
+        d.to_phone_x10 = 1200;
+        screen_t s;
+        screens_diag(&d, 2, &s);
+        check(glyphs(s.row[0]) <= 21 && glyphs(s.row[1]) <= 21, "rows fit even at the clamp");
+        check(strstr(s.row[1], "99.9 / 99.9") != NULL, "both rates clamp at 99.9");
     }
 }
 
