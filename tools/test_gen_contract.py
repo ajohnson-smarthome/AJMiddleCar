@@ -385,8 +385,9 @@ class TestDongleSchema(unittest.TestCase):
 
     def test_usb_state_vocabulary_is_the_documented_one(self):
         # usb had a key (status_fields) but no enumerated values until this fix — status_api.c
-        # hardcoded "up" with nothing here to check it against.
-        self.assertEqual(self.s["usb_states"], ["up"])
+        # hardcoded "up" with nothing here to check it against. "down" joined once
+        # status_api.c stopped hardcoding "up" and started asking usb_net_host_attached().
+        self.assertEqual(self.s["usb_states"], ["up", "down"])
 
 
 class TestDongleAgreesWithTheCar(unittest.TestCase):
@@ -545,7 +546,8 @@ class TestDongleEmitters(unittest.TestCase):
         out = self.g.emit_dongle_swift(self.s)
         self.assertIn("public enum DongleUsbState {", out)
         self.assertIn('public static let up = "up"', out)
-        self.assertIn('public static let all = ["up"]', out)
+        self.assertIn('public static let down = "down"', out)
+        self.assertIn('public static let all = ["up", "down"]', out)
 
     def test_swift_exposes_the_net_fields(self):
         out = self.g.emit_dongle_swift(self.s)

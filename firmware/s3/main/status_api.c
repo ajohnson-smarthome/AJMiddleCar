@@ -7,13 +7,17 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
+#include "esp_system.h"
+#include "esp_timer.h"
 
 #include "api_guard.h"
 #include "dongle_contract.inc"
 #include "net_api.h"
+#include "relay_stats.h"
 #include "status_api.h"
 #include "usb_net.h"
 #include "wifi_sta.h"
+#include "wifi_state.h"
 
 static const char *TAG = "status_api";
 
@@ -74,24 +78,56 @@ static esp_err_t status_get(httpd_req_t *req)
      * connected, whatever esp_wifi_sta_get_ap_info reports otherwise. */
     const char *net_state = wifi_sta_state_name();
     int net_rssi = (int)wifi_sta_rssi();
-    /* 320, not 256. Worst case with the rollback and net fields: 98 bytes of literal template,
-     * + 31 (esp_app_desc_t.version is char[32]) + 31 (idf_ver, likewise) + 5 ("false")
-     * + 64 (a 32-byte SSID whose every byte escapes to two) + 9 ("connected") + 4 ("-128")
-     * + NUL = 243. The margin is deliberate: adding one field should not also be a buffer
-     * calculation. */
-    char body[320];
+
+    /* Independent of the net pair above, and of each other: none of these can disagree with
+     * another the way state/rssi can, so no read-ordering constraint applies among them —
+     * each is a single self-contained fact, read once, right here. */
+    const char *usb_state = usb_net_host_attached() ? DONGLE_USB_STATE_UP : DONGLE_USB_STATE_DOWN;
+    relay_stats_t *relay = relay_stats_shared();
+    long uptime_s = (long)(esp_timer_get_time() / 1000000);
+    unsigned heap = (unsigned)esp_get_free_heap_size();
+    unsigned attempts = (unsigned)wifi_sta_attempts();
+    unsigned channel = (unsigned)wifi_sta_channel();
+
+    /* 512, not 448. Worst case with the rollback, net and new fields: 235 bytes of literal
+     * template (the previous 98, minus the 2-byte "up" literal usb loses by becoming a %s now
+     * that it can also read "down", plus the keys, braces and commas the fields below add)
+     * + 31 (esp_app_desc_t.version is char[32]) + 31 (idf_ver, likewise) + 4 ("down")
+     * + 5 ("false") + 64 (a 32-byte SSID whose every byte escapes to two) + 9 ("connected")
+     * + 4 ("-128") + 10 (uptime_s, a positive long) + 10 (heap, uint32_t) + 3 (attempts,
+     * uint8_t) + 3 (attempts_max, WIFI_JOIN_ATTEMPTS) + 2 (channel, 1..14 in practice)
+     * + 5 (to_car_x10, uint16_t) + 5 (to_phone_x10, likewise) + 3 (udp_used) + 3 (tcp_used)
+     * + 4 (last_errno) + 10 (errno_count, uint32_t) + NUL = 442. The margin is deliberate:
+     * adding one field should not also be a buffer calculation. */
+    char body[512];
     int n = snprintf(body, sizeof(body),
                      "{\"" DONGLE_KEY_DEVICE "\":\"" DONGLE_DEVICE "\","
                      "\"" DONGLE_KEY_FW "\":\"%s\","
                      "\"" DONGLE_KEY_IDF "\":\"%s\","
-                     "\"" DONGLE_KEY_USB "\":\"" DONGLE_USB_STATE_UP "\","
+                     "\"" DONGLE_KEY_USB "\":\"%s\","
                      "\"" DONGLE_KEY_ROLLBACK "\":%s,"
                      "\"" DONGLE_KEY_NET "\":{"
                      "\"" DONGLE_KEY_NET_SSID "\":\"%s\","
                      "\"" DONGLE_KEY_NET_STATE "\":\"%s\","
-                     "\"" DONGLE_KEY_NET_RSSI "\":%d}}",
-                     app->version, app->idf_ver, s_rollback ? "true" : "false", ssid_esc,
-                     net_state, net_rssi);
+                     "\"" DONGLE_KEY_NET_RSSI "\":%d},"
+                     "\"" DONGLE_KEY_UPTIME "\":%ld,"
+                     "\"" DONGLE_KEY_HEAP "\":%u,"
+                     "\"" DONGLE_KEY_ATTEMPTS "\":%u,"
+                     "\"" DONGLE_KEY_ATTEMPTS_MAX "\":%u,"
+                     "\"" DONGLE_KEY_CHANNEL "\":%u,"
+                     "\"" DONGLE_KEY_RELAY "\":{"
+                     "\"" DONGLE_KEY_RELAY_TO_CAR "\":%u,"
+                     "\"" DONGLE_KEY_RELAY_TO_PHONE "\":%u,"
+                     "\"" DONGLE_KEY_RELAY_SLOTS_UDP "\":%u,"
+                     "\"" DONGLE_KEY_RELAY_SLOTS_TCP "\":%u,"
+                     "\"" DONGLE_KEY_RELAY_ERRNO "\":%d,"
+                     "\"" DONGLE_KEY_RELAY_ERRNO_COUNT "\":%u}}",
+                     app->version, app->idf_ver, usb_state, s_rollback ? "true" : "false",
+                     ssid_esc, net_state, net_rssi,
+                     uptime_s, heap, attempts, (unsigned)WIFI_JOIN_ATTEMPTS, channel,
+                     (unsigned)relay->to_car_x10, (unsigned)relay->to_phone_x10,
+                     (unsigned)relay->udp_used, (unsigned)relay->tcp_used,
+                     relay->last_errno, (unsigned)relay->errno_count);
     if (n < 0 || (size_t)n >= sizeof(body)) {
         /* Same rule as the car's own /status: truncated JSON parses as something else or
          * nothing, and shipping it under a 200 hides exactly that. Only reachable if a
