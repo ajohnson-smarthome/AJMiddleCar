@@ -1,6 +1,7 @@
 #include "ota_api.h"
 
 #include <limits.h>
+#include <stdatomic.h>
 #include <stdint.h>
 
 #include "esp_check.h"
@@ -15,6 +16,23 @@
 #include "dongle_contract.inc"
 
 static const char *TAG = "ota_api";
+
+/* Bytes accepted, out of the upload's Content-Length — the same numbers the receive loop below
+ * already computes for itself (remaining vs req->content_len), just also published for a reader
+ * outside this file. s_ota_total is the "is one running at all" bit: httpd serves one request
+ * at a time, so a zero here always means the last upload's cleanup ran, whether it finished,
+ * failed, or was never even accepted past the size checks. */
+static _Atomic uint32_t s_ota_done;
+static _Atomic uint32_t s_ota_total;
+
+/* Every return out of ota_post from esp_ota_begin onward calls this — including the failure
+ * branches — so a request that dies partway through flashing cannot leave ota_api_progress
+ * claiming an upload is still running. */
+static void ota_progress_clear(void)
+{
+    atomic_store(&s_ota_total, 0);
+    atomic_store(&s_ota_done, 0);
+}
 
 /* A deliberate twin of firmware/p4/main/ota_api.c, not a shared file — the two firmwares do not
  * reference each other. What is missing here is the car's actuator arbitration: the car seizes
@@ -58,6 +76,11 @@ static esp_err_t ota_post(httpd_req_t *req)
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "OTA -> %s, %d bytes", part->label, (int)req->content_len);
+    /* s_ota_done follows, published as it's written below; setting it here rather than leaving
+     * the previous upload's leftover zero is what makes a reader see 0/total instead of a
+     * one-chunk jump from whatever the last upload ended on. */
+    atomic_store(&s_ota_total, (uint32_t)req->content_len);
+    atomic_store(&s_ota_done, 0);
 
     char buf[1024];
     int remaining = (int)req->content_len;
@@ -72,6 +95,7 @@ static esp_err_t ota_post(httpd_req_t *req)
             ESP_LOGW(TAG, "OTA upload abandoned: %d of %d bytes received (recv returned %d)",
                      (int)req->content_len - remaining, (int)req->content_len, r);
             esp_ota_abort(handle);
+            ota_progress_clear();
             api_reply_error(req, "400 Bad Request", "", "recv error");
             return ESP_FAIL;
         }
@@ -94,12 +118,15 @@ static esp_err_t ota_post(httpd_req_t *req)
                 ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(werr));
                 api_reply_error(req, "500 Internal Server Error", "", "ota write failed");
             }
+            ota_progress_clear();
             return ESP_FAIL;
         }
         remaining -= r;
+        atomic_fetch_add(&s_ota_done, (uint32_t)r);
     }
 
     if (esp_ota_end(handle) != ESP_OK) {
+        ota_progress_clear();
         api_reply_error(req, "400 Bad Request", "", "image invalid");
         return ESP_FAIL;
     }
@@ -107,9 +134,14 @@ static esp_err_t ota_post(httpd_req_t *req)
     if (serr != ESP_OK) {
         ESP_LOGE(TAG, "set_boot_partition failed: %s (image written+valid but not booted)",
                  esp_err_to_name(serr));
+        ota_progress_clear();
         api_reply_error(req, "500 Internal Server Error", "", "set boot failed");
         return ESP_FAIL;
     }
+    /* Cleared here too, ahead of the reboot below: the image is already committed either way,
+       but a client polling GET /status in the vTaskDelay window that follows should see the
+       upload as finished, not as still running. */
+    ota_progress_clear();
     /* Reboot whether or not the "ok" reaches the client — the image is already committed. The
        client will see the USB interface drop and come back; that is the update completing, not
        a failure. */
@@ -118,6 +150,16 @@ static esp_err_t ota_post(httpd_req_t *req)
     vTaskDelay(pdMS_TO_TICKS(500));
     esp_restart();
     return ESP_OK;
+}
+
+/* Bytes accepted of how many, while an upload is running. False when none is. */
+bool ota_api_progress(uint32_t *done, uint32_t *total)
+{
+    uint32_t t = atomic_load(&s_ota_total);
+    if (t == 0) return false;
+    *total = t;
+    *done  = atomic_load(&s_ota_done);
+    return true;
 }
 
 esp_err_t ota_api_register(httpd_handle_t server)

@@ -51,6 +51,17 @@ const char *wifi_sta_state_name(void);
  * receiver, so unlike the car this is a real measurement whenever it is non-zero. */
 int8_t wifi_sta_rssi(void);
 
+/* The joined network's primary channel. 0 when not connected — same contract as
+ * wifi_sta_rssi() above: a real reading whenever it is non-zero, never a placeholder. */
+uint8_t wifi_sta_channel(void);
+
+/* The consumed attempts of the current budget, out of WIFI_JOIN_ATTEMPTS.
+ *
+ * Read from the display and the HTTP task, so it comes from the lock-free mirror for the same
+ * reason wifi_sta_connected() does: a value at most one transition stale is a better answer
+ * than blocking either caller. */
+uint8_t wifi_sta_attempts(void);
+
 /* The gateway of the joined network, in network byte order. False until the FIRST address
  * ever arrives; once true, it stays true and keeps the last-known gateway even across a
  * drop and a retry — it is not cleared on disconnect, because a softAP's gateway does not

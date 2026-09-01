@@ -1,6 +1,9 @@
 #ifndef OTA_API_H
 #define OTA_API_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include "esp_err.h"
 #include "esp_http_server.h"
 
@@ -15,5 +18,10 @@
  * accepted connection that did not land on DONGLE_HOST is refused before a byte of this
  * handler's request is ever read. */
 esp_err_t ota_api_register(httpd_handle_t server);
+
+/* Bytes accepted of how many, while an upload is running. False when none is — including
+ * between uploads, and for the whole span of a request this file rejected before flashing
+ * began (a too-small or too-large image, no free partition). */
+bool ota_api_progress(uint32_t *done, uint32_t *total);
 
 #endif /* OTA_API_H */
