@@ -49,4 +49,13 @@ void relay_stats_tcp_slots(relay_stats_t *s, uint8_t used);
  * length leaves the previous reading in place rather than dividing by zero. */
 void relay_stats_sample(relay_stats_t *s, uint32_t now_ms);
 
+/* The one instance both relay tasks write and the display reads.
+ *
+ * Deliberately not a lock: every field is a single word written by one task and read by
+ * another, and a reader that catches a torn pair sees a rate one sample stale — which is
+ * cheaper than a mutex on the forwarding path, and the forwarding path is the one thing in
+ * this firmware that must never wait. The two relays write disjoint fields except the errno
+ * pair, where a lost update costs one repeat in a counter nobody adds up. */
+relay_stats_t *relay_stats_shared(void);
+
 #endif /* RELAY_STATS_H */

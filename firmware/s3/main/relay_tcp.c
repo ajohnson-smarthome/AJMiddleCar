@@ -10,17 +10,12 @@
 #include "lwip/sockets.h"
 
 #include "dongle_contract.inc"
+#include "relay_stats.h"
 #include "tcp_pending.h"
 #include "usb_net.h"
 #include "wifi_sta.h"
 
 static const char *TAG = "relay_tcp";
-
-/* Pool size is a design number, not a detail — the spec says so. Four: the app can have a
- * config POST and a firmware upload in flight at once, and a pool of one would deadlock the
- * second behind the first. Four leaves room for the browser-style parallelism a REST client
- * may use without letting a leaked slot starve the pool. */
-#define RELAY_POOL_SIZE 4
 
 /* TCP is a byte stream, not a datagram: unlike relay_udp.c's RELAY_BUF_LEN, this needs no
  * "+1 to detect truncation" trick. A recv() that does not drain everything queued just
@@ -181,12 +176,13 @@ static void close_slot(relay_state_t *r, int idx, const char *why)
  * this file spun on EAGAIN with a bounded wait, which blocked this single task's attention
  * (and so every other slot) for up to a second at a time; this version never calls send()
  * more than once without a fresh select() saying to. */
-static void flush_pending(relay_state_t *r, int idx, int dst, tcp_pending_t *p,
+static void flush_pending(relay_state_t *r, int idx, int dst, tcp_pending_t *p, bool to_car,
                            const char *label)
 {
     int remaining = p->len - p->off;
     int w = send(dst, p->buf + p->off, (size_t)remaining, 0);
     if (w > 0) {
+        relay_stats_forwarded(relay_stats_shared(), to_car);
         tcp_pending_advance(p, w);
         r->slots[idx].last_active_ms = now_ms();   /* bytes moved: the slot is not idle */
         return;
@@ -200,6 +196,7 @@ static void flush_pending(relay_state_t *r, int idx, int dst, tcp_pending_t *p,
          * stays; select() will say so again next pass if dst is still not ready. */
         return;
     }
+    relay_stats_failed(relay_stats_shared(), errno);
     ESP_LOGW(TAG, "%s forwarding failed on slot %d: errno %d", label, idx, errno);
     close_slot(r, idx, "forwarding failed");
 }
@@ -219,7 +216,7 @@ static void flush_pending(relay_state_t *r, int idx, int dst, tcp_pending_t *p,
  * EOF, a real recv() error, or a forwarding failure, and leaves it alone on EAGAIN (nothing to
  * do this pass) exactly like relay_udp.c's read paths. */
 static void pump_read(relay_state_t *r, int idx, int src, int dst, char *scratch,
-                       tcp_pending_t *p, const char *label)
+                       tcp_pending_t *p, bool to_car, const char *label)
 {
     int n = recv(src, scratch, RELAY_BUF_LEN, 0);
     if (n > 0) {
@@ -228,10 +225,18 @@ static void pump_read(relay_state_t *r, int idx, int src, int dst, char *scratch
          * refusing more bytes. */
         r->slots[idx].last_active_ms = now_ms();
         int w = send(dst, scratch, (size_t)n, 0);
+        if (w > 0) {
+            /* Counted whether this send() drained the whole chunk or only part of it — a
+             * partial send still moved bytes toward their destination, and the remainder
+             * getting stashed below does not undo that; flush_pending counts its own sends
+             * again when it finishes the job. */
+            relay_stats_forwarded(relay_stats_shared(), to_car);
+        }
         if (w == n) {
             return;   /* the common case: forwarded whole, nothing left pending */
         }
         if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            relay_stats_failed(relay_stats_shared(), errno);
             ESP_LOGW(TAG, "%s forwarding failed on slot %d: errno %d", label, idx, errno);
             close_slot(r, idx, "forwarding failed");
             return;
@@ -568,8 +573,14 @@ static void relay_task(void *arg)
         FD_ZERO(&wfds);
         FD_SET(r.listen_sock, &rfds);
         int maxfd = r.listen_sock;
+        /* Slot occupancy, sampled once per pass rather than kept as a running counter: every
+         * close_slot() and every handle_accept() would otherwise need to remember to adjust
+         * it, and a miscount there would be silent — this loop already visits every slot each
+         * pass, so counting here costs nothing and cannot drift from r.slots[] itself. */
+        int busy = 0;
         for (int i = 0; i < RELAY_POOL_SIZE; i++) {
             tcp_slot_t *s = &r.slots[i];
+            if (s->state != SLOT_FREE) busy++;
             if (s->state == SLOT_ACTIVE) {
                 tcp_pending_t *p2c = &s_p2c_pending[i];
                 tcp_pending_t *c2p = &s_c2p_pending[i];
@@ -605,6 +616,7 @@ static void relay_task(void *arg)
                 if (s->car_sock > maxfd) maxfd = s->car_sock;
             }
         }
+        relay_stats_tcp_slots(relay_stats_shared(), (uint8_t)busy);
 
         struct timeval tv = { .tv_sec = RELAY_LOOP_MS / 1000, .tv_usec = 0 };
         int nready = select(maxfd + 1, &rfds, &wfds, NULL, &tv);
@@ -671,11 +683,11 @@ static void relay_task(void *arg)
              * up) can close this same slot, and once it does its sockets are -1 — FD_ISSET
              * on a closed slot's stale fd number is exactly what must not happen. */
             if (!tcp_pending_empty(p2c) && FD_ISSET(s->car_sock, &wfds)) {
-                flush_pending(&r, i, s->car_sock, p2c, "phone->car");
+                flush_pending(&r, i, s->car_sock, p2c, true, "phone->car");
             }
             if (s->state == SLOT_ACTIVE && !tcp_pending_empty(c2p) &&
                 FD_ISSET(s->phone_sock, &wfds)) {
-                flush_pending(&r, i, s->phone_sock, c2p, "car->phone");
+                flush_pending(&r, i, s->phone_sock, c2p, false, "car->phone");
             }
             /* This is not the same fd-reuse hazard relay_udp.c has to survive: handle_accept
              * — the only place this file ever creates a socket — always runs once, earlier
@@ -687,10 +699,12 @@ static void relay_task(void *arg)
              * regardless (see set_nonblocking's comment) — that is defense in depth here,
              * not the reason it is needed. */
             if (s->state == SLOT_ACTIVE && FD_ISSET(s->phone_sock, &rfds)) {
-                pump_read(&r, i, s->phone_sock, s->car_sock, s_phone_buf, p2c, "phone->car");
+                pump_read(&r, i, s->phone_sock, s->car_sock, s_phone_buf, p2c, true,
+                          "phone->car");
             }
             if (s->state == SLOT_ACTIVE && FD_ISSET(s->car_sock, &rfds)) {
-                pump_read(&r, i, s->car_sock, s->phone_sock, s_car_buf, c2p, "car->phone");
+                pump_read(&r, i, s->car_sock, s->phone_sock, s_car_buf, c2p, false,
+                          "car->phone");
             }
         }
     }

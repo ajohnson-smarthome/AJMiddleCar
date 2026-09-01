@@ -2,6 +2,16 @@
 
 #include <string.h>
 
+/* RELAY_POOL_SIZE lives in relay_tcp.h and UDP_SESS_MAX in udp_sess.h; both are passed in at
+ * first use (relay_udp_start's relay_stats_init call) rather than included here, which is
+ * what keeps this file free of ESP-IDF. */
+static relay_stats_t s_shared;
+
+relay_stats_t *relay_stats_shared(void)
+{
+    return &s_shared;
+}
+
 void relay_stats_init(relay_stats_t *s, uint8_t udp_max, uint8_t tcp_max)
 {
     memset(s, 0, sizeof(*s));
