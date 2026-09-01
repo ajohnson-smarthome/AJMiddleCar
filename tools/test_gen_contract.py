@@ -507,6 +507,7 @@ class TestDongleEmitters(unittest.TestCase):
     def test_c_header_carries_the_usb_state_vocabulary(self):
         out = self.g.emit_dongle_c(self.s)
         self.assertIn('#define DONGLE_USB_STATE_UP "up"', out)
+        self.assertIn('#define DONGLE_USB_STATE_DOWN "down"', out)
 
     def test_c_header_carries_the_paths(self):
         out = self.g.emit_dongle_c(self.s)

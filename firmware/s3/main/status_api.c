@@ -81,7 +81,10 @@ static esp_err_t status_get(httpd_req_t *req)
 
     /* Independent of the net pair above, and of each other: none of these can disagree with
      * another the way state/rssi can, so no read-ordering constraint applies among them —
-     * each is a single self-contained fact, read once, right here. */
+     * each is a single self-contained fact, read once, right here. The one field below that
+     * can still come back torn is relay_stats_shared()'s errno/errno_count pair — accepted
+     * on purpose there, for the reason relay_stats.h gives: cheaper than a lock on a
+     * forwarding path that must never wait. */
     const char *usb_state = usb_net_host_attached() ? DONGLE_USB_STATE_UP : DONGLE_USB_STATE_DOWN;
     relay_stats_t *relay = relay_stats_shared();
     long uptime_s = (long)(esp_timer_get_time() / 1000000);
@@ -89,7 +92,7 @@ static esp_err_t status_get(httpd_req_t *req)
     unsigned attempts = (unsigned)wifi_sta_attempts();
     unsigned channel = (unsigned)wifi_sta_channel();
 
-    /* 512, not 448. Worst case with the rollback, net and new fields: 235 bytes of literal
+    /* 512, not 448. Worst case with the rollback, net and new fields: 243 bytes of literal
      * template (the previous 98, minus the 2-byte "up" literal usb loses by becoming a %s now
      * that it can also read "down", plus the keys, braces and commas the fields below add)
      * + 31 (esp_app_desc_t.version is char[32]) + 31 (idf_ver, likewise) + 4 ("down")
@@ -97,7 +100,7 @@ static esp_err_t status_get(httpd_req_t *req)
      * + 4 ("-128") + 10 (uptime_s, a positive long) + 10 (heap, uint32_t) + 3 (attempts,
      * uint8_t) + 3 (attempts_max, WIFI_JOIN_ATTEMPTS) + 2 (channel, 1..14 in practice)
      * + 5 (to_car_x10, uint16_t) + 5 (to_phone_x10, likewise) + 3 (udp_used) + 3 (tcp_used)
-     * + 4 (last_errno) + 10 (errno_count, uint32_t) + NUL = 442. The margin is deliberate:
+     * + 4 (last_errno) + 10 (errno_count, uint32_t) + NUL = 450. The margin is deliberate:
      * adding one field should not also be a buffer calculation. */
     char body[512];
     int n = snprintf(body, sizeof(body),
