@@ -55,9 +55,23 @@ static bool    s_overflow;
  * the recovery line can say how much was missed. */
 static uint32_t s_fail_count;
 static bool     s_fail_logged;
+static uint32_t s_ok_run;
+
+/* A whole frame of transfers with nothing failing, before the outage is declared over. The
+ * throttle above holds for a panel that answers NOTHING, which is its stated case — but a
+ * marginal bus is the one that needs it more, and a single success used to re-arm it. One
+ * failed transfer per frame on an otherwise working bus would then emit an error line and a
+ * recovery line every frame: ten lines a second, the noise the throttle exists to prevent,
+ * from the fault most likely to be intermittent. A frame is about 64 transfers (see
+ * XFER_TIMEOUT_MS above for where that number comes from), so demanding that many consecutive
+ * successes means recovery is claimed only by a bus that has actually carried a whole redraw —
+ * and a bus dropping one transfer a frame never gets to claim it, which is the honest reading
+ * of a bus that is still faulty. A genuinely repaired one says so 200 ms later. */
+#define RECOVERY_RUN 64
 
 static void note_failure(esp_err_t err)
 {
+    s_ok_run = 0;
     s_fail_count++;
     if (!s_fail_logged) {
         ESP_LOGE(TAG, "panel does not answer at 0x%02x on SDA %d / SCL %d (%s) — "
@@ -70,12 +84,16 @@ static void note_failure(esp_err_t err)
 
 static void note_success(void)
 {
-    if (s_fail_logged) {
-        ESP_LOGI(TAG, "panel answering again after %u failed transfers",
-                 (unsigned)s_fail_count);
-        s_fail_logged = false;
+    if (!s_fail_logged) {
+        return;   /* nothing to recover from; the counters are already where they belong */
     }
+    if (++s_ok_run < RECOVERY_RUN) {
+        return;
+    }
+    ESP_LOGI(TAG, "panel answering again after %u failed transfers", (unsigned)s_fail_count);
+    s_fail_logged = false;
     s_fail_count = 0;
+    s_ok_run = 0;
 }
 
 static uint8_t byte_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr)
