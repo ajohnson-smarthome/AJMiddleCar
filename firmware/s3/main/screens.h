@@ -113,8 +113,14 @@ typedef struct {
     uint32_t    ota_done;     /* bytes */
     uint32_t    ota_total;    /* bytes */
 
-    uint32_t    ip_be;        /* this dongle's own address, network byte order */
-    uint32_t    gw_be;        /* the phone acting as gateway, network byte order */
+    /* NOT network byte order, whatever the names say — the leading octet is the MOST
+     * significant byte, so 192.168.4.2 is 0xC0A80402 (screens.c renders from bit 31 down, and
+     * test_screens pins exactly that). On a little-endian target that is the byte-REVERSE of
+     * what lwIP keeps in esp_ip4_addr_t.addr, so a caller must not hand these a raw address:
+     * display.c's view_addr() assembles them octet by octet. The names are wrong and are kept
+     * only because renaming a field two shipped callers use buys nothing this comment does. */
+    uint32_t    ip_be;        /* this dongle's own address */
+    uint32_t    gw_be;        /* the gateway of the network it joined */
 
     int         last_errno;   /* 0 when nothing has failed; relay_stats_t's own type */
     uint32_t    errno_count;

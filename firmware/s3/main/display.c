@@ -44,6 +44,15 @@ static const char *TAG = "display";
  * its neighbour by two rows, the headline's top on row 0 and the lower row's descenders on
  * row 60, three clear of the last row the panel has.
  *
+ * ONE THING THAT WILL LOOK LIKE A BUG ON THE BENCH and is not: the rule does not sit at the
+ * same y on «Сигнал» as everywhere else. The plain rule and the level gauge are single lines
+ * and are centred IN the band, at row 27; the history is a strip that needs the whole band, so
+ * it hangs from the band's floor at row 32 and grows up to its ceiling at 22. Both are the same
+ * object occupying the same band — but a one-row line centred in an eleven-row band and an
+ * eleven-row strip filling it cannot share a y, and paging from «Связь» to «Сигнал» therefore
+ * drops the line five rows. Making them share a y would mean either a history with half the
+ * headroom or a plain rule sitting off-centre on nine screens out of eleven.
+ *
  * Horizontally the rule is 92 px, and that width is not a choice made here — screens.h fixes
  * it: SCREEN_HISTORY is 46 samples "at two pixels each", so 92 is the history strip's width
  * and the rule is the same object in its other two states. Centred, it starts at x 18. */
@@ -51,23 +60,31 @@ static const char *TAG = "display";
 #define PANEL_H    64
 
 #define HEAD_BASE  16   /* baseline of the 10x20 headline */
+#define HEAD_ASCENT 16  /* rows the 10x20 font can reach above its baseline (height + y-offset) */
+#define HEAD_DESCENT 4  /* ... and below it (its y-offset, negated) */
 #define RULE_X     18   /* (PANEL_W - RULE_W) / 2 */
 #define RULE_W     92   /* SCREEN_HISTORY * 2 */
 #define RULE_Y     27   /* the plain rule's row, and the level gauge's midline */
 #define GAUGE_H     5   /* the level gauge fills RULE_Y-2 .. RULE_Y+2 */
+#define HIST_TOP   22   /* the rule band's own top edge: where a full-strength sample reaches */
 #define HIST_BASE  32   /* the history's axis; its bars grow upward from just above it */
-#define HIST_H     10   /* a full-strength sample is this tall, so the strip tops out at 22 */
+#define HIST_H     (HIST_BASE - HIST_TOP)   /* 10 rows of headroom for a full sample */
 #define MARK_GAP    6   /* between the diagnostics page markers */
 #define ROW0_BASE  44   /* baselines of the two 6x12 rows */
 #define ROW1_BASE  58
-#define ROW_DESCENT 2   /* rows the 6x12 font puts below its baseline (its y-offset, negated) */
+#define ROW_ASCENT  10  /* rows the 6x12 font can reach above its baseline (height + y-offset) */
+#define ROW_DESCENT 2   /* ... and below it (its y-offset, negated) */
 
-/* The rule's width is screens.h's number, not this file's: change SCREEN_HISTORY and the strip
- * stops filling the rule it is supposed to be. Asserted rather than commented, so the two
- * cannot drift silently. The other two say the rule is centred, and that the lower row's
- * descenders land on the panel rather than off the bottom of it. */
+/* Every constraint the prose above states, stated again where the compiler can check it — the
+ * whole layout rather than the parts that were easy to assert. The first ties the rule's width
+ * to screens.h (change SCREEN_HISTORY and the strip stops filling the rule it is supposed to
+ * be); the rest keep each band on the panel and clear of its neighbour. */
 _Static_assert(RULE_W == SCREEN_HISTORY * 2, "the history strip must fill the rule exactly");
 _Static_assert(RULE_X * 2 + RULE_W == PANEL_W, "the rule must be centred");
+_Static_assert(HEAD_BASE - HEAD_ASCENT >= 0, "the headline's tallest glyph must fit above it");
+_Static_assert(HEAD_BASE + HEAD_DESCENT < HIST_TOP, "the headline must clear the rule band");
+_Static_assert(HIST_BASE < ROW0_BASE - ROW_ASCENT, "the rule band must clear the upper row");
+_Static_assert(ROW0_BASE + ROW_DESCENT < ROW1_BASE - ROW_ASCENT, "the two rows must not touch");
 _Static_assert(ROW1_BASE + ROW_DESCENT <= PANEL_H - 1, "the lower row must fit the panel");
 
 /* --- the task's own clocks -------------------------------------------------------------- */
@@ -112,6 +129,10 @@ static u8g2_t s_u8g2;
  * it belongs to the task. Nothing else may push into it. */
 static screens_history_t s_history;
 
+/* Resolved once in display_start(). The reason it is not looked up per pass is written at the
+ * point of use in view_build(), where the temptation to reach for the lookup lives. */
+static esp_netif_t *s_sta_netif;
+
 static int64_t s_start_us;
 static int     s_page = PAGE_STATE;
 static int64_t s_press_us;
@@ -149,17 +170,24 @@ static void draw_page_marks(const screen_t *s)
     int pages = s->pages;
     if (pages <= 0) return;
 
-    int seg = (RULE_W - (pages - 1) * MARK_GAP) / pages;
-    if (seg < 2) seg = 2;   /* more pages than the rule has room for: still draw something */
-    int total = pages * seg + (pages - 1) * MARK_GAP;
-    int x = (PANEL_W - total) / 2;
-    if (x < 0) x = 0;   /* u8g2's coordinates are unsigned; a negative x would wrap, not clip */
+    /* Each segment's two edges are computed from the rule's own extent rather than from a
+     * uniform width laid out and then centred. A uniform width drops the remainder of the
+     * division — with four pages, (92 - 18) / 4 is 18 and the run comes to 90, a pixel short
+     * of the rule at each end. Since the markers ARE the rule, ending a pixel inside it is
+     * exactly the misalignment a person notices and cannot name. Proportional edges make the
+     * first segment start at RULE_X and the last end at RULE_X + RULE_W, and spend the
+     * remainder as a one-pixel difference in segment width instead — invisible where a
+     * misaligned end is not. */
+    for (int i = 0; i < pages; i++) {
+        int x0 = RULE_X + (RULE_W + MARK_GAP) * i / pages;
+        int x1 = RULE_X + (RULE_W + MARK_GAP) * (i + 1) / pages - MARK_GAP;
+        int w = x1 - x0;
+        if (w < 1) w = 1;   /* more pages than the rule has room for: still draw something */
 
-    for (int i = 0; i < pages; i++, x += seg + MARK_GAP) {
         if (i == (int)s->page) {
-            u8g2_DrawBox(&s_u8g2, x, RULE_Y - 1, seg, 3);
+            u8g2_DrawBox(&s_u8g2, x0, RULE_Y - 1, w, 3);
         } else {
-            draw_dithered(x, RULE_Y, seg);
+            draw_dithered(x0, RULE_Y, w);
         }
     }
 }
@@ -274,12 +302,23 @@ static void view_build(dongle_view_t *v, net_cfg_t *cfg, const esp_app_desc_t *a
      * gateway from wifi_sta_gateway(). They are shown one above the other on the same page, and
      * two sources can disagree: wifi_sta_gateway keeps the last-known gateway across a drop on
      * purpose (it is the relays' destination and a softAP's gateway does not move), which
-     * beside a zeroed address would read as a link that half exists. It also takes wifi_sta's
-     * bounded-wait lock and logs an ESP_LOGE whenever that lock is busy — the right trade for a
-     * relay that needs a destination, the wrong one for a cosmetic read five times a second. */
-    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+     * beside a zeroed address would read as a link that half exists.
+     *
+     * s_sta_netif, and NOT esp_netif_get_handle_from_ifkey() on every pass. That lookup is not
+     * the local table walk its name suggests: esp_netif_lwip.c:909 routes it through
+     * esp_netif_lwip_ipc_call_get_netif, and with CONFIG_LWIP_TCPIP_CORE_LOCKING unset in this
+     * build (it is absent from build/config/sdkconfig.h) esp_netif_lwip_ipc_call_msg takes the
+     * process-wide api_lock_sem with a timeout of ZERO — sys_arch_sem_wait's spelling of "wait
+     * forever" — and then blocks until the tcpip thread services the message. That is the
+     * thread carrying every relayed packet, and this task would have joined the queue for it
+     * five times a second: an unbounded wait on a global lock, in the name of avoiding
+     * wifi_sta's bounded local one. Resolved once in display_start() instead — wifi_sta_start()
+     * creates the station netif and nothing ever destroys it, so the handle cannot go stale.
+     *
+     * esp_netif_get_ip_info() below is a different matter and stays where it is: a direct read
+     * of the lwip_netif struct, no IPC at all (esp_netif_lwip.c:1980-1996). */
     esp_netif_ip_info_t ip;
-    if (sta != NULL && esp_netif_get_ip_info(sta, &ip) == ESP_OK) {
+    if (s_sta_netif != NULL && esp_netif_get_ip_info(s_sta_netif, &ip) == ESP_OK) {
         v->ip_be = view_addr(&ip.ip);
         v->gw_be = view_addr(&ip.gw);
     }
@@ -344,7 +383,10 @@ static void display_task(void *arg)
 
     for (;;) {
         int64_t now_us = esp_timer_get_time();
-        bool second = (tick % PASSES_PER_SECOND) == 0;
+        /* Never on the first pass: display_start() opened the rate window a few milliseconds
+         * ago, and closing it again immediately would divide by that. Both the rate and the
+         * history want a full second behind them. */
+        bool second = tick > 0 && (tick % PASSES_PER_SECOND) == 0;
 
         /* Closes the rate window relay_stats.h describes, before the view reads what it
          * latched. This task is its ONLY caller, so GET /status's to_car_x10 / to_phone_x10
@@ -394,6 +436,21 @@ esp_err_t display_start(void)
     screens_history_init(&s_history);
     s_start_us = esp_timer_get_time();
     s_press_us = s_start_us;
+
+    /* Once, here, and never again from the task — see view_build(). Not fatal if it comes back
+     * NULL: only the address page loses its two rows. */
+    s_sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (s_sta_netif == NULL) {
+        ESP_LOGE(TAG, "no station netif to read an address from — «Диагностика» page 1 will "
+                      "show 0.0.0.0");
+    }
+
+    /* Opens the first rate window at NOW rather than at zero. relay_stats_init leaves mark_ms
+     * at 0, so without this the first sample would divide the packets forwarded since boot by
+     * the whole uptime and publish that as a current rate — an average dressed as a reading.
+     * The rate this latches is honest: the relays wait on a gateway and the station has not
+     * joined at this point in app_main, so nothing has been forwarded yet. */
+    relay_stats_sample(relay_stats_shared(), (uint32_t)(s_start_us / 1000));
 
     gpio_config_t btn = {
         .pin_bit_mask = 1ULL << BOARD_BOOT_GPIO,

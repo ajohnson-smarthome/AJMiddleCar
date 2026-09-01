@@ -32,16 +32,27 @@ static uint8_t s_buf[XFER_MAX];
 static uint8_t s_len;
 static bool    s_overflow;
 
-/* A 25-byte transfer at 400 kHz is about 0.6 ms on the wire. 50 ms is 80x that, and it is a
- * bound rather than an expectation: an absent panel NACKs immediately, but a bus held low by
- * a miswired or unpowered module would otherwise park this task on it. The display task's
- * whole period is 200 ms and a full redraw is nine transfers, so a bus in that state costs
- * the task its cadence — which is the correct thing to lose, and the only thing. */
+/* A full redraw is about 64 transfers, not the handful it looks like from u8g2_SendBuffer():
+ * u8g2_buffer.c walks 8 tile rows, and for each one u8x8_d_ssd1306_128x64_noname.c's draw-tile
+ * path emits two command transfers and then hands 128 bytes to u8x8_cad.c, which chops them
+ * into runs of 24 — six more. 8 x (2 + 6). That number is worth having right, because it is
+ * what the two decisions below are actually made against.
+ *
+ * A 25-byte transfer at 400 kHz is about 0.6 ms on the wire; 50 ms is 80x that. It is a bound
+ * rather than an expectation: an absent panel NACKs immediately, but a bus held low by a
+ * miswired or unpowered module would otherwise park this task on it. Chosen generously ON
+ * PURPOSE despite there being 64 of them per frame — a timeout that fires on a slow but real
+ * transfer aborts a frame halfway and leaves the controller mid-write, while a timeout that
+ * fires late only costs cadence. The arithmetic of being wrong in the safe direction: a wholly
+ * wedged bus costs 64 x 50 ms = 3.2 s per frame against a 200 ms period, so the display falls
+ * to a frame every three seconds and nothing else on the board notices. This task is priority
+ * 2, holds no lock anything else wants, and is the only user of I2C in the firmware. */
 #define XFER_TIMEOUT_MS 50
 
-/* One log line per outage, not one per failed transfer: a missing panel fails nine times a
- * frame, five times a second, and a flood on a 115200-baud console is how the useful lines
- * get lost. The count is carried so the recovery line can say how much was missed. */
+/* One log line per outage, not one per failed transfer: a missing panel fails all 64 times a
+ * frame, five times a second — 320 lines a second on a 115200-baud console, which is not a
+ * noisy log but a denial of service against every other line in it. The count is carried so
+ * the recovery line can say how much was missed. */
 static uint32_t s_fail_count;
 static bool     s_fail_logged;
 
@@ -195,6 +206,11 @@ esp_err_t display_hal_setup(u8g2_t *u8g2)
         ESP_LOGE(TAG, "cannot address the panel at 0x%02x (%s)",
                  (unsigned)BOARD_OLED_ADDR, esp_err_to_name(err));
         s_dev = NULL;
+        /* Give the bus back. Nothing retries this — display_hal_setup runs once — so the leak
+         * would be permanent rather than growing, but it would hold a hardware port and its
+         * pins for the life of a boot in exchange for nothing. */
+        i2c_del_master_bus(s_bus);
+        s_bus = NULL;
         return err;
     }
 
