@@ -51,11 +51,18 @@ void relay_stats_sample(relay_stats_t *s, uint32_t now_ms);
 
 /* The one instance both relay tasks write and the display reads.
  *
- * Deliberately not a lock: every field is a single word written by one task and read by
- * another, and a reader that catches a torn pair sees a rate one sample stale — which is
- * cheaper than a mutex on the forwarding path, and the forwarding path is the one thing in
- * this firmware that must never wait. The two relays write disjoint fields except the errno
- * pair, where a lost update costs one repeat in a counter nobody adds up. */
+ * Deliberately not a lock: every field is a single word written by at most one task, except
+ * the errno pair, and a reader that catches a torn pair sees a rate one sample stale — which
+ * is cheaper than a mutex on the forwarding path, and the forwarding path is the one thing in
+ * this firmware that must never wait. The packet totals belong to the UDP relay alone —
+ * relay_tcp.c never calls relay_stats_forwarded(), on purpose: the display's «Пакеты 10/5 в
+ * сек» reads as the real-time control rate only because every count in it is a control
+ * datagram, and mixing in REST bytes moved by the byte-pumping TCP relay would make a burst
+ * of REST fragments indistinguishable from a healthy control loop, not merely disagree with
+ * this comment. The two relays' slot counts are likewise each their own field. Only the
+ * errno pair is written by both — both relays speak to the same car over the same radio, so
+ * whichever wrote it means the same thing — and there a lost update costs one repeat in a
+ * counter nobody adds up. */
 relay_stats_t *relay_stats_shared(void);
 
 #endif /* RELAY_STATS_H */
