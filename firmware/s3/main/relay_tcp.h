@@ -33,6 +33,12 @@
  * bind-interface control over at all and which api_guard.c therefore has to screen connection
  * by connection. */
 
+/* Pool size is a design number, not a detail — the spec says so. Four: the app can have a
+ * config POST and a firmware upload in flight at once, and a pool of one would deadlock the
+ * second behind the first. Four leaves room for the browser-style parallelism a REST client
+ * may use without letting a leaked slot starve the pool. */
+#define RELAY_POOL_SIZE 4
+
 /* Starts the relay task. Safe to call right after wifi_sta_start(): the task waits on its
  * own for wifi_sta_gateway() to succeed before opening any socket, so this does not need to
  * wait for a join to finish and never blocks its caller. */

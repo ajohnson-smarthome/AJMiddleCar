@@ -7,13 +7,17 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
+#include "esp_system.h"
+#include "esp_timer.h"
 
 #include "api_guard.h"
 #include "dongle_contract.inc"
 #include "net_api.h"
+#include "relay_stats.h"
 #include "status_api.h"
 #include "usb_net.h"
 #include "wifi_sta.h"
+#include "wifi_state.h"
 
 static const char *TAG = "status_api";
 
@@ -34,6 +38,11 @@ static void read_rollback_state(void)
                  esp_ota_get_state_partition(other, &st) == ESP_OK &&
                  st == ESP_OTA_IMG_ABORTED;
     if (s_rollback) ESP_LOGW(TAG, "the previous OTA was rolled back by the bootloader");
+}
+
+bool status_api_rolled_back(void)
+{
+    return s_rollback;
 }
 
 /* The identity key is `device`, spelled as the car's contract spells it
@@ -60,38 +69,78 @@ static esp_err_t status_get(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    /* Read into locals, in this order, rather than passed as two arguments to one snprintf.
-     * C does not order argument evaluation, and these two are not one snapshot: state is taken
-     * under wifi_sta's lock, rssi is an unlocked esp_wifi_sta_get_ap_info. Evaluated
-     * right-to-left, rssi could be sampled while the station was still down and state a moment
-     * later once it was up, publishing {"state":"connected","rssi":0} out of two readings that
-     * were each correct. Taking state FIRST leaves only the honest version of that pairing: if
-     * state says connected, rssi was read afterwards, so a 0 means the link genuinely dropped
-     * in between. Not atomicity — there is no lock spanning both — but an ordering that cannot
-     * invent a contradiction.
+    /* Read into locals, in this order, rather than passed as arguments to one snprintf.
+     * C does not order argument evaluation, and these are not one snapshot: state is taken
+     * under wifi_sta's lock, the radio's figures are an unlocked esp_wifi_sta_get_ap_info.
+     * Evaluated right-to-left, they could be sampled while the station was still down and
+     * state a moment later once it was up, publishing {"state":"connected","rssi":0} out of
+     * two readings that were each correct. Taking state FIRST leaves only the honest version
+     * of that pairing: if state says connected, the radio was read afterwards, so a 0 means
+     * the link genuinely dropped in between. Not atomicity — there is no lock spanning both —
+     * but an ordering that cannot invent a contradiction.
      *
-     * `rssi` is a real reading from the dongle's own receiver, not a placeholder: 0 when not
-     * connected, whatever esp_wifi_sta_get_ap_info reports otherwise. */
+     * `rssi` and `channel` are real readings from the dongle's own receiver, not placeholders:
+     * 0 when not connected, whatever esp_wifi_sta_get_ap_info reports otherwise. They come
+     * from one call because they are one reading — see wifi_sta_ap_info's own comment for what
+     * two calls could publish. */
     const char *net_state = wifi_sta_state_name();
-    int net_rssi = (int)wifi_sta_rssi();
-    /* 320, not 256. Worst case with the rollback and net fields: 98 bytes of literal template,
-     * + 31 (esp_app_desc_t.version is char[32]) + 31 (idf_ver, likewise) + 5 ("false")
-     * + 64 (a 32-byte SSID whose every byte escapes to two) + 9 ("connected") + 4 ("-128")
-     * + NUL = 243. The margin is deliberate: adding one field should not also be a buffer
-     * calculation. */
-    char body[320];
+    int8_t ap_rssi;
+    uint8_t ap_channel;
+    wifi_sta_ap_info(&ap_rssi, &ap_channel);
+    int net_rssi = (int)ap_rssi;
+
+    /* Independent of the net trio above, and of each other: none of these can disagree with
+     * another the way state/rssi can, so no read-ordering constraint applies among them —
+     * each is a single self-contained fact, read once, right here. The one field below that
+     * can still come back torn is relay_stats_shared()'s errno/errno_count pair — accepted
+     * on purpose there, for the reason relay_stats.h gives: cheaper than a lock on a
+     * forwarding path that must never wait. */
+    const char *usb_state = usb_net_host_attached() ? DONGLE_USB_STATE_UP : DONGLE_USB_STATE_DOWN;
+    relay_stats_t *relay = relay_stats_shared();
+    long uptime_s = (long)(esp_timer_get_time() / 1000000);
+    unsigned heap = (unsigned)esp_get_free_heap_size();
+    unsigned attempts = (unsigned)wifi_sta_attempts();
+    unsigned channel = (unsigned)ap_channel;
+
+    /* 512, not 448. Worst case with the rollback, net and new fields: 243 bytes of literal
+     * template (the previous 98, minus the 2-byte "up" literal usb loses by becoming a %s now
+     * that it can also read "down", plus the keys, braces and commas the fields below add)
+     * + 31 (esp_app_desc_t.version is char[32]) + 31 (idf_ver, likewise) + 4 ("down")
+     * + 5 ("false") + 64 (a 32-byte SSID whose every byte escapes to two) + 9 ("connected")
+     * + 4 ("-128") + 10 (uptime_s, a positive long) + 10 (heap, uint32_t) + 3 (attempts,
+     * uint8_t) + 3 (attempts_max, WIFI_JOIN_ATTEMPTS) + 2 (channel, 1..14 in practice)
+     * + 5 (to_car_x10, uint16_t) + 5 (to_phone_x10, likewise) + 3 (udp_used) + 3 (tcp_used)
+     * + 4 (last_errno) + 10 (errno_count, uint32_t) + NUL = 450. The margin is deliberate:
+     * adding one field should not also be a buffer calculation. */
+    char body[512];
     int n = snprintf(body, sizeof(body),
                      "{\"" DONGLE_KEY_DEVICE "\":\"" DONGLE_DEVICE "\","
                      "\"" DONGLE_KEY_FW "\":\"%s\","
                      "\"" DONGLE_KEY_IDF "\":\"%s\","
-                     "\"" DONGLE_KEY_USB "\":\"" DONGLE_USB_STATE_UP "\","
+                     "\"" DONGLE_KEY_USB "\":\"%s\","
                      "\"" DONGLE_KEY_ROLLBACK "\":%s,"
                      "\"" DONGLE_KEY_NET "\":{"
                      "\"" DONGLE_KEY_NET_SSID "\":\"%s\","
                      "\"" DONGLE_KEY_NET_STATE "\":\"%s\","
-                     "\"" DONGLE_KEY_NET_RSSI "\":%d}}",
-                     app->version, app->idf_ver, s_rollback ? "true" : "false", ssid_esc,
-                     net_state, net_rssi);
+                     "\"" DONGLE_KEY_NET_RSSI "\":%d},"
+                     "\"" DONGLE_KEY_UPTIME "\":%ld,"
+                     "\"" DONGLE_KEY_HEAP "\":%u,"
+                     "\"" DONGLE_KEY_ATTEMPTS "\":%u,"
+                     "\"" DONGLE_KEY_ATTEMPTS_MAX "\":%u,"
+                     "\"" DONGLE_KEY_CHANNEL "\":%u,"
+                     "\"" DONGLE_KEY_RELAY "\":{"
+                     "\"" DONGLE_KEY_RELAY_TO_CAR "\":%u,"
+                     "\"" DONGLE_KEY_RELAY_TO_PHONE "\":%u,"
+                     "\"" DONGLE_KEY_RELAY_SLOTS_UDP "\":%u,"
+                     "\"" DONGLE_KEY_RELAY_SLOTS_TCP "\":%u,"
+                     "\"" DONGLE_KEY_RELAY_ERRNO "\":%d,"
+                     "\"" DONGLE_KEY_RELAY_ERRNO_COUNT "\":%u}}",
+                     app->version, app->idf_ver, usb_state, s_rollback ? "true" : "false",
+                     ssid_esc, net_state, net_rssi,
+                     uptime_s, heap, attempts, (unsigned)WIFI_JOIN_ATTEMPTS, channel,
+                     (unsigned)relay->to_car_x10, (unsigned)relay->to_phone_x10,
+                     (unsigned)relay->udp_used, (unsigned)relay->tcp_used,
+                     relay->last_errno, (unsigned)relay->errno_count);
     if (n < 0 || (size_t)n >= sizeof(body)) {
         /* Same rule as the car's own /status: truncated JSON parses as something else or
          * nothing, and shipping it under a 200 hides exactly that. Only reachable if a

@@ -1,6 +1,8 @@
 #ifndef STATUS_API_H
 #define STATUS_API_H
 
+#include <stdbool.h>
+
 #include "esp_err.h"
 #include "esp_http_server.h"
 
@@ -19,5 +21,13 @@ esp_err_t status_api_start(void);
 /* The running server, so another module can register its handlers on it rather than
  * start a second one. NULL before status_api_start succeeds. */
 httpd_handle_t status_api_server(void);
+
+/* Did the bootloader revert the previous OTA? The same answer GET /status publishes as
+ * `rollback`, read once at status_api_start and unable to change without a reboot.
+ *
+ * Exposed rather than duplicated: the display needs it too, and a second module querying the
+ * partition table itself would be two independent readings of one unchanging fact, free to
+ * disagree if either ever grew a condition. False before status_api_start has run. */
+bool status_api_rolled_back(void);
 
 #endif /* STATUS_API_H */

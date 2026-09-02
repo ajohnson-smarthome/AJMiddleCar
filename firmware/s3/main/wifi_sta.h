@@ -47,9 +47,24 @@ bool wifi_sta_connected(void);
 /* GET /status's `net.state`, spelled by the generated contract. */
 const char *wifi_sta_state_name(void);
 
-/* GET /status's `net.rssi`. 0 when not connected — the dongle is a station and reads its own
- * receiver, so unlike the car this is a real measurement whenever it is non-zero. */
-int8_t wifi_sta_rssi(void);
+/* GET /status's `net.rssi` and the joined network's primary channel, from ONE query. The dongle
+ * is a station and reads its own receiver, so unlike the car these are real measurements
+ * whenever they are non-zero; both are zeroed, and false returned, when there is no
+ * association to read them from. 0 is that sentinel and never a placeholder for a reading —
+ * see display.c's RSSI_NO_LINK and screens.c's «нет» for what has to be done with it.
+ *
+ * One call rather than an accessor each, because both callers show the two together and
+ * esp_wifi_sta_get_ap_info is unlocked: two queries a few instructions apart can straddle a
+ * dropped link and publish a live −53 dBm beside a channel of 0 — a measurement next to its own
+ * absence, indistinguishable from one instant's truth. */
+bool wifi_sta_ap_info(int8_t *rssi, uint8_t *channel);
+
+/* The consumed attempts of the current budget, out of WIFI_JOIN_ATTEMPTS.
+ *
+ * Read from the display and the HTTP task, so it comes from the lock-free mirror for the same
+ * reason wifi_sta_connected() does: a value at most one transition stale is a better answer
+ * than blocking either caller. */
+uint8_t wifi_sta_attempts(void);
 
 /* The gateway of the joined network, in network byte order. False until the FIRST address
  * ever arrives; once true, it stays true and keeps the last-known gateway even across a

@@ -12,6 +12,7 @@
 #include "tinyusb.h"
 #include "tinyusb_default_config.h"
 #include "tinyusb_net.h"
+#include "tusb.h"
 
 #include "usb_net.h"
 
@@ -122,6 +123,21 @@ static esp_err_t usb_post_attach(esp_netif_t *netif, void *args)
 esp_netif_t *usb_net_netif(void)
 {
     return s_netif;
+}
+
+/* Whether a USB host has enumerated and configured this device. /status reported "up"
+ * unconditionally before this existed, which was the one field on that endpoint that could not
+ * be false.
+ *
+ * tud_mounted(), not a link-state flag of our own: there is no NCM link-detect callback to hook
+ * — see usb_post_attach's own comment above on why this interface comes up unconditionally the
+ * moment it is attached. tud_mounted() answers a different, better question for this purpose
+ * anyway — "is a host present at all" rather than "did the class driver attach" — and
+ * espressif__esp_tinyusb/tinyusb_net.c already gates its own sends on exactly this call, so this
+ * is not a new source of truth, just the existing one made visible outside this file. */
+bool usb_net_host_attached(void)
+{
+    return tud_mounted();
 }
 
 /* See usb_net.h for why an interface pin is a different thing from a bind, and why the

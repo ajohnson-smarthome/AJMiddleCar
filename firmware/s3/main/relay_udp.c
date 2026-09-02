@@ -10,6 +10,8 @@
 #include "lwip/sockets.h"
 
 #include "dongle_contract.inc"
+#include "relay_stats.h"
+#include "relay_tcp.h"
 #include "udp_sess.h"
 #include "usb_net.h"
 #include "wifi_sta.h"
@@ -173,6 +175,7 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
     }
 
     if (send(r->car_sock[idx], buf, (size_t)n, 0) < 0) {
+        relay_stats_failed(relay_stats_shared(), errno);
         /* Rate-limited: a Wi-Fi drop fails every send, and udp_sess_touch (above) refreshes
          * this session's deadline on every phone datagram regardless of whether the send that
          * follows succeeds — so the session cannot age out while the phone keeps streaming,
@@ -185,6 +188,8 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
             last_log = t;
             ESP_LOGW(TAG, "phone->car send failed on slot %d: errno %d", idx, errno);
         }
+    } else {
+        relay_stats_forwarded(relay_stats_shared(), true);
     }
 }
 
@@ -200,6 +205,7 @@ static void handle_car_datagram(relay_state_t *r, int idx, const char *buf, int 
         .sin_port = htons(s->port),
     };
     if (sendto(r->phone_sock, buf, (size_t)n, 0, (struct sockaddr *)&to, sizeof(to)) < 0) {
+        relay_stats_failed(relay_stats_shared(), errno);
         /* Rate-limited for the same reason as the phone->car send above. */
         static uint32_t last_log;
         uint32_t t = now_ms();
@@ -207,6 +213,8 @@ static void handle_car_datagram(relay_state_t *r, int idx, const char *buf, int 
             last_log = t;
             ESP_LOGW(TAG, "car->phone send failed on slot %d: errno %d", idx, errno);
         }
+    } else {
+        relay_stats_forwarded(relay_stats_shared(), false);
     }
 }
 
@@ -315,12 +323,19 @@ static void relay_task(void *arg)
         FD_ZERO(&rfds);
         FD_SET(r.phone_sock, &rfds);
         int maxfd = r.phone_sock;
+        /* Session occupancy, sampled once per pass from the same loop that already visits
+         * every slot to build the fd set — see relay_tcp.c's identical reasoning for its own
+         * slot count. car_sock[i] >= 0 mirrors sess.s[i].used exactly (relay_state_t's own
+         * comment), so this counts live sessions without a second pass over the table. */
+        int used = 0;
         for (int i = 0; i < UDP_SESS_MAX; i++) {
             if (r.car_sock[i] >= 0) {
                 FD_SET(r.car_sock[i], &rfds);
                 if (r.car_sock[i] > maxfd) maxfd = r.car_sock[i];
+                used++;
             }
         }
+        relay_stats_udp_slots(relay_stats_shared(), (uint8_t)used);
 
         struct timeval tv = { .tv_sec = RELAY_LOOP_MS / 1000, .tv_usec = 0 };
         int nready = select(maxfd + 1, &rfds, NULL, NULL, &tv);
@@ -378,6 +393,11 @@ static void relay_task(void *arg)
 
 esp_err_t relay_udp_start(void)
 {
+    /* Initialised here, before either relay task is created: main.c calls relay_udp_start()
+     * ahead of relay_tcp_start(), and this runs before this file's own xTaskCreate below, so
+     * the shared instance is zeroed and sized before a byte of either relay's traffic can
+     * reach it — no task ever observes it half-initialised. */
+    relay_stats_init(relay_stats_shared(), UDP_SESS_MAX, RELAY_POOL_SIZE);
     if (xTaskCreate(relay_task, "relay_udp", 4096, NULL, 5, NULL) != pdPASS) {
         return ESP_FAIL;
     }

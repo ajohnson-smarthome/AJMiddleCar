@@ -25,7 +25,19 @@
     "net": "net",
     "net_ssid": "ssid",
     "net_state": "state",
-    "net_rssi": "rssi"
+    "net_rssi": "rssi",
+    "uptime": "uptime",
+    "heap": "heap",
+    "attempts": "attempts",
+    "attempts_max": "attempts_max",
+    "channel": "channel",
+    "relay": "relay",
+    "relay_to_car": "to_car_x10",
+    "relay_to_phone": "to_phone_x10",
+    "relay_slots_udp": "slots_udp",
+    "relay_slots_tcp": "slots_tcp",
+    "relay_errno": "errno",
+    "relay_errno_count": "errno_count"
   },
   "net_fields": {
     "ssid": "ssid",
@@ -47,6 +59,7 @@
     "failed"
   ],
   "usb_states": [
-    "up"
+    "up",
+    "down"
   ]
 }

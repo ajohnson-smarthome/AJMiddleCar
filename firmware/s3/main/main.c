@@ -5,6 +5,7 @@
 #include "esp_partition.h"
 #include "nvs_flash.h"
 
+#include "display.h"
 #include "net_api.h"
 #include "ota_api.h"
 #include "relay_tcp.h"
@@ -51,6 +52,22 @@ void app_main(void)
     ESP_ERROR_CHECK(status_api_start());
     ESP_ERROR_CHECK(net_api_register(status_api_server()));
     ESP_ERROR_CHECK(ota_api_register(status_api_server()));
+
+    /* Last of the startup calls, and deliberately still ahead of the rollback waiver below.
+       Everything above this line is a rollback trigger — the ESP_ERROR_CHECKs panic-reboot, and
+       a panic while the image is still PENDING_VERIFY is what puts the previous one back. A
+       display fault must not be able to do that: the panel is the least load-bearing thing on
+       the board, and an image that boots and serves /ota is the property worth protecting. So
+       this is not ESP_ERROR_CHECKed either — a screen that will not start is logged and lived
+       with, never a reason to revert firmware that works. After status_api_start() for a second
+       reason: display_start() reads status_api_rolled_back(), and status_api_start() is what
+       establishes it. */
+    esp_err_t disp_ret = display_start();
+    if (disp_ret != ESP_OK) {
+        ESP_LOGE(TAG, "display did not start (%s) — the panel stays dark and GET /status's "
+                      "packet rates stay 0; everything else is unaffected",
+                 esp_err_to_name(disp_ret));
+    }
 
     /* Rollback is waived here and nowhere earlier. Everything above is a rollback trigger:
        the ESP_ERROR_CHECKs panic-reboot on failure, and a panic while the image is still

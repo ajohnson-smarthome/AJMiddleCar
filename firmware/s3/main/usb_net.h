@@ -1,6 +1,8 @@
 #ifndef USB_NET_H
 #define USB_NET_H
 
+#include <stdbool.h>
+
 #include "esp_err.h"
 #include "esp_netif.h"
 
@@ -16,6 +18,10 @@ esp_err_t usb_net_start(void);
 
 /* The interface, for later plans that need to bridge or route through it. */
 esp_netif_t *usb_net_netif(void);
+
+/* Whether a USB host has configured the NCM interface. /status reported "up" unconditionally
+ * before this existed, which was the one field on that endpoint that could not be false. */
+bool usb_net_host_attached(void);
 
 /* Pin an already-created socket to the USB interface, so that only traffic which actually
  * ARRIVED on that wire can ever reach it.

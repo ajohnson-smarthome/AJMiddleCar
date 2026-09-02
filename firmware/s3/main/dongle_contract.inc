@@ -27,6 +27,18 @@
 #define DONGLE_KEY_NET_SSID "ssid"
 #define DONGLE_KEY_NET_STATE "state"
 #define DONGLE_KEY_NET_RSSI "rssi"
+#define DONGLE_KEY_UPTIME "uptime"
+#define DONGLE_KEY_HEAP "heap"
+#define DONGLE_KEY_ATTEMPTS "attempts"
+#define DONGLE_KEY_ATTEMPTS_MAX "attempts_max"
+#define DONGLE_KEY_CHANNEL "channel"
+#define DONGLE_KEY_RELAY "relay"
+#define DONGLE_KEY_RELAY_TO_CAR "to_car_x10"
+#define DONGLE_KEY_RELAY_TO_PHONE "to_phone_x10"
+#define DONGLE_KEY_RELAY_SLOTS_UDP "slots_udp"
+#define DONGLE_KEY_RELAY_SLOTS_TCP "slots_tcp"
+#define DONGLE_KEY_RELAY_ERRNO "errno"
+#define DONGLE_KEY_RELAY_ERRNO_COUNT "errno_count"
 
 #define DONGLE_NETKEY_SSID "ssid"
 #define DONGLE_NETKEY_PASSWORD "password"
@@ -39,5 +51,6 @@
 #define DONGLE_STATE_FAILED "failed"
 
 #define DONGLE_USB_STATE_UP "up"
+#define DONGLE_USB_STATE_DOWN "down"
 
 #endif /* DONGLE_CONTRACT_INC */

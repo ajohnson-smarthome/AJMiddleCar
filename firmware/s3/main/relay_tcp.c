@@ -10,17 +10,12 @@
 #include "lwip/sockets.h"
 
 #include "dongle_contract.inc"
+#include "relay_stats.h"
 #include "tcp_pending.h"
 #include "usb_net.h"
 #include "wifi_sta.h"
 
 static const char *TAG = "relay_tcp";
-
-/* Pool size is a design number, not a detail — the spec says so. Four: the app can have a
- * config POST and a firmware upload in flight at once, and a pool of one would deadlock the
- * second behind the first. Four leaves room for the browser-style parallelism a REST client
- * may use without letting a leaked slot starve the pool. */
-#define RELAY_POOL_SIZE 4
 
 /* TCP is a byte stream, not a datagram: unlike relay_udp.c's RELAY_BUF_LEN, this needs no
  * "+1 to detect truncation" trick. A recv() that does not drain everything queued just
@@ -200,6 +195,7 @@ static void flush_pending(relay_state_t *r, int idx, int dst, tcp_pending_t *p,
          * stays; select() will say so again next pass if dst is still not ready. */
         return;
     }
+    relay_stats_failed(relay_stats_shared(), errno);
     ESP_LOGW(TAG, "%s forwarding failed on slot %d: errno %d", label, idx, errno);
     close_slot(r, idx, "forwarding failed");
 }
@@ -232,6 +228,7 @@ static void pump_read(relay_state_t *r, int idx, int src, int dst, char *scratch
             return;   /* the common case: forwarded whole, nothing left pending */
         }
         if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            relay_stats_failed(relay_stats_shared(), errno);
             ESP_LOGW(TAG, "%s forwarding failed on slot %d: errno %d", label, idx, errno);
             close_slot(r, idx, "forwarding failed");
             return;
@@ -568,8 +565,14 @@ static void relay_task(void *arg)
         FD_ZERO(&wfds);
         FD_SET(r.listen_sock, &rfds);
         int maxfd = r.listen_sock;
+        /* Slot occupancy, sampled once per pass rather than kept as a running counter: every
+         * close_slot() and every handle_accept() would otherwise need to remember to adjust
+         * it, and a miscount there would be silent — this loop already visits every slot each
+         * pass, so counting here costs nothing and cannot drift from r.slots[] itself. */
+        int busy = 0;
         for (int i = 0; i < RELAY_POOL_SIZE; i++) {
             tcp_slot_t *s = &r.slots[i];
+            if (s->state != SLOT_FREE) busy++;
             if (s->state == SLOT_ACTIVE) {
                 tcp_pending_t *p2c = &s_p2c_pending[i];
                 tcp_pending_t *c2p = &s_c2p_pending[i];
@@ -605,6 +608,7 @@ static void relay_task(void *arg)
                 if (s->car_sock > maxfd) maxfd = s->car_sock;
             }
         }
+        relay_stats_tcp_slots(relay_stats_shared(), (uint8_t)busy);
 
         struct timeval tv = { .tv_sec = RELAY_LOOP_MS / 1000, .tv_usec = 0 };
         int nready = select(maxfd + 1, &rfds, &wfds, NULL, &tv);

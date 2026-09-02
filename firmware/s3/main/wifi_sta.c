@@ -48,6 +48,11 @@ static _Atomic bool s_join_in_flight;
  * lock is busy, in car.c's _Atomic idiom (see s_trim_pct there). */
 static _Atomic wifi_state_t s_state_view = WIFI_IDLE;
 
+/* Same shape, same reason, for s_sm.attempts: a display polling how much of the join budget is
+ * spent deserves the same race-free, at-most-one-transition-stale answer wifi_sta_state_name
+ * already gets from s_state_view, not a bounded-wait lock of its own. */
+static _Atomic uint8_t s_attempts_view;
+
 /* Whether the radio has actually associated with an access point, as opposed to still looking
  * for one. WIFI_JOINING covers both — the pure state machine models the join as one state,
  * correctly, because from its point of view they are one — but they are entirely different
@@ -74,10 +79,14 @@ static void lock_give(void)
 }
 
 /* Call with s_lock held, immediately after any wifi_state_step/wifi_state_init call that may
- * have changed s_sm.state, so the lock-free mirror never lags a real transition. */
+ * have changed s_sm.state, so the lock-free mirror never lags a real transition. Both mirrors
+ * together, always: s_sm.attempts can change on a call that leaves s_sm.state untouched (see
+ * WIFI_EV_DISCONNECTED's retry branch in wifi_state.c), so publishing only on a state change
+ * would let s_attempts_view drift behind the real count. */
 static void publish_state_locked(void)
 {
     atomic_store(&s_state_view, s_sm.state);
+    atomic_store(&s_attempts_view, s_sm.attempts);
 }
 
 static void handle_disconnected(const wifi_event_sta_disconnected_t *ev)
@@ -338,13 +347,31 @@ const char *wifi_sta_state_name(void)
     return refine(name);
 }
 
-int8_t wifi_sta_rssi(void)
+bool wifi_sta_ap_info(int8_t *rssi, uint8_t *channel)
 {
-    wifi_ap_record_t info;
-    if (esp_wifi_sta_get_ap_info(&info) != ESP_OK) {
-        return 0;
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+        /* Zeroed rather than left alone: the sentinel is the answer to "what is the signal
+         * when there is no link", and a caller that reads its own uninitialised locals
+         * because it forgot to check the return value should see that answer, not a number
+         * off the stack. */
+        *rssi = 0;
+        *channel = 0;
+        return false;
     }
-    return info.rssi;
+    *rssi = ap.rssi;
+    *channel = ap.primary;
+    return true;
+}
+
+/* The consumed attempts of the current budget, out of WIFI_JOIN_ATTEMPTS.
+ *
+ * Read from the display and the HTTP task, so it comes from the lock-free mirror for the same
+ * reason wifi_sta_connected() does: a value at most one transition stale is a better answer
+ * than blocking either caller. */
+uint8_t wifi_sta_attempts(void)
+{
+    return atomic_load(&s_attempts_view);
 }
 
 bool wifi_sta_gateway(uint32_t *out_be)

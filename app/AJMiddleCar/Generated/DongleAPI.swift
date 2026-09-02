@@ -32,6 +32,18 @@ public enum DongleStatusKey {
     public static let netSsid = "ssid"
     public static let netState = "state"
     public static let netRssi = "rssi"
+    public static let uptime = "uptime"
+    public static let heap = "heap"
+    public static let attempts = "attempts"
+    public static let attemptsMax = "attempts_max"
+    public static let channel = "channel"
+    public static let relay = "relay"
+    public static let relayToCar = "to_car_x10"
+    public static let relayToPhone = "to_phone_x10"
+    public static let relaySlotsUdp = "slots_udp"
+    public static let relaySlotsTcp = "slots_tcp"
+    public static let relayErrno = "errno"
+    public static let relayErrnoCount = "errno_count"
 }
 
 /// What the dongle's radio is doing, as `/status` reports it.
@@ -47,5 +59,6 @@ public enum DongleNetState {
 /// What the dongle's USB link is doing, as `/status` reports it.
 public enum DongleUsbState {
     public static let up = "up"
-    public static let all = ["up"]
+    public static let down = "down"
+    public static let all = ["up", "down"]
 }
