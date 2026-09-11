@@ -40,9 +40,15 @@ static const char *TAG = "display";
  * baseline (Ё, whose diaeresis sits above the cap) and 4 below. u8g2_font_6x12_t_cyrillic is
  * 12 with an offset of -2: 10 above, 2 below.
  *
- * That gives baselines of 16, 44 and 58, and a rule band from 22 to 32 — every band clear of
- * its neighbour by two rows, the headline's top on row 0 and the lower row's descenders on
- * row 60, three clear of the last row the panel has.
+ * That gives the headline a baseline of 16 and the rule a band from 22 to 32. The rows are not
+ * given fixed baselines: they are CENTRED, as a block, in the zone the band leaves below it —
+ * row 33 to the panel's last row, 31 rows. A screen with two rows puts a 26-row block there
+ * (baselines 45 and 59, descenders on row 60, three clear of the edge); a screen with one row
+ * — the splash, «Обновление», «Сигнал» — puts a 12-row block there, baseline 52, instead of
+ * hanging its only row under the rule with twenty empty rows beneath it, which is what fixed
+ * baselines did. The zone's top is the band's floor for EVERY screen, not the row the rule
+ * actually reached on this one: paging from a plain rule to the history strip must not make
+ * the rows jump. See rows_layout().
  *
  * ONE THING THAT WILL LOOK LIKE A BUG ON THE BENCH and is not: the rule does not sit at the
  * same y on «Сигнал» as everywhere else. The plain rule and the level gauge are single lines
@@ -70,8 +76,9 @@ static const char *TAG = "display";
 #define HIST_BASE  32   /* the history's axis; its bars grow upward from just above it */
 #define HIST_H     (HIST_BASE - HIST_TOP)   /* 10 rows of headroom for a full sample */
 #define MARK_GAP    6   /* between the diagnostics page markers */
-#define ROW0_BASE  44   /* baselines of the two 6x12 rows */
-#define ROW1_BASE  58
+#define ROWS_TOP   (HIST_BASE + 1)   /* the zone the rows are centred in: below the band ... */
+#define ROWS_BOTTOM (PANEL_H - 1)    /* ... down to the panel's last row */
+#define ROW_PITCH  14   /* baseline to baseline when there are two rows */
 #define ROW_ASCENT  10  /* rows the 6x12 font can reach above its baseline (height + y-offset) */
 #define ROW_DESCENT 2   /* ... and below it (its y-offset, negated) */
 
@@ -83,9 +90,9 @@ _Static_assert(RULE_W == SCREEN_HISTORY * 2, "the history strip must fill the ru
 _Static_assert(RULE_X * 2 + RULE_W == PANEL_W, "the rule must be centred");
 _Static_assert(HEAD_BASE - HEAD_ASCENT >= 0, "the headline's tallest glyph must fit above it");
 _Static_assert(HEAD_BASE + HEAD_DESCENT < HIST_TOP, "the headline must clear the rule band");
-_Static_assert(HIST_BASE < ROW0_BASE - ROW_ASCENT, "the rule band must clear the upper row");
-_Static_assert(ROW0_BASE + ROW_DESCENT < ROW1_BASE - ROW_ASCENT, "the two rows must not touch");
-_Static_assert(ROW1_BASE + ROW_DESCENT <= PANEL_H - 1, "the lower row must fit the panel");
+_Static_assert(ROW_ASCENT + ROW_DESCENT < ROW_PITCH, "the two rows must not touch");
+_Static_assert((SCREEN_ROWS - 1) * ROW_PITCH + ROW_ASCENT + ROW_DESCENT <= ROWS_BOTTOM - ROWS_TOP + 1,
+               "two rows must fit the zone under the rule band");
 
 /* --- the task's own clocks -------------------------------------------------------------- */
 
@@ -180,6 +187,26 @@ static void draw_dithered(int x, int y, int w)
     for (int i = 0; i < w; i += 2) {
         u8g2_DrawPixel(&s_u8g2, x + i, y);
     }
+}
+
+/* Baselines for the rows this screen actually has, centred as one block in the zone under the
+ * rule band. `n` rows occupy (n-1)*ROW_PITCH + ROW_ASCENT + ROW_DESCENT rows; the block is
+ * placed with the spare rows split above and below (the odd one below), and each baseline is
+ * ROW_ASCENT under the block's top plus its pitch. Rows are counted from the first non-empty
+ * to the last, so an empty row[1] means a one-row block and not a two-row block with a hole.
+ * Returns how many rows there are; base[] is meaningful for row indices first..last. */
+static int rows_layout(const screen_t *s, int base[SCREEN_ROWS])
+{
+    int first = -1, last = -1;
+    for (int r = 0; r < SCREEN_ROWS; r++) {
+        if (s->row[r][0] != '\0') { if (first < 0) first = r; last = r; }
+    }
+    if (first < 0) return 0;
+    int n = last - first + 1;
+    int box = (n - 1) * ROW_PITCH + ROW_ASCENT + ROW_DESCENT;
+    int top = ROWS_TOP + (ROWS_BOTTOM - ROWS_TOP + 1 - box) / 2;
+    for (int r = first; r <= last; r++) base[r] = top + ROW_ASCENT + (r - first) * ROW_PITCH;
+    return n;
 }
 
 static void draw_centred(int baseline, const char *s)
@@ -292,8 +319,12 @@ static void draw(const screen_t *s, uint16_t hist_mark, int64_t now_us)
     draw_rule(s);
 
     u8g2_SetFont(&s_u8g2, u8g2_font_6x12_t_cyrillic);
-    draw_centred(ROW0_BASE, s->row[0]);
-    draw_centred(ROW1_BASE, s->row[1]);
+    int base[SCREEN_ROWS];
+    if (rows_layout(s, base) > 0) {
+        for (int r = 0; r < SCREEN_ROWS; r++) {
+            if (s->row[r][0] != '\0') draw_centred(base[r], s->row[r]);
+        }
+    }
 
     /* The one call that touches the bus. Everything above is memory. */
     u8g2_SendBuffer(&s_u8g2);
