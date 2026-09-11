@@ -7,6 +7,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -29,18 +30,39 @@ static wifi_sm_t s_sm;
 static uint32_t s_gateway;   /* network byte order; meaningful only when s_has_gateway */
 static bool s_has_gateway;
 
-/* True from the moment wifi_sta_join issues its own esp_wifi_disconnect() until it is
- * consumed by handle_disconnected — or, if the resulting disconnect event never arrives at
- * all (nothing was connected to begin with, the common case for a first join, or any join
- * from WIFI_IDLE/WIFI_FAILED), until wifi_sta_join clears it itself on the way out.
+/* Until when a disconnect event is to be read as wifi_sta_join's OWN doing rather than as a
+ * failed join. Zero means "no suppression pending"; otherwise it is a millisecond deadline.
+ *
+ * A DEADLINE and not a flag, which is the whole of it. As a bool this was set before
+ * esp_wifi_disconnect() and cleared unconditionally a few lines later, on the stated
+ * assumption that the disconnect's event had "already posted (the ordinary case, well ahead
+ * of this point)". Nothing enforced that: the event runs on the event-loop task, and this
+ * function runs on httpd with an esp_wifi_set_config and a lock_take between the two. When
+ * the event lost that race the flag was already false, so its own deliberate disconnect was
+ * charged against the five-attempt budget AND answered with a second esp_wifi_connect()
+ * racing the one below.
+ *
+ * Clearing it only in handle_disconnected would have fixed the race and reintroduced the
+ * failure the unconditional clear existed to prevent: a disconnect that never produces an
+ * event (nothing was connected — the common case for a first join) leaves the suppression
+ * armed, and the next genuine disconnect, possibly hours later, is swallowed. A deadline has
+ * neither problem. A late event inside the window is still recognised; an event that never
+ * comes costs nothing, because the window closes on its own.
+ *
+ * One second, because it bounds a handoff between two tasks on the same chip, not a network
+ * operation. A genuine disconnect arriving within a second of a join request is this join's
+ * own, whatever else it might be.
  *
  * _Atomic, not s_lock-guarded, on purpose: an earlier version set/cleared this only inside
  * lock_take()/lock_give() pairs, and a busy lock at the wrong moment could leave it stuck
- * true forever — the next genuine disconnect, possibly hours later, would then be silently
- * swallowed by the branch below. An atomic store can't fail to happen the way a timed-out
- * mutex acquisition can; that is the guarantee this exists to make structural rather than
- * "usually true". */
-static _Atomic bool s_join_in_flight;
+ * forever. An atomic store can't fail to happen the way a timed-out mutex acquisition can. */
+#define JOIN_QUIET_MS 1000u
+static _Atomic uint32_t s_join_quiet_until_ms;
+
+static uint32_t wifi_now_ms(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000);
+}
 
 /* A lock-free mirror of s_sm.state, updated under s_lock alongside every real write to it.
  * wifi_state.h's wifi_sm_t is a pure, host-tested struct and gains no atomics of its own —
@@ -61,7 +83,7 @@ static _Atomic uint8_t s_attempts_view;
  * it is knowledge that belongs here rather than in wifi_state.c, which is pure and host-tested
  * and has no business knowing what an association is.
  *
- * _Atomic and not s_lock-guarded, in this file's established idiom (see s_join_in_flight): a
+ * _Atomic and not s_lock-guarded, in this file's established idiom (see s_join_quiet_until_ms): a
  * store that cannot fail to happen is worth more here than one that is ordered with the state
  * machine, because the only reader turns it into a label. */
 static _Atomic bool s_associated;
@@ -91,13 +113,16 @@ static void publish_state_locked(void)
 
 static void handle_disconnected(const wifi_event_sta_disconnected_t *ev)
 {
-    if (atomic_exchange(&s_join_in_flight, false)) {
+    uint32_t quiet_until = atomic_load(&s_join_quiet_until_ms);
+    if (quiet_until != 0 && (int32_t)(wifi_now_ms() - quiet_until) < 0) {
         /* This is the disconnect wifi_sta_join issued deliberately, to leave the interface
          * idle before esp_wifi_set_config. Not a failure: consuming it here — rather than
          * stepping WIFI_EV_DISCONNECTED — is what stops it from charging one of the five
          * attempts and racing wifi_sta_join's own upcoming esp_wifi_connect(). Checked
          * before s_lock is even touched, so consuming it never depends on that lock being
-         * free — see s_join_in_flight's own comment for why that matters. */
+         * free — see s_join_quiet_until_ms's own comment for why that matters. Signed
+         * difference, so the window is correct across the millisecond counter's wrap. */
+        atomic_store(&s_join_quiet_until_ms, 0u);
         return;
     }
     if (!lock_take()) {
@@ -242,16 +267,18 @@ esp_err_t wifi_sta_start(void)
 
 esp_err_t wifi_sta_join(const net_cfg_t *cfg)
 {
-    /* Set unconditionally — no lock needed, and none can make this fail to happen. See
-     * s_join_in_flight's own comment for why that is the point. */
-    atomic_store(&s_join_in_flight, true);
+    /* Armed unconditionally — no lock needed, and none can make this fail to happen. See
+     * s_join_quiet_until_ms's own comment for why that is the point, and why this is a
+     * deadline rather than a flag somebody has to remember to clear. */
+    uint32_t until = wifi_now_ms() + JOIN_QUIET_MS;
+    atomic_store(&s_join_quiet_until_ms, until != 0u ? until : 1u);   /* 0 means "not armed" */
 
     /* Disconnect BEFORE reconfiguring, not after: an idle interface is what keeps
      * esp_wifi_set_config from returning ESP_ERR_WIFI_STATE ("still connecting") in the
      * first place, rather than merely tolerating it — and "still connecting" is this
      * device's ordinary condition while a bad join is working through its retry budget.
      * The disconnect's own error is ignored: it legitimately fails when there is nothing to
-     * tear down, the common case for a first-ever join. s_join_in_flight (above) is what
+     * tear down, the common case for a first-ever join. s_join_quiet_until_ms (above) is what
      * keeps the resulting event — real or absent — from being mistaken for a failed join
      * of the network being configured below. */
     esp_wifi_disconnect();
@@ -269,13 +296,12 @@ esp_err_t wifi_sta_join(const net_cfg_t *cfg)
         /* Leave the state machine untouched: net.state still describes what the RADIO is
          * doing — the previous attempt, if any — while GET /net already reflects what the
          * dongle was just TOLD to join. The two legitimately disagree until this is retried
-         * (a corrected POST /net, which restarts the whole budget). Clear the suppression
-         * flag here too, rather than leave it waiting for an event a failed set_config will
-         * never cause. */
+         * (a corrected POST /net, which restarts the whole budget). The suppression window is
+         * deliberately LEFT armed: the disconnect above was still issued and its event is
+         * still coming, and it is still not a failed join. The window closes on its own. */
         ESP_LOGE(TAG, "set config failed (%s) — net.state still reflects the previous "
                       "attempt, not this request; GET /net already shows what was requested",
                  esp_err_to_name(err));
-        atomic_store(&s_join_in_flight, false);
         return err;
     }
 
@@ -291,13 +317,11 @@ esp_err_t wifi_sta_join(const net_cfg_t *cfg)
         ESP_LOGE(TAG, "state lock busy — join requested without recording it");
     }
 
-    /* Cleared unconditionally, independent of whether the lock_take() above succeeded: by
-     * now the disconnect above has either already posted its event (the ordinary case, well
-     * ahead of this point) or was a no-op because nothing was connected. Either way this
-     * join owns nothing further to suppress, and this store cannot fail to run the way that
-     * lock acquisition could — bounding s_join_in_flight to at most the duration of this
-     * call, with no path left that could leave it stuck. */
-    atomic_store(&s_join_in_flight, false);
+    /* Nothing to clear here any more. The suppression is a deadline, so it expires whether or
+     * not the disconnect above ever produced an event — and leaving it armed across this line
+     * is what lets a late event still be recognised as ours. The unconditional clear that used
+     * to stand here assumed the event had already been delivered by now, which is exactly the
+     * race it created. */
 
     esp_err_t cerr = esp_wifi_connect();
     if (cerr != ESP_OK) {

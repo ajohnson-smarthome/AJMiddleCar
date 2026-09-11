@@ -189,6 +189,32 @@ static void test_expire_still_elapses_correctly_across_a_millisecond_rollover(vo
     assert(udp_sess_expire(&t, exact + 1u, UDP_SESS_IDLE_MS) == (1u << idx));  /* one ms more */
 }
 
+/* The eviction picks the session silent longest, and "longest" across a 32-bit millisecond
+ * counter is not a smaller number. udp_sess_expire in this same file already knows that — it
+ * uses the unsigned-subtraction idiom and says so, citing the car's watchdog_stale — and the
+ * eviction did not. At ~49.7 days of uptime the counter wraps, and a plain `<` then calls the
+ * session touched one millisecond ago the oldest one in the table: a phone that is actively
+ * driving loses its slot and its car-facing socket to whatever stray datagram arrives next,
+ * while a genuinely silent peer from before the wrap keeps its own. */
+static void test_eviction_picks_the_oldest_across_a_millisecond_rollover(void) {
+    udp_sess_table_t t;
+    udp_sess_init(&t);
+
+    /* Fill every slot just before the wrap, oldest first... */
+    for (int i = 0; i < UDP_SESS_MAX; i++) {
+        udp_sess_touch(&t, ADDR_A, (uint16_t)(1000 + i), 0xFFFFFF00u + (uint32_t)i);
+    }
+    /* ...then let slot 0 — the oldest of them — speak again just AFTER the wrap. It is now the
+     * most recently active session in the table, and its timestamp is the smallest. */
+    int busy = udp_sess_touch(&t, ADDR_A, 1000, 0x00000100u);
+    assert(busy == 0);
+
+    /* The new peer must land somewhere else, and the session that just spoke must survive. */
+    int victim = udp_sess_touch(&t, ADDR_B, 7777, 0x00000200u);
+    assert(victim != 0);
+    assert(udp_sess_find(&t, ADDR_A, 1000) == 0);
+}
+
 int main(void) {
     test_new_peer_takes_a_free_slot();
     test_same_peer_returns_the_same_slot();
@@ -205,6 +231,7 @@ int main(void) {
     test_expire_boundary_is_exact();
     test_expire_returns_a_bitmask_of_every_freed_slot();
     test_expire_still_elapses_correctly_across_a_millisecond_rollover();
+    test_eviction_picks_the_oldest_across_a_millisecond_rollover();
     printf("test_udp_sess: all passed\n");
     return 0;
 }

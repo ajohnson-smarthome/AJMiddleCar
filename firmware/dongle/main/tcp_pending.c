@@ -24,7 +24,14 @@ void tcp_pending_stash(tcp_pending_t *p, const char *chunk, int n, int sent)
 void tcp_pending_advance(tcp_pending_t *p, int w)
 {
     p->off += w;
-    if (p->off == p->len) {
+    /* >=, not ==. The header documents `0 < w <= however many remain` as a precondition and
+       nothing checks it; on an exact match the two spellings agree, and on an overshoot only
+       this one recovers. The other latched the backlog non-empty for good — relay_tcp.c's
+       fd-set build would never offer that direction's source for reading again, and
+       flush_pending's `len - off` would go negative and reach send() as a size_t of about four
+       gigabytes out of a 1460-byte buffer. A pure, host-tested module should not have its
+       bookkeeping rest on every caller getting it right. */
+    if (p->off >= p->len) {
         p->len = 0;
         p->off = 0;
     }

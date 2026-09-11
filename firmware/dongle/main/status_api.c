@@ -11,6 +11,7 @@
 #include "esp_timer.h"
 
 #include "api_guard.h"
+#include "api_util.h"
 #include "dongle_contract.inc"
 #include "net_api.h"
 #include "relay_stats.h"
@@ -66,7 +67,7 @@ static esp_err_t status_get(httpd_req_t *req)
     if (net_cfg_escape(ssid, ssid_esc, sizeof(ssid_esc)) < 0) {
         /* Only reachable if a future field outgrows ssid_esc — then this is the symptom. */
         ESP_LOGE(TAG, "/status could not escape the ssid into its buffer");
-        return ESP_FAIL;
+        return api_reply_error(req, "500 Internal Server Error", "", "status unavailable");
     }
 
     /* Read into locals, in this order, rather than passed as arguments to one snprintf.
@@ -171,9 +172,16 @@ static esp_err_t status_get(httpd_req_t *req)
     if (n < 0 || (size_t)n >= sizeof(body)) {
         /* Same rule as the car's own /status: truncated JSON parses as something else or
          * nothing, and shipping it under a 200 hides exactly that. Only reachable if a
-         * future field outgrows the buffer — then this is the symptom. */
+         * future field outgrows the buffer — then this is the symptom.
+         *
+         * And the same ANSWER as the car's, which this claimed and did not do: both paths out
+         * of here used to `return ESP_FAIL`, which sends nothing at all and lets
+         * esp_http_server close the session. A client polling this every 1.5 s then sees a
+         * connection reset indistinguishable from the dongle having been unplugged — on the
+         * one endpoint that exists to tell it what is wrong. api_util is already part of this
+         * component; this file simply was not using it. */
         ESP_LOGE(TAG, "/status does not fit its buffer");
-        return ESP_FAIL;
+        return api_reply_error(req, "500 Internal Server Error", "", "status too long");
     }
 
     httpd_resp_set_type(req, "application/json");

@@ -1,4 +1,5 @@
 #include "link.h"
+#include <stdatomic.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -11,6 +12,10 @@
 static const char *TAG = "link";
 
 #define SHADOW_UNKNOWN 0xFFFFu     /* forces a real write on the first tick */
+
+/* Releases owed to sources that could not take s_lock twice. One bit per link_src_t; drained
+   by link_task under the lock, so no grant can outlive its owner's attempt to give it up. */
+static _Atomic uint32_t s_release_pending;
 
 static SemaphoreHandle_t s_lock;   /* guards s_arb and s_target */
 static link_arb_t        s_arb = { .owner = LINK_SRC_NONE, .until_ms = 0, .sticky = false };
@@ -50,7 +55,11 @@ bool link_set(link_src_t src, const uint16_t duty[8], uint32_t hold_ms, bool sti
 
     if (!granted) {
         /* Rate-limited: a refused source is usually refused at its own frame rate. */
-        static uint32_t last_log;
+        /* Seeded past the window, not at 0. The dongle's api_guard.c makes the same point for
+           the same idiom: a guard's very first rejections — in the first second after boot —
+           are exactly the interesting ones, and last_log starting at 0 silently drops whichever
+           of them land before now_ms() first exceeds 1000. */
+        static uint32_t last_log = (uint32_t)-1001;
         uint32_t t = now_ms();
         if ((uint32_t)(t - last_log) > 1000) {
             last_log = t;
@@ -76,8 +85,18 @@ bool link_release_must(link_src_t src) {
     if (link_release(src)) return true;
     vTaskDelay(1);   /* the lock is held across a memcpy, never across a wait */
     if (link_release(src)) return true;
-    ESP_LOGE(TAG, "%s could not release the actuator — the grant is stuck",
-             link_src_name(src));
+
+    /* Hand it to the 50 Hz task instead of giving up. Losing both races means colliding with
+       whoever holds s_lock — and for most of a tick that is the actuator task itself, which
+       takes the lock every pass and can finish this under a lock it already owns. Before this,
+       a caller that lost both races left a sticky top-rank grant (SAFE after a goodbye, OTA on
+       a failure path) standing with nothing in the system able to take it back: every later
+       car_drive refused until a power cycle. Thirteen of the fifteen call sites dropped this
+       return on the floor, which link.h warned against — the warning was right, and needing it
+       was the real defect. A queued release completes within one tick. */
+    atomic_fetch_or(&s_release_pending, 1u << (int)src);
+    ESP_LOGW(TAG, "%s could not take the lock to release the actuator — queued for the "
+                  "actuator task", link_src_name(src));
     return false;
 }
 
@@ -96,6 +115,20 @@ static void link_task(void *arg) {
 
         uint16_t tgt[8];
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(LINK_TICK_MS)) != pdTRUE) continue;
+
+        /* Finish the releases link_release_must could not. Drained before the lapse check
+           below, so a grant given up this tick falls to the safe target on this tick rather
+           than on the next one. */
+        uint32_t owed = atomic_exchange(&s_release_pending, 0u);
+        while (owed) {
+            int bit = __builtin_ctz(owed);
+            owed &= owed - 1u;
+            if (s_arb.owner == (link_src_t)bit) {
+                link_arb_release(&s_arb, (link_src_t)bit);
+                memset(s_target, 0, sizeof(s_target));
+                s_owner_pub = LINK_SRC_NONE;
+            }
+        }
         /* An expired grant means nobody is driving: fall to zero rather than holding
            the last command, which is what "ownership lapses" has to mean physically. */
         if (link_arb_lapsed(&s_arb, now_ms())) {
@@ -123,18 +156,40 @@ static void link_task(void *arg) {
             if (e == ESP_OK) {
                 s_current[ch] = next[ch];      /* shadow follows the chip, not our intent */
             } else {
-                /* Deliberately leave s_current alone. It still differs from the target,
-                   so the next tick retries — where updating it first would have left the
-                   firmware believing a spinning motor was stopped, forever. */
+                /* SHADOW_UNKNOWN, not the old value and not the new one. A failed write is
+                   not the same as a write that did not happen: pca9685_set_pwm pushes five
+                   bytes into four auto-incrementing registers and the PCA9685 has no
+                   per-channel double buffer, so a transfer that aborts partway can leave the
+                   channel driving a duty neither side asked for — and both i2c attempts can
+                   report failure for a transfer the peripheral latched. Keeping the OLD value
+                   was the bug: the shadow then says 0 while the chip drives, this channel
+                   stops being planned at all (cur == tgt), and the pair-mate's next rise
+                   passes link_rise_safe(0, x) and drives the other input of the same BTS7960.
+                   That is the shoot-through motors.h and link.h call structurally impossible,
+                   reached through the one path where the shadow stops describing the chip.
+
+                   The unknown value is what link.h already designed for this: it is nonzero,
+                   so link_rise_safe counts this channel as DRIVING and holds the mate down,
+                   and it differs from every target, so the next tick still replans and
+                   retries — which is what the old comment was protecting and is kept. */
+                s_current[ch] = SHADOW_UNKNOWN;
                 failed = true;
                 last_err = e;
             }
         }
         /* Only a tick that actually wrote may call the bus healthy. A tick where every
            channel already sat at its target attempts nothing, and clearing the flag on
-           that evidence would report a dead bus as fine the moment the car stood still. */
-        if (failed)      s_bus_ok = false;
-        else if (wrote)  s_bus_ok = true;
+           that evidence would report a dead bus as fine the moment the car stood still.
+
+           And only if the boards were actually brought up. A board that a half-finished
+           pca9685_init left in SLEEP keeps ACKing every write above — SLEEP gates the PWM
+           oscillator, not the I2C interface — so `wrote && !failed` was true on a car whose
+           wheels could not turn, and bus_ok latched true. That removed the one signal the app
+           has, and contradicted the contract CLAUDE.md states: a motor bus that did not come
+           up boots with bus_ok false and the motors inert. pca9685_ready() is the question
+           worth asking; whether a write was ACKed is not. */
+        if (failed || !pca9685_ready()) s_bus_ok = false;
+        else if (wrote)                 s_bus_ok = true;
 
         /* A wedged bus fails eight channels fifty times a second — but each failing
            write BLOCKS for up to two 50 ms I2C timeouts, so a "tick" under the exact

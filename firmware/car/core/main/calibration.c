@@ -1,4 +1,5 @@
 #include "calibration.h"
+#include <stdint.h>
 #include <stdio.h>
 #include "esp_log.h"
 #include "cJSON.h"
@@ -29,8 +30,18 @@ bool calibration_load(motors_config_t *out) {
         cJSON *jp = cJSON_GetObjectItemCaseSensitive(w, "pair");
         cJSON *js = cJSON_GetObjectItemCaseSensitive(w, "sign");
         if (!cJSON_IsNumber(jp) || !cJSON_IsNumber(js)) { cJSON_Delete(j); return false; }
-        tmp.wheels[i].channel_pair = (uint8_t)jp->valueint;
-        tmp.wheels[i].sign = (int8_t)js->valueint;
+        /* Range-checked BEFORE narrowing, which is the whole point: (uint8_t)256 is 0 and
+           (int8_t)257 is 1, both squarely inside what calibration_valid accepts. A blob from an
+           older build, a corrupted sector or a half-written commit therefore laundered into a
+           table that validated, and the app was told the calibration was good while the wheels
+           answered to channels the file never named. */
+        int pv = jp->valueint, sv = js->valueint;
+        if (pv < 0 || pv > UINT8_MAX || sv < INT8_MIN || sv > INT8_MAX) {
+            cJSON_Delete(j);
+            return false;
+        }
+        tmp.wheels[i].channel_pair = (uint8_t)pv;
+        tmp.wheels[i].sign = (int8_t)sv;
     }
     cJSON_Delete(j);
     if (!calibration_valid(&tmp)) return false;

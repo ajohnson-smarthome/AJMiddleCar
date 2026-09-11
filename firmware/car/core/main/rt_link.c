@@ -145,7 +145,11 @@ static void on_datagram(int sock, const char *buf, int n, const struct sockaddr_
        thing the car will accept. Anything bigger is refused here rather than parsed. */
     if (control_parse_frame(buf, (size_t)n, RT_MAX_COMMAND, &f) != 0) {
         /* Rate-limited: whatever is sending nonsense is usually sending it at a rate. */
-        static uint32_t last_log;
+        /* Seeded past the window, not at 0. The dongle's api_guard.c makes the same point for
+           the same idiom: a guard's very first rejections — in the first second after boot —
+           are exactly the interesting ones, and last_log starting at 0 silently drops whichever
+           of them land before now_ms() first exceeds 1000. */
+        static uint32_t last_log = (uint32_t)-1001;
         uint32_t t = now_ms();
         if ((uint32_t)(t - last_log) > 1000) {
             last_log = t;
@@ -206,7 +210,11 @@ static void push_telemetry(int sock) {
     int n = telemetry_json(buf, sizeof(buf));
     if (n <= 0) return;
     if (sendto(sock, buf, (size_t)n, 0, (const struct sockaddr *)&s_owner, sizeof(s_owner)) < 0) {
-        static uint32_t last_log;
+        /* Seeded past the window, not at 0. The dongle's api_guard.c makes the same point for
+           the same idiom: a guard's very first rejections — in the first second after boot —
+           are exactly the interesting ones, and last_log starting at 0 silently drops whichever
+           of them land before now_ms() first exceeds 1000. */
+        static uint32_t last_log = (uint32_t)-1001;
         uint32_t t = now_ms();
         if ((uint32_t)(t - last_log) > 1000) {
             last_log = t;

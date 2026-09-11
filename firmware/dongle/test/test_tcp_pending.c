@@ -101,6 +101,22 @@ static void test_a_new_stash_replaces_whatever_was_there(void) {
     assert(memcmp(p.buf, "second-chunk", 12) == 0);
 }
 
+/* tcp_pending.h documents `0 < w <= however many remain` as a precondition and does not check
+ * it. An overshoot used to latch the backlog non-empty forever: relay_tcp.c's fd-set build then
+ * never offers that direction's source for reading again, so the connection stalls, and
+ * flush_pending's `int remaining = p->len - p->off` goes negative and reaches send() as a
+ * size_t of about four gigabytes out of a 1460-byte buffer. This module is pure and host-tested
+ * precisely so its bookkeeping does not rest on every caller getting it right. */
+static void test_an_overshooting_advance_still_clears_the_backlog(void) {
+    tcp_pending_t p;
+    tcp_pending_clear(&p);
+    tcp_pending_stash(&p, "abcdefgh", 8, 0);
+    assert(!tcp_pending_empty(&p));
+
+    tcp_pending_advance(&p, 99);
+    assert(tcp_pending_empty(&p));
+}
+
 int main(void) {
     test_a_fresh_backlog_is_empty();
     test_a_fully_sent_stash_leaves_nothing_pending();
@@ -111,6 +127,7 @@ int main(void) {
     test_advance_can_span_more_than_one_call();
     test_clear_after_a_partial_advance_forgets_the_backlog();
     test_a_new_stash_replaces_whatever_was_there();
+    test_an_overshooting_advance_still_clears_the_backlog();
     printf("test_tcp_pending: all passed\n");
     return 0;
 }

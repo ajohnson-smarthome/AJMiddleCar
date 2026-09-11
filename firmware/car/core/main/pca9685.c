@@ -35,9 +35,23 @@ static const char   *s_name[PCA_COUNT] = { "front", "rear" };
 static i2c_master_bus_handle_t bus_handle;
 static i2c_master_dev_handle_t s_dev[PCA_COUNT];
 
+/* Set only when pca9685_init has taken every board through the whole sequence. See the
+   header for why "the bus answers" is a different question from "the oscillator is on". */
+static bool s_ready;
+
+bool pca9685_ready(void) { return s_ready; }
+
 static esp_err_t pca9685_write_reg(int idx, uint8_t reg, uint8_t value) {
     uint8_t buf[2] = {reg, value};
-    return i2c_master_transmit(s_dev[idx], buf, sizeof(buf), PCA_I2C_TIMEOUT_MS);
+    esp_err_t e = i2c_master_transmit(s_dev[idx], buf, sizeof(buf), PCA_I2C_TIMEOUT_MS);
+    if (e != ESP_OK) {
+        /* One retry, for the same reason pca9685_set_pwm has one: a single NACK on a shared
+           bus is worth another try. It matters more here than there — a NACK on a 50 Hz duty
+           write costs one tick, while a NACK anywhere in this sequence used to cost every
+           wheel until the next reboot, with no retry and no second chance. */
+        e = i2c_master_transmit(s_dev[idx], buf, sizeof(buf), PCA_I2C_TIMEOUT_MS);
+    }
+    return e;
 }
 
 static esp_err_t pca9685_read_reg(int idx, uint8_t reg, uint8_t *value) {
@@ -68,6 +82,10 @@ esp_err_t pca9685_bus_init(int sda_pin, int scl_pin, uint32_t i2c_speed_hz) {
 }
 
 esp_err_t pca9685_init(uint16_t pwm_freq_hz) {
+    /* Cleared first: a re-init that fails halfway must not leave the previous run's promise
+       standing, and every ESP_RETURN_ON_ERROR below leaves through this function's middle. */
+    s_ready = false;
+
     uint8_t prescale = (uint8_t)((25000000.0 / (4096.0 * pwm_freq_hz)) - 0.5);
     ESP_LOGI(TAG, "PCA9685 prescale = %d for %d Hz", prescale, pwm_freq_hz);
 
@@ -89,6 +107,7 @@ esp_err_t pca9685_init(uint16_t pwm_freq_hz) {
 
         ESP_LOGI(TAG, "%s PCA9685 (0x%02x) initialized", s_name[i], s_addr[i]);
     }
+    s_ready = true;
     return ESP_OK;
 }
 

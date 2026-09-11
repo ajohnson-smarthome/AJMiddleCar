@@ -1,4 +1,5 @@
 #include "udp_sess.h"
+#include <stdint.h>
 
 void udp_sess_init(udp_sess_table_t *t)
 {
@@ -32,11 +33,19 @@ int udp_sess_touch(udp_sess_table_t *t, uint32_t addr, uint16_t port, uint32_t n
             }
         }
         if (idx < 0) {
-            /* Every slot is used: evict the one silent longest — the smallest last_ms. Ties
-             * resolve to the lowest index, which is arbitrary but deterministic. */
+            /* Every slot is used: evict the one silent longest. Ties resolve to the lowest
+             * index, which is arbitrary but deterministic.
+             *
+             * The signed difference, not `<` on the raw stamps — the same wraparound point
+             * udp_sess_expire below makes, and this is the other half of it. A plain
+             * comparison calls the smaller number older, which stops being true the moment
+             * the counter wraps at 2^32 (about 49.7 days): a session touched a millisecond
+             * after the wrap has the smallest stamp in the table, so the eviction picked the
+             * phone that was actively driving and closed its car-facing socket, while a peer
+             * genuinely silent since before the wrap kept its slot. */
             idx = 0;
             for (int i = 1; i < UDP_SESS_MAX; i++) {
-                if (t->s[i].last_ms < t->s[idx].last_ms) idx = i;
+                if ((int32_t)(t->s[i].last_ms - t->s[idx].last_ms) < 0) idx = i;
             }
         }
         t->s[idx].used = true;

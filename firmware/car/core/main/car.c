@@ -47,16 +47,21 @@ static float clamp_unit(float v) {
 
 static uint32_t hold_for(link_src_t src) {
     switch (src) {
-        case LINK_SRC_RT:    return LINK_HOLD_RT_MS;
-        case LINK_SRC_CALIB: return LINK_HOLD_CALIB_MS;
-        default:             return 0;   /* sticky sources ignore this */
+        case LINK_SRC_RT:      return LINK_HOLD_RT_MS;
+        case LINK_SRC_CALIB:   return LINK_HOLD_CALIB_MS;
+        case LINK_SRC_RECOVER: return LINK_HOLD_RECOVER_MS;
+        default:               return 0;   /* sticky sources ignore this */
     }
 }
 
 static bool sticky_for(link_src_t src) {
     /* Anything that is not a stream holds until it says otherwise. A console command
-       runs until the next one, which is the documented bench behaviour. */
-    return src != LINK_SRC_RT && src != LINK_SRC_CALIB;
+       runs until the next one, which is the documented bench behaviour.
+
+       RECOVER is a stream too — recovery.c replays one segment at a time, refreshing this
+       deadline on every step — and it was the only one left sticky. See LINK_HOLD_RECOVER_MS
+       for what that cost. */
+    return src != LINK_SRC_RT && src != LINK_SRC_CALIB && src != LINK_SRC_RECOVER;
 }
 
 bool car_drive(link_src_t src, float throttle, float yaw) {

@@ -164,25 +164,31 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
     uint16_t port = ntohs(from->sin_port);
 
     bool is_new = udp_sess_find(&r->sess, addr, port) < 0;
+
+    /* The socket comes FIRST, before the table is touched, and the touch is skipped entirely
+     * if it cannot be had. udp_sess_touch on a full table evicts: it overwrites the victim's
+     * (addr, port) and hands back its slot. Opening afterwards meant a failure — the socket
+     * table exhausted, connect() refusing, or open_car_sock's own gateway == host check —
+     * destroyed a live session on behalf of a peer that could not be served anyway, and the
+     * rollback could not undo it: setting `used = false` frees the slot but the evicted
+     * phone's address is already gone, along with its socket. A phone mid-drive lost its relay
+     * to a stray datagram from an unrelated source port. This way round the failure costs one
+     * dropped datagram and nothing else. */
+    int fresh = -1;
+    if (is_new) {
+        fresh = open_car_sock(r->gateway_be, r->host_be);
+        if (fresh < 0) {
+            ESP_LOGW(TAG, "dropping a datagram: no car-facing socket for a new peer");
+            return;
+        }
+    }
+
     int idx = udp_sess_touch(&r->sess, addr, port, now_ms());
 
     if (is_new) {
         /* A slot won by eviction can still carry the socket of the peer it displaced. */
         close_car_sock(r, idx);
-        r->car_sock[idx] = open_car_sock(r->gateway_be, r->host_be);
-        if (r->car_sock[idx] < 0) {
-            /* Roll the touch back rather than leave the slot marked used with no socket
-             * behind it: udp_sess.h has no "forget this one" call — a pure table has no
-             * socket to fail opening — but its fields are plain and public, and undoing
-             * exactly what touch() just did is enough to keep car_sock[] and sess.s[].used
-             * from ever disagreeing. Without this, udp_sess_touch's unconditional call above
-             * would keep refreshing this same broken slot's deadline for as long as this
-             * peer kept sending, and it would never expire, never retry, and never let
-             * another peer take the slot either. */
-            r->sess.s[idx].used = false;
-            ESP_LOGW(TAG, "dropping a datagram: no car-facing socket for slot %d", idx);
-            return;
-        }
+        r->car_sock[idx] = fresh;
     }
 
     if (send(r->car_sock[idx], buf, (size_t)n, 0) < 0) {

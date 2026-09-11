@@ -1,6 +1,7 @@
 #ifndef PCA9685_H
 #define PCA9685_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include "esp_err.h"
 
@@ -9,6 +10,15 @@ esp_err_t pca9685_bus_init(int sda_pin, int scl_pin, uint32_t i2c_speed_hz);
 
 // Configure the PWM frequency on both devices (sleep->prescale->wake->restart).
 esp_err_t pca9685_init(uint16_t pwm_freq_hz);
+
+// True only after pca9685_init() has taken BOTH boards all the way through that sequence.
+//
+// Not the same question as "does the bus answer", and that is the whole point. The sequence
+// starts by putting a board to SLEEP, and a failure anywhere after that leaves its oscillator
+// off — while its I2C interface keeps ACKing every LED-register write, because SLEEP gates the
+// PWM oscillator and nothing else. Without this, a half-finished init produced a car whose
+// writes all "succeeded", whose bus_ok read true, and whose wheels did not turn.
+bool pca9685_ready(void);
 
 // Set PWM duty of a LOGICAL channel 0..7, duty 0..4095.
 //

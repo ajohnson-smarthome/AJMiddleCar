@@ -173,10 +173,26 @@ static esp_err_t cfg_post(httpd_req_t *req) {
     }
     cJSON_Delete(j);
 
+    /* Snapshot before applying. The order here has to be apply-then-persist — several domains
+       validate inside set() and there is no dry run — so the only way a 500 can mean what it
+       says is to be able to undo it. */
+    int32_t prev[CFG_MAX_FIELDS];
+    b->get(prev);
+
     if (!b->set(vals)) {
         return api_reply_error(req, "500 Internal Server Error", "", "could not apply");
     }
     if (b->save() != ESP_OK) {
+        /* Put the running car back before answering. Without this, a failed NVS write left the
+           50 Hz task using the new value while the client was told the change was refused and
+           went on showing the old one — two truths at once, resolved only at the next boot,
+           when the stored value came back and the car changed behaviour with nothing having
+           been asked of it. A rollback that also fails is worth a line of its own: that is the
+           only path left where the two can still disagree. */
+        if (!b->set(prev)) {
+            ESP_LOGE(TAG, "%s: could not persist, and could not roll back either — the running "
+                          "value now differs from both NVS and the client", d->path);
+        }
         return api_reply_error(req, "500 Internal Server Error", "", "could not persist");
     }
     return api_reply_ok(req);

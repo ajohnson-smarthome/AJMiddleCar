@@ -99,6 +99,17 @@ _Static_assert(LINK_SRC_SAFE + 2 == CTL_COUNT, "link_src_t and ctl_values disagr
  * scheduling gap; the RT_COMMAND_HZ stream refreshes the grant far inside it. */
 #define LINK_HOLD_RT_MS     ((uint32_t)RT_WATCHDOG_MS + LINK_TICK_MS)
 #define LINK_HOLD_CALIB_MS  600u   /* one identification pulse */
+/* One breadcrumb segment (recovery.h's RECOVER_SEG_MAX_MS = 250) plus a tick of slack, the
+ * same shape as LINK_HOLD_RT_MS. Spelled here rather than included from recovery.h: link.h is
+ * what recovery.h depends on, not the other way round.
+ *
+ * RECOVER used to be sticky with no hold at all, which made the retreat the one streaming
+ * source in the system with no time bound — a replay starved between a step and its release,
+ * or a release that lost both lock races, left the last REVERSED command standing as the
+ * actuator target with nothing to fall it to zero. It self-healed only because every other
+ * source outranks RECOVER, i.e. only if somebody came back. RT and CALIB are both bounded by
+ * their lapse; this is the retreat's. */
+#define LINK_HOLD_RECOVER_MS 270u
 
 /* Pure: plan one actuator tick. next[] receives every channel's post-ramp duty;
  * order[] receives the channels that need writing — every falling channel first, then
@@ -143,10 +154,16 @@ bool link_set(link_src_t src, const uint16_t duty[8], uint32_t hold_ms, bool sti
  * but the safe target was not written either, so a safety caller should say so. */
 bool link_release(link_src_t src);
 
-/* link_release, insisted upon: one retry a tick later, then a loud log. A false
- * return leaves `src`'s grant standing — for a sticky top-rank source (SAFE after a
- * goodbye) that is an actuator nothing else can ever take, so no caller may drop the
- * result on the floor. */
+/* link_release, insisted upon: one retry a tick later, then the release is QUEUED for the
+ * 50 Hz actuator task, which drains it under the lock it takes every pass. A false return
+ * therefore means "not yet, but within a tick" — not "stuck".
+ *
+ * It used to mean stuck, and this comment used to forbid dropping the result because of it: a
+ * sticky top-rank grant (SAFE after a goodbye, OTA on a failure path) left standing is an
+ * actuator nothing of lower rank can ever take, and rt_glue_bye deliberately will not grab
+ * SAFE over an OTA owner. Thirteen of fifteen callers dropped it anyway. Requiring fifteen
+ * call sites to handle a failure the arbiter can finish itself was the wrong shape; the queue
+ * is the fix, and a caller may now use the return for reporting or ignore it. */
 bool link_release_must(link_src_t src);
 
 /* Who owns the actuator right now, for telemetry and logs. */
