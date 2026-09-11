@@ -63,6 +63,7 @@ typedef enum {
     SCREEN_ROLLED_BACK,    /* the bootloader reverted the previous OTA */
     SCREEN_NO_HOST,        /* no USB host attached — nothing to say about a network either */
     SCREEN_DIAG,           /* reached only by pressing BOOT — five pages, the signal first */
+    SCREEN_RESET,          /* BOOT held past the short-press window: the erase countdown */
 } screen_id_t;
 
 typedef enum {
@@ -161,6 +162,11 @@ void screens_for(const dongle_view_t *v, screen_t *out);
  * other pages have two rows and no gauge. */
 void    screens_diag(const dongle_view_t *v, uint8_t page, screen_t *out);
 uint8_t screens_diag_pages(void);
+
+/* Shown while BOOT is held past the short-press window and until the erase fires. `pct` is
+ * how far along the hold is — the level gauge is the countdown — and clamps at 100. Pure:
+ * what the hold does and when it fires belong to display.c, which owns the button. */
+void screens_reset(uint8_t pct, screen_t *out);
 
 /* Where the BOOT button has paged to. SCREENS_PAGE_STATE means "showing the state screen",
  * which is both the resting place and where the five-second timeout returns to; 0..diag_pages-1

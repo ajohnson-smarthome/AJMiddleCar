@@ -565,6 +565,28 @@ static void test_the_button_walks_the_pages_and_wraps_home(void)
     p = screens_next_page(p); check(p == SCREENS_PAGE_STATE, "and then home");
 }
 
+/* Holding BOOT past the short-press window shows this, and the level gauge is the countdown:
+ * it fills from the moment the hold is recognised to the moment the erase fires, and letting go
+ * anywhere before that is a cancel. Irreversible things are announced while there is still time
+ * to change one's mind, and the row says exactly what will happen and exactly how to not have
+ * it happen — no first person, no exclamation marks. */
+static void test_the_reset_screen_counts_down_on_the_rule(void)
+{
+    screen_t s;
+    screens_reset(0, &s);
+    check(s.id == SCREEN_RESET, "its own screen");
+    check(strcmp(s.head, "Сброс") == 0, "one word, the thing that is about to happen");
+    check(s.gauge == GAUGE_LEVEL && s.gauge_pct == 0, "an empty gauge at the start of the hold");
+    check(strstr(s.row[0], "настройки") != NULL, "says what is erased");
+    check(strstr(s.row[1], "Отпустите") != NULL, "says how to cancel");
+    check_fits(&s);
+
+    screens_reset(60, &s);
+    check(s.gauge_pct == 60, "fills as the hold goes on");
+    screens_reset(250, &s);
+    check(s.gauge_pct == 100, "and clamps at full");
+}
+
 int main(void)
 {
     test_every_headline_fits_twelve_characters();
@@ -581,6 +603,7 @@ int main(void)
     test_rssi_maps_over_the_range_that_matters();
     test_diagnostics_pages_are_five_with_the_signal_first();
     test_the_button_walks_the_pages_and_wraps_home();
+    test_the_reset_screen_counts_down_on_the_rule();
     test_the_address_rows_stay_in_budget_at_their_widest();
     test_diagnostic_rows_share_one_width_so_centring_aligns_them();
     test_a_quiet_relay_reports_no_error();

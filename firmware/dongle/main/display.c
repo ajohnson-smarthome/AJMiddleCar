@@ -4,7 +4,9 @@
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_system.h"
 #include "esp_timer.h"
+#include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -107,6 +109,16 @@ _Static_assert(ROW_ASCENT + ROW_DESCENT <= ROWS_BOTTOM - (SIG_HIST_BASE + 1) + 1
 #define SPLASH_US       (2000 * 1000LL)
 #define PAGE_HOLD_US    (5000 * 1000LL)
 
+/* The button's two gestures, told apart by how long it is held. Under HOLD_SHOW_US it is a
+ * press and pages; from HOLD_SHOW_US the panel shows «Сброс» with the gauge filling; at
+ * HOLD_ERASE_US the erase fires. Letting go anywhere between the two is a cancel.
+ *
+ * One second before anything is even shown, so that a slow thumb on the page button never
+ * sees the word «Сброс»; five before it fires, because the thing it fires is irreversible and
+ * the whole point of counting it down on the glass is that a person can still stop. */
+#define HOLD_SHOW_US    (1000 * 1000LL)
+#define HOLD_ERASE_US   (5000 * 1000LL)
+
 /* One second, and two things happen on it: the RSSI history takes the sample screens.h sizes
  * its ring for, and the relay's rate window is closed.
  *
@@ -153,8 +165,12 @@ static esp_netif_t *s_sta_netif;
 
 static int64_t s_start_us;
 static int     s_page = SCREENS_PAGE_STATE;
-static int64_t s_press_us;
+static int64_t s_press_us;      /* the last short press's release: the page timeout counts from it */
+static int64_t s_down_us;       /* when the current hold began; meaningful while s_button_down */
 static bool    s_button_down;
+/* 0 while the button is up or the hold is still short; otherwise how far the countdown is,
+   1..100. Read by the task to put «Сброс» on the glass instead of whatever page was up. */
+static uint8_t s_reset_pct;
 
 /* False until gpio_config() has actually made BOOT an input. display_start() logs a failure
  * there and carries on — the state screens are the device's job and do not need a button — but
@@ -467,7 +483,11 @@ static void view_build(dongle_view_t *v, net_cfg_t *cfg, const esp_app_desc_t *a
  * samples is not seen at all, and a deliberate press is usually longer than 200 ms but not
  * always. The remedy is to press again, which is what a person does with a page button anyway
  * — but it is a real property of this loop and not a theoretical one, and it has never been
- * tried on hardware. */
+ * tried on hardware.
+ *
+ * Two gestures on one button, told apart by duration (HOLD_SHOW_US, HOLD_ERASE_US): a press
+ * pages, a hold erases. Paging therefore happens on the RELEASE, not on the down edge as it
+ * first did — otherwise every hold would page once on its way to becoming a hold. */
 static void poll_button(int64_t now_us)
 {
     if (!s_button_ok) return;   /* the pin was never made an input; see s_button_ok */
@@ -475,8 +495,38 @@ static void poll_button(int64_t now_us)
     bool down = gpio_get_level(BOARD_BOOT_GPIO) == 0;   /* pulled up; pressed is low */
 
     if (down && !s_button_down) {
-        s_page = screens_next_page(s_page);   /* the cycle itself is screens.c's, and tested there */
-        s_press_us = now_us;
+        s_down_us = now_us;                   /* a hold has begun; what it is, time will tell */
+    } else if (down) {
+        int64_t held = now_us - s_down_us;
+        if (held >= HOLD_ERASE_US) {
+            /* The countdown ran out with the button still down. Everything in the default NVS
+               partition goes — the stored network, the Wi-Fi driver's own records, the PHY
+               calibration — and the device starts over as if never configured; the app tells
+               it the network again on its own. nvs_flash_erase() de-initialises the partition
+               itself before erasing (nvs_flash.h says so), and nothing below this line runs
+               long enough to miss it: the restart is immediate. Drawn full first, so the last
+               frame the glass holds is the gauge at 100 rather than the one before it. */
+            s_reset_pct = 100;
+            ESP_LOGW(TAG, "BOOT held %d s — erasing NVS and restarting",
+                     (int)(HOLD_ERASE_US / 1000000));
+            esp_err_t err = nvs_flash_erase();
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "nvs_flash_erase failed (%s) — restarting anyway", esp_err_to_name(err));
+            }
+            esp_restart();
+        } else if (held >= HOLD_SHOW_US) {
+            /* 1..100 across the window between "this is a hold" and "this is the erase". */
+            s_reset_pct = (uint8_t)(1 + (held - HOLD_SHOW_US) * 99 / (HOLD_ERASE_US - HOLD_SHOW_US));
+        }
+    } else if (s_button_down) {
+        /* Released. A short hold was a press: page now, on the release rather than on the
+           edge, so that a hold that turns out to be long never pages first. A long hold that
+           did not reach the erase was a change of mind, and costs nothing. */
+        if (now_us - s_down_us < HOLD_SHOW_US) {
+            s_page = screens_next_page(s_page);   /* the cycle itself is screens.c's, and tested there */
+            s_press_us = now_us;
+        }
+        s_reset_pct = 0;
     }
     s_button_down = down;
 
@@ -533,6 +583,10 @@ static void display_task(void *arg)
              * itself on a bench-powered board. */
             dongle_view_t intro = { .host_attached = true, .fw = v.fw };
             screens_for(&intro, &s);
+        } else if (s_reset_pct > 0) {
+            /* Above every page and every state, «Нет хоста» included: a hand on the button is
+               about to erase the device, and nothing else the glass could say matters more. */
+            screens_reset(s_reset_pct, &s);
         } else if (s_page == SCREENS_PAGE_STATE) {
             screens_for(&v, &s);
         } else {

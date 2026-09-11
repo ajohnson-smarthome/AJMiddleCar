@@ -338,6 +338,23 @@ void screens_for(const dongle_view_t *v, screen_t *out)
     fill_splash(v, out);
 }
 
+/* --- screens_reset: the erase countdown, while BOOT is held --------------------------------- */
+
+void screens_reset(uint8_t pct, screen_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->id = SCREEN_RESET;
+    put_head(out, "Сброс");
+    /* What will happen and how to stop it, in the instrument's own register: no first person,
+     * no exclamation. "Отпустите для отмены" rather than an em dash — U+2014 is in neither
+     * font (tools/gen_dongle_fonts.sh maps 32-127 and U+0400..U+04FF), and a glyph that draws
+     * as nothing would leave the row reading as an instruction with a hole in it. */
+    put_row(out, 0, "Стереть все настройки");
+    put_row(out, 1, "Отпустите для отмены");
+    out->gauge = GAUGE_LEVEL;
+    out->gauge_pct = pct > 100 ? 100 : pct;
+}
+
 /* --- the signal page: diagnostics page 0 ------------------------------------------------ */
 
 /* Page 0. One row, not two: the history strip is drawn where the first row would be (display.c
