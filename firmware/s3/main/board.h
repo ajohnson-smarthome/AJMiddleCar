@@ -8,14 +8,15 @@
 // Board: a third-party carrier silkscreened `ESP32-23 2022-V1.3`, ESP32-S3 module, native
 // USB. Not Espressif's own hardware, so there is no vendor pinout doc to defer to here.
 //
-// PROVISIONAL: the OLED panel has not arrived, and these pins are unverified against this
-// board's silkscreen. They are chosen only to be clear of what this board already commits
-// elsewhere -- GPIO19/20 are the native USB D-/D+, and GPIO33-37 are the octal PSRAM bus --
-// and to be numbers this firmware does not otherwise use: I2C runs on no other bus in this
-// project today. Confirm both pins and the panel's address against the physical board before
-// wiring, and update this file, not a caller, when they turn out wrong.
-#define BOARD_I2C_SDA    8
-#define BOARD_I2C_SCL    9
+// Wired and confirmed on the bench 2026-09-06 against a GM009605 v4.3 panel. The first guess
+// here had these two the other way round -- SDA on 8, SCL on 9 -- and the panel answered
+// nothing: `display_hal: panel does not answer at 0x3c on SDA 8 / SCL 9`. The pins themselves
+// were never the problem, only which was which, and swapping them is why this file exists.
+//
+// They stay clear of what this board already commits elsewhere -- GPIO19/20 are the native USB
+// D-/D+, GPIO33-37 the octal PSRAM bus -- and I2C runs on no other bus in this project.
+#define BOARD_I2C_SDA    9
+#define BOARD_I2C_SCL    8
 
 #define BOARD_I2C_HZ     400000
 
