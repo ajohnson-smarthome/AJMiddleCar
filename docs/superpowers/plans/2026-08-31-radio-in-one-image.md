@@ -4,7 +4,7 @@
 
 **Goal:** Embed the C6 radio's image in the car's firmware so one OTA updates both processors, and the `esp_hosted` pin can move without a bench visit.
 
-**Architecture:** The release builds the slave image from the pinned component and drops it at `firmware/p4/main/radio_image.bin`, which the car's build embeds with `EMBED_FILES`. At boot — after the app image is marked valid, before the car starts serving — the car compares the radio's running version against `RADIO_EXPECTED_FW`; on a mismatch it pushes the embedded image over SDIO and restarts. An attempt counter in NVS bounds the loop that would otherwise be unrecoverable.
+**Architecture:** The release builds the slave image from the pinned component and drops it at `firmware/car/core/main/radio_image.bin`, which the car's build embeds with `EMBED_FILES`. At boot — after the app image is marked valid, before the car starts serving — the car compares the radio's running version against `RADIO_EXPECTED_FW`; on a mismatch it pushes the embedded image over SDIO and restarts. An attempt counter in NVS bounds the loop that would otherwise be unrecoverable.
 
 **Tech Stack:** ESP-IDF 6.0.2, `esp_hosted` (pinned), NVS, plain `cc` for the pure module's host tests.
 
@@ -17,7 +17,7 @@
 - **The chunk size for `esp_hosted_cp_ota_write` is at most 1536 bytes.**
 - **`RADIO_OTA_MAX_ATTEMPTS` is 3.**
 - **Two vendor behaviours are successes, not errors:** `esp_hosted_cp_ota_activate()` returning `ESP_FAIL`, and the SDIO link dropping right after `esp_hosted_cp_ota_end()`. The authority is the version read on the next boot, never a return code.
-- **`firmware/p4/main/radio_image.bin` is git-ignored.** It is a build product of a pinned dependency; checking it in would create the second version this work exists to remove.
+- **`firmware/car/core/main/radio_image.bin` is git-ignored.** It is a build product of a pinned dependency; checking it in would create the second version this work exists to remove.
 - **An everyday `idf.py build` must succeed without the radio image present.**
 - Run `tools/test-all.sh` before every commit; it must stay green.
 - **Read symbols with `riscv32-esp-elf-nm`, never the system `nm`.** `ajmiddlecar.elf` is a
@@ -29,10 +29,10 @@
 ### Task 1: `radio_ota` — the pure decision
 
 **Files:**
-- Create: `firmware/p4/main/radio_ota.h`
-- Create: `firmware/p4/main/radio_ota.c`
-- Create: `firmware/p4/test/test_radio_ota.c`
-- Modify: `firmware/p4/test/Makefile`
+- Create: `firmware/car/core/main/radio_ota.h`
+- Create: `firmware/car/core/main/radio_ota.c`
+- Create: `firmware/car/core/test/test_radio_ota.c`
+- Modify: `firmware/car/core/test/Makefile`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -40,7 +40,7 @@
 
 - [ ] **Step 1: Write the failing test**
 
-Create `firmware/p4/test/test_radio_ota.c`:
+Create `firmware/car/core/test/test_radio_ota.c`:
 
 ```c
 /* The decision that keeps a car recoverable. Every case here is a way the car could end up
@@ -108,13 +108,13 @@ int main(void) {
 
 Run:
 ```bash
-cd /Users/adamjohnson/VSCode/esp32-p4-car && make -C firmware/p4/test test_radio_ota
+cd /Users/adamjohnson/VSCode/esp32-p4-car && make -C firmware/car/core/test test_radio_ota
 ```
 Expected: FAIL — no rule to make target `test_radio_ota` (the Makefile has no entry yet).
 
 - [ ] **Step 3: Write the header**
 
-Create `firmware/p4/main/radio_ota.h`:
+Create `firmware/car/core/main/radio_ota.h`:
 
 ```c
 #pragma once
@@ -149,7 +149,7 @@ int radio_ota_next_attempts(bool versions_match, int attempts);
 
 - [ ] **Step 4: Write the implementation**
 
-Create `firmware/p4/main/radio_ota.c`:
+Create `firmware/car/core/main/radio_ota.c`:
 
 ```c
 #include "radio_ota.h"
@@ -180,7 +180,7 @@ int radio_ota_next_attempts(bool versions_match, int attempts)
 
 - [ ] **Step 5: Add the test to the Makefile**
 
-In `firmware/p4/test/Makefile`, append `test_radio_ota` to the `all:` target's list, and add
+In `firmware/car/core/test/Makefile`, append `test_radio_ota` to the `all:` target's list, and add
 the rule and the run line. The rule:
 
 ```make
@@ -195,15 +195,15 @@ Add `./test_radio_ota` to the `run:` target beside the other `./test_*` lines, a
 
 Run:
 ```bash
-cd /Users/adamjohnson/VSCode/esp32-p4-car && make -C firmware/p4/test run
+cd /Users/adamjohnson/VSCode/esp32-p4-car && make -C firmware/car/core/test run
 ```
 Expected: `test_radio_ota: all passed`, and every other test still passing.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add firmware/p4/main/radio_ota.h firmware/p4/main/radio_ota.c \
-        firmware/p4/test/test_radio_ota.c firmware/p4/test/Makefile
+git add firmware/car/core/main/radio_ota.h firmware/car/core/main/radio_ota.c \
+        firmware/car/core/test/test_radio_ota.c firmware/car/core/test/Makefile
 git commit -m "feat(fw): the pure decision behind flashing the radio from the car"
 ```
 
@@ -212,7 +212,7 @@ git commit -m "feat(fw): the pure decision behind flashing the radio from the ca
 ### Task 2: Embed the image, and build without it
 
 **Files:**
-- Modify: `firmware/p4/main/CMakeLists.txt`
+- Modify: `firmware/car/core/main/CMakeLists.txt`
 - Modify: `.gitignore`
 
 **Interfaces:**
@@ -221,7 +221,7 @@ git commit -m "feat(fw): the pure decision behind flashing the radio from the ca
 
 - [ ] **Step 1: Make the image optional at configure time**
 
-In `firmware/p4/main/CMakeLists.txt`, above `idf_component_register(...)`, add:
+In `firmware/car/core/main/CMakeLists.txt`, above `idf_component_register(...)`, add:
 
 ```cmake
 # The C6's image rides inside the car's image, so one OTA updates both processors
@@ -262,15 +262,15 @@ idf_component_register(
 In `.gitignore`, beside the other firmware build products, add:
 
 ```
-firmware/p4/main/radio_image.bin
+firmware/car/core/main/radio_image.bin
 ```
 
 - [ ] **Step 4: Verify a clean build still works with no image**
 
 Run:
 ```bash
-cd /Users/adamjohnson/VSCode/esp32-p4-car && rm -f firmware/p4/main/radio_image.bin && \
-  source tools/env-p4.sh && (cd firmware/p4 && idf.py build 2>&1 | tail -5)
+cd /Users/adamjohnson/VSCode/esp32-p4-car && rm -f firmware/car/core/main/radio_image.bin && \
+  source tools/env-p4.sh && (cd firmware/car/core && idf.py build 2>&1 | tail -5)
 ```
 Expected: BUILD SUCCEEDS, and the configure output contains
 `no radio_image.bin — this build carries no co-processor image`.
@@ -289,18 +289,18 @@ perfectly correct build, which is a check that teaches an implementer to delete 
 Run:
 ```bash
 source tools/env-p4.sh && \
-  cp firmware/p4/build/bootloader/bootloader.bin firmware/p4/main/radio_image.bin && \
-  (cd firmware/p4 && idf.py build 2>&1 | tail -3) && \
-  grep -c "^\.global _binary_radio_image_bin" firmware/p4/build/radio_image.bin.S
+  cp firmware/car/core/build/bootloader/bootloader.bin firmware/car/core/main/radio_image.bin && \
+  (cd firmware/car/core && idf.py build 2>&1 | tail -3) && \
+  grep -c "^\.global _binary_radio_image_bin" firmware/car/core/build/radio_image.bin.S
 ```
 Expected: the build succeeds and the grep prints `2` — both symbols declared global in the
 generated assembly. Match the `.global` lines specifically: `EMBED_FILES` emits a `.global`
-directive AND a label for each symbol, so a looser pattern counts every symbol twice. Then remove the stand-in: `rm -f firmware/p4/main/radio_image.bin`.
+directive AND a label for each symbol, so a looser pattern counts every symbol twice. Then remove the stand-in: `rm -f firmware/car/core/main/radio_image.bin`.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add firmware/p4/main/CMakeLists.txt .gitignore
+git add firmware/car/core/main/CMakeLists.txt .gitignore
 git commit -m "build(fw): the car's image can carry the radio's, and builds fine without it"
 ```
 
@@ -309,9 +309,9 @@ git commit -m "build(fw): the car's image can carry the radio's, and builds fine
 ### Task 3: `radio_flash` — the four RPCs
 
 **Files:**
-- Create: `firmware/p4/main/radio_flash.h`
-- Create: `firmware/p4/main/radio_flash.c`
-- Modify: `firmware/p4/main/CMakeLists.txt` (add `radio_flash.c` to `SRCS`)
+- Create: `firmware/car/core/main/radio_flash.h`
+- Create: `firmware/car/core/main/radio_flash.c`
+- Modify: `firmware/car/core/main/CMakeLists.txt` (add `radio_flash.c` to `SRCS`)
 
 **Interfaces:**
 - Consumes: the linker symbols from Task 2.
@@ -326,7 +326,7 @@ git commit -m "build(fw): the car's image can carry the radio's, and builds fine
 
 - [ ] **Step 1: Write the header**
 
-Create `firmware/p4/main/radio_flash.h`:
+Create `firmware/car/core/main/radio_flash.h`:
 
 ```c
 #pragma once
@@ -337,7 +337,7 @@ Create `firmware/p4/main/radio_flash.h`:
  * decision, and that one is pure and tested.
  *
  * The route is the vendor's: esp_hosted_cp_ota_begin/write/end/activate, reached through the
- * component's compat header, and proven on this board on 2026-08-20 (firmware/c6/README.md).
+ * component's compat header, and proven on this board on 2026-08-20 (firmware/car/modem/README.md).
  */
 
 /* The co-processor's running version, e.g. "3.0.6". Read once over RPC on the first call and
@@ -362,7 +362,7 @@ void radio_flash_apply(void);
 
 - [ ] **Step 2: Write the implementation**
 
-Create `firmware/p4/main/radio_flash.c`:
+Create `firmware/car/core/main/radio_flash.c`:
 
 ```c
 #include "radio_flash.h"
@@ -447,14 +447,14 @@ void radio_flash_apply(void)
 
 - [ ] **Step 3: Add it to the build**
 
-In `firmware/p4/main/CMakeLists.txt`, add `"radio_flash.c"` to `SRCS`, after `"radio_ota.c"`.
+In `firmware/car/core/main/CMakeLists.txt`, add `"radio_flash.c"` to `SRCS`, after `"radio_ota.c"`.
 
 - [ ] **Step 4: Verify it builds**
 
 Run:
 ```bash
 cd /Users/adamjohnson/VSCode/esp32-p4-car && source tools/env-p4.sh && \
-  (cd firmware/p4 && idf.py build 2>&1 | tail -5)
+  (cd firmware/car/core && idf.py build 2>&1 | tail -5)
 ```
 Expected: BUILD SUCCEEDS. If `esp_hosted.h` or `esp_hosted_ota.h` is not found, add
 `espressif__esp_hosted` to `REQUIRES` in the same `idf_component_register(...)` and rebuild.
@@ -467,7 +467,7 @@ check lives there.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add firmware/p4/main/radio_flash.h firmware/p4/main/radio_flash.c firmware/p4/main/CMakeLists.txt
+git add firmware/car/core/main/radio_flash.h firmware/car/core/main/radio_flash.c firmware/car/core/main/CMakeLists.txt
 git commit -m "feat(fw): push the embedded radio image over SDIO"
 ```
 
@@ -476,8 +476,8 @@ git commit -m "feat(fw): push the embedded radio image over SDIO"
 ### Task 4: The boot gate and the attempt counter
 
 **Files:**
-- Modify: `firmware/p4/main/main.c` (between the mark-valid block and `telemetry_start()`)
-- Modify: `firmware/p4/main/status_api.c` (`read_radio_version`, around line 58)
+- Modify: `firmware/car/core/main/main.c` (between the mark-valid block and `telemetry_start()`)
+- Modify: `firmware/car/core/main/status_api.c` (`read_radio_version`, around line 58)
 
 **Interfaces:**
 - Consumes: `radio_ota_should_flash`, `radio_ota_next_attempts`, `RADIO_OTA_MAX_ATTEMPTS`
@@ -486,7 +486,7 @@ git commit -m "feat(fw): push the embedded radio image over SDIO"
 
 - [ ] **Step 1: Point `status_api.c` at the cached version**
 
-In `firmware/p4/main/status_api.c`, replace the body of `read_radio_version()` so it uses the
+In `firmware/car/core/main/status_api.c`, replace the body of `read_radio_version()` so it uses the
 cached read instead of making a second RPC — against a mismatched slave that call costs up to
 five seconds, and the boot gate has already paid it:
 
@@ -513,7 +513,7 @@ Add `#include "radio_flash.h"` to the includes at the top of the file. Remove th
 
 `RADIO_EXPECTED_FW` is defined privately inside `status_api.c`, and `main.c` now needs the same
 value. Two copies of that derivation would be exactly the hand-copied pin an earlier audit
-caught, so move it. Create `firmware/p4/main/radio_expected.h`:
+caught, so move it. Create `firmware/car/core/main/radio_expected.h`:
 
 ```c
 #pragma once
@@ -539,7 +539,7 @@ Delete those same five lines (the two `RADIO_STR*` macros and `RADIO_EXPECTED_FW
 
 - [ ] **Step 3: Write the boot gate in `main.c`**
 
-Add these includes to `firmware/p4/main/main.c`: `"nvs.h"`, `"radio_ota.h"`, `"radio_flash.h"`,
+Add these includes to `firmware/car/core/main/main.c`: `"nvs.h"`, `"radio_ota.h"`, `"radio_flash.h"`,
 `"radio_expected.h"`. Then, above `app_main`, add:
 
 ```c
@@ -636,7 +636,7 @@ before `telemetry_start();`, insert:
 Run:
 ```bash
 cd /Users/adamjohnson/VSCode/esp32-p4-car && tools/test-all.sh 2>&1 | tail -3 && \
-  source tools/env-p4.sh && (cd firmware/p4 && idf.py build 2>&1 | tail -3)
+  source tools/env-p4.sh && (cd firmware/car/core && idf.py build 2>&1 | tail -3)
 ```
 Expected: `== all green ==` and BUILD SUCCEEDS.
 
@@ -648,9 +648,9 @@ this and could not — the linker was correctly throwing away an image nobody ha
 
 ```bash
 source tools/env-p4.sh && \
-  cp firmware/p4/build/bootloader/bootloader.bin firmware/p4/main/radio_image.bin && \
-  (cd firmware/p4 && idf.py reconfigure >/dev/null && idf.py build >/dev/null 2>&1) && \
-  riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep radio_image_bin
+  cp firmware/car/core/build/bootloader/bootloader.bin firmware/car/core/main/radio_image.bin && \
+  (cd firmware/car/core && idf.py reconfigure >/dev/null && idf.py build >/dev/null 2>&1) && \
+  riscv32-esp-elf-nm firmware/car/core/build/ajmiddlecar.elf | grep radio_image_bin
 ```
 `reconfigure` is not optional: the CMake block that turns an absent image into an empty one runs
 at configure time, so swapping the file under an existing build tree needs CMake to look again.
@@ -659,7 +659,7 @@ Expected: both `_binary_radio_image_bin_start` and `_binary_radio_image_bin_end`
 they are still absent here, that is a real defect rather than the linker being reasonable — stop
 and report it, because the whole design rests on the image reaching the flash.
 
-Then remove the stand-in: `rm -f firmware/p4/main/radio_image.bin`.
+Then remove the stand-in: `rm -f firmware/car/core/main/radio_image.bin`.
 
 - [ ] **Step 7: Verify the ordinary build is inert**
 
@@ -668,10 +668,10 @@ Confirm the symbols exist and are equal — which is what `radio_flash_image_siz
 from:
 
 ```bash
-rm -f firmware/p4/main/radio_image.bin && \
+rm -f firmware/car/core/main/radio_image.bin && \
   source tools/env-p4.sh && \
-  (cd firmware/p4 && idf.py reconfigure >/dev/null && idf.py build >/dev/null 2>&1) && \
-  riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep radio_image_bin
+  (cd firmware/car/core && idf.py reconfigure >/dev/null && idf.py build >/dev/null 2>&1) && \
+  riscv32-esp-elf-nm firmware/car/core/build/ajmiddlecar.elf | grep radio_image_bin
 ```
 Expected: two lines whose addresses are identical — start and end at the same place, so the
 image is zero bytes and `radio_ota_should_flash` refuses on `have_image == false`.
@@ -679,7 +679,7 @@ image is zero bytes and `radio_ota_should_flash` refuses on `have_image == false
 - [ ] **Step 8: Commit**
 
 ```bash
-git add firmware/p4/main/main.c firmware/p4/main/status_api.c firmware/p4/main/radio_expected.h
+git add firmware/car/core/main/main.c firmware/car/core/main/status_api.c firmware/car/core/main/radio_expected.h
 git commit -m "feat(fw): the car offers its embedded image to a mismatched radio at boot"
 ```
 
@@ -691,26 +691,26 @@ git commit -m "feat(fw): the car offers its embedded image to a mismatched radio
 - Modify: `tools/release.sh`
 
 **Interfaces:**
-- Consumes: `firmware/p4/main/radio_image.bin` as the path the car's build embeds (Task 2).
+- Consumes: `firmware/car/core/main/radio_image.bin` as the path the car's build embeds (Task 2).
 - Produces: nothing further tasks call.
 
 - [ ] **Step 1: Build the radio image before the car's**
 
 In `tools/release.sh`, immediately before the line
-`(cd firmware/p4 && idf.py fullclean >/dev/null && idf.py build)`, insert:
+`(cd firmware/car/core && idf.py fullclean >/dev/null && idf.py build)`, insert:
 
 ```bash
 # The C6's image rides inside the car's, so build it first and put it where the car's build
 # embeds it. Same source flash-radio.sh uses — the pinned component's own example — so the pin
 # determines both halves and there is no second version to keep in step.
-HOSTED="firmware/p4/managed_components/espressif__esp_hosted"
+HOSTED="firmware/car/core/managed_components/espressif__esp_hosted"
 CP="$HOSTED/examples/wifi/sta/cp"
 if [ ! -d "$CP" ]; then
-    echo "ERROR: esp_hosted is not fetched — run (cd firmware/p4 && idf.py reconfigure) first"; exit 1
+    echo "ERROR: esp_hosted is not fetched — run (cd firmware/car/core && idf.py reconfigure) first"; exit 1
 fi
 # The co-processor's SDIO datapath sends frames larger than stock ESP-IDF allows. This is the
 # vendor's own patch, it is idempotent, and without it the build stops with an explicit error —
-# the same line firmware/c6/flash-radio.sh runs for the same reason.
+# the same line firmware/car/modem/flash-radio.sh runs for the same reason.
 python "$HOSTED/tools/eh.py" patch-idf --idf-path "$IDF_PATH" >/dev/null
 (cd "$CP" && { [ -d build ] || idf.py set-target esp32c6 >/dev/null; } && idf.py build >/dev/null)
 # `|| true` is load-bearing under `set -euo pipefail`: pipefail reports the pipeline's rightmost
@@ -720,8 +720,8 @@ python "$HOSTED/tools/eh.py" patch-idf --idf-path "$IDF_PATH" >/dev/null
 # script carried a comment warning about exactly this.
 CP_BIN=$(ls "$CP"/build/*.bin 2>/dev/null | grep -v -E 'bootloader|partition-table|ota_data' | head -1) || true
 [ -n "$CP_BIN" ] || { echo "ERROR: the co-processor build produced no image"; exit 1; }
-cp "$CP_BIN" firmware/p4/main/radio_image.bin
-echo "radio image: $(basename "$CP_BIN"), $(wc -c < firmware/p4/main/radio_image.bin) bytes"
+cp "$CP_BIN" firmware/car/core/main/radio_image.bin
+echo "radio image: $(basename "$CP_BIN"), $(wc -c < firmware/car/core/main/radio_image.bin) bytes"
 ```
 
 - [ ] **Step 2: Refuse to ship a car image without it**
@@ -731,10 +731,10 @@ After the existing `[ -f "$BIN_CAR" ] || { ... }` check, add:
 ```bash
 # A release whose car image does not actually contain the radio's is the silent version of the
 # bug this whole change removes: it would look current and strand a pin bump anyway.
-if ! riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep -q _binary_radio_image_bin_start; then
+if ! riscv32-esp-elf-nm firmware/car/core/build/ajmiddlecar.elf | grep -q _binary_radio_image_bin_start; then
     echo "ERROR: the car image does not embed a radio image"; exit 1
 fi
-EMBEDDED=$(wc -c < firmware/p4/main/radio_image.bin)
+EMBEDDED=$(wc -c < firmware/car/core/main/radio_image.bin)
 [ "$EMBEDDED" -gt 4096 ] || { echo "ERROR: the embedded radio image is $EMBEDDED bytes — not an image"; exit 1; }
 ```
 
@@ -773,7 +773,7 @@ git commit -m "feat(release): build the radio's image into the car's, and retire
 
 **Files:**
 - Modify: `CLAUDE.md` (the Hardware table's radio row, and the Build section)
-- Modify: `firmware/c6/README.md`
+- Modify: `firmware/car/modem/README.md`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -782,7 +782,7 @@ git commit -m "feat(release): build the radio's image into the car's, and retire
 - [ ] **Step 1: Correct `CLAUDE.md`**
 
 In the paragraph beginning "**The C6 is a modem, not a brain.**", replace the sentence
-"The radio's image is built by `firmware/c6/flash-radio.sh` and can be delivered either over the
+"The radio's image is built by `firmware/car/modem/flash-radio.sh` and can be delivered either over the
 C6's UART header or — as was actually done — over the SDIO link itself, from the host" with:
 
 ```markdown
@@ -790,10 +790,10 @@ The radio's image is built into the car's own firmware and delivered over SDIO b
 itself: a mismatch at boot makes the car push the embedded image at the C6 and restart, so one
 OTA updates both processors and an `esp_hosted` pin bump no longer means a bench visit
 (`docs/superpowers/specs/2026-08-31-radio-in-one-image-design.md`). The UART header remains the
-recovery path, and `firmware/c6/flash-radio.sh` still builds the image standalone.
+recovery path, and `firmware/car/modem/flash-radio.sh` still builds the image standalone.
 ```
 
-- [ ] **Step 2: Correct `firmware/c6/README.md`**
+- [ ] **Step 2: Correct `firmware/car/modem/README.md`**
 
 At the top of the "Flashing over SDIO, from the host" section, add:
 
@@ -811,12 +811,12 @@ Run:
 cd /Users/adamjohnson/VSCode/esp32-p4-car && \
   grep -rn "radio-bumped\|bench reflash\|reflash the C6" --include="*.md" --include="*.sh" --include="*.c" . | grep -v managed_components
 ```
-Expected: only `firmware/c6/README.md`'s recovery section, which is still true. Fix any other hit.
+Expected: only `firmware/car/modem/README.md`'s recovery section, which is still true. Fix any other hit.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add CLAUDE.md firmware/c6/README.md
+git add CLAUDE.md firmware/car/modem/README.md
 git commit -m "docs: the radio updates itself now, so stop sending people for a cable"
 ```
 
@@ -831,7 +831,7 @@ None of this can be proven in the simulator or on the host. When hardware is nex
 2. **Flash the car by cable** from that build, with the radio already matched. Expected: the boot
    log has no `radio_flash` line at all — the ordinary path costs one comparison.
 3. **Force a mismatch.** Flash the C6 by hand with an older image
-   (`firmware/c6/flash-radio.sh /dev/cu.usbserial-XXXX` from a checkout at an older pin), then
+   (`firmware/car/modem/flash-radio.sh /dev/cu.usbserial-XXXX` from a checkout at an older pin), then
    reset the car. Expected: `flashing the radio: N bytes over SDIO`, then a restart, then a boot
    whose `status_api` line reads `radio firmware <expected>` — matched, and the counter cleared.
 4. **Prove the budget.** With the radio deliberately unable to take the image, confirm the car

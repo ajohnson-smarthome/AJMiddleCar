@@ -584,7 +584,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: nothing new.
-- Produces: `RTLink.rx_fps(now, who)` where `who` is `"push"` or `"status"` — a per-consumer delta mirroring `fps_now` in `firmware/p4/main/telemetry.c`: 0 on a consumer's first read, 0 when the gap since its last read is ≥ 10 s, else `int(frames_delta / dt)`; the accumulator updates on every read. The 1-second window deque stays only for the human log line via the private `_window_fps(now)`.
+- Produces: `RTLink.rx_fps(now, who)` where `who` is `"push"` or `"status"` — a per-consumer delta mirroring `fps_now` in `firmware/car/core/main/telemetry.c`: 0 on a consumer's first read, 0 when the gap since its last read is ≥ 10 s, else `int(frames_delta / dt)`; the accumulator updates on every read. The 1-second window deque stays only for the human log line via the private `_window_fps(now)`.
 
 - [ ] **Step 1: Write the failing tests** — append to `tools/mock_car/test_rtlink.py`:
 
@@ -1146,9 +1146,9 @@ Expected: PASS — every bound, min included, exists as a literal today (`RECOVE
 - [ ] **Step 3: Prove it catches the drift the old guard missed**
 
 ```bash
-sed -i '' 's/RECOVER_WIN_MIN_MS 1000/RECOVER_WIN_MIN_MS 500/' firmware/p4/main/recovery.h
+sed -i '' 's/RECOVER_WIN_MIN_MS 1000/RECOVER_WIN_MIN_MS 500/' firmware/car/core/main/recovery.h
 python3 tools/test_gen_contract.py TestSchema.test_ranges_match_the_firmware_today -v
-git checkout firmware/p4/main/recovery.h
+git checkout firmware/car/core/main/recovery.h
 ```
 
 Expected: FAIL while mutated (`/recover window_ms: bound 1000 not in the firmware sources`), then the checkout restores it. The old substring-of-max guard stayed green under this exact mutation.
@@ -1225,7 +1225,7 @@ delete the `CTL_NONE, CTL_RECOVER, ... = PRIORITY` unpack and shrink its comment
 
 ```python
 # Ownership of the actuator, lowest priority first. `link_src_t` in
-# firmware/p4/main/link.h is generated from the same list, and these names are
+# firmware/car/core/main/link.h is generated from the same list, and these names are
 # what telemetry reports in `ctl`. Position is rank on all three sides; the
 # per-name symbols come from the generator, same as C's and Swift's.
 PRIORITY = tuple(CTL_VALUES)

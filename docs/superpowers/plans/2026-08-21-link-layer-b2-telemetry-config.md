@@ -22,12 +22,12 @@
 
 | File | Responsibility |
 |---|---|
-| `firmware/p4/main/ws_control.c` | Captures the client fd on the data path, validates it before pushing, drains frames it declines |
-| `firmware/p4/main/telemetry.{c,h}` | Cheap gather: cached `calibrated`, RSSI sampled off the timer, per-consumer frame-rate accumulators |
-| `firmware/p4/main/calibration.{c,h}` | Gains a cached `calibration_is_valid()` so telemetry stops reading flash at 5 Hz |
-| `firmware/p4/main/cfg_api.{c,h}` | **New.** One handler pair for all five config domains, driven by `cfg_table.inc` |
-| `firmware/p4/main/{ramp,trim,recovery,wheel,dims}_api.{c,h}` | Deleted. Their bindings move into `cfg_api.c` as a small table of getters and setters |
-| `firmware/p4/main/pca9685.{c,h}` | Bus-fault escalation: reset the bus after repeated failures |
+| `firmware/car/core/main/ws_control.c` | Captures the client fd on the data path, validates it before pushing, drains frames it declines |
+| `firmware/car/core/main/telemetry.{c,h}` | Cheap gather: cached `calibrated`, RSSI sampled off the timer, per-consumer frame-rate accumulators |
+| `firmware/car/core/main/calibration.{c,h}` | Gains a cached `calibration_is_valid()` so telemetry stops reading flash at 5 Hz |
+| `firmware/car/core/main/cfg_api.{c,h}` | **New.** One handler pair for all five config domains, driven by `cfg_table.inc` |
+| `firmware/car/core/main/{ramp,trim,recovery,wheel,dims}_api.{c,h}` | Deleted. Their bindings move into `cfg_api.c` as a small table of getters and setters |
+| `firmware/car/core/main/pca9685.{c,h}` | Bus-fault escalation: reset the bus after repeated failures |
 | `docs/protocol.md` | JSON responses, and the `/ws` client rule stated as the firmware actually implements it |
 
 ---
@@ -47,7 +47,7 @@ and on data frames `httpd_parse.c:698` sets `r->method = 0`, which is not `HTTP_
 Two more defects in the same function ride along. A send error clears `s_client_fd` permanently even for `EAGAIN`, which IDF itself classifies as retryable — one slow moment and telemetry is dead until the client reconnects. And a frame the handler declines (oversized, or a type it ignores) is never read out of the socket, so its payload is parsed as the next frame's header and the stream desynchronises.
 
 **Files:**
-- Modify: `firmware/p4/main/ws_control.c`
+- Modify: `firmware/car/core/main/ws_control.c`
 
 **Interfaces:**
 - Produces: `ws_control_send` unchanged in signature; `s_client_fd` maintained from the data path.
@@ -148,7 +148,7 @@ esp_err_t ws_control_send(const char *data, size_t len) {
 - [ ] **Step 4: Build**
 
 ```bash
-cd ~/VSCode/esp32-p4-car/firmware/p4
+cd ~/VSCode/esp32-p4-car/firmware/car/core
 source ~/esp/esp-idf-v6.0.2/export.sh >/dev/null 2>&1
 idf.py build 2>&1 | grep -E "error:|warning:|Project build complete"
 ```
@@ -159,7 +159,7 @@ Expected: `Project build complete.` with no warnings.
 
 ```bash
 cd ~/VSCode/esp32-p4-car
-git add firmware/p4/main/ws_control.c
+git add firmware/car/core/main/ws_control.c
 git commit -m "fix(fw): the telemetry push has never sent a frame — capture the client where IDF calls us
 
 ws_control captured the client socket in the req->method == HTTP_GET branch,
@@ -192,8 +192,8 @@ desynchronised into garbage instead of closing.
 Separately, `ws_fps_now()` keeps `static uint32_t last_frames` / `static int64_t last_us` and is called from two tasks — the 5 Hz push and every `/status` request — which read-modify-write each other's measurement interval. The number `docs/protocol.md` calls "a direct measure of the uplink" is currently a function of how the two callers interleave.
 
 **Files:**
-- Modify: `firmware/p4/main/telemetry.c`, `firmware/p4/main/telemetry.h`, `firmware/p4/main/calibration.c`, `firmware/p4/main/calibration.h`, `firmware/p4/main/car.c`, `firmware/p4/main/calib_api.c`
-- Modify: `firmware/p4/test/test_telemetry.c`
+- Modify: `firmware/car/core/main/telemetry.c`, `firmware/car/core/main/telemetry.h`, `firmware/car/core/main/calibration.c`, `firmware/car/core/main/calibration.h`, `firmware/car/core/main/car.c`, `firmware/car/core/main/calib_api.c`
+- Modify: `firmware/car/core/test/test_telemetry.c`
 
 **Interfaces:**
 - Produces: `bool calibration_is_valid(void)` — the cached answer, no flash access; `void calibration_set_valid(bool)` — called by `car_init` and `/calib/save`. `telemetry_gather` gains a `consumer` argument: `typedef enum { TELEM_PUSH, TELEM_STATUS } telem_consumer_t;`.
@@ -316,14 +316,14 @@ with `#define PUSH_PERIOD_MS 200` replacing `PUSH_PERIOD_US`.
 `telemetry_fields` is unchanged, so `test_telemetry.c` needs no edit unless the enum moved above the host-test guard breaks its include. Compile it and fix only what actually breaks:
 
 ```bash
-cd ~/VSCode/esp32-p4-car/firmware/p4/test
+cd ~/VSCode/esp32-p4-car/firmware/car/core/test
 cc -I../main -Wall -Wextra -Werror -std=c11 -o /tmp/tt test_telemetry.c -lm && /tmp/tt
 ```
 
 - [ ] **Step 6: Build and run everything**
 
 ```bash
-cd ~/VSCode/esp32-p4-car/firmware/p4
+cd ~/VSCode/esp32-p4-car/firmware/car/core
 source ~/esp/esp-idf-v6.0.2/export.sh >/dev/null 2>&1
 idf.py build 2>&1 | grep -E "error:|warning:|Project build complete"
 cd ~/VSCode/esp32-p4-car && ./tools/test-all.sh 2>&1 | tail -3
@@ -333,7 +333,7 @@ cd ~/VSCode/esp32-p4-car && ./tools/test-all.sh 2>&1 | tail -3
 
 ```bash
 cd ~/VSCode/esp32-p4-car
-git add firmware/p4/main firmware/p4/test
+git add firmware/car/core/main firmware/car/core/test
 git commit -m "perf(fw): telemetry stops costing an NVS read and an SDIO RPC per frame
 
 telemetry_gather ran in the esp_timer task at priority 22, five times a second,
@@ -361,9 +361,9 @@ Five `*_api.c` files are the same forty lines with different nouns: GET snprintf
 Three defects are shared by all five and fixed once here. The body is read with a single `httpd_req_recv` and no loop, so a body split across TCP segments is truncated and rejected with a message blaming the field names. `HTTPD_SOCK_ERR_TIMEOUT` is not retried. And the reply is the bare string `ok` with content type `text/html`, under a protocol doc that says everything is JSON.
 
 **Files:**
-- Create: `firmware/p4/main/cfg_api.c`, `firmware/p4/main/cfg_api.h`
-- Delete: `firmware/p4/main/{ramp,trim,recovery,wheel,dims}_api.{c,h}`
-- Modify: `firmware/p4/main/CMakeLists.txt`, `firmware/p4/main/main.c`
+- Create: `firmware/car/core/main/cfg_api.c`, `firmware/car/core/main/cfg_api.h`
+- Delete: `firmware/car/core/main/{ramp,trim,recovery,wheel,dims}_api.{c,h}`
+- Modify: `firmware/car/core/main/CMakeLists.txt`, `firmware/car/core/main/main.c`
 
 **Interfaces:**
 - Consumes: `CFG_DOMAINS`, `CFG_DOMAIN_COUNT`, `cfg_field_t`, `cfg_domain_t` from `cfg_table.inc` and `cfg_contract.h` (Plan A).
@@ -549,7 +549,7 @@ static esp_err_t cfg_post(httpd_req_t *req) {
 _Static_assert(CFG_MAX_FIELDS <= 8, "widen vals[] in cfg_api.c");
 ```
 
-and have the generator emit `#define CFG_MAX_FIELDS <n>` in `cfg_table.inc` — add that to `emit_c` in `tools/gen_contract.py`, with a matching assertion in `tools/test_gen_contract.py` and in `firmware/p4/test/test_cfg_table.c`.
+and have the generator emit `#define CFG_MAX_FIELDS <n>` in `cfg_table.inc` — add that to `emit_c` in `tools/gen_contract.py`, with a matching assertion in `tools/test_gen_contract.py` and in `firmware/car/core/test/test_cfg_table.c`.
 
 - [ ] **Step 3: Register, and delete the five files**
 
@@ -573,7 +573,7 @@ Delete `ramp_api.{c,h}`, `trim_api.{c,h}`, `recovery_api.{c,h}`, `wheel_api.{c,h
 - [ ] **Step 4: Build and check the handler count**
 
 ```bash
-cd ~/VSCode/esp32-p4-car/firmware/p4
+cd ~/VSCode/esp32-p4-car/firmware/car/core
 source ~/esp/esp-idf-v6.0.2/export.sh >/dev/null 2>&1
 idf.py build 2>&1 | grep -E "error:|warning:|Project build complete"
 grep -rn "max_uri_handlers" main/http_server.c
@@ -585,7 +585,7 @@ Registered handlers drop from 17 to 15 (`/`, `/ws`, `/calib`×3, `/status`, `/ot
 
 ```bash
 cd ~/VSCode/esp32-p4-car
-git add -A firmware/p4/main tools/gen_contract.py tools/test_gen_contract.py firmware/p4/test
+git add -A firmware/car/core/main tools/gen_contract.py tools/test_gen_contract.py firmware/car/core/test
 git commit -m "refactor(fw): one config handler over the generated table
 
 Five *_api.c files were the same forty lines with different nouns, and every
@@ -610,7 +610,7 @@ Plan A's generated C table now has a consumer."
 Carried from B1's review, where it was deliberately deferred rather than invented at review time. Bounding the I2C wait stops the *task* hanging; it does not stop the *motors*, which hold their last duty while `link_task` retries eight channels fifty times a second, forever.
 
 **Files:**
-- Modify: `firmware/p4/main/pca9685.c`, `firmware/p4/main/pca9685.h`, `firmware/p4/main/link.c`
+- Modify: `firmware/car/core/main/pca9685.c`, `firmware/car/core/main/pca9685.h`, `firmware/car/core/main/link.c`
 
 - [ ] **Step 1: Expose a bus reset**
 
@@ -655,11 +655,11 @@ replacing the rate-limited log block with this (the reset log serves the same pu
 - [ ] **Step 3: Build, test, commit**
 
 ```bash
-cd ~/VSCode/esp32-p4-car/firmware/p4
+cd ~/VSCode/esp32-p4-car/firmware/car/core
 source ~/esp/esp-idf-v6.0.2/export.sh >/dev/null 2>&1
 idf.py build 2>&1 | grep -E "error:|warning:|Project build complete"
 cd ~/VSCode/esp32-p4-car && ./tools/test-all.sh 2>&1 | tail -3
-git add firmware/p4/main
+git add firmware/car/core/main
 git commit -m "fix(fw): a wedged I2C bus gets clocked free instead of retried forever
 
 B1 bounded the wait so the task could not hang, and its review pointed out that

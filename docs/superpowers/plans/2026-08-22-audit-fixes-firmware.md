@@ -6,18 +6,18 @@
 
 **Architecture:** Pure decisions stay in headers under `*_HOST_TEST` guards (the codebase's established seam); the one new module is `rt_glue.h`, which lifts rt_link.c's session side-effect *orderings* into pure functions over an effects table so they are host-tested the way `test_state.py` pins the same rules on the mock. Wire-visible behavior follows `docs/superpowers/specs/2026-08-22-audit-fix-decisions.md` exactly — the mock plan lands the identical rules.
 
-**Tech Stack:** C11, plain `cc` host tests (`firmware/p4/test/Makefile`, assert-based, one binary per module), ESP-IDF 6.0.2 for the final device build, Python 3 for the contract generator.
+**Tech Stack:** C11, plain `cc` host tests (`firmware/car/core/test/Makefile`, assert-based, one binary per module), ESP-IDF 6.0.2 for the final device build, Python 3 for the contract generator.
 
 **Spec:** `docs/superpowers/specs/2026-08-22-audit-fix-decisions.md`
 
 ## Global Constraints
 
 - Work ONLY in the worktree `/Users/adamjohnson/VSCode/esp32-p4-car/.claude/worktrees/audit-fixes` (branch `audit-fixes`). All paths below are relative to it.
-- Never hand-edit a generated file: `firmware/p4/main/cfg_table.inc`, `app/AJMiddleCar/Generated/CarAPI.swift`, `tools/mock_car/generated.py`, and the endpoints block of `docs/protocol.md` come from `contract/car-api.json` via `python3 tools/gen_contract.py`; `tools/check_contract.sh` fails on drift.
+- Never hand-edit a generated file: `firmware/car/core/main/cfg_table.inc`, `app/AJMiddleCar/Generated/CarAPI.swift`, `tools/mock_car/generated.py`, and the endpoints block of `docs/protocol.md` come from `contract/car-api.json` via `python3 tools/gen_contract.py`; `tools/check_contract.sh` fails on drift.
 - Pure modules keep **zero ESP-IDF dependencies**; the IDF half of a header sits behind `#ifndef <MODULE>_HOST_TEST` (see `link.h`, `rt_link.h`, `ramp.h` for the pattern). Host tests are assert-based `main()`s compiled with `cc -I../main -Wall -Wextra -Werror -std=c11`.
 - The shoot-through invariant: never both channels of a BTS7960 pair driven nonzero — `motors_plan` guarantees it in the targets, and after Task 6 the write path guarantees it at the chip.
 - Wire/session semantics must land exactly as the decisions spec states (rules 1–9); the mock plan implements the same rules against the same names (`RT_SESSION_IDLE_MS` = schema `rt.session_idle_ms` = 10000). Do not improvise different constants or orderings.
-- After every task: `make -C firmware/p4/test run` green, then `./tools/test-all.sh` green, then commit. Commit messages follow the repo's style (`fix(fw): …`, `feat(contract): …`, lowercase subject, body explains the why) and end with:
+- After every task: `make -C firmware/car/core/test run` green, then `./tools/test-all.sh` green, then commit. Commit messages follow the repo's style (`fix(fw): …`, `feat(contract): …`, lowercase subject, body explains the why) and end with:
   `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`
 - The firmware's REST-body changes (Tasks 10–12) intentionally diverge from the mock until the mock plan lands; `test-all.sh` stays green throughout because conformance runs against the mock's own (unchanged) behavior. Body-level conformance assertions arrive with the mock plan.
 
@@ -29,7 +29,7 @@
 - Modify: `contract/car-api.json` (rt section)
 - Modify: `tools/gen_contract.py:106-109` (emit_c), `tools/gen_contract.py:144` (emit_swift)
 - Modify: `tools/test_gen_contract.py` (TestSchema + the emitter tests)
-- Regenerate: `firmware/p4/main/cfg_table.inc`, `app/AJMiddleCar/Generated/CarAPI.swift`, `tools/mock_car/generated.py` (via the generator, never by hand)
+- Regenerate: `firmware/car/core/main/cfg_table.inc`, `app/AJMiddleCar/Generated/CarAPI.swift`, `tools/mock_car/generated.py` (via the generator, never by hand)
 
 **Interfaces:**
 - Consumes: nothing.
@@ -98,7 +98,7 @@ Expected: `contract: no drift` and `== all green ==`.
 
 ```bash
 git add contract/car-api.json tools/gen_contract.py tools/test_gen_contract.py \
-        firmware/p4/main/cfg_table.inc app/AJMiddleCar/Generated/CarAPI.swift \
+        firmware/car/core/main/cfg_table.inc app/AJMiddleCar/Generated/CarAPI.swift \
         tools/mock_car/generated.py
 git commit -m "feat(contract): sessions are mortal — session_idle_ms joins the schema
 
@@ -113,8 +113,8 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 2: The parser speaks JSON — depth-1 keys, duplicate rejection, strict numbers
 
 **Files:**
-- Modify: `firmware/p4/main/control_proto.c` (value_of, parse_num, parse_u32, bye handling)
-- Test: `firmware/p4/test/test_control_proto.c`
+- Modify: `firmware/car/core/main/control_proto.c` (value_of, parse_num, parse_u32, bye handling)
+- Test: `firmware/car/core/test/test_control_proto.c`
 
 **Interfaces:**
 - Consumes: `RT_KEY_*` from `cfg_table.inc` (unchanged).
@@ -122,7 +122,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing tests**
 
-In `firmware/p4/test/test_control_proto.c`, before the final `printf("test_control_proto: all passed\n");` line (run `grep -n "all passed" firmware/p4/test/test_control_proto.c` to find it), insert:
+In `firmware/car/core/test/test_control_proto.c`, before the final `printf("test_control_proto: all passed\n");` line (run `grep -n "all passed" firmware/car/core/test/test_control_proto.c` to find it), insert:
 
 ```c
     /* --- the audit's shared pinned frames (decisions spec, rule 6) ------------
@@ -145,12 +145,12 @@ In `firmware/p4/test/test_control_proto.c`, before the final `printf("test_contr
 
 - [ ] **Step 2: Run to verify the new cases fail**
 
-Run: `make -C firmware/p4/test test_control_proto && ./firmware/p4/test/test_control_proto`
+Run: `make -C firmware/car/core/test test_control_proto && ./firmware/car/core/test/test_control_proto`
 Expected: FAIL on the first new `bad(...)` (the nested-`t` frame parses today).
 
 - [ ] **Step 3: Implement**
 
-In `firmware/p4/main/control_proto.c`:
+In `firmware/car/core/main/control_proto.c`:
 
 **(a)** Replace the whole `value_of` function with a depth-tracking, duplicate-detecting scanner. It returns `0` found (sets `*val`/`*left`), `1` absent, `-1` duplicate:
 
@@ -297,13 +297,13 @@ static bool json_num_shape(const char *s) {
 
 - [ ] **Step 4: Run the full C suite**
 
-Run: `make -C firmware/p4/test run`
+Run: `make -C firmware/car/core/test run`
 Expected: PASS. If a pre-existing `ok(...)`/`bad(...)` case now disagrees, read it against spec rule 6 before touching it — the existing whitespace-tolerant and key-order cases must keep passing; only the newly-illegal spellings may flip, and none of the existing cases use them.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add firmware/p4/main/control_proto.c firmware/p4/test/test_control_proto.c
+git add firmware/car/core/main/control_proto.c firmware/car/core/test/test_control_proto.c
 git commit -m "fix(fw): the control parser speaks JSON, not almost-JSON
 
 Depth-1 key matching (a nested {\"t\":..} drove the car), duplicate keys
@@ -320,9 +320,9 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 3: Session rules, pure half — the gate survives a trip, dead sids, mortality
 
 **Files:**
-- Modify: `firmware/p4/main/rt_link.h` (rt_session_t helpers, classify, new dead-sid ring, new idle predicate)
-- Modify: `firmware/p4/main/rt_link.c` (mechanical call-site updates only — glue rework is Task 5)
-- Test: `firmware/p4/test/test_rt_session.c`
+- Modify: `firmware/car/core/main/rt_link.h` (rt_session_t helpers, classify, new dead-sid ring, new idle predicate)
+- Modify: `firmware/car/core/main/rt_link.c` (mechanical call-site updates only — glue rework is Task 5)
+- Test: `firmware/car/core/test/test_rt_session.c`
 
 **Interfaces:**
 - Consumes: `RT_SESSION_IDLE_MS` (Task 1), `CONTROL_SID_MAX`, `watchdog_stale`.
@@ -335,7 +335,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing tests**
 
-Rewrite the affected regions of `firmware/p4/test/test_rt_session.c`:
+Rewrite the affected regions of `firmware/car/core/test/test_rt_session.c`:
 
 **(a)** Every `act()` call gains the dead-sid argument. Change the helper:
 
@@ -418,7 +418,7 @@ and mechanically update every existing call site to pass `NULL` as the new secon
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `make -C firmware/p4/test test_rt_session 2>&1 | tail -5`
+Run: `make -C firmware/car/core/test test_rt_session 2>&1 | tail -5`
 Expected: compile FAILURE (`rt_dead_sids_t` undeclared, wrong arity on `rt_session_classify`/`rt_session_adopt`).
 
 - [ ] **Step 3: Implement in `rt_link.h`**
@@ -532,13 +532,13 @@ Only what compiles — the behavioral rework is Task 5:
 
 - [ ] **Step 5: Run the suite**
 
-Run: `make -C firmware/p4/test run`
+Run: `make -C firmware/car/core/test run`
 Expected: PASS, all binaries.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add firmware/p4/main/rt_link.h firmware/p4/main/rt_link.c firmware/p4/test/test_rt_session.c
+git add firmware/car/core/main/rt_link.h firmware/car/core/main/rt_link.c firmware/car/core/test/test_rt_session.c
 git commit -m "fix(fw): the seq gate survives a trip; dead sids; sessions are mortal
 
 Rule 1: a post-trip gate reset accepted one delayed pre-dropout duplicate as
@@ -557,10 +557,10 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 4: Arbiter timing and checked releases
 
 **Files:**
-- Modify: `firmware/p4/main/link.h` (LINK_TICK_MS, LINK_HOLD_RT_MS, link_release_must decl)
-- Modify: `firmware/p4/main/link.c` (TICK_MS → LINK_TICK_MS, link_release_must impl)
-- Modify: `firmware/p4/main/ota_api.c`, `firmware/p4/main/calib_api.c`, `firmware/p4/main/car.c`, `firmware/p4/main/main.c`, `firmware/p4/main/recovery.c` (release call sites)
-- Test: `firmware/p4/test/test_link.c`
+- Modify: `firmware/car/core/main/link.h` (LINK_TICK_MS, LINK_HOLD_RT_MS, link_release_must decl)
+- Modify: `firmware/car/core/main/link.c` (TICK_MS → LINK_TICK_MS, link_release_must impl)
+- Modify: `firmware/car/core/main/ota_api.c`, `firmware/car/core/main/calib_api.c`, `firmware/car/core/main/car.c`, `firmware/car/core/main/main.c`, `firmware/car/core/main/recovery.c` (release call sites)
+- Test: `firmware/car/core/test/test_link.c`
 
 **Interfaces:**
 - Consumes: `RT_WATCHDOG_MS` (generated).
@@ -568,7 +568,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing test**
 
-In `firmware/p4/test/test_link.c`, inside `main()` after `ctl_vocabulary();`, add:
+In `firmware/car/core/test/test_link.c`, inside `main()` after `ctl_vocabulary();`, add:
 
 ```c
     /* The RT grant must outlive the watchdog deadline by one actuator tick: with the
@@ -581,12 +581,12 @@ In `firmware/p4/test/test_link.c`, inside `main()` after `ctl_vocabulary();`, ad
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `make -C firmware/p4/test test_link 2>&1 | tail -3`
+Run: `make -C firmware/car/core/test test_link 2>&1 | tail -3`
 Expected: compile FAILURE — `LINK_HOLD_RT_MS`/`LINK_TICK_MS` are behind `#ifndef LINK_HOST_TEST` today (and the hold equals `RT_WATCHDOG_MS`).
 
 - [ ] **Step 3: Implement**
 
-In `firmware/p4/main/link.h`: delete the `LINK_HOLD_RT_MS`/`LINK_HOLD_CALIB_MS` block from the `#ifndef LINK_HOST_TEST` section and place this immediately BEFORE `#ifndef LINK_HOST_TEST` (pure constants may live outside the guard):
+In `firmware/car/core/main/link.h`: delete the `LINK_HOLD_RT_MS`/`LINK_HOLD_CALIB_MS` block from the `#ifndef LINK_HOST_TEST` section and place this immediately BEFORE `#ifndef LINK_HOST_TEST` (pure constants may live outside the guard):
 
 ```c
 /* The actuator task's beat, public because the RT hold is defined against it. */
@@ -612,7 +612,7 @@ In the IDF section of `link.h`, after `link_release`'s declaration add:
 bool link_release_must(link_src_t src);
 ```
 
-In `firmware/p4/main/link.c`: delete `#define TICK_MS 20` and replace both uses (`vTaskDelayUntil(&last, pdMS_TO_TICKS(TICK_MS))`, `xSemaphoreTake(s_lock, pdMS_TO_TICKS(TICK_MS))`) with `LINK_TICK_MS`; the `ramp_max_up_per_tick(ramp_get_ms(), TICK_MS)` use becomes `LINK_TICK_MS` too. Then add after `link_release`:
+In `firmware/car/core/main/link.c`: delete `#define TICK_MS 20` and replace both uses (`vTaskDelayUntil(&last, pdMS_TO_TICKS(TICK_MS))`, `xSemaphoreTake(s_lock, pdMS_TO_TICKS(TICK_MS))`) with `LINK_TICK_MS`; the `ramp_max_up_per_tick(ramp_get_ms(), TICK_MS)` use becomes `LINK_TICK_MS` too. Then add after `link_release`:
 
 ```c
 bool link_release_must(link_src_t src) {
@@ -635,15 +635,15 @@ Sweep the call sites — every `link_release(` outside link.c becomes `link_rele
 
 - [ ] **Step 4: Run the suite**
 
-Run: `make -C firmware/p4/test run`
+Run: `make -C firmware/car/core/test run`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add firmware/p4/main/link.h firmware/p4/main/link.c firmware/p4/main/ota_api.c \
-        firmware/p4/main/calib_api.c firmware/p4/main/car.c firmware/p4/main/main.c \
-        firmware/p4/main/recovery.c firmware/p4/test/test_link.c
+git add firmware/car/core/main/link.h firmware/car/core/main/link.c firmware/car/core/main/ota_api.c \
+        firmware/car/core/main/calib_api.c firmware/car/core/main/car.c firmware/car/core/main/main.c \
+        firmware/car/core/main/recovery.c firmware/car/core/test/test_link.c
 git commit -m "fix(fw): the trip precedes the lapse, and releases are checked
 
 The RT grant now holds RT_WATCHDOG_MS plus one actuator tick, so the loss is
@@ -659,9 +659,9 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 5: The glue seam — session side effects become host-tested
 
 **Files:**
-- Create: `firmware/p4/main/rt_glue.h`
-- Modify: `firmware/p4/main/rt_link.c` (adopt/on_bye/check_silence rewired; new check_idle)
-- Test: `firmware/p4/test/test_rt_glue.c` (new), `firmware/p4/test/Makefile`
+- Create: `firmware/car/core/main/rt_glue.h`
+- Modify: `firmware/car/core/main/rt_link.c` (adopt/on_bye/check_silence rewired; new check_idle)
+- Test: `firmware/car/core/test/test_rt_glue.c` (new), `firmware/car/core/test/Makefile`
 
 **Interfaces:**
 - Consumes: `rt_session_*`, `rt_dead_*`, `rt_session_idle` (Task 3), `link_src_t` (link.h pure half), `link_release_must` (Task 4, via the firmware's effects table).
@@ -674,7 +674,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing test**
 
-Create `firmware/p4/test/test_rt_glue.c`:
+Create `firmware/car/core/test/test_rt_glue.c`:
 
 ```c
 /* The session lifecycle's SIDE EFFECTS, in order. test_rt_session pins what the flag
@@ -796,7 +796,7 @@ int main(void) {
 }
 ```
 
-Add to `firmware/p4/test/Makefile`: `test_rt_glue` in the `all:` list and the `run:` chain, plus:
+Add to `firmware/car/core/test/Makefile`: `test_rt_glue` in the `all:` list and the `run:` chain, plus:
 
 ```make
 # The lifecycle's side effects over a recording effects table — the impure orderings
@@ -807,10 +807,10 @@ test_rt_glue: test_rt_glue.c ../main/rt_glue.h ../main/rt_link.h ../main/link.h
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `make -C firmware/p4/test test_rt_glue 2>&1 | tail -3`
+Run: `make -C firmware/car/core/test test_rt_glue 2>&1 | tail -3`
 Expected: compile FAILURE — `rt_glue.h` does not exist.
 
-- [ ] **Step 3: Create `firmware/p4/main/rt_glue.h`**
+- [ ] **Step 3: Create `firmware/car/core/main/rt_glue.h`**
 
 ```c
 #ifndef RT_GLUE_H
@@ -909,7 +909,7 @@ static inline bool rt_glue_idle(rt_session_t *s, rt_dead_sids_t *dead, uint32_t 
 
 - [ ] **Step 4: Run the glue test**
 
-Run: `make -C firmware/p4/test test_rt_glue && ./firmware/p4/test/test_rt_glue`
+Run: `make -C firmware/car/core/test test_rt_glue && ./firmware/car/core/test/test_rt_glue`
 Expected: `test_rt_glue: all passed`.
 
 - [ ] **Step 5: Rewire `rt_link.c`**
@@ -988,14 +988,14 @@ static void check_idle(void) {
 
 - [ ] **Step 6: Run everything**
 
-Run: `make -C firmware/p4/test run && ./tools/test-all.sh 2>&1 | tail -3`
+Run: `make -C firmware/car/core/test run && ./tools/test-all.sh 2>&1 | tail -3`
 Expected: all green.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add firmware/p4/main/rt_glue.h firmware/p4/main/rt_link.c \
-        firmware/p4/test/test_rt_glue.c firmware/p4/test/Makefile
+git add firmware/car/core/main/rt_glue.h firmware/car/core/main/rt_link.c \
+        firmware/car/core/test/test_rt_glue.c firmware/car/core/test/Makefile
 git commit -m "fix(fw): a goodbye keeps its hands off a sticky hold — and the glue is tested
 
 rt_glue.h lifts adopt/goodbye/trip/mortality side-effect orderings into pure
@@ -1013,9 +1013,9 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 6: Two-pass PCA9685 writes — falls land before rises
 
 **Files:**
-- Modify: `firmware/p4/main/link.h` (link_plan_writes, link_rise_safe — pure)
-- Modify: `firmware/p4/main/link.c` (link_task write loop)
-- Test: `firmware/p4/test/test_link.c`; touch `firmware/p4/test/test_rt_glue.c` (one `#define RAMP_HOST_TEST` line)
+- Modify: `firmware/car/core/main/link.h` (link_plan_writes, link_rise_safe — pure)
+- Modify: `firmware/car/core/main/link.c` (link_task write loop)
+- Test: `firmware/car/core/test/test_link.c`; touch `firmware/car/core/test/test_rt_glue.c` (one `#define RAMP_HOST_TEST` line)
 
 **Interfaces:**
 - Consumes: `ramp_step`, `ramp_max_up_per_tick` (ramp.h pure half).
@@ -1023,7 +1023,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing test**
 
-In `firmware/p4/test/test_link.c`: the file will now need ramp.h's pure half — add `#define RAMP_HOST_TEST` above the existing `#define LINK_HOST_TEST`. `firmware/p4/test/test_rt_glue.c` reaches link.h through rt_glue.h, so add the same `#define RAMP_HOST_TEST` line above its `#define LINK_HOST_TEST` too — without it that binary stops compiling the moment link.h includes ramp.h. Then add to test_link.c's `main()`:
+In `firmware/car/core/test/test_link.c`: the file will now need ramp.h's pure half — add `#define RAMP_HOST_TEST` above the existing `#define LINK_HOST_TEST`. `firmware/car/core/test/test_rt_glue.c` reaches link.h through rt_glue.h, so add the same `#define RAMP_HOST_TEST` line above its `#define LINK_HOST_TEST` too — without it that binary stops compiling the moment link.h includes ramp.h. Then add to test_link.c's `main()`:
 
 ```c
     /* --- write ordering: within a pair, the fall lands before the rise -----------
@@ -1066,12 +1066,12 @@ In `firmware/p4/test/test_link.c`: the file will now need ramp.h's pure half —
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `make -C firmware/p4/test test_link 2>&1 | tail -3`
+Run: `make -C firmware/car/core/test test_link 2>&1 | tail -3`
 Expected: compile FAILURE — `link_plan_writes` undeclared.
 
 - [ ] **Step 3: Implement**
 
-In `firmware/p4/main/link.h`, add `#include "ramp.h"` after `#include "contract.h"`, and place in the pure section (before `#ifndef LINK_HOST_TEST`):
+In `firmware/car/core/main/link.h`, add `#include "ramp.h"` after `#include "contract.h"`, and place in the pure section (before `#ifndef LINK_HOST_TEST`):
 
 ```c
 /* Pure: plan one actuator tick. next[] receives every channel's post-ramp duty;
@@ -1101,7 +1101,7 @@ static inline bool link_rise_safe(uint16_t mate_cur, uint16_t duty) {
 }
 ```
 
-In `firmware/p4/main/link.c`, replace the write loop in `link_task` (the `uint16_t up = ...` line through the end of the `for (uint8_t ch = ...)` loop) with:
+In `firmware/car/core/main/link.c`, replace the write loop in `link_task` (the `uint16_t up = ...` line through the end of the `for (uint8_t ch = ...)` loop) with:
 
 ```c
         uint16_t up = ramp_max_up_per_tick(ramp_get_ms(), LINK_TICK_MS);
@@ -1132,14 +1132,14 @@ In `firmware/p4/main/link.c`, replace the write loop in `link_task` (the `uint16
 
 - [ ] **Step 4: Run the suite**
 
-Run: `make -C firmware/p4/test run`
+Run: `make -C firmware/car/core/test run`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add firmware/p4/main/link.h firmware/p4/main/link.c firmware/p4/test/test_link.c \
-        firmware/p4/test/test_rt_glue.c
+git add firmware/car/core/main/link.h firmware/car/core/main/link.c firmware/car/core/test/test_link.c \
+        firmware/car/core/test/test_rt_glue.c
 git commit -m "fix(fw): falls land before rises — never both bridge inputs driven
 
 The write loop walked channels 0..7 with no knowledge of pairing, so a
@@ -1156,7 +1156,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 7: Bus recovery paced by the clock, not by bloated ticks
 
 **Files:**
-- Modify: `firmware/p4/main/link.c` (the failure-pacing block at the end of link_task)
+- Modify: `firmware/car/core/main/link.c` (the failure-pacing block at the end of link_task)
 
 **Interfaces:**
 - Consumes: `now_ms()` (link.c-local), `pca9685_bus_recover`.
@@ -1194,13 +1194,13 @@ verification is the suite staying green plus the final device build. Replace the
 
 - [ ] **Step 2: Run the suite (compile sanity comes with Task 14's device build)**
 
-Run: `make -C firmware/p4/test run && ./tools/test-all.sh 2>&1 | tail -3`
+Run: `make -C firmware/car/core/test run && ./tools/test-all.sh 2>&1 | tail -3`
 Expected: all green.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add firmware/p4/main/link.c
+git add firmware/car/core/main/link.c
 git commit -m "fix(fw): bus recovery paced by wall time, not by 100-800ms 'ticks'
 
 Fifty failing ticks was a second only when failures were fast NACKs; on a
@@ -1216,8 +1216,8 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 8: The retreat consumes its history, and reads its config under the lock
 
 **Files:**
-- Modify: `firmware/p4/main/recovery.h` (recovery_seg_ms — pure), `firmware/p4/main/recovery.c` (snapshot_consume, retreat_task, recovery_on_link_lost)
-- Test: `firmware/p4/test/test_recovery.c`
+- Modify: `firmware/car/core/main/recovery.h` (recovery_seg_ms — pure), `firmware/car/core/main/recovery.c` (snapshot_consume, retreat_task, recovery_on_link_lost)
+- Test: `firmware/car/core/test/test_recovery.c`
 
 **Interfaces:**
 - Consumes: nothing new.
@@ -1225,7 +1225,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing test**
 
-In `firmware/p4/test/test_recovery.c`, add to `main()`:
+In `firmware/car/core/test/test_recovery.c`, add to `main()`:
 
 ```c
     /* One replay segment: the gap between breadcrumb timestamps, capped. The gap is
@@ -1241,12 +1241,12 @@ In `firmware/p4/test/test_recovery.c`, add to `main()`:
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `make -C firmware/p4/test test_recovery 2>&1 | tail -3`
+Run: `make -C firmware/car/core/test test_recovery 2>&1 | tail -3`
 Expected: compile FAILURE — `recovery_seg_ms` undeclared.
 
 - [ ] **Step 3: Implement**
 
-In `firmware/p4/main/recovery.h`, next to `recovery_evict`:
+In `firmware/car/core/main/recovery.h`, next to `recovery_evict`:
 
 ```c
 // Pure (host-tested): one replay segment's duration, from the gap between two
@@ -1258,7 +1258,7 @@ static inline uint32_t recovery_seg_ms(uint32_t newer_ts, uint32_t older_ts) {
 }
 ```
 
-In `firmware/p4/main/recovery.c`:
+In `firmware/car/core/main/recovery.c`:
 
 **(a)** Delete `#define TAIL_MS 400` (superseded by the segment cap). Replace `snapshot()` with:
 
@@ -1317,13 +1317,13 @@ void recovery_on_link_lost(void) {
 
 - [ ] **Step 4: Run the suite**
 
-Run: `make -C firmware/p4/test run && ./tools/test-all.sh 2>&1 | tail -3`
+Run: `make -C firmware/car/core/test run && ./tools/test-all.sh 2>&1 | tail -3`
 Expected: all green.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add firmware/p4/main/recovery.h firmware/p4/main/recovery.c firmware/p4/test/test_recovery.c
+git add firmware/car/core/main/recovery.h firmware/car/core/main/recovery.c firmware/car/core/test/test_recovery.c
 git commit -m "fix(fw): a retreat consumes the path it replays, and caps each segment
 
 The ring survived the replay, so a second trip inside window_ms re-retraced
@@ -1340,8 +1340,8 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 9: `api_util` — one error envelope, one body reader
 
 **Files:**
-- Create: `firmware/p4/main/api_util.h`, `firmware/p4/main/api_util.c`
-- Modify: `firmware/p4/main/cfg_api.c` (drop its private copies), `firmware/p4/main/CMakeLists.txt`
+- Create: `firmware/car/core/main/api_util.h`, `firmware/car/core/main/api_util.c`
+- Modify: `firmware/car/core/main/cfg_api.c` (drop its private copies), `firmware/car/core/main/CMakeLists.txt`
 
 **Interfaces:**
 - Consumes: `esp_http_server.h`.
@@ -1354,7 +1354,7 @@ No host test is possible (esp_http_server): this task is a pure extraction of co
 exists and works in cfg_api.c today, verified by the suite staying green and Task 14's
 device build.
 
-- [ ] **Step 1: Create `firmware/p4/main/api_util.h`**
+- [ ] **Step 1: Create `firmware/car/core/main/api_util.h`**
 
 ```c
 #ifndef API_UTIL_H
@@ -1384,7 +1384,7 @@ int api_read_body(httpd_req_t *req, char *buf, size_t n);
 #endif /* API_UTIL_H */
 ```
 
-- [ ] **Step 2: Create `firmware/p4/main/api_util.c`**
+- [ ] **Step 2: Create `firmware/car/core/main/api_util.c`**
 
 Move (do not rewrite) `reply_error` and `read_body` from `cfg_api.c`, renamed:
 
@@ -1424,18 +1424,18 @@ int api_read_body(httpd_req_t *req, char *buf, size_t n) {
 - [ ] **Step 3: Adopt in `cfg_api.c` and register the file**
 
 - In `cfg_api.c`: add `#include "api_util.h"`; delete its static `reply_error` and `read_body`; rename every `reply_error(` call to `api_reply_error(` and every `read_body(` call to `api_read_body(`; replace the success tail (`httpd_resp_set_type(...); return httpd_resp_sendstr(req, "{\"ok\":true}");`) with `return api_reply_ok(req);`. Keep the comment that explains the segmented-body history — move it onto the `api_read_body` implementation if it would otherwise be deleted.
-- In `firmware/p4/main/CMakeLists.txt`: add `"api_util.c"` to the SRCS list.
+- In `firmware/car/core/main/CMakeLists.txt`: add `"api_util.c"` to the SRCS list.
 
 - [ ] **Step 4: Run the suite**
 
-Run: `make -C firmware/p4/test run && ./tools/test-all.sh 2>&1 | tail -3`
+Run: `make -C firmware/car/core/test run && ./tools/test-all.sh 2>&1 | tail -3`
 Expected: all green.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add firmware/p4/main/api_util.h firmware/p4/main/api_util.c \
-        firmware/p4/main/cfg_api.c firmware/p4/main/CMakeLists.txt
+git add firmware/car/core/main/api_util.h firmware/car/core/main/api_util.c \
+        firmware/car/core/main/cfg_api.c firmware/car/core/main/CMakeLists.txt
 git commit -m "refactor(fw): the REST envelope and body reader move to api_util
 
 Extraction only: cfg_api's reply_error/read_body become api_reply_error/
@@ -1450,7 +1450,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 10: calib_api — looped body read, JSON envelope, integral-only values
 
 **Files:**
-- Modify: `firmware/p4/main/calib_api.c`
+- Modify: `firmware/car/core/main/calib_api.c`
 
 **Interfaces:**
 - Consumes: `api_reply_error`, `api_reply_ok`, `api_read_body` (Task 9); `link_release_must` (Task 4, already swept).
@@ -1461,7 +1461,7 @@ assertions arrive with the mock plan.
 
 - [ ] **Step 1: Implement**
 
-In `firmware/p4/main/calib_api.c`:
+In `firmware/car/core/main/calib_api.c`:
 
 **(a)** Delete the file's private `read_body` (the single-recv one — the exact bug cfg_api documents having fixed) and `#include "api_util.h"`.
 
@@ -1520,13 +1520,13 @@ and the final `return httpd_resp_sendstr(req, "ok");` becomes `return api_reply_
 
 - [ ] **Step 2: Run the suite**
 
-Run: `make -C firmware/p4/test run && ./tools/test-all.sh 2>&1 | tail -3`
+Run: `make -C firmware/car/core/test run && ./tools/test-all.sh 2>&1 | tail -3`
 Expected: all green.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add firmware/p4/main/calib_api.c
+git add firmware/car/core/main/calib_api.c
 git commit -m "fix(fw): calib endpoints speak the documented JSON envelope, whole-body reads
 
 protocol.md promised {\"ok\":true} and {\"error\",\"field\"} everywhere; these
@@ -1544,7 +1544,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 11: ota_api — the JSON envelope
 
 **Files:**
-- Modify: `firmware/p4/main/ota_api.c`
+- Modify: `firmware/car/core/main/ota_api.c`
 
 **Interfaces:**
 - Consumes: `api_reply_error`, `api_reply_ok` (Task 9).
@@ -1552,7 +1552,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Implement**
 
-In `firmware/p4/main/ota_api.c`, add `#include "api_util.h"` and replace the response calls only (the control flow, the sticky grant, the recv loop and the reboot stay exactly as they are):
+In `firmware/car/core/main/ota_api.c`, add `#include "api_util.h"` and replace the response calls only (the control flow, the sticky grant, the recv loop and the reboot stay exactly as they are):
 
 - `httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "actuator busy")` → `api_reply_error(req, "500 Internal Server Error", "", "actuator busy")` (keep the `return`).
 - `... "image too small")` → `api_reply_error(req, "400 Bad Request", "", "image too small")`.
@@ -1567,13 +1567,13 @@ In `firmware/p4/main/ota_api.c`, add `#include "api_util.h"` and replace the res
 
 - [ ] **Step 2: Run the suite**
 
-Run: `make -C firmware/p4/test run && ./tools/test-all.sh 2>&1 | tail -3`
+Run: `make -C firmware/car/core/test run && ./tools/test-all.sh 2>&1 | tail -3`
 Expected: all green.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add firmware/p4/main/ota_api.c
+git add firmware/car/core/main/ota_api.c
 git commit -m "fix(fw): /ota answers the documented JSON envelope
 
 Same rule as the calib endpoints: {\"ok\":true} on success, {\"error\",\"field\"}
@@ -1588,12 +1588,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 12: cfg_api — integral-only values, and a 500 when apply/persist fails
 
 **Files:**
-- Modify: `firmware/p4/main/cfg_api.c` (integral check, set/save result handling, bindings)
-- Modify: `firmware/p4/main/ramp.h`, `firmware/p4/main/ramp.c` (ramp_set_ms → bool, ramp_save → esp_err_t)
-- Modify: `firmware/p4/main/car.h`, `firmware/p4/main/car.c` (car_save_trim → esp_err_t)
-- Modify: `firmware/p4/main/recovery.h`, `firmware/p4/main/recovery.c` (recovery_save → esp_err_t)
-- Modify: `firmware/p4/main/wheel.h`, `firmware/p4/main/wheel.c` (wheel_save → esp_err_t)
-- Modify: `firmware/p4/main/dims.h`, `firmware/p4/main/dims.c` (dims_save → esp_err_t)
+- Modify: `firmware/car/core/main/cfg_api.c` (integral check, set/save result handling, bindings)
+- Modify: `firmware/car/core/main/ramp.h`, `firmware/car/core/main/ramp.c` (ramp_set_ms → bool, ramp_save → esp_err_t)
+- Modify: `firmware/car/core/main/car.h`, `firmware/car/core/main/car.c` (car_save_trim → esp_err_t)
+- Modify: `firmware/car/core/main/recovery.h`, `firmware/car/core/main/recovery.c` (recovery_save → esp_err_t)
+- Modify: `firmware/car/core/main/wheel.h`, `firmware/car/core/main/wheel.c` (wheel_save → esp_err_t)
+- Modify: `firmware/car/core/main/dims.h`, `firmware/car/core/main/dims.c` (dims_save → esp_err_t)
 
 **Interfaces:**
 - Consumes: `cfg_json_save` (already returns esp_err_t — today every caller discards it).
@@ -1685,7 +1685,7 @@ static bool dims_set_v(const int32_t *v) {
 
 - [ ] **Step 3: Run the suite**
 
-Run: `make -C firmware/p4/test run && ./tools/test-all.sh 2>&1 | tail -3`
+Run: `make -C firmware/car/core/test run && ./tools/test-all.sh 2>&1 | tail -3`
 Expected: all green (test_ramp/test_wheel exercise only the pure halves; if a host test
 fails to compile it is referencing a changed signature — fix the test's expectation to
 the new signature, nothing else).
@@ -1693,10 +1693,10 @@ the new signature, nothing else).
 - [ ] **Step 4: Commit**
 
 ```bash
-git add firmware/p4/main/cfg_api.c firmware/p4/main/ramp.h firmware/p4/main/ramp.c \
-        firmware/p4/main/car.h firmware/p4/main/car.c firmware/p4/main/recovery.h \
-        firmware/p4/main/recovery.c firmware/p4/main/wheel.h firmware/p4/main/wheel.c \
-        firmware/p4/main/dims.h firmware/p4/main/dims.c
+git add firmware/car/core/main/cfg_api.c firmware/car/core/main/ramp.h firmware/car/core/main/ramp.c \
+        firmware/car/core/main/car.h firmware/car/core/main/car.c firmware/car/core/main/recovery.h \
+        firmware/car/core/main/recovery.c firmware/car/core/main/wheel.h firmware/car/core/main/wheel.c \
+        firmware/car/core/main/dims.h firmware/car/core/main/dims.c
 git commit -m "fix(fw): config POSTs refuse fractions and stop lying about persistence
 
 valueint truncation applied 25 for a posted 25.7 where the generated
@@ -1712,13 +1712,13 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 13: The small-robustness batch, and the comment contracts
 
 **Files:**
-- Modify: `firmware/p4/main/status_api.c` (overflow → 500; radio-pair comment)
-- Modify: `firmware/p4/main/cfg_api.c` (cfg_get brace reserve)
-- Modify: `firmware/p4/main/http_server.c` (GET / identity)
-- Modify: `firmware/p4/main/telemetry.c` (volatile s_push_seq)
-- Modify: `firmware/p4/main/calibration.c` (volatile s_valid)
-- Modify: `firmware/p4/main/main.c` (parse_mix isfinite)
-- Modify: `firmware/p4/main/car.h`, `firmware/p4/main/link.h` (watchdog comment contracts)
+- Modify: `firmware/car/core/main/status_api.c` (overflow → 500; radio-pair comment)
+- Modify: `firmware/car/core/main/cfg_api.c` (cfg_get brace reserve)
+- Modify: `firmware/car/core/main/http_server.c` (GET / identity)
+- Modify: `firmware/car/core/main/telemetry.c` (volatile s_push_seq)
+- Modify: `firmware/car/core/main/calibration.c` (volatile s_valid)
+- Modify: `firmware/car/core/main/main.c` (parse_mix isfinite)
+- Modify: `firmware/car/core/main/car.h`, `firmware/car/core/main/link.h` (watchdog comment contracts)
 
 **Interfaces:** consumes `api_reply_error` (Task 9), `CAR_DEVICE_ID` (identity.h); produces nothing new.
 
@@ -1814,17 +1814,17 @@ the command as applied — the control watchdog is fed only on a true return.") 
 
 - [ ] **Step 2: Run the suite**
 
-Run: `make -C firmware/p4/test run && ./tools/test-all.sh 2>&1 | tail -3`
+Run: `make -C firmware/car/core/test run && ./tools/test-all.sh 2>&1 | tail -3`
 Expected: all green (test_contract_wire compiles telemetry.h only — the .c change is
 invisible to it).
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add firmware/p4/main/status_api.c firmware/p4/main/cfg_api.c \
-        firmware/p4/main/http_server.c firmware/p4/main/telemetry.c \
-        firmware/p4/main/calibration.c firmware/p4/main/main.c \
-        firmware/p4/main/car.h firmware/p4/main/link.h
+git add firmware/car/core/main/status_api.c firmware/car/core/main/cfg_api.c \
+        firmware/car/core/main/http_server.c firmware/car/core/main/telemetry.c \
+        firmware/car/core/main/calibration.c firmware/car/core/main/main.c \
+        firmware/car/core/main/car.h firmware/car/core/main/link.h
 git commit -m "fix(fw): the robustness batch the audit filed under 'info'
 
 /status overflow becomes a 500 instead of truncated JSON under a 200; cfg_get
@@ -1854,7 +1854,7 @@ The toolchain is on this machine (`~/esp/esp-idf-v6.0.2`, used for the 2026-08-2
 bring-up). A fresh worktree has no `build/`, so this configures from `sdkconfig.defaults`
 and compiles everything — several minutes.
 
-Run: `bash -c 'source tools/env-p4.sh && cd firmware/p4 && idf.py build' 2>&1 | tail -15`
+Run: `bash -c 'source tools/env-p4.sh && cd firmware/car/core && idf.py build' 2>&1 | tail -15`
 Expected: `Project build complete.` (with the usual binary-size summary). No hardware is
 needed — this is a compile, not a flash.
 
@@ -1864,7 +1864,7 @@ the task report and stop — do NOT try to install ESP-IDF; the orchestrator dec
 - [ ] **Step 3: Commit anything the build regenerated**
 
 `idf.py` must not have modified tracked files; `git status --short` should show only
-untracked `firmware/p4/build/` (gitignored) and `sdkconfig` (gitignored). If a tracked
+untracked `firmware/car/core/build/` (gitignored) and `sdkconfig` (gitignored). If a tracked
 file changed, stop and report — nothing in this plan expects that.
 
 - [ ] **Step 4: Report**

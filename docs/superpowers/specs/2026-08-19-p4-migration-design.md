@@ -39,7 +39,7 @@ Consequences:
 | Old project | AJPicoCar stays alive | Two physical cars, two repos, code diverges over time |
 | iOS app | Own app in the new repo | The apps will genuinely diverge (FPV/display are P4-only); a shared SPM package is premature |
 | C6 slave image | Flashed by wire once, version pinned | Air-updating the radio needs WiFi down mid-transfer; disproportionate for a rare event |
-| Layout | `app/` + `firmware/p4/` + `firmware/c6/` | No component owns the repo root |
+| Layout | `app/` + `firmware/car/core/` + `firmware/car/modem/` | No component owns the repo root |
 | Order of work | Full port first, hardware verified at the end | User's call; mitigated by quarantining hardware assumptions in `board.h` and `docs/bringup.md` |
 | ESP-IDF | 6.0.2 (latest stable, released 2026-03) | Best P4 and `esp_hosted` maturity; installed alongside 5.4, old project untouched |
 | Code provenance | Clone AJPicoCar with full history | `git blame` explains the non-obvious constants (e.g. recovery's 400 ms tail cap) that cost debugging sessions |
@@ -86,11 +86,11 @@ AJMiddleCar/
 └── README.md
 ```
 
-Boundaries: `app/` and `firmware/p4/` do not reference each other. Their only seam is `docs/protocol.md`
-(the wire contract) and `tools/mock_car` (an executable stand-in for the car). `firmware/c6/` knows nothing
+Boundaries: `app/` and `firmware/car/core/` do not reference each other. Their only seam is `docs/protocol.md`
+(the wire contract) and `tools/mock_car` (an executable stand-in for the car). `firmware/car/modem/` knows nothing
 about the car at all — not the motors, not the protocol.
 
-The ESP-IDF project moves into `firmware/p4/`, so `idf.py` runs from there. This is the cost of the boundary:
+The ESP-IDF project moves into `firmware/car/core/`, so `idf.py` runs from there. This is the cost of the boundary:
 build commands and script paths gain one level.
 
 `version.txt` moves with `CMakeLists.txt`, which reads it as `${CMAKE_CURRENT_LIST_DIR}/version.txt`. Left behind at
@@ -118,7 +118,7 @@ The firmware turned out to be almost entirely chip-independent. The total C6-spe
 
 **Changes:**
 
-1. I2C pins move from `main.c` into a new `firmware/p4/main/board.h`
+1. I2C pins move from `main.c` into a new `firmware/car/core/main/board.h`
 2. `sdkconfig.defaults`: target `esp32p4`, 16 MB flash, custom `partitions.csv`, SDIO transport for hosted, plus two
    board settings the C6 build never needed:
    - **Console** — `main.c`'s `mix <t> <y>` REPL reads USB Serial JTAG directly. The P4 has that peripheral, but the
@@ -133,11 +133,11 @@ The firmware turned out to be almost entirely chip-independent. The total C6-spe
 
 **New — and each of these is work, not a line in a tree diagram:**
 
-- `firmware/c6/` — the radio's build project
+- `firmware/car/modem/` — the radio's build project
 - `board.h` — the board-assumption quarantine
 - The `device` identifier and the radio-version field in `/status` (see *Telling the two cars apart*)
 - `docs/bringup.md` — the bench checklist that closes the open assumptions
-- `docs/protocol.md` — **written from scratch.** It is named as the seam between `app/` and `firmware/p4/`, but no
+- `docs/protocol.md` — **written from scratch.** It is named as the seam between `app/` and `firmware/car/core/`, but no
   such document exists today: the wire contract currently lives scattered through `CLAUDE.md`. Without it the
   boundary is a folder convention rather than an agreement. It documents the `/ws` control frame and telemetry, all
   REST endpoints with their JSON bodies and ranges, `/ota`, and the device identity handshake.
@@ -153,7 +153,7 @@ the init order changes.
 `board.h` quarantines every hardware assumption:
 
 ```c
-// firmware/p4/main/board.h — the only file that knows what we are standing on
+// firmware/car/core/main/board.h — the only file that knows what we are standing on
 #define BOARD_I2C_SDA        /* from bring-up */
 #define BOARD_I2C_SCL        /* from bring-up */
 #define BOARD_I2C_HZ         400000
@@ -176,7 +176,7 @@ inspection rather than by symptom. At boot the firmware queries the slave versio
 A mismatch logs a warning and sets `ok:false`. This is the only mention of the C6 in the car's code, and it is
 diagnostics, not structure. The app surfaces it on the existing Firmware screen.
 
-`firmware/c6/` builds the slave for target `esp32c6` against the same pinned `esp_hosted` version, and documents
+`firmware/car/modem/` builds the slave for target `esp32c6` against the same pinned `esp_hosted` version, and documents
 the wired-flash procedure through the board's C6 UART header. The built `.bin` is a build artifact and is not
 committed.
 
@@ -186,7 +186,7 @@ Partition tables are expensive to change later — a new table means a wired ref
 where the P4 is going, not for what it does today:
 
 ```
-# firmware/p4/partitions.csv
+# firmware/car/core/partitions.csv
 nvs,      data, nvs,      0x9000,   0x6000     # 24K, standard offset — settings
 otadata,  data, ota,      0xf000,   0x2000
 phy_init, data, phy,      0x11000,  0x1000
@@ -213,7 +213,7 @@ car, so continuity across repos does not matter.
 build number, the launch gate force-updates a lagging board. Three details change:
 
 - The artifact is `ajmiddlecar.bin`; `tools/release.sh` moves to the new layout
-- The C6 slave image is **not** attached to releases — it is reproduced by building `firmware/c6/`
+- The C6 slave image is **not** attached to releases — it is reproduced by building `firmware/car/modem/`
 - The app currently picks the **first asset ending in `.bin`**. That works while a release holds one file but is a
   fragile heuristic; since the app is forking anyway, it changes to an exact filename match
 
@@ -267,7 +267,7 @@ Four independent gates, only the last of which needs the board:
 
 | Gate | Proves | Board needed |
 |---|---|---|
-| `cd firmware/p4/test && make run` | The pure modules survived the move: mixing, PWM planning, frame parsing, watchdog, recovery, NVS serialization | No |
+| `cd firmware/car/core/test && make run` | The pure modules survived the move: mixing, PWM planning, frame parsing, watchdog, recovery, NVS serialization | No |
 | `idf.py build` for `esp32p4` on IDF 6.0.2 | Toolchain, major-version API breakage, the `esp_hosted` component, partition-table validity, image fits the slot | No |
 | `xcodebuild` + simulator against the mock | The whole app flow: gate → connect → drive → settings → calibration | No |
 | `docs/bringup.md` | Pins, a live SDIO link, motors actually turning | Yes |
@@ -291,9 +291,9 @@ assumption is carried to bring-up rather than counted as closed.
    and driving is unaffected — *may surface at link time, otherwise needs the board*
 4. The exact hosted transport-init function and its position in `app_main` — *settled by compiling*
 5. Whether 5.4-era code builds on IDF 6.0.2 unchanged — *settled by compiling*
-6. Whether the `esp_hosted` slave builds as a standalone project we own in `firmware/c6/`, or ships only as an
+6. Whether the `esp_hosted` slave builds as a standalone project we own in `firmware/car/modem/`, or ships only as an
    example meant to be copied wholesale. This one is structural, not cosmetic: if it cannot be a thin project
-   pinning the component, `firmware/c6/` takes a different shape — *settled by trying to build it*
+   pinning the component, `firmware/car/modem/` takes a different shape — *settled by trying to build it*
 
 ## Out of scope
 

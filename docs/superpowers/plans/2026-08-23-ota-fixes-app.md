@@ -608,7 +608,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **Interfaces:** consumes Task 4's `RadioStatus`; produces nothing new.
 
-Why (audit finding, decision 18): the mismatch warning told the user to "см. firmware/c6/README.md" — a repo path no phone user can follow — and no harness (mock or gallery) could ever render the string, so nobody had seen it.
+Why (audit finding, decision 18): the mismatch warning told the user to "см. firmware/car/modem/README.md" — a repo path no phone user can follow — and no harness (mock or gallery) could ever render the string, so nobody had seen it.
 
 - [ ] **Step 1: Rewrite the string**
 

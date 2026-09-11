@@ -4,7 +4,7 @@
 Separate from gen_contract.py so the car's file does not grow a second device's shapes.
 The two schemas share a generator's plumbing and nothing else — neither references the
 other, and the dongle's rules (lengths, the character class, escaping) live in
-firmware/s3/main/net_cfg.{c,h} where they are host-tested rather than here where they
+firmware/dongle/main/net_cfg.{c,h} where they are host-tested rather than here where they
 would only be described.
 """
 

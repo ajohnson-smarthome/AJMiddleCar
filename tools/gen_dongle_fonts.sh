@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Regenerates firmware/s3/main/fonts_cyrillic.c from u8g2's own BDFs, with u8g2's own converter.
+# Regenerates firmware/dongle/main/fonts_cyrillic.c from u8g2's own BDFs, with u8g2's own converter.
 # Never hand-edit the output.
 #
 # The glyph range is ASCII plus the Cyrillic block: 32-127 and 1024-1279 (U+0400..U+04FF). The
-# full catalogue is deliberately not vendored -- see firmware/s3/components/u8g2/README.md.
+# full catalogue is deliberately not vendored -- see firmware/dongle/components/u8g2/README.md.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="$ROOT/firmware/s3/main/fonts_cyrillic.c"
+OUT="$ROOT/firmware/dongle/main/fonts_cyrillic.c"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # bdfconv and the BDFs come from upstream, not from the vendored copy: the vendored tree is
 # csrc only, and trimmed. Pin the same commit the component README records.
 UPSTREAM="https://github.com/olikraus/u8g2.git"
-COMMIT="$(sed -n 's/^Upstream commit: //p' "$ROOT/firmware/s3/components/u8g2/README.md")"
+COMMIT="$(sed -n 's/^Upstream commit: //p' "$ROOT/firmware/dongle/components/u8g2/README.md")"
 git clone --quiet "$UPSTREAM" "$WORK/u8g2"
 git -C "$WORK/u8g2" checkout --quiet "$COMMIT"
 

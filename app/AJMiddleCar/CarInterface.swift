@@ -72,7 +72,7 @@ enum CarInterface {
     /// The concrete interface to pin to, or `nil`.
     ///
     /// `nil` is not a failure and must not be treated as one. The dongle deliberately advertises
-    /// neither a gateway nor a DNS server (`firmware/s3/main/usb_net.c` — that is what keeps it
+    /// neither a gateway nor a DNS server (`firmware/dongle/main/usb_net.c` — that is what keeps it
     /// from stealing the host's default route, and it is proven behaviour on macOS), so iOS is
     /// entitled to decline to list a wire it considers unusable for general traffic. When that
     /// happens the dongle is still there and still reachable: `CarNet` simply does not pin, and

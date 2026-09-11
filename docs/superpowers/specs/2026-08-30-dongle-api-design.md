@@ -1,18 +1,18 @@
 # The app ↔ dongle API
 
-The contract between `app/` and `firmware/s3/`. Like `docs/protocol.md` for the car, this
+The contract between `app/` and `firmware/dongle/`. Like `docs/protocol.md` for the car, this
 document and the dongle's own behaviour are the whole seam: neither side references the other in
 code, and either should be reimplementable from this file alone.
 
 Plan 1 established that iOS accepts the dongle as an ordinary network interface
-(`firmware/s3/README.md`, verified 2026-08-30). This spec covers what the two then say to each
+(`firmware/dongle/README.md`, verified 2026-08-30). This spec covers what the two then say to each
 other.
 
 ## What the dongle is, and is not
 
 **A modem, not a brain.** It knows no car: no SSID, no protocol, no device id compiled in. It is
 told which network to join at runtime and carries bytes it does not interpret. That rule is the
-same one `firmware/c6/` lives under, and it is what keeps the dongle's firmware independent of
+same one `firmware/car/modem/` lives under, and it is what keeps the dongle's firmware independent of
 the car's contract — the two can be reasoned about, tested and changed apart.
 
 Everything the app does with the car today — the five config domains, calibration, OTA,
@@ -43,14 +43,14 @@ with one `TARGETS` table `check_contract.sh` reads instead of re-declaring, and 
 device meant a table entry rather than a rewrite, the size argument stopped deciding anything.
 `contract/dongle-api.json` now carries the dongle's own vocabulary — device id, address, port,
 endpoint paths, status/net field names, the WPA2 length bounds, the net-state list — generated
-into `firmware/s3/main/dongle_contract.inc` (a C header, pure `#define`s) and
+into `firmware/dongle/main/dongle_contract.inc` (a C header, pure `#define`s) and
 `app/AJMiddleCar/Generated/DongleAPI.swift`, both watched by the same drift check that already
 guarded the car's four artifacts. Neither side writes an agreed name, number or path as a
 literal, which is the principle the car already lived under and the dongle now shares.
 
 What did not move, and does not move under this reasoning either, is the *rule* a value is
 checked against. `net_cfg_validate`'s length bounds, its character-class check, its escaping,
-its refuse-rather-than-truncate discipline stay in `firmware/s3/main/net_cfg.{c,h}`,
+its refuse-rather-than-truncate discipline stay in `firmware/dongle/main/net_cfg.{c,h}`,
 hand-written and host-tested with plain `cc -Wall -Wextra -Werror`, exactly as before. The car's
 own schema-driven validation could not absorb it either, and the reason is structural, not a
 matter of scale: every field `contract/car-api.json` hands to a generated validator is `int`,
@@ -195,8 +195,8 @@ car, and the two cannot both have it. `status_api.c` sets the port in one line.
 **`GET /status` renames `dev` to `device`.** The car's contract calls that field `device`, and the
 app's "which device am I talking to" check should not need two spellings.
 
-Nothing outside `firmware/s3/` consumes either yet — no app code, no script, and the one
-verification tool (`firmware/s3/verify-on-host.sh`) is ours to update in the same commit.
+Nothing outside `firmware/dongle/` consumes either yet — no app code, no script, and the one
+verification tool (`firmware/dongle/verify-on-host.sh`) is ours to update in the same commit.
 
 ## The dongle's API
 
@@ -310,7 +310,7 @@ available:
 - `httpd_config_t.open_fn`, rejecting at accept time before a request is parsed.
 
 The second is preferable — it refuses the connection rather than the request — but either
-satisfies the requirement. `firmware/s3/main/status_api.h` already carries this warning at the
+satisfies the requirement. `firmware/dongle/main/status_api.h` already carries this warning at the
 declaration a future author will read first.
 
 ## What changes in the app
@@ -430,7 +430,7 @@ second cache path — it already matches assets by exact name rather than by "th
 ending in .bin", with a comment recording that the loose match was outgrown.
 
 **This settles an open question rather than adding one.** Plan 1's final review noticed that the
-dongle's `/status` reports the *car repo's* `git describe`, and asked whether `firmware/s3/`
+dongle's `/status` reports the *car repo's* `git describe`, and asked whether `firmware/dongle/`
 needed its own version source. Under co-release the answer is no, and the present behaviour is
 correct by construction: one tag, one build number, two images from one commit. Their versions
 cannot disagree, because nothing computes them separately.
@@ -440,7 +440,7 @@ firmware that is not in the release it was built from.
 
 ### Three consequences
 
-**Rollback must be switched on when OTA arrives.** `firmware/s3/sdkconfig.defaults` deliberately
+**Rollback must be switched on when OTA arrives.** `firmware/dongle/sdkconfig.defaults` deliberately
 leaves `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` off, and says why: with it on, an image written
 through the OTA API must mark itself valid or be reverted, and Plan 1 had nothing to mark it.
 This is the moment it acquires that. Without rollback, one bad image is a dongle that needs a

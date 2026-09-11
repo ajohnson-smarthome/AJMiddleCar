@@ -14,8 +14,8 @@ python3 tools/test_gen_contract.py
 bash tools/check_contract.sh
 
 echo "== firmware host tests =="
-make -C firmware/p4/test run
-make -C firmware/s3/test run
+make -C firmware/car/core/test run
+make -C firmware/dongle/test run
 
 echo "== swift host tests =="
 for dir in app/tests/*/; do

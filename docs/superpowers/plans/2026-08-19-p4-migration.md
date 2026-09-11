@@ -4,7 +4,7 @@
 
 **Goal:** Stand up `AJMiddleCar` — the same car, feature for feature, running on a Waveshare ESP32-P4-Module-DEV-KIT, in a repository where the firmware and the iOS pult are peers rather than host and guest.
 
-**Architecture:** The new repo is a clone of AJPicoCar with full history, restructured into `app/` + `firmware/p4/` + `firmware/c6/`. The firmware is almost chip-independent already, so the port is a retarget: pin numbers move into `board.h`, `sdkconfig.defaults` switches to `esp32p4` with a 16 MB partition table, and WiFi arrives through `esp_wifi_remote` talking over SDIO to the on-board ESP32-C6 acting as a modem. The iOS app is forked with its own identity. Hardware is verified last, so every hardware assumption is quarantined in one header and one checklist.
+**Architecture:** The new repo is a clone of AJPicoCar with full history, restructured into `app/` + `firmware/car/core/` + `firmware/car/modem/`. The firmware is almost chip-independent already, so the port is a retarget: pin numbers move into `board.h`, `sdkconfig.defaults` switches to `esp32p4` with a 16 MB partition table, and WiFi arrives through `esp_wifi_remote` talking over SDIO to the on-board ESP32-C6 acting as a modem. The iOS app is forked with its own identity. Hardware is verified last, so every hardware assumption is quarantined in one header and one checklist.
 
 **Tech Stack:** ESP-IDF 6.0.2 (RISC-V, esp32p4), `esp_wifi_remote`/`esp_hosted` over SDIO, cJSON, FreeRTOS; SwiftUI + XcodeGen; Python/aiohttp for the mock car.
 
@@ -31,16 +31,16 @@
 
 | File | Responsibility |
 |---|---|
-| `firmware/p4/main/board.h` | Every assumption about the physical board: I2C pins, bus speed, PWM frequency, expected radio firmware version. The only file bring-up edits. |
-| `firmware/p4/main/identity.h` | Product identity: device id, SSID, password. Separate from `board.h` because it is about *which car*, not *which board*. |
-| `firmware/p4/partitions.csv` | 16 MB layout: two 4 MB OTA slots plus a reserved data partition. |
-| `firmware/p4/main/idf_component.yml` | Pinned `esp_wifi_remote` dependency. |
-| `firmware/c6/` | The radio's build project: builds the `esp_hosted` slave for the C6. Knows nothing about the car. |
+| `firmware/car/core/main/board.h` | Every assumption about the physical board: I2C pins, bus speed, PWM frequency, expected radio firmware version. The only file bring-up edits. |
+| `firmware/car/core/main/identity.h` | Product identity: device id, SSID, password. Separate from `board.h` because it is about *which car*, not *which board*. |
+| `firmware/car/core/partitions.csv` | 16 MB layout: two 4 MB OTA slots plus a reserved data partition. |
+| `firmware/car/core/main/idf_component.yml` | Pinned `esp_wifi_remote` dependency. |
+| `firmware/car/modem/` | The radio's build project: builds the `esp_hosted` slave for the C6. Knows nothing about the car. |
 | `tools/flash-radio.sh` | Builds and flashes the slave through the board's C6 UART header. |
-| `docs/protocol.md` | The wire contract between `app/` and `firmware/p4/` — the seam that makes the boundary an agreement rather than a folder convention. |
+| `docs/protocol.md` | The wire contract between `app/` and `firmware/car/core/` — the seam that makes the boundary an agreement rather than a folder convention. |
 | `docs/bringup.md` | Bench checklist closing the six open assumptions. |
 
-**Modified:** `firmware/p4/main/main.c` (pins and SSID move out), `status_api.c` (identity + radio), `wifi_ap.c` (uses `identity.h`), `sdkconfig.defaults`, `CMakeLists.txt`, `tools/release.sh`, `tools/mock_car/mock_car.py`, the whole `app/` tree's identity, `CLAUDE.md`, `README.md`.
+**Modified:** `firmware/car/core/main/main.c` (pins and SSID move out), `status_api.c` (identity + radio), `wifi_ap.c` (uses `identity.h`), `sdkconfig.defaults`, `CMakeLists.txt`, `tools/release.sh`, `tools/mock_car/mock_car.py`, the whole `app/` tree's identity, `CLAUDE.md`, `README.md`.
 
 **Moved wholesale (no content change):** every other `main/*.c`, `test/*`, the iOS sources, the inherited `docs/superpowers/`.
 
@@ -53,7 +53,7 @@
 - Modify: nothing yet — this task only moves files
 
 **Interfaces:**
-- Produces: the directory layout every later task addresses (`app/`, `firmware/p4/`, `firmware/c6/`, `tools/`, `docs/`)
+- Produces: the directory layout every later task addresses (`app/`, `firmware/car/core/`, `firmware/car/modem/`, `tools/`, `docs/`)
 
 - [ ] **Step 1: Clone with full history**
 
@@ -73,8 +73,8 @@ git log -1 --oneline         # expect the spec-review commit
 - [ ] **Step 3: Restructure with `git mv` in one commit**
 
 ```bash
-mkdir -p firmware/p4 firmware/c6 app
-git mv CMakeLists.txt sdkconfig.defaults version.txt main test firmware/p4/
+mkdir -p firmware/car/core firmware/car/modem app
+git mv CMakeLists.txt sdkconfig.defaults version.txt main test firmware/car/core/
 git mv ios/project.yml app/project.yml
 git mv ios/ESP32Car app/AJMiddleCar
 git mv ios/tests app/tests 2>/dev/null || true
@@ -89,13 +89,13 @@ Confirm nothing was left behind: `ls` should show only `app firmware tools docs 
 Replace the path-bearing lines (`build/`, `ios/build/`, `ios/ESP32Car.xcodeproj/`, `ios/DerivedData/`, `test/test_*`) with:
 
 ```
-firmware/p4/build/
-firmware/c6/build/
+firmware/car/core/build/
+firmware/car/modem/build/
 app/build/
 app/AJMiddleCar.xcodeproj/
 app/DerivedData/
-firmware/p4/test/test_*
-!firmware/p4/test/test_*.c
+firmware/car/core/test/test_*
+!firmware/car/core/test/test_*.c
 ```
 
 Keep the rest of the file as it is.
@@ -104,13 +104,13 @@ Keep the rest of the file as it is.
 
 ```bash
 git add -A
-git commit -m "chore: restructure into app/ + firmware/p4 + firmware/c6"
+git commit -m "chore: restructure into app/ + firmware/car/core + firmware/car/modem"
 ```
 
 - [ ] **Step 6: Verify blame survived the move**
 
 ```bash
-git log --follow --oneline firmware/p4/main/recovery.c | tail -3
+git log --follow --oneline firmware/car/core/main/recovery.c | tail -3
 ```
 Expected: the original `recovery.c` commits, not a single "restructure" commit.
 
@@ -127,8 +127,8 @@ git push -u origin main
 ### Task 2: Prove the pure modules survived the move
 
 **Files:**
-- Modify: `firmware/p4/test/Makefile` (only if its relative paths broke)
-- Test: `firmware/p4/test/` — the existing host tests
+- Modify: `firmware/car/core/test/Makefile` (only if its relative paths broke)
+- Test: `firmware/car/core/test/` — the existing host tests
 
 **Interfaces:**
 - Consumes: the layout from Task 1
@@ -137,9 +137,9 @@ git push -u origin main
 - [ ] **Step 1: Run the host tests in the new location**
 
 ```bash
-cd firmware/p4/test && make run
+cd firmware/car/core/test && make run
 ```
-Expected: all suites pass. `test/` and `main/` stayed siblings inside `firmware/p4/`, so relative includes should be unaffected.
+Expected: all suites pass. `test/` and `main/` stayed siblings inside `firmware/car/core/`, so relative includes should be unaffected.
 
 - [ ] **Step 2: If anything failed, fix only the paths**
 
@@ -148,7 +148,7 @@ The failure mode to expect is a broken `../main/...` include, not a logic failur
 - [ ] **Step 3: Commit if anything changed**
 
 ```bash
-git add firmware/p4/test/Makefile
+git add firmware/car/core/test/Makefile
 git commit -m "test: fix host-test paths after the restructure"
 ```
 
@@ -217,14 +217,14 @@ Note: if v6.0.2's installer needs no Python shadowing, the 5.4-era `/tmp/py313bi
 ### Task 4: Retarget to the P4 — board, identity, partitions
 
 **Files:**
-- Create: `firmware/p4/main/board.h`, `firmware/p4/main/identity.h`, `firmware/p4/partitions.csv`
-- Modify: `firmware/p4/main/main.c`, `firmware/p4/main/wifi_ap.c` call site, `firmware/p4/sdkconfig.defaults`
+- Create: `firmware/car/core/main/board.h`, `firmware/car/core/main/identity.h`, `firmware/car/core/partitions.csv`
+- Modify: `firmware/car/core/main/main.c`, `firmware/car/core/main/wifi_ap.c` call site, `firmware/car/core/sdkconfig.defaults`
 
 **Interfaces:**
 - Consumes: the IDF 6.0.2 environment from Task 3
 - Produces: `BOARD_I2C_SDA`, `BOARD_I2C_SCL`, `BOARD_I2C_HZ`, `BOARD_PWM_HZ`, `BOARD_RADIO_SLAVE_FW` from `board.h`; `CAR_DEVICE_ID`, `CAR_AP_SSID`, `CAR_AP_PASS` from `identity.h`
 
-- [ ] **Step 1: Write `firmware/p4/main/board.h`**
+- [ ] **Step 1: Write `firmware/car/core/main/board.h`**
 
 ```c
 #ifndef BOARD_H
@@ -250,7 +250,7 @@ Note: if v6.0.2's installer needs no Python shadowing, the 5.4-era `/tmp/py313bi
 #endif // BOARD_H
 ```
 
-- [ ] **Step 2: Write `firmware/p4/main/identity.h`**
+- [ ] **Step 2: Write `firmware/car/core/main/identity.h`**
 
 ```c
 #ifndef IDENTITY_H
@@ -268,7 +268,7 @@ Note: if v6.0.2's installer needs no Python shadowing, the 5.4-era `/tmp/py313bi
 
 - [ ] **Step 3: Point `main.c` at the two new headers**
 
-In `firmware/p4/main/main.c`, add `#include "board.h"` and `#include "identity.h"`, then delete these six defines:
+In `firmware/car/core/main/main.c`, add `#include "board.h"` and `#include "identity.h"`, then delete these six defines:
 
 ```c
 #define I2C_SDA_PIN  22
@@ -290,7 +290,7 @@ and update the three call sites:
 
 `WDT_TIMEOUT_MS` stays in `main.c` — it is a behaviour constant, not a board fact.
 
-- [ ] **Step 4: Write `firmware/p4/partitions.csv`**
+- [ ] **Step 4: Write `firmware/car/core/partitions.csv`**
 
 ```
 # Name,     Type, SubType,  Offset,   Size
@@ -302,7 +302,7 @@ ota_1,      app,  ota_1,    0x420000, 0x400000
 storage,    data, fat,      0x820000, 0x7E0000
 ```
 
-- [ ] **Step 5: Rewrite `firmware/p4/sdkconfig.defaults`**
+- [ ] **Step 5: Rewrite `firmware/car/core/sdkconfig.defaults`**
 
 ```
 CONFIG_IDF_TARGET="esp32p4"
@@ -328,7 +328,7 @@ CONFIG_SPIRAM=y
 - [ ] **Step 6: Build, and expect to fail at WiFi**
 
 ```bash
-cd firmware/p4 && source ../../tools/env-p4.sh && idf.py set-target esp32p4 && idf.py build
+cd firmware/car/core && source ../../tools/env-p4.sh && idf.py set-target esp32p4 && idf.py build
 ```
 Expected: every module of ours compiles; the build fails on `esp_wifi` (the P4 has no native WiFi, so the component is unavailable until Task 5 adds `esp_wifi_remote`).
 
@@ -337,7 +337,7 @@ Expected: every module of ours compiles; the build fails on `esp_wifi` (the P4 h
 - [ ] **Step 7: Commit**
 
 ```bash
-git add firmware/p4/
+git add firmware/car/core/
 git commit -m "feat(fw): retarget to ESP32-P4 — board.h, identity.h, 16MB partitions"
 ```
 
@@ -346,8 +346,8 @@ git commit -m "feat(fw): retarget to ESP32-P4 — board.h, identity.h, 16MB part
 ### Task 5: Wire the radio through `esp_wifi_remote`
 
 **Files:**
-- Create: `firmware/p4/main/idf_component.yml`
-- Modify: `firmware/p4/main/main.c` (transport init), `firmware/p4/sdkconfig.defaults` (SDIO transport), `firmware/p4/main/CMakeLists.txt` if the component needs a REQUIRES entry
+- Create: `firmware/car/core/main/idf_component.yml`
+- Modify: `firmware/car/core/main/main.c` (transport init), `firmware/car/core/sdkconfig.defaults` (SDIO transport), `firmware/car/core/main/CMakeLists.txt` if the component needs a REQUIRES entry
 
 **Interfaces:**
 - Consumes: the P4 target from Task 4
@@ -356,7 +356,7 @@ git commit -m "feat(fw): retarget to ESP32-P4 — board.h, identity.h, 16MB part
 - [ ] **Step 1: Declare the dependency**
 
 ```bash
-cd firmware/p4 && source ../../tools/env-p4.sh && idf.py add-dependency "espressif/esp_wifi_remote"
+cd firmware/car/core && source ../../tools/env-p4.sh && idf.py add-dependency "espressif/esp_wifi_remote"
 ```
 This writes `main/idf_component.yml`. Then pin it: open that file and replace any `*` or `^` version with the exact resolved version from `dependencies.lock`. A floating version on a transport component is how a working build silently becomes a broken one.
 
@@ -372,7 +372,7 @@ Read the component's own example `app_main` and copy its ordering.
 
 - [ ] **Step 3: Select SDIO transport**
 
-Add to `firmware/p4/sdkconfig.defaults` the transport option found via:
+Add to `firmware/car/core/sdkconfig.defaults` the transport option found via:
 ```bash
 idf.py menuconfig   # navigate to the ESP-Hosted / co-processor menu, note the symbol name
 ```
@@ -390,7 +390,7 @@ In `app_main`, the hosted transport comes up **before** `wifi_ap_start()`. Nothi
 - [ ] **Step 5: Build to green**
 
 ```bash
-cd firmware/p4 && source ../../tools/env-p4.sh && idf.py build
+cd firmware/car/core && source ../../tools/env-p4.sh && idf.py build
 ```
 Expected: `Project build complete`, and a reported binary size well under the 4 MB slot.
 
@@ -399,7 +399,7 @@ If `esp_wifi_ap_get_sta_list` fails to link, that is open assumption 3 resolving
 - [ ] **Step 6: Commit**
 
 ```bash
-git add firmware/p4/
+git add firmware/car/core/
 git commit -m "feat(fw): WiFi over esp_wifi_remote — the C6 becomes a radio modem"
 ```
 
@@ -408,7 +408,7 @@ git commit -m "feat(fw): WiFi over esp_wifi_remote — the C6 becomes a radio mo
 ### Task 6: Device identity and radio version in `/status`
 
 **Files:**
-- Modify: `firmware/p4/main/status_api.c`, `firmware/p4/main/board.h`, `tools/mock_car/mock_car.py`
+- Modify: `firmware/car/core/main/status_api.c`, `firmware/car/core/main/board.h`, `tools/mock_car/mock_car.py`
 
 **Interfaces:**
 - Consumes: `CAR_DEVICE_ID` (Task 4), a linking firmware (Task 5)
@@ -425,7 +425,7 @@ In `status_api.c`, `#include "identity.h"` and replace the hardcoded string:
 - [ ] **Step 2: Find the slave-version API — do not guess it**
 
 ```bash
-grep -rn "version" firmware/p4/managed_components/*/include/*.h | grep -i "coprocessor\|slave\|fw" | head
+grep -rn "version" firmware/car/core/managed_components/*/include/*.h | grep -i "coprocessor\|slave\|fw" | head
 ```
 Use the symbol you find. If no such API exists in the pinned version, report that and stop — `radio.fw` becomes `"unavailable"` and the mismatch check is dropped rather than faked.
 
@@ -470,8 +470,8 @@ Expected: `"device": "ajmiddlecar"` and a `radio` object.
 - [ ] **Step 7: Build and commit**
 
 ```bash
-cd firmware/p4 && source ../../tools/env-p4.sh && idf.py build
-git add firmware/p4/ tools/mock_car/
+cd firmware/car/core && source ../../tools/env-p4.sh && idf.py build
+git add firmware/car/core/ tools/mock_car/
 git commit -m "feat(fw): distinct device identity + radio version in /status"
 ```
 
@@ -480,7 +480,7 @@ git commit -m "feat(fw): distinct device identity + radio version in /status"
 ### Task 7: The radio's build project and flashing script
 
 **Files:**
-- Create: `firmware/c6/CMakeLists.txt`, `firmware/c6/sdkconfig.defaults`, `firmware/c6/main/` (whatever the slave project requires), `firmware/c6/README.md`, `tools/flash-radio.sh`
+- Create: `firmware/car/modem/CMakeLists.txt`, `firmware/car/modem/sdkconfig.defaults`, `firmware/car/modem/main/` (whatever the slave project requires), `firmware/car/modem/README.md`, `tools/flash-radio.sh`
 
 **Interfaces:**
 - Consumes: the pinned `esp_hosted` version from Task 5
@@ -501,22 +501,22 @@ grep -rn "slave" ~/.espressif/ --include=idf_component.yml 2>/dev/null | head
 
 - [ ] **Step 2: Build the slave for the C6**
 
-Whatever shape Step 1 revealed, land it under `firmware/c6/` and build:
+Whatever shape Step 1 revealed, land it under `firmware/car/modem/` and build:
 
 ```bash
-cd firmware/c6 && source ../../tools/env-p4.sh && idf.py set-target esp32c6 && idf.py build
+cd firmware/car/modem && source ../../tools/env-p4.sh && idf.py set-target esp32c6 && idf.py build
 ```
 Note this needs the esp32c6 toolchain in the 6.0.2 install; add it with `~/esp/esp-idf-v6.0.2/install.sh esp32c6` if the target is rejected.
 
-If the slave turns out to ship only as a copy-whole-example, say so in `firmware/c6/README.md` and record the exact version copied. Do not pretend it is a thin project if it is not.
+If the slave turns out to ship only as a copy-whole-example, say so in `firmware/car/modem/README.md` and record the exact version copied. Do not pretend it is a thin project if it is not.
 
 - [ ] **Step 3: Write `tools/flash-radio.sh`**
 
 ```bash
 #!/usr/bin/env bash
-# Flash the ESP32-C6 radio co-processor. One-time bench procedure — see firmware/c6/README.md.
+# Flash the ESP32-C6 radio co-processor. One-time bench procedure — see firmware/car/modem/README.md.
 set -euo pipefail
-cd "$(dirname "$0")/../firmware/c6"
+cd "$(dirname "$0")/../firmware/car/modem"
 source ../../tools/env-p4.sh
 idf.py set-target esp32c6
 idf.py build
@@ -524,14 +524,14 @@ echo "Connect a USB-serial adapter to the board's ESP32-C6 UART header, then:"
 echo "  idf.py -p <port> flash"
 ```
 
-- [ ] **Step 4: Write `firmware/c6/README.md`**
+- [ ] **Step 4: Write `firmware/car/modem/README.md`**
 
 Cover: what this image is (a WiFi/BT modem for the P4, not car firmware), the pinned version, how to build it, how to flash it through the C6 UART header, and how to check the result — `/status`'s `radio.ok` after the P4 boots.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add firmware/c6/ tools/flash-radio.sh
+git add firmware/car/modem/ tools/flash-radio.sh
 git commit -m "feat(radio): build project and bench procedure for the C6 slave image"
 ```
 
@@ -683,11 +683,11 @@ git commit -m "feat(app): refuse a foreign car instead of driving it"
 
 - [ ] **Step 1: Point `release.sh` at the new layout and artifact**
 
-`BIN` becomes `firmware/p4/build/ajmiddlecar.bin`, and the build steps `cd firmware/p4` and source `tools/env-p4.sh` instead of the 5.4 environment. The `main`-branch and clean-tree guards stay as they are.
+`BIN` becomes `firmware/car/core/build/ajmiddlecar.bin`, and the build steps `cd firmware/car/core` and source `tools/env-p4.sh` instead of the 5.4 environment. The `main`-branch and clean-tree guards stay as they are.
 
 - [ ] **Step 2: Set the project name so the artifact matches**
 
-In `firmware/p4/CMakeLists.txt`, `project(ajmiddlecar)`.
+In `firmware/car/core/CMakeLists.txt`, `project(ajmiddlecar)`.
 
 - [ ] **Step 3: Replace the fragile asset heuristic in `UpdateClient.swift`**
 
@@ -713,7 +713,7 @@ already live. Without this step Task 6's work is invisible — nothing else cons
 Decode `radio.fw` and `radio.ok` where `/status` is parsed for this screen, then add one line to `FirmwareView.swift`
 under the existing current-version line (`sub(L.fwCurrent(current))` and its siblings): the radio version, plus —
 when `ok` is false — a warning that the co-processor firmware does not match what this build expects, naming
-`firmware/c6/README.md` as the fix. Add the strings to `L.swift` and `ru.lproj/Localizable.strings`; no Cyrillic
+`firmware/car/modem/README.md` as the fix. Add the strings to `L.swift` and `ru.lproj/Localizable.strings`; no Cyrillic
 literals in views.
 
 - [ ] **Step 5: Dry-run the release script**
@@ -721,13 +721,13 @@ literals in views.
 ```bash
 tools/release.sh --dry-run
 ```
-Expected: it prints the version, tag, title and `firmware/p4/build/ajmiddlecar.bin` as the asset, and exits without creating anything.
+Expected: it prints the version, tag, title and `firmware/car/core/build/ajmiddlecar.bin` as the asset, and exits without creating anything.
 
 - [ ] **Step 6: Build the app and commit**
 
 ```bash
 cd app && xcodegen generate && xcodebuild build -scheme AJMiddleCar -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath /tmp/ddata-middle 2>&1 | grep -iE "error:|BUILD SUCCEEDED|BUILD FAILED" | head
-git add tools/release.sh firmware/p4/CMakeLists.txt app/
+git add tools/release.sh firmware/car/core/CMakeLists.txt app/
 git commit -m "build: releases under the AJMiddleCar name and exact asset match"
 ```
 
@@ -775,15 +775,15 @@ git commit -m "fix(ios): reject a car that reports a different device identifier
 
 - [ ] **Step 1: Write `docs/protocol.md`**
 
-The seam between `app/` and `firmware/p4/`, written so either side could be reimplemented from it alone: the identity handshake (`GET /status`, the `device` field, what a mismatch means), the `/ws` control frame `{"t","y"}` with its 10 Hz streaming requirement and the 300 ms watchdog that requirement feeds, the 5 Hz telemetry frame and every field in it, each REST endpoint with its JSON body and accepted ranges, and `POST /ota`. Take the values from the code, not from memory.
+The seam between `app/` and `firmware/car/core/`, written so either side could be reimplemented from it alone: the identity handshake (`GET /status`, the `device` field, what a mismatch means), the `/ws` control frame `{"t","y"}` with its 10 Hz streaming requirement and the 300 ms watchdog that requirement feeds, the 5 Hz telemetry frame and every field in it, each REST endpoint with its JSON body and accepted ranges, and `POST /ota`. Take the values from the code, not from memory.
 
 - [ ] **Step 2: Write `docs/bringup.md`**
 
-A checklist, one item per open assumption in the spec, each with the command that settles it and a blank for the answer: I2C pins against the real pinout; whether the C6 arrived pre-flashed; whether `esp_wifi_ap_get_sta_list` linked or was stubbed; the transport-init symbol used; whether 5.4-era code needed changes on 6.0.2; and what shape `firmware/c6/` ended up taking. Then the physical sequence: flash, join `AJMiddleCar`, `curl /status`, drive one wheel, drop WiFi mid-drive and confirm the watchdog stops the car.
+A checklist, one item per open assumption in the spec, each with the command that settles it and a blank for the answer: I2C pins against the real pinout; whether the C6 arrived pre-flashed; whether `esp_wifi_ap_get_sta_list` linked or was stubbed; the transport-init symbol used; whether 5.4-era code needed changes on 6.0.2; and what shape `firmware/car/modem/` ended up taking. Then the physical sequence: flash, join `AJMiddleCar`, `curl /status`, drive one wheel, drop WiFi mid-drive and confirm the watchdog stops the car.
 
 - [ ] **Step 3: Rewrite `CLAUDE.md`**
 
-Not a copy. The inherited file describes the XIAO's pin mapping, the flat layout and the python 3.13 workaround — all wrong here. Rewrite for this repo: the P4 board and its C6 radio, the `app/` + `firmware/p4` + `firmware/c6` layout, `source tools/env-p4.sh` as the build entry point, the identity rule, and the gotchas discovered during this migration.
+Not a copy. The inherited file describes the XIAO's pin mapping, the flat layout and the python 3.13 workaround — all wrong here. Rewrite for this repo: the P4 board and its C6 radio, the `app/` + `firmware/car/core` + `firmware/car/modem` layout, `source tools/env-p4.sh` as the build entry point, the identity rule, and the gotchas discovered during this migration.
 
 - [ ] **Step 4: Rewrite `README.md`**
 
@@ -800,9 +800,9 @@ git commit -m "docs: protocol contract, bring-up checklist, rewritten CLAUDE.md 
 
 ## Definition of done
 
-- `cd firmware/p4/test && make run` — all host tests pass
-- `cd firmware/p4 && idf.py build` — succeeds on IDF 6.0.2 for `esp32p4`, image well under 4 MB
-- `cd firmware/c6 && idf.py build` — produces the slave image, or `firmware/c6/README.md` records why it takes a different shape
+- `cd firmware/car/core/test && make run` — all host tests pass
+- `cd firmware/car/core && idf.py build` — succeeds on IDF 6.0.2 for `esp32p4`, image well under 4 MB
+- `cd firmware/car/modem && idf.py build` — produces the slave image, or `firmware/car/modem/README.md` records why it takes a different shape
 - `xcodebuild -scheme AJMiddleCar` — succeeds; the app installs alongside the pico app
 - The app drives the mock, and shows `WrongCarView` when the mock claims to be `esp32-car`
 - `tools/release.sh --dry-run` — names `ajmiddlecar.bin`

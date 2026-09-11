@@ -17,10 +17,10 @@
 - **No warning without a cause.** Nothing tells the user not to unplug during OTA: the image goes to the passive partition and the boot partition switches only after a successful verify (`ota_api.c:102–106`).
 - **Layout limits, no exceptions:** headline ≤ 12 characters (`u8g2_font_10x20_t_cyrillic`); at most two rows of ≤ 21 characters (`u8g2_font_6x12_t_cyrillic`); one graphical element only — the dithered rule, which may be plain, filled to a level, or a strip of values over time.
 - **The large word is always the state**, never the instruction.
-- **Generated files are never hand-edited.** `firmware/s3/main/dongle_contract.inc` and `app/AJMiddleCar/Generated/DongleAPI.swift` come from `contract/dongle-api.json` via `tools/gen_contract.py`; `tools/check_contract.sh` fails a tree where they disagree. The font tables come from `tools/gen_dongle_fonts.sh`.
+- **Generated files are never hand-edited.** `firmware/dongle/main/dongle_contract.inc` and `app/AJMiddleCar/Generated/DongleAPI.swift` come from `contract/dongle-api.json` via `tools/gen_contract.py`; `tools/check_contract.sh` fails a tree where they disagree. The font tables come from `tools/gen_dongle_fonts.sh`.
 - **Vendored u8g2 is unmodified** except for omitting `u8g2_fonts.c` and `u8x8_fonts.c`, so an upstream update stays a copy rather than a merge.
 - Host tests build with `-Wall -Wextra -Werror -std=c11` and must stay warning-free.
-- Firmware build: `source tools/env-p4.sh && cd firmware/s3 && idf.py build`.
+- Firmware build: `source tools/env-p4.sh && cd firmware/dongle && idf.py build`.
 
 ---
 
@@ -30,26 +30,26 @@
 
 | File | Responsibility |
 |---|---|
-| `firmware/s3/main/relay_stats.{c,h}` | pure: packets moved, slots busy, last forwarding `errno` |
-| `firmware/s3/main/screens.{c,h}` | pure: state snapshot → headline, rows, gauge, page markers |
-| `firmware/s3/main/board.h` | every assumption about this board: I²C pins, bus speed, panel address, BOOT pin |
-| `firmware/s3/components/u8g2/` | vendored library, its `CMakeLists.txt` and a README recording the omission |
-| `firmware/s3/main/fonts_cyrillic.c` | three fonts, generated |
+| `firmware/dongle/main/relay_stats.{c,h}` | pure: packets moved, slots busy, last forwarding `errno` |
+| `firmware/dongle/main/screens.{c,h}` | pure: state snapshot → headline, rows, gauge, page markers |
+| `firmware/dongle/main/board.h` | every assumption about this board: I²C pins, bus speed, panel address, BOOT pin |
+| `firmware/dongle/components/u8g2/` | vendored library, its `CMakeLists.txt` and a README recording the omission |
+| `firmware/dongle/main/fonts_cyrillic.c` | three fonts, generated |
 | `tools/gen_dongle_fonts.sh` | regenerates the above from u8g2's BDFs |
-| `firmware/s3/main/display_hal.{c,h}` | u8g2 byte callback over the IDF I²C master driver |
-| `firmware/s3/main/display.{c,h}` | the task: gather → draw → flush, BOOT paging, idle return |
-| `firmware/s3/test/test_relay_stats.c`, `test_screens.c` | host tests |
+| `firmware/dongle/main/display_hal.{c,h}` | u8g2 byte callback over the IDF I²C master driver |
+| `firmware/dongle/main/display.{c,h}` | the task: gather → draw → flush, BOOT paging, idle return |
+| `firmware/dongle/test/test_relay_stats.c`, `test_screens.c` | host tests |
 
-**Modified:** `wifi_sta.{c,h}` (expose attempts), `usb_net.{c,h}` (NCM link state), `ota_api.c` (progress), `relay_udp.c`/`relay_tcp.c` (feed `relay_stats`), `status_api.c` (new fields), `contract/dongle-api.json`, `firmware/s3/main/CMakeLists.txt`, `firmware/s3/test/Makefile`, `firmware/s3/main/main.c`.
+**Modified:** `wifi_sta.{c,h}` (expose attempts), `usb_net.{c,h}` (NCM link state), `ota_api.c` (progress), `relay_udp.c`/`relay_tcp.c` (feed `relay_stats`), `status_api.c` (new fields), `contract/dongle-api.json`, `firmware/dongle/main/CMakeLists.txt`, `firmware/dongle/test/Makefile`, `firmware/dongle/main/main.c`.
 
 ---
 
 ### Task 1: `relay_stats` — the pure counters
 
 **Files:**
-- Create: `firmware/s3/main/relay_stats.h`, `firmware/s3/main/relay_stats.c`
-- Test: `firmware/s3/test/test_relay_stats.c`
-- Modify: `firmware/s3/test/Makefile`
+- Create: `firmware/dongle/main/relay_stats.h`, `firmware/dongle/main/relay_stats.c`
+- Test: `firmware/dongle/test/test_relay_stats.c`
+- Modify: `firmware/dongle/test/Makefile`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -57,7 +57,7 @@
 
 - [ ] **Step 1: Write the failing test**
 
-Create `firmware/s3/test/test_relay_stats.c`:
+Create `firmware/dongle/test/test_relay_stats.c`:
 
 ```c
 #include <stdio.h>
@@ -151,7 +151,7 @@ int main(void)
 
 - [ ] **Step 2: Add it to the Makefile**
 
-In `firmware/s3/test/Makefile`, add `test_relay_stats` to `all:`, to `run:` (as `./test_relay_stats`) and to `clean:`, plus the rule:
+In `firmware/dongle/test/Makefile`, add `test_relay_stats` to `all:`, to `run:` (as `./test_relay_stats`) and to `clean:`, plus the rule:
 
 ```make
 test_relay_stats: test_relay_stats.c ../main/relay_stats.c ../main/relay_stats.h
@@ -160,12 +160,12 @@ test_relay_stats: test_relay_stats.c ../main/relay_stats.c ../main/relay_stats.h
 
 - [ ] **Step 3: Run it and watch it fail**
 
-Run: `make -C firmware/s3/test run`
+Run: `make -C firmware/dongle/test run`
 Expected: FAIL — `relay_stats.h: No such file or directory`.
 
 - [ ] **Step 4: Write the header**
 
-Create `firmware/s3/main/relay_stats.h`:
+Create `firmware/dongle/main/relay_stats.h`:
 
 ```c
 #ifndef RELAY_STATS_H
@@ -224,7 +224,7 @@ void relay_stats_sample(relay_stats_t *s, uint32_t now_ms);
 
 - [ ] **Step 5: Write the implementation**
 
-Create `firmware/s3/main/relay_stats.c`:
+Create `firmware/dongle/main/relay_stats.c`:
 
 ```c
 #include "relay_stats.h"
@@ -280,13 +280,13 @@ void relay_stats_sample(relay_stats_t *s, uint32_t now_ms)
 
 - [ ] **Step 6: Run the tests**
 
-Run: `make -C firmware/s3/test run`
+Run: `make -C firmware/dongle/test run`
 Expected: PASS — `relay_stats: ok`, and the four existing tests still `ok`.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add firmware/s3/main/relay_stats.c firmware/s3/main/relay_stats.h firmware/s3/test/test_relay_stats.c firmware/s3/test/Makefile
+git add firmware/dongle/main/relay_stats.c firmware/dongle/main/relay_stats.h firmware/dongle/test/test_relay_stats.c firmware/dongle/test/Makefile
 git commit -m "feat(s3): count what the relay moves, in packets and never in hertz"
 ```
 
@@ -295,7 +295,7 @@ git commit -m "feat(s3): count what the relay moves, in packets and never in her
 ### Task 2: feed `relay_stats` from both relays
 
 **Files:**
-- Modify: `firmware/s3/main/relay_udp.c`, `firmware/s3/main/relay_tcp.c`, `firmware/s3/main/relay_stats.h`, `firmware/s3/main/CMakeLists.txt`
+- Modify: `firmware/dongle/main/relay_udp.c`, `firmware/dongle/main/relay_tcp.c`, `firmware/dongle/main/relay_stats.h`, `firmware/dongle/main/CMakeLists.txt`
 
 **Interfaces:**
 - Consumes: Task 1's `relay_stats_t` and its functions.
@@ -303,7 +303,7 @@ git commit -m "feat(s3): count what the relay moves, in packets and never in her
 
 - [ ] **Step 1: Add the shared instance**
 
-Append to `firmware/s3/main/relay_stats.h`, before the `#endif`:
+Append to `firmware/dongle/main/relay_stats.h`, before the `#endif`:
 
 ```c
 /* The one instance both relay tasks write and the display reads.
@@ -331,7 +331,7 @@ relay_stats_t *relay_stats_shared(void)
 
 - [ ] **Step 2: Count the UDP relay**
 
-In `firmware/s3/main/relay_udp.c`:
+In `firmware/dongle/main/relay_udp.c`:
 
 - add `#include "relay_stats.h"` beside the other local includes;
 - at `relay_udp.c:175`, where `send(r->car_sock[idx], ...)` is tested, call `relay_stats_forwarded(relay_stats_shared(), true)` on success and `relay_stats_failed(relay_stats_shared(), errno)` in the existing failure branch;
@@ -340,7 +340,7 @@ In `firmware/s3/main/relay_udp.c`:
 
 - [ ] **Step 3: Count the TCP relay**
 
-In `firmware/s3/main/relay_tcp.c`: add the same include; after each successful forward in the two `forward()` paths call `relay_stats_forwarded(relay_stats_shared(), <direction>)`, and in the `errno` branches call `relay_stats_failed(relay_stats_shared(), errno)`. Once per select pass, count slots whose `state != SLOT_FREE` and call `relay_stats_tcp_slots(relay_stats_shared(), busy)`.
+In `firmware/dongle/main/relay_tcp.c`: add the same include; after each successful forward in the two `forward()` paths call `relay_stats_forwarded(relay_stats_shared(), <direction>)`, and in the `errno` branches call `relay_stats_failed(relay_stats_shared(), errno)`. Once per select pass, count slots whose `state != SLOT_FREE` and call `relay_stats_tcp_slots(relay_stats_shared(), busy)`.
 
 - [ ] **Step 4: Initialise the shared instance once**
 
@@ -348,17 +348,17 @@ In `relay_udp_start()`, before the task is created, call `relay_stats_init(relay
 
 - [ ] **Step 5: Register the new source**
 
-In `firmware/s3/main/CMakeLists.txt`, add `"relay_stats.c"` to the `SRCS` list.
+In `firmware/dongle/main/CMakeLists.txt`, add `"relay_stats.c"` to the `SRCS` list.
 
 - [ ] **Step 6: Build**
 
-Run: `source tools/env-p4.sh && cd firmware/s3 && idf.py build`
+Run: `source tools/env-p4.sh && cd firmware/dongle && idf.py build`
 Expected: builds clean, no new warnings.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add firmware/s3/main/relay_udp.c firmware/s3/main/relay_tcp.c firmware/s3/main/relay_tcp.h firmware/s3/main/relay_stats.c firmware/s3/main/relay_stats.h firmware/s3/main/CMakeLists.txt
+git add firmware/dongle/main/relay_udp.c firmware/dongle/main/relay_tcp.c firmware/dongle/main/relay_tcp.h firmware/dongle/main/relay_stats.c firmware/dongle/main/relay_stats.h firmware/dongle/main/CMakeLists.txt
 git commit -m "feat(s3): both relays report what they moved and what failed"
 ```
 
@@ -367,7 +367,7 @@ git commit -m "feat(s3): both relays report what they moved and what failed"
 ### Task 3: expose the three measurements that already exist
 
 **Files:**
-- Modify: `firmware/s3/main/wifi_sta.{c,h}`, `firmware/s3/main/usb_net.{c,h}`, `firmware/s3/main/ota_api.{c,h}`
+- Modify: `firmware/dongle/main/wifi_sta.{c,h}`, `firmware/dongle/main/usb_net.{c,h}`, `firmware/dongle/main/ota_api.{c,h}`
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
@@ -442,13 +442,13 @@ Declare it in `ota_api.h`.
 
 - [ ] **Step 5: Build**
 
-Run: `source tools/env-p4.sh && cd firmware/s3 && idf.py build`
+Run: `source tools/env-p4.sh && cd firmware/dongle && idf.py build`
 Expected: builds clean.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add firmware/s3/main/wifi_sta.c firmware/s3/main/wifi_sta.h firmware/s3/main/usb_net.c firmware/s3/main/usb_net.h firmware/s3/main/ota_api.c firmware/s3/main/ota_api.h
+git add firmware/dongle/main/wifi_sta.c firmware/dongle/main/wifi_sta.h firmware/dongle/main/usb_net.c firmware/dongle/main/usb_net.h firmware/dongle/main/ota_api.c firmware/dongle/main/ota_api.h
 git commit -m "feat(s3): surface the attempt counter, the channel, the USB link and OTA progress"
 ```
 
@@ -457,8 +457,8 @@ git commit -m "feat(s3): surface the attempt counter, the channel, the USB link 
 ### Task 4: put the new measurements in `GET /status`
 
 **Files:**
-- Modify: `contract/dongle-api.json`, `firmware/s3/main/status_api.c`
-- Regenerated (never hand-edited): `firmware/s3/main/dongle_contract.inc`, `app/AJMiddleCar/Generated/DongleAPI.swift`
+- Modify: `contract/dongle-api.json`, `firmware/dongle/main/status_api.c`
+- Regenerated (never hand-edited): `firmware/dongle/main/dongle_contract.inc`, `app/AJMiddleCar/Generated/DongleAPI.swift`
 
 **Interfaces:**
 - Consumes: Task 2's `relay_stats_shared()`, Task 3's four accessors.
@@ -491,13 +491,13 @@ Keep the existing ordering discipline: read `net_state` before `net_rssi`, and a
 
 - [ ] **Step 5: Build and check the contract**
 
-Run: `source tools/env-p4.sh && cd firmware/s3 && idf.py build && cd ../.. && tools/check_contract.sh && tools/test-all.sh`
+Run: `source tools/env-p4.sh && cd firmware/dongle && idf.py build && cd ../.. && tools/check_contract.sh && tools/test-all.sh`
 Expected: all pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add contract/dongle-api.json firmware/s3/main/dongle_contract.inc firmware/s3/main/status_api.c app/AJMiddleCar/Generated/DongleAPI.swift
+git add contract/dongle-api.json firmware/dongle/main/dongle_contract.inc firmware/dongle/main/status_api.c app/AJMiddleCar/Generated/DongleAPI.swift
 git commit -m "feat(s3): /status reports the relay's own counters, and stops claiming usb is always up"
 ```
 
@@ -506,9 +506,9 @@ git commit -m "feat(s3): /status reports the relay's own counters, and stops cla
 ### Task 5: `screens` — the pure layout
 
 **Files:**
-- Create: `firmware/s3/main/screens.h`, `firmware/s3/main/screens.c`
-- Test: `firmware/s3/test/test_screens.c`
-- Modify: `firmware/s3/test/Makefile`, `firmware/s3/main/CMakeLists.txt`
+- Create: `firmware/dongle/main/screens.h`, `firmware/dongle/main/screens.c`
+- Test: `firmware/dongle/test/test_screens.c`
+- Modify: `firmware/dongle/test/Makefile`, `firmware/dongle/main/CMakeLists.txt`
 
 **Interfaces:**
 - Consumes: the contract's `DONGLE_STATE_*` string constants from `dongle_contract.inc`.
@@ -518,7 +518,7 @@ Every string a person will read on this device lives in this one file, and it is
 
 - [ ] **Step 1: Write the failing test**
 
-Create `firmware/s3/test/test_screens.c`:
+Create `firmware/dongle/test/test_screens.c`:
 
 ```c
 #include <stdio.h>
@@ -734,12 +734,12 @@ test_screens: test_screens.c ../main/screens.c ../main/screens.h ../main/dongle_
 
 - [ ] **Step 3: Run it and watch it fail**
 
-Run: `make -C firmware/s3/test run`
+Run: `make -C firmware/dongle/test run`
 Expected: FAIL — `screens.h: No such file or directory`.
 
 - [ ] **Step 4: Write the header**
 
-Create `firmware/s3/main/screens.h` with `SCREEN_HISTORY 46`, `SCREEN_ROWS 2`, `SCREEN_ROW_MAX 22`, `SCREEN_HEAD_MAX 25` (12 Cyrillic glyphs are up to 24 UTF-8 bytes plus NUL — the panel's limit is *glyphs*, the buffer's is bytes, and they are not the same number), the `screen_id_t` enum listing all eleven ids, `screen_gauge_t` (`GAUGE_NONE`, `GAUGE_LEVEL`, `GAUGE_HISTORY`), the `screen_t` and `dongle_view_t` structs from the Interfaces block above, and the declarations.
+Create `firmware/dongle/main/screens.h` with `SCREEN_HISTORY 46`, `SCREEN_ROWS 2`, `SCREEN_ROW_MAX 22`, `SCREEN_HEAD_MAX 25` (12 Cyrillic glyphs are up to 24 UTF-8 bytes plus NUL — the panel's limit is *glyphs*, the buffer's is bytes, and they are not the same number), the `screen_id_t` enum listing all eleven ids, `screen_gauge_t` (`GAUGE_NONE`, `GAUGE_LEVEL`, `GAUGE_HISTORY`), the `screen_t` and `dongle_view_t` structs from the Interfaces block above, and the declarations.
 
 `dongle_view_t` carries `const screens_history_t *history` so the signal screen can name the worst
 dip. The buffer itself is a plain ring of `int8_t`:
@@ -772,7 +772,7 @@ Document on `dongle_view_t` that it holds only the dongle's own measurements, an
 
 - [ ] **Step 5: Write the implementation**
 
-Create `firmware/s3/main/screens.c`. The precedence in `screens_for()` is, highest first: no USB host → OTA in progress → rollback → the station's state. Each branch fills `head` and both rows from the table below, verbatim:
+Create `firmware/dongle/main/screens.c`. The precedence in `screens_for()` is, highest first: no USB host → OTA in progress → rollback → the station's state. Each branch fills `head` and both rows from the table below, verbatim:
 
 | id | head | row 0 | row 1 | gauge |
 |---|---|---|---|---|
@@ -800,15 +800,15 @@ Create `firmware/s3/main/screens.c`. The precedence in `screens_for()` is, highe
 
 - [ ] **Step 6: Run the tests**
 
-Run: `make -C firmware/s3/test run`
+Run: `make -C firmware/dongle/test run`
 Expected: PASS — `screens: ok` and the five earlier tests still `ok`.
 
 - [ ] **Step 7: Register the source and commit**
 
-Add `"screens.c"` to `SRCS` in `firmware/s3/main/CMakeLists.txt`, build once (`source tools/env-p4.sh && cd firmware/s3 && idf.py build`), then:
+Add `"screens.c"` to `SRCS` in `firmware/dongle/main/CMakeLists.txt`, build once (`source tools/env-p4.sh && cd firmware/dongle && idf.py build`), then:
 
 ```bash
-git add firmware/s3/main/screens.c firmware/s3/main/screens.h firmware/s3/test/test_screens.c firmware/s3/test/Makefile firmware/s3/main/CMakeLists.txt
+git add firmware/dongle/main/screens.c firmware/dongle/main/screens.h firmware/dongle/test/test_screens.c firmware/dongle/test/Makefile firmware/dongle/main/CMakeLists.txt
 git commit -m "feat(s3): every word this device will show, in one pure module"
 ```
 
@@ -817,8 +817,8 @@ git commit -m "feat(s3): every word this device will show, in one pure module"
 ### Task 6: `board.h`, u8g2 vendored, fonts generated
 
 **Files:**
-- Create: `firmware/s3/main/board.h`, `firmware/s3/components/u8g2/` (vendored + `CMakeLists.txt` + `README.md`), `firmware/s3/main/fonts_cyrillic.c`, `tools/gen_dongle_fonts.sh`
-- Modify: `firmware/s3/main/CMakeLists.txt`, `.gitignore` if needed
+- Create: `firmware/dongle/main/board.h`, `firmware/dongle/components/u8g2/` (vendored + `CMakeLists.txt` + `README.md`), `firmware/dongle/main/fonts_cyrillic.c`, `tools/gen_dongle_fonts.sh`
+- Modify: `firmware/dongle/main/CMakeLists.txt`, `.gitignore` if needed
 
 **Interfaces:**
 - Consumes: nothing.
@@ -826,7 +826,7 @@ git commit -m "feat(s3): every word this device will show, in one pure module"
 
 - [ ] **Step 1: Write `board.h`**
 
-Create `firmware/s3/main/board.h` carrying the pins and the panel's address, and a doc comment saying what the file is for — the twin of `firmware/p4/main/board.h`, whose role CLAUDE.md states: "every assumption about the physical board… Bring-up edits this file and nothing else." Record that the values are **provisional**: the pins are unverified against this board's silkscreen (a third-party `ESP32-23 2022-V1.3`), `GPIO19/20` are the native USB and `GPIO33–37` the octal PSRAM, and I²C is used nowhere else in this firmware.
+Create `firmware/dongle/main/board.h` carrying the pins and the panel's address, and a doc comment saying what the file is for — the twin of `firmware/car/core/main/board.h`, whose role CLAUDE.md states: "every assumption about the physical board… Bring-up edits this file and nothing else." Record that the values are **provisional**: the pins are unverified against this board's silkscreen (a third-party `ESP32-23 2022-V1.3`), `GPIO19/20` are the native USB and `GPIO33–37` the octal PSRAM, and I²C is used nowhere else in this firmware.
 
 ```c
 #define BOARD_I2C_SDA    8
@@ -840,46 +840,46 @@ Create `firmware/s3/main/board.h` carrying the pins and the panel's address, and
 
 ```bash
 cd /tmp && git clone --depth 1 https://github.com/olikraus/u8g2.git u8g2-src
-mkdir -p firmware/s3/components/u8g2
-cp -R /tmp/u8g2-src/csrc firmware/s3/components/u8g2/
-rm firmware/s3/components/u8g2/csrc/u8g2_fonts.c firmware/s3/components/u8g2/csrc/u8x8_fonts.c
+mkdir -p firmware/dongle/components/u8g2
+cp -R /tmp/u8g2-src/csrc firmware/dongle/components/u8g2/
+rm firmware/dongle/components/u8g2/csrc/u8g2_fonts.c firmware/dongle/components/u8g2/csrc/u8x8_fonts.c
 ```
 
 Record the upstream commit hash. `csrc` is 43 MB, of which those two files are 40.4 MB.
 
 - [ ] **Step 3: Give the component a CMakeLists and a README**
 
-`firmware/s3/components/u8g2/CMakeLists.txt`:
+`firmware/dongle/components/u8g2/CMakeLists.txt`:
 
 ```cmake
 file(GLOB U8G2_SRCS "csrc/*.c")
 idf_component_register(SRCS ${U8G2_SRCS} INCLUDE_DIRS "csrc")
 ```
 
-`firmware/s3/components/u8g2/README.md` must record: the upstream URL and commit; that the tree is **unmodified except** for the two deleted font files, so an update is a copy rather than a merge; that the fonts this project uses are generated by `tools/gen_dongle_fonts.sh`; and why the component manager was not used — the registry holds only `nixy4/u8g2` v0.1.4, zero downloads, published 2026-03, which does not meet this project's bar for a pinned dependency.
+`firmware/dongle/components/u8g2/README.md` must record: the upstream URL and commit; that the tree is **unmodified except** for the two deleted font files, so an update is a copy rather than a merge; that the fonts this project uses are generated by `tools/gen_dongle_fonts.sh`; and why the component manager was not used — the registry holds only `nixy4/u8g2` v0.1.4, zero downloads, published 2026-03, which does not meet this project's bar for a pinned dependency.
 
 - [ ] **Step 4: Generate the three fonts with u8g2's own converter**
 
-Create `tools/gen_dongle_fonts.sh`, executable, which builds `bdfconv` from the vendored checkout and emits `firmware/s3/main/fonts_cyrillic.c`:
+Create `tools/gen_dongle_fonts.sh`, executable, which builds `bdfconv` from the vendored checkout and emits `firmware/dongle/main/fonts_cyrillic.c`:
 
 ```bash
 #!/usr/bin/env bash
-# Regenerates firmware/s3/main/fonts_cyrillic.c from u8g2's own BDFs, with u8g2's own converter.
+# Regenerates firmware/dongle/main/fonts_cyrillic.c from u8g2's own BDFs, with u8g2's own converter.
 # Never hand-edit the output.
 #
 # The glyph range is ASCII plus the Cyrillic block: 32-127 and 1024-1279 (U+0400..U+04FF). The
-# full catalogue is deliberately not vendored -- see firmware/s3/components/u8g2/README.md.
+# full catalogue is deliberately not vendored -- see firmware/dongle/components/u8g2/README.md.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="$ROOT/firmware/s3/main/fonts_cyrillic.c"
+OUT="$ROOT/firmware/dongle/main/fonts_cyrillic.c"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # bdfconv and the BDFs come from upstream, not from the vendored copy: the vendored tree is
 # csrc only, and trimmed. Pin the same commit the component README records.
 UPSTREAM="https://github.com/olikraus/u8g2.git"
-COMMIT="$(sed -n 's/^Upstream commit: //p' "$ROOT/firmware/s3/components/u8g2/README.md")"
+COMMIT="$(sed -n 's/^Upstream commit: //p' "$ROOT/firmware/dongle/components/u8g2/README.md")"
 git clone --quiet "$UPSTREAM" "$WORK/u8g2"
 git -C "$WORK/u8g2" checkout --quiet "$COMMIT"
 
@@ -901,18 +901,18 @@ echo "wrote $OUT ($(wc -c < "$OUT") bytes)"
 
 - [ ] **Step 5: Generate, build, and confirm the fonts link**
 
-Run: `tools/gen_dongle_fonts.sh && source tools/env-p4.sh && cd firmware/s3 && idf.py build`
+Run: `tools/gen_dongle_fonts.sh && source tools/env-p4.sh && cd firmware/dongle && idf.py build`
 Expected: builds clean. Confirm the three symbols are present:
 
 ```bash
-xtensa-esp32s3-elf-nm firmware/s3/build/ajdongle.elf | grep -c u8g2_font_.*_t_cyrillic || true
+xtensa-esp32s3-elf-nm firmware/dongle/build/ajdongle.elf | grep -c u8g2_font_.*_t_cyrillic || true
 ```
 Expected: `3`. Use `|| true`: under `set -euo pipefail` a `grep` that closes the pipe early exits 141 and would fail the step on success — the same trap that broke `tools/release.sh` on 2026-08-31.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add firmware/s3/components/u8g2 firmware/s3/main/board.h firmware/s3/main/fonts_cyrillic.c tools/gen_dongle_fonts.sh firmware/s3/main/CMakeLists.txt
+git add firmware/dongle/components/u8g2 firmware/dongle/main/board.h firmware/dongle/main/fonts_cyrillic.c tools/gen_dongle_fonts.sh firmware/dongle/main/CMakeLists.txt
 git commit -m "build(s3): vendor u8g2 without its 40 MB of fonts, and generate the three we use"
 ```
 
@@ -921,8 +921,8 @@ git commit -m "build(s3): vendor u8g2 without its 40 MB of fonts, and generate t
 ### Task 7: the display itself
 
 **Files:**
-- Create: `firmware/s3/main/display_hal.{c,h}`, `firmware/s3/main/display.{c,h}`
-- Modify: `firmware/s3/main/CMakeLists.txt`, `firmware/s3/main/main.c`, `firmware/s3/README.md`
+- Create: `firmware/dongle/main/display_hal.{c,h}`, `firmware/dongle/main/display.{c,h}`
+- Modify: `firmware/dongle/main/CMakeLists.txt`, `firmware/dongle/main/main.c`, `firmware/dongle/README.md`
 
 **Interfaces:**
 - Consumes: `board.h`; Task 5's `screens_for`/`screens_diag`/`screens_rssi_pct`; Task 2's `relay_stats_shared()`; Task 3's four accessors; the vendored u8g2.
@@ -946,21 +946,21 @@ In `main.c`, call `display_start()` **after** `status_api_start()` and `net_api_
 
 - [ ] **Step 4: Build**
 
-Run: `source tools/env-p4.sh && cd firmware/s3 && idf.py build`
+Run: `source tools/env-p4.sh && cd firmware/dongle && idf.py build`
 Expected: builds clean.
 
 - [ ] **Step 5: Run every host test and the contract check**
 
-Run: `tools/test-all.sh && make -C firmware/s3/test run`
+Run: `tools/test-all.sh && make -C firmware/dongle/test run`
 Expected: all pass. Neither exercises the panel; that is the point of Tasks 1 and 5 carrying the logic.
 
 - [ ] **Step 6: Record what the bench still owes**
 
-Add a row to `firmware/s3/README.md`'s bench table for each of: the panel lights at all; the I²C pins as chosen in `board.h`; the panel address; the `BOOT` button paging; current draw **with a phone as the power source, not a Mac**. Mark them `*(record what you observed)*`, the convention that table already uses.
+Add a row to `firmware/dongle/README.md`'s bench table for each of: the panel lights at all; the I²C pins as chosen in `board.h`; the panel address; the `BOOT` button paging; current draw **with a phone as the power source, not a Mac**. Mark them `*(record what you observed)*`, the convention that table already uses.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add firmware/s3/main/display.c firmware/s3/main/display.h firmware/s3/main/display_hal.c firmware/s3/main/display_hal.h firmware/s3/main/main.c firmware/s3/main/CMakeLists.txt firmware/s3/README.md
+git add firmware/dongle/main/display.c firmware/dongle/main/display.h firmware/dongle/main/display_hal.c firmware/dongle/main/display_hal.h firmware/dongle/main/main.c firmware/dongle/main/CMakeLists.txt firmware/dongle/README.md
 git commit -m "feat(s3): the dongle reports itself on its own screen"
 ```

@@ -27,10 +27,10 @@ needing a cable.
   that must not ship before rollback does." Task 2 enables rollback; Task 3 adds the endpoint.
   That order is a requirement, not a preference — do not reorder them, and do not combine them
   into one commit that could be partially reverted.
-- **The dongle knows nothing about the car.** No `firmware/s3` file may reference `firmware/p4`,
+- **The dongle knows nothing about the car.** No `firmware/dongle` file may reference `firmware/car/core`,
   its paths, its identity, or its credentials. This is why Task 4 moves `version.txt` to the root
   rather than having the dongle read the car's copy.
-- **Generated files are never hand-edited.** `firmware/s3/main/dongle_contract.inc` and
+- **Generated files are never hand-edited.** `firmware/dongle/main/dongle_contract.inc` and
   `app/AJMiddleCar/Generated/DongleAPI.swift` come from `contract/dongle-api.json` through
   `tools/gen_contract.py`. Change the schema and the emitter, then regenerate.
 - **No real network credentials anywhere.** Not in tests, not in scripts, not in docs. Bench
@@ -48,18 +48,18 @@ needing a cable.
 | `contract/dongle-api.json` | *modify* — gains the `/ota` endpoint and the `rollback` status field |
 | `tools/gen_dongle.py` | *modify* — emits `DONGLE_PATH_OTA` and `DongleContract.otaPath` |
 | `tools/test_gen_contract.py` | *modify* — asserts the two new names reach both artifacts |
-| `firmware/s3/main/dongle_contract.inc` | *generated* — regenerate, never edit |
+| `firmware/dongle/main/dongle_contract.inc` | *generated* — regenerate, never edit |
 | `app/AJMiddleCar/Generated/DongleAPI.swift` | *generated* — regenerate, never edit |
-| `firmware/s3/sdkconfig.defaults` | *modify* — rollback on, and the comment that said why it was off is rewritten to say why it is on |
-| `firmware/s3/main/main.c` | *modify* — marks the running image valid, last thing in `app_main` |
-| `firmware/s3/main/status_api.c` | *modify* — reads the rollback verdict once at boot, reports it |
-| `firmware/s3/main/ota_api.{c,h}` | *create* — `POST /ota` |
-| `firmware/s3/main/CMakeLists.txt` | *modify* — new source, `app_update` and `esp_partition` |
-| `firmware/s3/verify-on-host.sh` | *modify* — the two refusals that are safe to automate |
-| `firmware/s3/README.md` | *modify* — how to push an image, and what to expect |
-| `version.txt` | *move* — from `firmware/p4/`, because the version belongs to the release, not to either firmware |
-| `firmware/p4/CMakeLists.txt` | *modify* — reads the root copy, and fails loudly if it is missing |
-| `firmware/s3/CMakeLists.txt` | *modify* — gains the same `PROJECT_VER` derivation |
+| `firmware/dongle/sdkconfig.defaults` | *modify* — rollback on, and the comment that said why it was off is rewritten to say why it is on |
+| `firmware/dongle/main/main.c` | *modify* — marks the running image valid, last thing in `app_main` |
+| `firmware/dongle/main/status_api.c` | *modify* — reads the rollback verdict once at boot, reports it |
+| `firmware/dongle/main/ota_api.{c,h}` | *create* — `POST /ota` |
+| `firmware/dongle/main/CMakeLists.txt` | *modify* — new source, `app_update` and `esp_partition` |
+| `firmware/dongle/verify-on-host.sh` | *modify* — the two refusals that are safe to automate |
+| `firmware/dongle/README.md` | *modify* — how to push an image, and what to expect |
+| `version.txt` | *move* — from `firmware/car/core/`, because the version belongs to the release, not to either firmware |
+| `firmware/car/core/CMakeLists.txt` | *modify* — reads the root copy, and fails loudly if it is missing |
+| `firmware/dongle/CMakeLists.txt` | *modify* — gains the same `PROJECT_VER` derivation |
 | `tools/release.sh` | *modify* — one tag, two assets |
 
 ---
@@ -75,7 +75,7 @@ explicitly, so `/ota` needs one line in each.
 - Modify: `contract/dongle-api.json`
 - Modify: `tools/gen_dongle.py`
 - Modify: `tools/test_gen_contract.py`
-- Generated (regenerate, do not hand-edit): `firmware/s3/main/dongle_contract.inc`,
+- Generated (regenerate, do not hand-edit): `firmware/dongle/main/dongle_contract.inc`,
   `app/AJMiddleCar/Generated/DongleAPI.swift`
 
 **Interfaces:**
@@ -180,7 +180,7 @@ bash tools/check_contract.sh
 ```
 
 Expected: all tests pass; the drift check is silent. `git diff` shows `DONGLE_PATH_OTA` and
-`DONGLE_KEY_ROLLBACK` in `firmware/s3/main/dongle_contract.inc`, and `otaPath` plus
+`DONGLE_KEY_ROLLBACK` in `firmware/dongle/main/dongle_contract.inc`, and `otaPath` plus
 `DongleStatusKey.rollback` in `app/AJMiddleCar/Generated/DongleAPI.swift`.
 
 - [ ] **Step 6: Full suite, then commit**
@@ -188,7 +188,7 @@ Expected: all tests pass; the drift check is silent. `git diff` shows `DONGLE_PA
 ```bash
 tools/test-all.sh
 git add contract/dongle-api.json tools/gen_dongle.py tools/test_gen_contract.py \
-        firmware/s3/main/dongle_contract.inc app/AJMiddleCar/Generated/DongleAPI.swift
+        firmware/dongle/main/dongle_contract.inc app/AJMiddleCar/Generated/DongleAPI.swift
 git commit -m "feat(contract): the dongle's vocabulary gains /ota and rollback"
 ```
 
@@ -217,10 +217,10 @@ One consequence to state plainly: everything before the mark is a rollback trigg
 makes the bootloader revert. That is correct and deliberate.
 
 **Files:**
-- Modify: `firmware/s3/sdkconfig.defaults`
-- Modify: `firmware/s3/main/main.c`
-- Modify: `firmware/s3/main/status_api.c`
-- Modify: `firmware/s3/main/CMakeLists.txt`
+- Modify: `firmware/dongle/sdkconfig.defaults`
+- Modify: `firmware/dongle/main/main.c`
+- Modify: `firmware/dongle/main/status_api.c`
+- Modify: `firmware/dongle/main/CMakeLists.txt`
 
 **Interfaces:**
 - Consumes: `DONGLE_KEY_ROLLBACK` from Task 1.
@@ -229,7 +229,7 @@ makes the bootloader revert. That is correct and deliberate.
 
 - [ ] **Step 1: Turn rollback on**
 
-In `firmware/s3/sdkconfig.defaults`, replace the paragraph that ends
+In `firmware/dongle/sdkconfig.defaults`, replace the paragraph that ends
 `It arrives with the OTA code that needs it.` The setting and its reason both change, so replace
 the whole comment rather than appending to it:
 
@@ -250,7 +250,7 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 - [ ] **Step 2: Declare the components the new calls need**
 
-In `firmware/s3/main/CMakeLists.txt`, add `app_update` (for `esp_ota_ops.h`) and `esp_partition`
+In `firmware/dongle/main/CMakeLists.txt`, add `app_update` (for `esp_ota_ops.h`) and `esp_partition`
 (for `esp_partition.h`) to `PRIV_REQUIRES`. Declare only these two — an earlier commit on this
 firmware trimmed over-declared requirements, and that trim should stay meaningful:
 
@@ -263,7 +263,7 @@ idf_component_register(SRCS "main.c" "usb_net.c" "status_api.c" "api_util.c" "ne
 
 - [ ] **Step 3: Mark the image valid at the end of `app_main`**
 
-In `firmware/s3/main/main.c`, add the include:
+In `firmware/dongle/main/main.c`, add the include:
 
 ```c
 #include "esp_ota_ops.h"
@@ -300,7 +300,7 @@ the release and offers an update when it is behind; if the bootloader quietly pu
 back, the app sees the old version, offers the same update again, and loops forever with no
 explanation. This field is what breaks that loop.
 
-In `firmware/s3/main/status_api.c`, add the includes:
+In `firmware/dongle/main/status_api.c`, add the includes:
 
 ```c
 #include "esp_ota_ops.h"
@@ -362,27 +362,27 @@ Leave the existing truncation guard below it exactly as it is.
 - [ ] **Step 6: Build it**
 
 ```bash
-source tools/env-p4.sh && (cd firmware/s3 && idf.py build)
+source tools/env-p4.sh && (cd firmware/dongle && idf.py build)
 ```
 
 Expected: a clean build. On a machine that has never built for this target it fails on a missing
-Xtensa toolchain — `~/esp/esp-idf-v6.0.2/install.sh esp32s3` once, as `firmware/s3/README.md` says.
+Xtensa toolchain — `~/esp/esp-idf-v6.0.2/install.sh esp32s3` once, as `firmware/dongle/README.md` says.
 
 Then confirm rollback actually reached the config, rather than trusting the defaults file:
 
 ```bash
-grep BOOTLOADER_APP_ROLLBACK_ENABLE firmware/s3/sdkconfig
+grep BOOTLOADER_APP_ROLLBACK_ENABLE firmware/dongle/sdkconfig
 ```
 
 Expected: `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`. A `# ... is not set` line means the stale
-`sdkconfig` in the tree predates the change — delete `firmware/s3/sdkconfig` and rebuild.
+`sdkconfig` in the tree predates the change — delete `firmware/dongle/sdkconfig` and rebuild.
 
 - [ ] **Step 7: Full suite, then commit**
 
 ```bash
 tools/test-all.sh
-git add firmware/s3/sdkconfig.defaults firmware/s3/main/main.c \
-        firmware/s3/main/status_api.c firmware/s3/main/CMakeLists.txt
+git add firmware/dongle/sdkconfig.defaults firmware/dongle/main/main.c \
+        firmware/dongle/main/status_api.c firmware/dongle/main/CMakeLists.txt
 git commit -m "feat(s3): rollback on, and a boot that earns its keep before waiving it"
 ```
 
@@ -395,9 +395,9 @@ The car's handler, minus the actuator layer. Every check that guards the flash s
 that moves.
 
 **Files:**
-- Create: `firmware/s3/main/ota_api.c`, `firmware/s3/main/ota_api.h`
-- Modify: `firmware/s3/main/main.c`, `firmware/s3/main/CMakeLists.txt`
-- Modify: `firmware/s3/verify-on-host.sh`, `firmware/s3/README.md`
+- Create: `firmware/dongle/main/ota_api.c`, `firmware/dongle/main/ota_api.h`
+- Modify: `firmware/dongle/main/main.c`, `firmware/dongle/main/CMakeLists.txt`
+- Modify: `firmware/dongle/verify-on-host.sh`, `firmware/dongle/README.md`
 
 **Interfaces:**
 - Consumes: `DONGLE_PATH_OTA` (Task 1); `api_reply_error` / `api_reply_ok` from `api_util.h`;
@@ -407,7 +407,7 @@ that moves.
 
 - [ ] **Step 1: The header**
 
-Create `firmware/s3/main/ota_api.h`:
+Create `firmware/dongle/main/ota_api.h`:
 
 ```c
 #ifndef OTA_API_H
@@ -431,7 +431,7 @@ esp_err_t ota_api_register(httpd_handle_t server);
 
 - [ ] **Step 2: The handler**
 
-Create `firmware/s3/main/ota_api.c`:
+Create `firmware/dongle/main/ota_api.c`:
 
 ```c
 #include "ota_api.h"
@@ -452,7 +452,7 @@ Create `firmware/s3/main/ota_api.c`:
 
 static const char *TAG = "ota_api";
 
-/* A deliberate twin of firmware/p4/main/ota_api.c, not a shared file — the two firmwares do not
+/* A deliberate twin of firmware/car/core/main/ota_api.c, not a shared file — the two firmwares do not
  * reference each other. What is missing here is the car's actuator arbitration: the car seizes
  * the motors for the length of the flash and releases them on every failure path, because a
  * refused upload must not leave a car undriveable. The dongle has nothing that moves, so that
@@ -560,7 +560,7 @@ esp_err_t ota_api_register(httpd_handle_t server)
 
 - [ ] **Step 3: Register it, before the mark-valid**
 
-In `firmware/s3/main/main.c`, add `#include "ota_api.h"` and register `/ota` immediately after
+In `firmware/dongle/main/main.c`, add `#include "ota_api.h"` and register `/ota` immediately after
 `net_api_register`, so the rollback waiver added in Task 2 stays the last thing `app_main` does:
 
 ```c
@@ -575,20 +575,20 @@ additions.
 
 - [ ] **Step 4: Add the source**
 
-In `firmware/s3/main/CMakeLists.txt`, add `"ota_api.c"` to `SRCS`. `PRIV_REQUIRES` already gained
+In `firmware/dongle/main/CMakeLists.txt`, add `"ota_api.c"` to `SRCS`. `PRIV_REQUIRES` already gained
 `app_update` and `esp_partition` in Task 2.
 
 - [ ] **Step 5: Build**
 
 ```bash
-source tools/env-p4.sh && (cd firmware/s3 && idf.py build)
+source tools/env-p4.sh && (cd firmware/dongle && idf.py build)
 ```
 
 Expected: a clean build, and the size summary shows the image well under the 4 MB slot.
 
 - [ ] **Step 6: Automate the two refusals that are safe to run**
 
-In `firmware/s3/verify-on-host.sh`, inside the `DONGLE ATTACHED` block, after the short-password
+In `firmware/dongle/verify-on-host.sh`, inside the `DONGLE ATTACHED` block, after the short-password
 check and before the `=== 2. THE REGRESSION ===` header:
 
 ```bash
@@ -619,7 +619,7 @@ everything after it. It goes in the README as a manual step.
 
 - [ ] **Step 7: Document the manual half**
 
-In `firmware/s3/README.md`, after the `## Build` section, add:
+In `firmware/dongle/README.md`, after the `## Build` section, add:
 
 ```markdown
 ## Updating over USB
@@ -627,7 +627,7 @@ In `firmware/s3/README.md`, after the `## Build` section, add:
 Once the dongle is running an image with `/ota`, the cable is only needed for the first flash:
 
 ```bash
-cd firmware/s3 && idf.py build
+cd firmware/dongle && idf.py build
 curl --data-binary @build/ajdongle.bin \
      -H 'Content-Type: application/octet-stream' \
      http://192.168.7.1:8080/ota
@@ -650,8 +650,8 @@ update; the `fw` you see is the old image, and pushing the same binary again wil
 
 ```bash
 tools/test-all.sh
-git add firmware/s3/main/ota_api.c firmware/s3/main/ota_api.h firmware/s3/main/main.c \
-        firmware/s3/main/CMakeLists.txt firmware/s3/verify-on-host.sh firmware/s3/README.md
+git add firmware/dongle/main/ota_api.c firmware/dongle/main/ota_api.h firmware/dongle/main/main.c \
+        firmware/dongle/main/CMakeLists.txt firmware/dongle/verify-on-host.sh firmware/dongle/README.md
 git commit -m "feat(s3): the dongle takes its own firmware over the wire"
 ```
 
@@ -659,13 +659,13 @@ git commit -m "feat(s3): the dongle takes its own firmware over the wire"
 
 ### Task 4: One release, two images
 
-`release.sh` today reads `firmware/p4/version.txt` and ships one binary. The spec wants one tag
+`release.sh` today reads `firmware/car/core/version.txt` and ships one binary. The spec wants one tag
 carrying both images under one version, so that "the hardware is behind this app" is a single
 event rather than two policies that can disagree.
 
 **Where the version lives.** It moves to the repo root. The dongle must not read
-`firmware/p4/version.txt` — that would be the dongle knowing about the car, which is the one thing
-this branch has been careful to prevent. A second `firmware/s3/version.txt` that must match the
+`firmware/car/core/version.txt` — that would be the dongle knowing about the car, which is the one thing
+this branch has been careful to prevent. A second `firmware/dongle/version.txt` that must match the
 first is a drift source, and the contract work exists precisely to remove those. The version
 belongs to the release, and the release is a repo-level thing.
 
@@ -674,8 +674,8 @@ It lived at the root before the P4 migration moved it, for a mechanical reason: 
 not fail loudly". Step 2 makes that failure loud, which is what makes the move safe this time.
 
 **Files:**
-- Move: `firmware/p4/version.txt` → `version.txt`
-- Modify: `firmware/p4/CMakeLists.txt`, `firmware/s3/CMakeLists.txt`, `tools/release.sh`
+- Move: `firmware/car/core/version.txt` → `version.txt`
+- Modify: `firmware/car/core/CMakeLists.txt`, `firmware/dongle/CMakeLists.txt`, `tools/release.sh`
 
 **Interfaces:**
 - Produces: both firmwares embed the same `PROJECT_VER` (`v<semver>+<git commit count>`), and a
@@ -684,12 +684,12 @@ not fail loudly". Step 2 makes that failure loud, which is what makes the move s
 - [ ] **Step 1: Move the file**
 
 ```bash
-git mv firmware/p4/version.txt version.txt
+git mv firmware/car/core/version.txt version.txt
 ```
 
 - [ ] **Step 2: Point the car's CMake at the root, and make a missing file loud**
 
-In `firmware/p4/CMakeLists.txt`, replace lines 3-12 (the comment block through the
+In `firmware/car/core/CMakeLists.txt`, replace lines 3-12 (the comment block through the
 `CMAKE_CONFIGURE_DEPENDS` property) with:
 
 ```cmake
@@ -698,7 +698,7 @@ In `firmware/p4/CMakeLists.txt`, replace lines 3-12 (the comment block through t
 # (takes precedence over IDF's version.txt auto-detection and git-describe fallback).
 #
 # The file sits at the repo root, not here, because the version identifies a RELEASE and a release
-# carries two images — this one and firmware/s3's. firmware/s3/CMakeLists.txt reads the same file
+# carries two images — this one and firmware/dongle's. firmware/dongle/CMakeLists.txt reads the same file
 # the same way. The EXISTS check is not ceremony: the 2026-08-19 migration noted that a
 # mispointed path "would not fail loudly", producing an empty semver and a car reporting a
 # garbage version. It fails loudly now.
@@ -719,7 +719,7 @@ Leave the rest of the file — the `string(STRIP ...)`, the `execute_process` co
 
 - [ ] **Step 3: Give the dongle the same derivation**
 
-Replace `firmware/s3/CMakeLists.txt` entirely:
+Replace `firmware/dongle/CMakeLists.txt` entirely:
 
 ```cmake
 cmake_minimum_required(VERSION 3.16)
@@ -768,8 +768,8 @@ SEMVER=$(tr -d '[:space:]' < version.txt)
 BUILD_NUM=$(git rev-list --count HEAD)
 VER="v${SEMVER}+${BUILD_NUM}"
 TITLE="v${SEMVER} (build ${BUILD_NUM})"
-BIN_CAR="firmware/p4/build/ajmiddlecar.bin"
-BIN_DONGLE="firmware/s3/build/ajdongle.bin"
+BIN_CAR="firmware/car/core/build/ajmiddlecar.bin"
+BIN_DONGLE="firmware/dongle/build/ajdongle.bin"
 NOTES="${NOTES_ARG:-Release ${VER}}"
 ```
 
@@ -789,14 +789,14 @@ Replace the build block (from `# A stray bench sdkconfig` through the `[ -f "$BI
 # A stray bench sdkconfig must not configure a release: regenerate purely from defaults. This
 # matters more for the dongle than for the car — bench work on the S3 has run with local
 # overrides before, and a release built from one would ship them.
-rm -f firmware/p4/sdkconfig firmware/p4/sdkconfig.old
-rm -f firmware/s3/sdkconfig firmware/s3/sdkconfig.old
-(cd firmware/p4 && idf.py fullclean >/dev/null && idf.py build)
+rm -f firmware/car/core/sdkconfig firmware/car/core/sdkconfig.old
+rm -f firmware/dongle/sdkconfig firmware/dongle/sdkconfig.old
+(cd firmware/car/core && idf.py fullclean >/dev/null && idf.py build)
 [ -f "$BIN_CAR" ] || { echo "ERROR: $BIN_CAR not built"; exit 1; }
 # The dongle is an Xtensa target; the car and its radio are both RISC-V, so an ESP-IDF installed
 # for the car alone has no compiler for it. Say so rather than letting a toolchain error look
 # like a firmware problem.
-if ! (cd firmware/s3 && idf.py fullclean >/dev/null && idf.py build); then
+if ! (cd firmware/dongle && idf.py fullclean >/dev/null && idf.py build); then
     echo "ERROR: the dongle build failed. If this is a fresh ESP-IDF install, it has no Xtensa"
     echo "       toolchain yet: ~/esp/esp-idf-v6.0.2/install.sh esp32s3"; exit 1
 fi
@@ -834,9 +834,9 @@ afterwards.
 
 ```bash
 source tools/env-p4.sh
-(cd firmware/p4 && idf.py build >/dev/null) && (cd firmware/s3 && idf.py build >/dev/null)
-grep -ao 'v1\.0+[0-9]*' firmware/p4/build/ajmiddlecar.bin | head -1
-grep -ao 'v1\.0+[0-9]*' firmware/s3/build/ajdongle.bin | head -1
+(cd firmware/car/core && idf.py build >/dev/null) && (cd firmware/dongle && idf.py build >/dev/null)
+grep -ao 'v1\.0+[0-9]*' firmware/car/core/build/ajmiddlecar.bin | head -1
+grep -ao 'v1\.0+[0-9]*' firmware/dongle/build/ajdongle.bin | head -1
 ```
 
 Expected: the same string from both, and it matches `v1.0+$(git rev-list --count HEAD)`. This is
@@ -849,7 +849,7 @@ before recent commits, `idf.py fullclean` it and rebuild.
 
 ```bash
 tools/test-all.sh
-git add version.txt firmware/p4/CMakeLists.txt firmware/s3/CMakeLists.txt tools/release.sh
+git add version.txt firmware/car/core/CMakeLists.txt firmware/dongle/CMakeLists.txt tools/release.sh
 git commit -m "feat(release): one tag, one version, two images"
 ```
 
@@ -875,7 +875,7 @@ pure module to extract from it. Task 1 and Task 4 are covered by the suite; Task
 covered by the bench, and honestly so. In order:
 
 1. Cable-flash the built image. `/status` answers with the new `fw`, and `rollback:false`.
-2. `firmware/s3/verify-on-host.sh out.txt` — the Plan 1 and 2 checks still pass, and both OTA
+2. `firmware/dongle/verify-on-host.sh out.txt` — the Plan 1 and 2 checks still pass, and both OTA
    refusals return 400 with the dongle still answering afterwards.
 3. Push a real image with the README's `curl`. Expect `{"ok":true}`, an interface drop, and
    `/status` back within seconds carrying the same `fw` and `rollback:false`.

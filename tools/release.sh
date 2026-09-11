@@ -29,8 +29,8 @@ SEMVER=$(tr -d '[:space:]' < version.txt)
 BUILD_NUM=$(git rev-list --count HEAD)
 VER="v${SEMVER}+${BUILD_NUM}"
 TITLE="v${SEMVER} (build ${BUILD_NUM})"
-BIN_CAR="firmware/p4/build/ajmiddlecar.bin"
-BIN_DONGLE="firmware/s3/build/ajdongle.bin"
+BIN_CAR="firmware/car/core/build/ajmiddlecar.bin"
+BIN_DONGLE="firmware/dongle/build/ajdongle.bin"
 NOTES="${NOTES_ARG:-Release ${VER}}"
 
 if [ "$DRY_RUN" = 1 ]; then
@@ -41,13 +41,13 @@ if [ "$DRY_RUN" = 1 ]; then
     echo "[dry-run]         : $BIN_DONGLE"
     echo "[dry-run] radio   : built from the pinned esp_hosted and embedded in $BIN_CAR"
     echo "[dry-run] notes   : $NOTES"
-    echo "[dry-run] would run: test-all && rm sdkconfig && idf.py fullclean && idf.py build (p4, s3) && gh release create '$VER' '$BIN_CAR' '$BIN_DONGLE' --target <HEAD> ..."
+    echo "[dry-run] would run: test-all && rm sdkconfig && idf.py fullclean && idf.py build (car, dongle) && gh release create '$VER' '$BIN_CAR' '$BIN_DONGLE' --target <HEAD> ..."
     exit 0
 fi
 
 # Only tracked changes matter — the build number comes from committed history; untracked
 # build artifacts don't change the release commit. (The two untracked files that COULD —
-# firmware/p4/sdkconfig and firmware/s3/sdkconfig — are deleted below so the build
+# firmware/car/core/sdkconfig and firmware/dongle/sdkconfig — are deleted below so the build
 # regenerates both from defaults.)
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
     echo "ERROR: tracked changes present — commit them so the build number matches the release commit"; exit 1
@@ -76,34 +76,34 @@ set -e
 # A stray bench sdkconfig must not configure a release: regenerate purely from defaults. This
 # matters more for the dongle than for the car — bench work on the S3 has run with local
 # overrides before, and a release built from one would ship them.
-rm -f firmware/p4/sdkconfig firmware/p4/sdkconfig.old
-rm -f firmware/s3/sdkconfig firmware/s3/sdkconfig.old
+rm -f firmware/car/core/sdkconfig firmware/car/core/sdkconfig.old
+rm -f firmware/dongle/sdkconfig firmware/dongle/sdkconfig.old
 # The C6's image rides inside the car's, so build it first and put it where the car's build
 # embeds it. Same source flash-radio.sh uses — the pinned component's own example — so the pin
 # determines both halves and there is no second version to keep in step.
-HOSTED="firmware/p4/managed_components/espressif__esp_hosted"
+HOSTED="firmware/car/core/managed_components/espressif__esp_hosted"
 CP="$HOSTED/examples/wifi/sta/cp"
 if [ ! -d "$CP" ]; then
-    echo "ERROR: esp_hosted is not fetched — run (cd firmware/p4 && idf.py reconfigure) first"; exit 1
+    echo "ERROR: esp_hosted is not fetched — run (cd firmware/car/core && idf.py reconfigure) first"; exit 1
 fi
 # Re-resolve the component before building anything from it. The car's own build does this at
 # line ~104, but by then the co-processor image is already built and copied — so a pin bumped
 # since the last fetch would ship an OLD radio image inside a car expecting the NEW version.
 # Every guard below would pass, and every car in the field would flash the wrong image three
 # times and give up.
-(cd firmware/p4 && idf.py reconfigure >/dev/null)
+(cd firmware/car/core && idf.py reconfigure >/dev/null)
 # Belt and braces: prove the fetched component is the pinned one. flash-radio.sh makes the same
 # comparison for the manual path and merely warns; here it is fatal, because nobody is standing
 # over a release watching for a prompt.
-PIN=$(grep -E 'espressif/esp_hosted:' firmware/p4/main/idf_component.yml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) || true
+PIN=$(grep -E 'espressif/esp_hosted:' firmware/car/core/main/idf_component.yml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) || true
 GOT=$(grep -E '^version:' "$HOSTED/idf_component.yml" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) || true
-[ -n "$PIN" ] || { echo "ERROR: no esp_hosted pin found in firmware/p4/main/idf_component.yml"; exit 1; }
+[ -n "$PIN" ] || { echo "ERROR: no esp_hosted pin found in firmware/car/core/main/idf_component.yml"; exit 1; }
 [ -n "$GOT" ] || { echo "ERROR: cannot read the fetched esp_hosted version"; exit 1; }
 [ "$PIN" = "$GOT" ] || { echo "ERROR: esp_hosted pin is $PIN but the fetched component is $GOT — the radio image would be built from the wrong one"; exit 1; }
 echo "radio component: esp_hosted $GOT (matches the pin)"
 # The co-processor's SDIO datapath sends frames larger than stock ESP-IDF allows. This is the
 # vendor's own patch, it is idempotent, and without it the build stops with an explicit error —
-# the same line firmware/c6/flash-radio.sh runs for the same reason.
+# the same line firmware/car/modem/flash-radio.sh runs for the same reason.
 python "$HOSTED/tools/eh.py" patch-idf --idf-path "$IDF_PATH" >/dev/null
 (cd "$CP" && { [ -d build ] || idf.py set-target esp32c6 >/dev/null; } && idf.py build >/dev/null)
 # `|| true` is load-bearing under `set -euo pipefail`: pipefail reports the pipeline's rightmost
@@ -113,10 +113,10 @@ python "$HOSTED/tools/eh.py" patch-idf --idf-path "$IDF_PATH" >/dev/null
 # script carried a comment warning about exactly this.
 CP_BIN=$(ls "$CP"/build/*.bin 2>/dev/null | grep -v -E 'bootloader|partition-table|ota_data' | head -1) || true
 [ -n "$CP_BIN" ] || { echo "ERROR: the co-processor build produced no image"; exit 1; }
-cp "$CP_BIN" firmware/p4/main/radio_image.bin
-echo "radio image: $(basename "$CP_BIN"), $(wc -c < firmware/p4/main/radio_image.bin) bytes"
+cp "$CP_BIN" firmware/car/core/main/radio_image.bin
+echo "radio image: $(basename "$CP_BIN"), $(wc -c < firmware/car/core/main/radio_image.bin) bytes"
 
-(cd firmware/p4 && idf.py fullclean >/dev/null && idf.py build)
+(cd firmware/car/core && idf.py fullclean >/dev/null && idf.py build)
 [ -f "$BIN_CAR" ] || { echo "ERROR: $BIN_CAR not built"; exit 1; }
 # This only catches EMBED_FILES being removed altogether: the _start/_end symbols appear in the
 # ELF even for a zero-length embed (they're just equal), so this check alone proves nothing about
@@ -126,14 +126,14 @@ echo "radio image: $(basename "$CP_BIN"), $(wc -c < firmware/p4/main/radio_image
 # form fails ON SUCCESS: grep exits at the first match and closes the pipe, nm dies of SIGPIPE
 # with 141, and pipefail reports that as the pipeline's status. This check rejected a perfectly
 # good build the first time it ran. -c reads all of the input, so there is no early close.
-EMBED_SYMS=$(riscv32-esp-elf-nm firmware/p4/build/ajmiddlecar.elf | grep -c _binary_radio_image_bin_start) || true
+EMBED_SYMS=$(riscv32-esp-elf-nm firmware/car/core/build/ajmiddlecar.elf | grep -c _binary_radio_image_bin_start) || true
 [ "${EMBED_SYMS:-0}" -gt 0 ] || { echo "ERROR: the car image does not embed a radio image"; exit 1; }
-EMBEDDED=$(wc -c < firmware/p4/main/radio_image.bin)
+EMBEDDED=$(wc -c < firmware/car/core/main/radio_image.bin)
 [ "$EMBEDDED" -gt 4096 ] || { echo "ERROR: the embedded radio image is $EMBEDDED bytes — not an image"; exit 1; }
 # The dongle is an Xtensa target; the car and its radio are both RISC-V, so an ESP-IDF installed
 # for the car alone has no compiler for it. Say so rather than letting a toolchain error look
 # like a firmware problem.
-if ! (cd firmware/s3 && idf.py fullclean >/dev/null && idf.py build); then
+if ! (cd firmware/dongle && idf.py fullclean >/dev/null && idf.py build); then
     echo "ERROR: the dongle build failed. If this is a fresh ESP-IDF install, it has no Xtensa"
     echo "       toolchain yet: ~/esp/esp-idf-v6.0.2/install.sh esp32s3"; exit 1
 fi

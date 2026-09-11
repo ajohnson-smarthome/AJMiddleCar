@@ -6,7 +6,7 @@
  * decision, and that one is pure and tested.
  *
  * The route is the vendor's: esp_hosted_cp_ota_begin/write/end/activate, reached through the
- * component's compat header, and proven on this board on 2026-08-20 (firmware/c6/README.md).
+ * component's compat header, and proven on this board on 2026-08-20 (firmware/car/modem/README.md).
  */
 
 /* The co-processor's running version, e.g. "3.0.6". Read once over RPC on the first call and

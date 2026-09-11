@@ -25,7 +25,7 @@ something here contradicts it, the spec wins.
 ## Global Constraints
 
 - **The dongle knows no car.** No SSID, password, device id, protocol or address may be compiled
-  into `firmware/s3`. The relays' destination is **the gateway the join produced**, read at
+  into `firmware/dongle`. The relays' destination is **the gateway the join produced**, read at
   runtime from `IP_EVENT_STA_GOT_IP`. A hard-coded `192.168.4.1` anywhere is a defect.
 - **The relays interpret nothing.** They move bytes between two sockets. No parsing, no
   buffering of whole messages, no knowledge of JSON or of the control frame.
@@ -33,11 +33,11 @@ something here contradicts it, the spec wins.
   and `POST /ota` writes firmware; both are USB-only today only because no second interface
   exists. This plan creates that interface, so this plan brings the guard. Nothing in it may be
   merged with the guard missing.
-- **Generated files are never hand-edited.** `firmware/s3/main/dongle_contract.inc` and
+- **Generated files are never hand-edited.** `firmware/dongle/main/dongle_contract.inc` and
   `app/AJMiddleCar/Generated/DongleAPI.swift` come from `contract/dongle-api.json` through
   `tools/gen_contract.py`.
 - **Pure modules stay pure.** `wifi_state.{c,h}` and `udp_sess.{c,h}` include no ESP-IDF header
-  and are host-tested by `firmware/s3/test/Makefile` with `cc -Wall -Wextra -Werror -std=c11`,
+  and are host-tested by `firmware/dongle/test/Makefile` with `cc -Wall -Wextra -Werror -std=c11`,
   exactly as `net_cfg` already is.
 - **No real network credentials anywhere** — not in tests, not in scripts, not in docs.
 - **ESP-IDF 6.0.2**, sourced with `tools/env-p4.sh`; the target comes from `sdkconfig.defaults`.
@@ -51,18 +51,18 @@ something here contradicts it, the spec wins.
 |---|---|
 | `contract/dongle-api.json` | *modify* — the relay's two forwarded ports become vocabulary |
 | `tools/gen_dongle.py`, `tools/test_gen_contract.py` | *modify* — emit and assert them |
-| `firmware/s3/main/wifi_state.{c,h}` | *create* — **pure**: the join state machine and its retry budget |
-| `firmware/s3/main/wifi_sta.{c,h}` | *create* — the radio: events in, state machine driven, gateway and RSSI out |
-| `firmware/s3/main/udp_sess.{c,h}` | *create* — **pure**: the real-time channel's session table |
-| `firmware/s3/main/relay_udp.{c,h}` | *create* — one socket per phone session, both directions |
-| `firmware/s3/main/relay_tcp.{c,h}` | *create* — a bounded pool of forwarded connections, one select loop |
-| `firmware/s3/main/api_guard.{c,h}` | *create* — refuses a connection whose local address is not the USB one |
-| `firmware/s3/main/status_api.c` | *modify* — `net.state` and `net.rssi` stop being constants; the guard is installed |
-| `firmware/s3/main/net_api.c` | *modify* — a changed `POST /net` starts a join |
-| `firmware/s3/main/main.c` | *modify* — start the radio and the relays |
-| `firmware/s3/main/CMakeLists.txt`, `firmware/s3/sdkconfig.defaults` | *modify* — sources, `esp_wifi`, station tuning |
-| `firmware/s3/test/Makefile`, `test_wifi_state.c`, `test_udp_sess.c` | *modify/create* — the two pure modules' host tests |
-| `firmware/s3/README.md`, `firmware/s3/verify-on-host.sh` | *modify* — the bench record and what it runs |
+| `firmware/dongle/main/wifi_state.{c,h}` | *create* — **pure**: the join state machine and its retry budget |
+| `firmware/dongle/main/wifi_sta.{c,h}` | *create* — the radio: events in, state machine driven, gateway and RSSI out |
+| `firmware/dongle/main/udp_sess.{c,h}` | *create* — **pure**: the real-time channel's session table |
+| `firmware/dongle/main/relay_udp.{c,h}` | *create* — one socket per phone session, both directions |
+| `firmware/dongle/main/relay_tcp.{c,h}` | *create* — a bounded pool of forwarded connections, one select loop |
+| `firmware/dongle/main/api_guard.{c,h}` | *create* — refuses a connection whose local address is not the USB one |
+| `firmware/dongle/main/status_api.c` | *modify* — `net.state` and `net.rssi` stop being constants; the guard is installed |
+| `firmware/dongle/main/net_api.c` | *modify* — a changed `POST /net` starts a join |
+| `firmware/dongle/main/main.c` | *modify* — start the radio and the relays |
+| `firmware/dongle/main/CMakeLists.txt`, `firmware/dongle/sdkconfig.defaults` | *modify* — sources, `esp_wifi`, station tuning |
+| `firmware/dongle/test/Makefile`, `test_wifi_state.c`, `test_udp_sess.c` | *modify/create* — the two pure modules' host tests |
+| `firmware/dongle/README.md`, `firmware/dongle/verify-on-host.sh` | *modify* — the bench record and what it runs |
 
 ---
 
@@ -77,7 +77,7 @@ the dongle knows which ports it forwards, not what speaks on them.
 
 **Files:**
 - Modify: `contract/dongle-api.json`, `tools/gen_dongle.py`, `tools/test_gen_contract.py`
-- Generated (regenerate, never hand-edit): `firmware/s3/main/dongle_contract.inc`,
+- Generated (regenerate, never hand-edit): `firmware/dongle/main/dongle_contract.inc`,
   `app/AJMiddleCar/Generated/DongleAPI.swift`
 
 **Interfaces:**
@@ -139,7 +139,7 @@ python3 tools/test_gen_contract.py
 bash tools/check_contract.sh
 tools/test-all.sh
 git add contract/dongle-api.json tools/gen_dongle.py tools/test_gen_contract.py \
-        firmware/s3/main/dongle_contract.inc app/AJMiddleCar/Generated/DongleAPI.swift
+        firmware/dongle/main/dongle_contract.inc app/AJMiddleCar/Generated/DongleAPI.swift
 git commit -m "feat(contract): the dongle's vocabulary gains the relay's ports"
 ```
 
@@ -157,16 +157,16 @@ knows nothing of `esp_wifi`; it takes events and answers with a state and one qu
 the caller attempt a connection now.
 
 **Files:**
-- Create: `firmware/s3/main/wifi_state.c`, `firmware/s3/main/wifi_state.h`
-- Create: `firmware/s3/test/test_wifi_state.c`
-- Modify: `firmware/s3/test/Makefile`
+- Create: `firmware/dongle/main/wifi_state.c`, `firmware/dongle/main/wifi_state.h`
+- Create: `firmware/dongle/test/test_wifi_state.c`
+- Modify: `firmware/dongle/test/Makefile`
 
 **Interfaces:**
 - Produces: the types and functions below. Task 3 drives them from `esp_wifi` events.
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `firmware/s3/test/test_wifi_state.c`. Follow `test_net_cfg.c`'s shape — a `main` that runs
+Create `firmware/dongle/test/test_wifi_state.c`. Follow `test_net_cfg.c`'s shape — a `main` that runs
 named cases and counts failures, no framework:
 
 ```c
@@ -302,18 +302,18 @@ int main(void)
 
 - [ ] **Step 2: Add it to the host build**
 
-In `firmware/s3/test/Makefile`, add a `test_wifi_state` target beside `test_net_cfg`, built the
+In `firmware/dongle/test/Makefile`, add a `test_wifi_state` target beside `test_net_cfg`, built the
 same way, and add it to `all` and to `run`. Keep the existing flags exactly:
 `-I../main -Wall -Wextra -Werror -std=c11`.
 
 - [ ] **Step 3: Run it and watch it fail**
 
-Run: `make -C firmware/s3/test run`
+Run: `make -C firmware/dongle/test run`
 Expected: the compile fails — `wifi_state.h` does not exist.
 
 - [ ] **Step 4: The header**
 
-Create `firmware/s3/main/wifi_state.h`:
+Create `firmware/dongle/main/wifi_state.h`:
 
 ```c
 #ifndef WIFI_STATE_H
@@ -370,7 +370,7 @@ const char *wifi_state_name(const wifi_sm_t *sm);
 
 - [ ] **Step 5: The implementation**
 
-Create `firmware/s3/main/wifi_state.c`:
+Create `firmware/dongle/main/wifi_state.c`:
 
 ```c
 #include "wifi_state.h"
@@ -434,10 +434,10 @@ const char *wifi_state_name(const wifi_sm_t *sm)
 - [ ] **Step 6: Run the tests, then the suite, then commit**
 
 ```bash
-make -C firmware/s3/test run
+make -C firmware/dongle/test run
 tools/test-all.sh
-git add firmware/s3/main/wifi_state.c firmware/s3/main/wifi_state.h \
-        firmware/s3/test/test_wifi_state.c firmware/s3/test/Makefile
+git add firmware/dongle/main/wifi_state.c firmware/dongle/main/wifi_state.h \
+        firmware/dongle/test/test_wifi_state.c firmware/dongle/test/Makefile
 git commit -m "feat(s3): the join gives up, and says so — as a testable policy"
 ```
 
@@ -449,10 +449,10 @@ The glue. It owns `esp_wifi`, feeds the state machine, and publishes three thing
 firmware needs: the state name, the RSSI, and the gateway the relays aim at.
 
 **Files:**
-- Create: `firmware/s3/main/wifi_sta.c`, `firmware/s3/main/wifi_sta.h`
-- Modify: `firmware/s3/main/status_api.c`, `firmware/s3/main/net_api.c`,
-  `firmware/s3/main/main.c`, `firmware/s3/main/CMakeLists.txt`,
-  `firmware/s3/sdkconfig.defaults`, `firmware/s3/README.md`
+- Create: `firmware/dongle/main/wifi_sta.c`, `firmware/dongle/main/wifi_sta.h`
+- Modify: `firmware/dongle/main/status_api.c`, `firmware/dongle/main/net_api.c`,
+  `firmware/dongle/main/main.c`, `firmware/dongle/main/CMakeLists.txt`,
+  `firmware/dongle/sdkconfig.defaults`, `firmware/dongle/README.md`
 
 **Interfaces:**
 - Consumes: `wifi_state.h` (Task 2); `net_cfg_t` and `net_api_current` (already present).
@@ -475,7 +475,7 @@ firmware needs: the state name, the RSSI, and the gateway the relays aim at.
 
 - [ ] **Step 1: Station configuration**
 
-Append to `firmware/s3/sdkconfig.defaults`:
+Append to `firmware/dongle/sdkconfig.defaults`:
 
 ```
 # The S3 has its own radio — unlike the P4, which has none and drives a C6 over SDIO. Nothing
@@ -496,7 +496,7 @@ CONFIG_LWIP_MAX_SOCKETS=16
 
 - [ ] **Step 2: The header**
 
-Create `firmware/s3/main/wifi_sta.h`:
+Create `firmware/dongle/main/wifi_sta.h`:
 
 ```c
 #ifndef WIFI_STA_H
@@ -544,7 +544,7 @@ bool wifi_sta_gateway(uint32_t *out_be);
 
 - [ ] **Step 3: The implementation**
 
-Create `firmware/s3/main/wifi_sta.c`. Requirements, in the order they matter:
+Create `firmware/dongle/main/wifi_sta.c`. Requirements, in the order they matter:
 
 1. `wifi_sta_start` does: `esp_netif_create_default_wifi_sta()`, `esp_wifi_init` with
    `WIFI_INIT_CONFIG_DEFAULT()`, register a handler for `WIFI_EVENT` (any id) and one for
@@ -576,7 +576,7 @@ say so in a comment rather than leaving the reader to check.
 
 - [ ] **Step 4: `/status` stops lying**
 
-In `firmware/s3/main/status_api.c`, replace the hard-coded `DONGLE_STATE_IDLE` and `0`:
+In `firmware/dongle/main/status_api.c`, replace the hard-coded `DONGLE_STATE_IDLE` and `0`:
 
 ```c
                      "\"" DONGLE_KEY_NET_STATE "\":\"%s\","
@@ -596,7 +596,7 @@ stating a number that is no longer the worst case.
 
 - [ ] **Step 5: A changed `POST /net` starts a join**
 
-In `firmware/s3/main/net_api.c`, where the handler has decided the posted value differs from the
+In `firmware/dongle/main/net_api.c`, where the handler has decided the posted value differs from the
 stored one and has written NVS, call `wifi_sta_join(&cfg)`. Where it decided the value is
 unchanged, call nothing — the spec is explicit: "A `POST` whose body matches the stored value does
 not rewrite flash and does not restart a radio that is already connected — so the app may send it
@@ -604,7 +604,7 @@ unconditionally, and does."
 
 - [ ] **Step 6: Start it**
 
-In `firmware/s3/main/main.c`, after `net_api_load()` and before `status_api_start()`:
+In `firmware/dongle/main/main.c`, after `net_api_load()` and before `status_api_start()`:
 
 ```c
     ESP_ERROR_CHECK(wifi_sta_start());
@@ -616,24 +616,24 @@ stay above the mark-valid block, which remains the last thing `app_main` does.
 - [ ] **Step 7: Build, measure, record**
 
 Add `"wifi_sta.c"` and `"wifi_state.c"` to `SRCS` and `esp_wifi` to `PRIV_REQUIRES` in
-`firmware/s3/main/CMakeLists.txt`, then:
+`firmware/dongle/main/CMakeLists.txt`, then:
 
 ```bash
-source tools/env-p4.sh && (cd firmware/s3 && idf.py build)
+source tools/env-p4.sh && (cd firmware/dongle && idf.py build)
 ```
 
 The spec asks for this number rather than an assumption: "The app is 395 KB today against a 4 MB
 slot; the station and its stack will roughly double it. Comfortable, and worth measuring rather
 than assuming, because the earlier 1 MB partition would have been tight." Record the built size
-in `firmware/s3/README.md`'s bench table as an observed fact, with the slot size beside it.
+in `firmware/dongle/README.md`'s bench table as an observed fact, with the slot size beside it.
 
 - [ ] **Step 8: Suite, then commit**
 
 ```bash
 tools/test-all.sh
-git add firmware/s3/main/wifi_sta.c firmware/s3/main/wifi_sta.h \
-        firmware/s3/main/status_api.c firmware/s3/main/net_api.c firmware/s3/main/main.c \
-        firmware/s3/main/CMakeLists.txt firmware/s3/sdkconfig.defaults firmware/s3/README.md
+git add firmware/dongle/main/wifi_sta.c firmware/dongle/main/wifi_sta.h \
+        firmware/dongle/main/status_api.c firmware/dongle/main/net_api.c firmware/dongle/main/main.c \
+        firmware/dongle/main/CMakeLists.txt firmware/dongle/sdkconfig.defaults firmware/dongle/README.md
 git commit -m "feat(s3): the dongle joins the network it was told to join"
 ```
 
@@ -652,10 +652,10 @@ with no lookup and no ambiguity. A single task selects over the phone-facing soc
 live car-facing one.
 
 **Files:**
-- Create: `firmware/s3/main/udp_sess.c`, `firmware/s3/main/udp_sess.h` (**pure**)
-- Create: `firmware/s3/main/relay_udp.c`, `firmware/s3/main/relay_udp.h`
-- Create: `firmware/s3/test/test_udp_sess.c`; modify `firmware/s3/test/Makefile`
-- Modify: `firmware/s3/main/main.c`, `firmware/s3/main/CMakeLists.txt`
+- Create: `firmware/dongle/main/udp_sess.c`, `firmware/dongle/main/udp_sess.h` (**pure**)
+- Create: `firmware/dongle/main/relay_udp.c`, `firmware/dongle/main/relay_udp.h`
+- Create: `firmware/dongle/test/test_udp_sess.c`; modify `firmware/dongle/test/Makefile`
+- Modify: `firmware/dongle/main/main.c`, `firmware/dongle/main/CMakeLists.txt`
 
 **Interfaces:**
 - Consumes: `DONGLE_RELAY_RT_PORT` (Task 1); `wifi_sta_gateway` (Task 3). ~~`wifi_sta_on_connected`~~
@@ -664,7 +664,7 @@ live car-facing one.
 
 - [ ] **Step 1: Write the failing tests for the pure half**
 
-Create `firmware/s3/test/test_udp_sess.c`, in `test_net_cfg.c`'s style. Cover: a new peer takes a
+Create `firmware/dongle/test/test_udp_sess.c`, in `test_net_cfg.c`'s style. Cover: a new peer takes a
 free slot; the same peer returns the same slot; a different port is a different session; the
 table fills and then evicts the least recently used; expiry frees a slot; expiry leaves a fresh
 session alone; a touch moves a session's deadline. Use explicit `now_ms` values — the module takes
@@ -672,7 +672,7 @@ time as an argument precisely so the tests need no clock.
 
 - [ ] **Step 2: The pure header**
 
-Create `firmware/s3/main/udp_sess.h`:
+Create `firmware/dongle/main/udp_sess.h`:
 
 ```c
 #ifndef UDP_SESS_H
@@ -731,12 +731,12 @@ uint32_t udp_sess_expire(udp_sess_table_t *t, uint32_t now_ms, uint32_t idle_ms)
 Write `udp_sess.c` to satisfy the header and the tests. Eviction picks the smallest `last_ms`
 among used slots. `udp_sess_expire` returns `1u << i` for each slot it frees.
 
-Add `test_udp_sess` to `firmware/s3/test/Makefile` beside the other two, then
-`make -C firmware/s3/test run`.
+Add `test_udp_sess` to `firmware/dongle/test/Makefile` beside the other two, then
+`make -C firmware/dongle/test run`.
 
 - [ ] **Step 4: The relay**
 
-Create `firmware/s3/main/relay_udp.{c,h}`. `relay_udp_start()` creates one task. The task:
+Create `firmware/dongle/main/relay_udp.{c,h}`. `relay_udp_start()` creates one task. The task:
 
 1. Waits until `wifi_sta_gateway()` succeeds — before that there is nowhere to forward. Re-reads
    it ~~whenever the connected callback fires~~ **once per `select()` pass** (there is no
@@ -783,8 +783,8 @@ behind the first. Four leaves room for the browser-style parallelism a REST clie
 without letting a leaked slot starve the pool.
 
 **Files:**
-- Create: `firmware/s3/main/relay_tcp.c`, `firmware/s3/main/relay_tcp.h`
-- Modify: `firmware/s3/main/main.c`, `firmware/s3/main/CMakeLists.txt`
+- Create: `firmware/dongle/main/relay_tcp.c`, `firmware/dongle/main/relay_tcp.h`
+- Modify: `firmware/dongle/main/main.c`, `firmware/dongle/main/CMakeLists.txt`
 
 **Interfaces:**
 - Consumes: `DONGLE_RELAY_HTTP_PORT` (Task 1); `wifi_sta_gateway` (Task 3). ~~`wifi_sta_on_connected`~~
@@ -793,7 +793,7 @@ without letting a leaked slot starve the pool.
 
 - [ ] **Step 1: The header**
 
-Create `firmware/s3/main/relay_tcp.h` declaring `relay_tcp_start(void)`, with a comment carrying
+Create `firmware/dongle/main/relay_tcp.h` declaring `relay_tcp_start(void)`, with a comment carrying
 three facts a reader needs: the relay interprets nothing (it is a byte pump, and must never grow
 a parser); the destination is the gateway the join produced, never a constant; and — **amended
 after review, same correction as Task 4 Step 4** — it is the `SO_BINDTODEVICE` pin to the USB
@@ -802,7 +802,7 @@ weak-host lwIP would still deliver a bind-address-only listener a SYN from the c
 
 - [ ] **Step 2: The relay**
 
-Create `firmware/s3/main/relay_tcp.c` with a pool of four slots, each holding the two sockets and
+Create `firmware/dongle/main/relay_tcp.c` with a pool of four slots, each holding the two sockets and
 a state. The task:
 
 1. Waits for a gateway, as the UDP relay does, and drops every live slot if it changes.
@@ -843,10 +843,10 @@ address explicitly. The HTTP server cannot, so it gets a guard instead.
 rather than the request".
 
 **Files:**
-- Create: `firmware/s3/main/api_guard.c`, `firmware/s3/main/api_guard.h`
-- Modify: `firmware/s3/main/status_api.c`, `firmware/s3/main/status_api.h`,
-  `firmware/s3/main/ota_api.h`, `firmware/s3/main/CMakeLists.txt`,
-  `firmware/s3/verify-on-host.sh`, `firmware/s3/README.md`
+- Create: `firmware/dongle/main/api_guard.c`, `firmware/dongle/main/api_guard.h`
+- Modify: `firmware/dongle/main/status_api.c`, `firmware/dongle/main/status_api.h`,
+  `firmware/dongle/main/ota_api.h`, `firmware/dongle/main/CMakeLists.txt`,
+  `firmware/dongle/verify-on-host.sh`, `firmware/dongle/README.md`
 
 **Interfaces:**
 - Produces: `esp_err_t api_guard_open(httpd_handle_t hd, int sockfd);` — assigned to
@@ -854,7 +854,7 @@ rather than the request".
 
 - [ ] **Step 1: The guard**
 
-Create `firmware/s3/main/api_guard.{c,h}`. `api_guard_open` calls `getsockname(sockfd, ...)` and
+Create `firmware/dongle/main/api_guard.{c,h}`. `api_guard_open` calls `getsockname(sockfd, ...)` and
 returns `ESP_OK` only when the local address equals `DONGLE_HOST`; otherwise it logs the rejected
 peer at `ESP_LOGW` and returns `ESP_FAIL`, which makes `esp_http_server` close the socket before
 a single byte of request is parsed.
@@ -876,10 +876,10 @@ alternative, and `open_fn` is what makes that safe.
 - [ ] **Step 3: Prove it on the bench script**
 
 The guard's whole point is a request that must *not* be answered, and the existing script only
-tests from the USB side, where everything is allowed. Add to `firmware/s3/verify-on-host.sh`,
+tests from the USB side, where everything is allowed. Add to `firmware/dongle/verify-on-host.sh`,
 inside the `DONGLE ATTACHED` block, a check that the USB side still answers `/status` **and** a
 note naming the check that needs the car — a request to the dongle's station address on 8080 must
-be refused. Add the matching pending row to `firmware/s3/README.md`'s bench table.
+be refused. Add the matching pending row to `firmware/dongle/README.md`'s bench table.
 
 - [ ] **Step 4: Build, suite, commit**
 
@@ -894,7 +894,7 @@ feat(s3): the config surface refuses everything that is not the USB wire
 - **The app side.** `CarHost.host` moving to the dongle, the startup sequence, the update gate.
   That is Plan 5, and it needs a simulator rather than a bench.
 - **Video.** Out of scope, as the spec says.
-- **Any change to the car.** `firmware/p4` is not touched. That is the property the relay exists
+- **Any change to the car.** `firmware/car/core` is not touched. That is the property the relay exists
   to preserve.
 
 ## Bench verification, when hardware is available
@@ -913,4 +913,4 @@ a car, and the plan says so rather than implying otherwise. In order, with the c
 5. From a machine on the car's network, `curl http://<dongle's station address>:8080/status`.
    It must be refused. This is the only test of the guard, and the only one that proves a Wi-Fi
    password and a firmware-write endpoint are not exposed.
-6. Record every result in `firmware/s3/README.md`'s table.
+6. Record every result in `firmware/dongle/README.md`'s table.

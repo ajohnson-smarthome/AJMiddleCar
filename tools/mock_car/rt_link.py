@@ -18,7 +18,7 @@ from collections import deque
 from generated import PROTO, RT
 from state import parse_frame, seq_is_newer
 
-# The service tick. firmware/p4/main/rt_link.c uses a 20 ms SO_RCVTIMEO as its clock
+# The service tick. firmware/car/core/main/rt_link.c uses a 20 ms SO_RCVTIMEO as its clock
 # (TICK_MS there), so the watchdog is checked at the same granularity here and telemetry
 # rides a counter on it. Not in contract/car-api.json — mirrored by hand from that file,
 # unlike PUSH_EVERY below, which is derived from the schema's telemetry rate.

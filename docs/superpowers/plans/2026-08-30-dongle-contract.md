@@ -42,9 +42,9 @@ A string field cannot travel as an `int32`. Adding one would mean a new type acr
 | `tools/check_contract.sh` | Stops holding its own copy of the artifact list; asks the generator |
 | `contract/dongle-api.json` | The dongle's vocabulary: address, port, identity, paths, field names, bounds, the state enum |
 | `tools/gen_dongle.py` | The dongle's two emitters, kept out of `gen_contract.py` so the car's file does not grow a second device's shapes |
-| `firmware/s3/main/dongle_contract.inc` | Generated. Pure `#define`s |
+| `firmware/dongle/main/dongle_contract.inc` | Generated. Pure `#define`s |
 | `app/AJMiddleCar/Generated/DongleAPI.swift` | Generated. No consumer until Plan 4, deliberately |
-| `firmware/s3/main/{net_cfg.h,status_api.c,usb_net.h}` | Stop holding the values the schema now owns |
+| `firmware/dongle/main/{net_cfg.h,status_api.c,usb_net.h}` | Stop holding the values the schema now owns |
 | `tools/test_gen_contract.py` | Tests for the routing table and the dongle's emitters |
 | `docs/superpowers/specs/2026-08-30-dongle-api-design.md` | The "hand-written, not generated" section is amended to what is now true |
 
@@ -76,7 +76,7 @@ class TestArtifactListing(unittest.TestCase):
         out = subprocess.run(
             [sys.executable, str(ROOT / "tools" / "gen_contract.py"), "--list-artifacts"],
             capture_output=True, text=True, check=True).stdout.split()
-        self.assertIn("firmware/p4/main/cfg_table.inc", out)
+        self.assertIn("firmware/car/core/main/cfg_table.inc", out)
         self.assertIn("app/AJMiddleCar/Generated/CarAPI.swift", out)
         self.assertIn("tools/mock_car/generated.py", out)
 
@@ -121,7 +121,7 @@ TARGETS = [
         "name": "car",
         "schema": SCHEMA,
         "artifacts": [
-            ("firmware/p4/main/cfg_table.inc", emit_c),
+            ("firmware/car/core/main/cfg_table.inc", emit_c),
             ("app/AJMiddleCar/Generated/CarAPI.swift", emit_swift),
             ("tools/mock_car/generated.py", emit_python),
         ],
@@ -240,7 +240,7 @@ git commit -m "refactor(contract): route generated artefacts from one table both
 - Create: `tools/gen_dongle.py`
 - Modify: `tools/gen_contract.py`
 - Modify: `tools/test_gen_contract.py`
-- Create (generated): `firmware/s3/main/dongle_contract.inc`
+- Create (generated): `firmware/dongle/main/dongle_contract.inc`
 - Create (generated): `app/AJMiddleCar/Generated/DongleAPI.swift`
 
 **Interfaces:**
@@ -255,7 +255,7 @@ git commit -m "refactor(contract): route generated artefacts from one table both
 ```json
 {
   "device": "ajdongle",
-  "doc": "The vocabulary the app and the dongle must spell identically. Rules live in firmware/s3/main/net_cfg.{c,h}, which is host-tested; this file carries only names, numbers and paths.",
+  "doc": "The vocabulary the app and the dongle must spell identically. Rules live in firmware/dongle/main/net_cfg.{c,h}, which is host-tested; this file carries only names, numbers and paths.",
   "network": {
     "host": "192.168.7.1",
     "port": 8080,
@@ -386,7 +386,7 @@ Expected: `TestDongleSchema` fails on the missing file, `TestDongleEmitters` on 
 Separate from gen_contract.py so the car's file does not grow a second device's shapes.
 The two schemas share a generator's plumbing and nothing else — neither references the
 other, and the dongle's rules (lengths, the character class, escaping) live in
-firmware/s3/main/net_cfg.{c,h} where they are host-tested rather than here where they
+firmware/dongle/main/net_cfg.{c,h} where they are host-tested rather than here where they
 would only be described.
 """
 
@@ -493,7 +493,7 @@ Then append to `TARGETS`:
         "name": "dongle",
         "schema": ROOT / "contract" / "dongle-api.json",
         "artifacts": [
-            ("firmware/s3/main/dongle_contract.inc", emit_dongle_c),
+            ("firmware/dongle/main/dongle_contract.inc", emit_dongle_c),
             ("app/AJMiddleCar/Generated/DongleAPI.swift", emit_dongle_swift),
         ],
         # No spliced documentation: the dongle's endpoints are described in its spec as
@@ -512,7 +512,7 @@ python3 tools/test_gen_contract.py -v
 Expected: both new files appear, all tests pass. Then confirm the car is still untouched:
 
 ```bash
-git diff --stat firmware/p4 app/AJMiddleCar/Generated/CarAPI.swift tools/mock_car/generated.py docs/protocol.md
+git diff --stat firmware/car/core app/AJMiddleCar/Generated/CarAPI.swift tools/mock_car/generated.py docs/protocol.md
 ```
 
 Expected: **empty**. A single changed byte in the car's artifacts means Task 1's routing rewrite was not faithful.
@@ -526,20 +526,20 @@ bash tools/check_contract.sh
 Expected: `contract: no drift`. Then prove it actually watches the new files — edit one generated file by hand, re-run, see it caught, and restore it:
 
 ```bash
-printf '\n#define TAMPER 1\n' >> firmware/s3/main/dongle_contract.inc
+printf '\n#define TAMPER 1\n' >> firmware/dongle/main/dongle_contract.inc
 bash tools/check_contract.sh || echo "caught, as it should be"
-git checkout firmware/s3/main/dongle_contract.inc
+git checkout firmware/dongle/main/dongle_contract.inc
 bash tools/check_contract.sh
 ```
 
-Expected: the middle run reports `DRIFT: firmware/s3/main/dongle_contract.inc` and exits non-zero; the last reports no drift. Record both in your report — a drift check that does not catch a deliberate edit is worse than none.
+Expected: the middle run reports `DRIFT: firmware/dongle/main/dongle_contract.inc` and exits non-zero; the last reports no drift. Record both in your report — a drift check that does not catch a deliberate edit is worse than none.
 
 - [ ] **Step 8: Run the whole suite and commit**
 
 ```bash
 tools/test-all.sh
 git add contract/dongle-api.json tools/gen_dongle.py tools/gen_contract.py \
-        tools/test_gen_contract.py firmware/s3/main/dongle_contract.inc \
+        tools/test_gen_contract.py firmware/dongle/main/dongle_contract.inc \
         app/AJMiddleCar/Generated/DongleAPI.swift
 git commit -m "feat(contract): the dongle's vocabulary becomes generated, and drift-checked"
 ```
@@ -549,14 +549,14 @@ git commit -m "feat(contract): the dongle's vocabulary becomes generated, and dr
 ### Task 3: The firmware stops holding the values
 
 **Files:**
-- Modify: `firmware/s3/main/net_cfg.h`
-- Modify: `firmware/s3/main/status_api.c`
-- Modify: `firmware/s3/main/usb_net.h`
-- Modify: `firmware/s3/test/Makefile`
+- Modify: `firmware/dongle/main/net_cfg.h`
+- Modify: `firmware/dongle/main/status_api.c`
+- Modify: `firmware/dongle/main/usb_net.h`
+- Modify: `firmware/dongle/test/Makefile`
 - Modify: `docs/superpowers/specs/2026-08-30-dongle-api-design.md`
 
 **Interfaces:**
-- Consumes from Task 2: `firmware/s3/main/dongle_contract.inc` and its `DONGLE_*` names.
+- Consumes from Task 2: `firmware/dongle/main/dongle_contract.inc` and its `DONGLE_*` names.
 
 - [ ] **Step 1: Have `net_cfg.h` take its bounds from the contract**
 
@@ -616,10 +616,10 @@ keeping the existing comment about why the subnet was chosen. The netmask stays 
 
 - [ ] **Step 4: Teach the host test where the header is**
 
-`firmware/s3/test/Makefile` already has `-I../main`, which is where the generated `.inc` lands, so no change should be needed. **Verify** rather than assume:
+`firmware/dongle/test/Makefile` already has `-I../main`, which is where the generated `.inc` lands, so no change should be needed. **Verify** rather than assume:
 
 ```bash
-make -C firmware/s3/test clean && make -C firmware/s3/test run
+make -C firmware/dongle/test clean && make -C firmware/dongle/test run
 ```
 
 Expected: `test_net_cfg: all passed`. If the include is not found, add the path and say so.
@@ -627,7 +627,7 @@ Expected: `test_net_cfg: all passed`. If the include is not found, add the path 
 - [ ] **Step 5: Build the firmware**
 
 ```bash
-source tools/env-p4.sh && cd firmware/s3 && idf.py build
+source tools/env-p4.sh && cd firmware/dongle && idf.py build
 ```
 
 Expected: clean, no warnings. Record the binary size and compare it to the previous build — the string-concatenation claim in step 2 predicts no meaningful change.
@@ -653,7 +653,7 @@ Expected: `== all green ==` with `contract: no drift`.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add firmware/s3 docs/superpowers/specs/2026-08-30-dongle-api-design.md
+git add firmware/dongle docs/superpowers/specs/2026-08-30-dongle-api-design.md
 git commit -m "feat(s3): the firmware reads its contract instead of restating it"
 ```
 
@@ -661,7 +661,7 @@ git commit -m "feat(s3): the firmware reads its contract instead of restating it
 
 ## Verification on hardware
 
-Deliberately not a task here. This branch changes where constants come from, not what they are, so its bench evidence is the same run Plan 2 is waiting for: flash once with both branches merged, then `firmware/s3/verify-on-host.sh`.
+Deliberately not a task here. This branch changes where constants come from, not what they are, so its bench evidence is the same run Plan 2 is waiting for: flash once with both branches merged, then `firmware/dongle/verify-on-host.sh`.
 
 One thing that run should confirm beyond Plan 2's own list: `/status` still answers on **8080** and still names itself `ajdongle`. If the generated header disagreed with what the firmware previously hardcoded, that is where it shows — and it is the reason step 2 of Task 3 asks for the binary size before and after rather than trusting that a macro substitution changed nothing.
 

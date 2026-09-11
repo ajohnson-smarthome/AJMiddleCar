@@ -12,7 +12,7 @@ static const char *TAG = "display_hal";
 
 /* NOTHING HERE HAS EVER RUN AGAINST GLASS. The panel had not been bought when this was
  * written, so every constant below is chosen from the datasheet and from u8g2's own source,
- * not confirmed on a bench. firmware/s3/README.md's table lists what the panel still owes. */
+ * not confirmed on a bench. firmware/dongle/README.md's table lists what the panel still owes. */
 
 static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_dev;

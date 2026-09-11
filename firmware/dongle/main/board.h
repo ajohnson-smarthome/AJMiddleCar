@@ -2,7 +2,7 @@
 #define BOARD_H
 
 // Everything this firmware assumes about the physical board lives here, and only here.
-// The twin of firmware/p4/main/board.h, same role: "every assumption about the physical
+// The twin of firmware/car/core/main/board.h, same role: "every assumption about the physical
 // board... Bring-up edits this file and nothing else." (CLAUDE.md)
 //
 // Board: a third-party carrier silkscreened `ESP32-23 2022-V1.3`, ESP32-S3 module, native

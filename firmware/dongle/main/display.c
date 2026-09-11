@@ -25,7 +25,7 @@ static const char *TAG = "display";
 
 /* NOTHING BELOW HAS BEEN SEEN ON GLASS. The panel had not been bought when this was written:
  * every coordinate is derived from the fonts' own metrics and the design's template, and not
- * one of them has been looked at. firmware/s3/README.md's bench table lists what is owed. */
+ * one of them has been looked at. firmware/dongle/README.md's bench table lists what is owed. */
 
 /* --- the template, in pixels ------------------------------------------------------------
  *

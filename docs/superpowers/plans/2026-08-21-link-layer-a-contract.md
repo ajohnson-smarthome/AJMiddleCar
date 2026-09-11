@@ -30,9 +30,9 @@
 | `tools/gen_contract.py` | Reads the schema, writes the four artefacts. One emitter function per artefact |
 | `tools/test_gen_contract.py` | stdlib `unittest` over the schema and each emitter, plus a guard asserting the schema matches the firmware's current constants |
 | `tools/check_contract.sh` | Regenerate to a temp dir, diff against committed, exit non-zero on drift |
-| `firmware/p4/main/cfg_contract.h` | Hand-written types the generated table uses (`cfg_field_t`, `cfg_domain_t`). Not generated |
-| `firmware/p4/main/cfg_table.inc` | **Generated.** The descriptor table |
-| `firmware/p4/test/test_cfg_table.c` | Host test that the generated table compiles and carries the right ranges |
+| `firmware/car/core/main/cfg_contract.h` | Hand-written types the generated table uses (`cfg_field_t`, `cfg_domain_t`). Not generated |
+| `firmware/car/core/main/cfg_table.inc` | **Generated.** The descriptor table |
+| `firmware/car/core/test/test_cfg_table.c` | Host test that the generated table compiles and carries the right ranges |
 | `app/AJMiddleCar/Generated/CarAPI.swift` | **Generated.** `Codable` structs, range constants, defaults |
 | `app/tests/test_carapi.swift` | Host test over the generated Swift |
 | `tools/mock_car/generated.py` | **Generated.** Domain table and a validator for the mock |
@@ -49,7 +49,7 @@ The four transport files added on 2026-08-21 are untracked while tracked files c
 **Files:**
 - Add to git: `app/AJMiddleCar/CarNet.swift`, `app/AJMiddleCar/CarHTTP.swift`, `app/AJMiddleCar/HTTPParse.swift`, `app/AJMiddleCarTests/HTTPParseTests.swift`
 - Delete: `app/AJMiddleCar/DiagProbe.swift`
-- Modify: `app/AJMiddleCar/AJMiddleCarApp.swift`, `app/AJMiddleCar/CarConnection.swift`, `app/AJMiddleCar/AppFlow.swift`, `firmware/p4/main/telemetry.c`, `app/project.yml`
+- Modify: `app/AJMiddleCar/AJMiddleCarApp.swift`, `app/AJMiddleCar/CarConnection.swift`, `app/AJMiddleCar/AppFlow.swift`, `firmware/car/core/main/telemetry.c`, `app/project.yml`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -113,7 +113,7 @@ In `app/AJMiddleCar/AppFlow.swift`, delete every line matching `NSLog("DIAG flow
 
 - [ ] **Step 5: Remove the firmware rate diagnostic**
 
-In `firmware/p4/main/telemetry.c`, `telemetry_gather` contains:
+In `firmware/car/core/main/telemetry.c`, `telemetry_gather` contains:
 
 ```c
     // ==== TEMPORARY BENCH DIAGNOSTIC — NOT FOR COMMIT ====
@@ -168,7 +168,7 @@ git add app/AJMiddleCar/CarNet.swift app/AJMiddleCar/CarHTTP.swift \
         app/AJMiddleCar/HTTPParse.swift app/AJMiddleCarTests/HTTPParseTests.swift
 git add -A app/AJMiddleCar/AJMiddleCarApp.swift app/AJMiddleCar/CarConnection.swift \
            app/AJMiddleCar/AppFlow.swift app/AJMiddleCar/DiagProbe.swift \
-           app/project.yml firmware/p4/main/telemetry.c
+           app/project.yml firmware/car/core/main/telemetry.c
 git commit -m "chore: commit the pinned-networking transport, drop the bench diagnostics
 
 The Wi-Fi-pinned transport landed as four untracked files while tracked callers
@@ -265,7 +265,7 @@ class TestSchema(unittest.TestCase):
 
     def test_ranges_match_the_firmware_today(self):
         """The schema must describe the firmware that exists, not one we imagined."""
-        main = ROOT / "firmware" / "p4" / "main"
+        main = ROOT / "firmware" / "car" / "core" / "main"
         src = "\n".join((main / n).read_text()
                         for n in ("wheel.h", "dims.h", "recovery.h", "ramp.c",
                                   "ramp_api.c", "trim_api.c"))
@@ -682,10 +682,10 @@ the drift check it is meant to enable useless.
 ### Task 4: The C descriptor table
 
 **Files:**
-- Create: `firmware/p4/main/cfg_contract.h`
-- Create: `firmware/p4/main/cfg_table.inc` (generated)
-- Create: `firmware/p4/test/test_cfg_table.c`
-- Modify: `tools/gen_contract.py`, `tools/test_gen_contract.py`, `firmware/p4/test/Makefile`
+- Create: `firmware/car/core/main/cfg_contract.h`
+- Create: `firmware/car/core/main/cfg_table.inc` (generated)
+- Create: `firmware/car/core/test/test_cfg_table.c`
+- Modify: `tools/gen_contract.py`, `tools/test_gen_contract.py`, `firmware/car/core/test/Makefile`
 
 **Interfaces:**
 - Consumes: `load_schema`, `write`, `BANNER` from Task 3.
@@ -717,7 +717,7 @@ class TestCEmitter(unittest.TestCase):
             self.assertEqual(out.count(f'"{d["nvs_key"]}"'), 1, d["path"])
 ```
 
-And a C host test, `firmware/p4/test/test_cfg_table.c`:
+And a C host test, `firmware/car/core/test/test_cfg_table.c`:
 
 ```c
 /* The generated table must compile as plain C and carry the schema's numbers. */
@@ -783,7 +783,7 @@ Expected: `AttributeError: module 'gen_contract' has no attribute 'emit_c'`.
 
 - [ ] **Step 3: Write the hand-written C types**
 
-Create `firmware/p4/main/cfg_contract.h`:
+Create `firmware/car/core/main/cfg_contract.h`:
 
 ```c
 #ifndef CFG_CONTRACT_H
@@ -864,21 +864,21 @@ def emit_c(schema):
 and inside `main`, after the doc is written:
 
 ```python
-    write(root / "firmware" / "p4" / "main" / "cfg_table.inc", emit_c(schema))
+    write(root / "firmware" / "car" / "core" / "main" / "cfg_table.inc", emit_c(schema))
 ```
 
 - [ ] **Step 5: Generate, then wire the C test into the host Makefile**
 
 ```bash
-cd ~/VSCode/esp32-p4-car && python3 tools/gen_contract.py && head -20 firmware/p4/main/cfg_table.inc
+cd ~/VSCode/esp32-p4-car && python3 tools/gen_contract.py && head -20 firmware/car/core/main/cfg_table.inc
 ```
 
-Then open `firmware/p4/test/Makefile` and read how the existing host tests are declared. Add `test_cfg_table` to the same list the other tests use, following the file's existing pattern exactly — it already compiles sources from `../main` with plain `cc`, so the new test needs the same include path and no new flags.
+Then open `firmware/car/core/test/Makefile` and read how the existing host tests are declared. Add `test_cfg_table` to the same list the other tests use, following the file's existing pattern exactly — it already compiles sources from `../main` with plain `cc`, so the new test needs the same include path and no new flags.
 
 - [ ] **Step 6: Run the host tests**
 
 ```bash
-cd ~/VSCode/esp32-p4-car/firmware/p4/test && make run
+cd ~/VSCode/esp32-p4-car/firmware/car/core/test && make run
 ```
 
 Expected: the existing tests still pass and `test_cfg_table: OK` appears.
@@ -895,8 +895,8 @@ Expected: `Ran 10 tests` and `OK`.
 
 ```bash
 cd ~/VSCode/esp32-p4-car
-git add firmware/p4/main/cfg_contract.h firmware/p4/main/cfg_table.inc \
-        firmware/p4/test/test_cfg_table.c firmware/p4/test/Makefile \
+git add firmware/car/core/main/cfg_contract.h firmware/car/core/main/cfg_table.inc \
+        firmware/car/core/test/test_cfg_table.c firmware/car/core/test/Makefile \
         tools/gen_contract.py tools/test_gen_contract.py
 git commit -m "feat(contract): generated C descriptor table, host-tested
 
@@ -1277,7 +1277,7 @@ trap 'rm -rf "$TMP"' EXIT
 python3 "$ROOT/tools/gen_contract.py" --out-dir "$TMP"
 
 status=0
-for rel in firmware/p4/main/cfg_table.inc \
+for rel in firmware/car/core/main/cfg_table.inc \
            app/AJMiddleCar/Generated/CarAPI.swift \
            tools/mock_car/generated.py; do
     if ! diff -u "$ROOT/$rel" "$TMP/$rel" > /dev/null 2>&1; then
@@ -1351,7 +1351,7 @@ proves it fails on a hand-edit before it is trusted.
 
 ### Task 7: Wire the checks into the project's test entry points
 
-The generator is only load-bearing if a normal test run exercises it. Right now the project has two entry points: `firmware/p4/test/make run` for C, and ad-hoc `swiftc` invocations for Swift.
+The generator is only load-bearing if a normal test run exercises it. Right now the project has two entry points: `firmware/car/core/test/make run` for C, and ad-hoc `swiftc` invocations for Swift.
 
 **Files:**
 - Create: `tools/test-all.sh`
@@ -1379,7 +1379,7 @@ python3 tools/test_gen_contract.py
 bash tools/check_contract.sh
 
 echo "== firmware host tests =="
-make -C firmware/p4/test run
+make -C firmware/car/core/test run
 
 echo "== swift host tests =="
 swiftc -o /tmp/test_carapi app/AJMiddleCar/Generated/CarAPI.swift app/tests/test_carapi.swift
@@ -1408,7 +1408,7 @@ In `CLAUDE.md`, the `## Build` section currently documents host tests as:
 **Host tests** (pure modules, no ESP-IDF):
 
 ```bash
-cd firmware/p4/test && make run
+cd firmware/car/core/test && make run
 ```
 ```
 
@@ -1422,7 +1422,7 @@ tools/test-all.sh
 ```
 
 That covers the contract (schema, generator, drift), the firmware's pure modules and
-the app's pure Swift. `make -C firmware/p4/test run` still works on its own for the C half.
+the app's pure Swift. `make -C firmware/car/core/test run` still works on its own for the C half.
 ```
 
 Then add a new section after `## Layout`:

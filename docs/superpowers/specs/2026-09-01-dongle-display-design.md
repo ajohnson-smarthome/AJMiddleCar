@@ -42,11 +42,11 @@ indistinguishable from any other REST body. There is no "updating the car" scree
 | | |
 |---|---|
 | Panel | SSD1306 128 × 64, I²C, address `0x3C` or `0x3D` (module-dependent) |
-| Bus | I²C, pins declared in `firmware/s3/main/board.h` — **not yet chosen on hardware** |
+| Bus | I²C, pins declared in `firmware/dongle/main/board.h` — **not yet chosen on hardware** |
 | Button | `BOOT` (GPIO0), present on this board, used at runtime to page the reference screens |
 | Current | ~20 mA |
 
-**`board.h` is new to the dongle.** `firmware/p4` has one, and CLAUDE.md describes its role:
+**`board.h` is new to the dongle.** `firmware/car/core` has one, and CLAUDE.md describes its role:
 "every assumption about the physical board… Bring-up edits this file and nothing else." The
 dongle has had no such file — its constants live scattered across module headers. This work
 creates the twin and moves the display's pins, bus speed and I²C address into it, so bring-up
@@ -210,7 +210,7 @@ Most of this is independent of the panel and can be built and tested before it a
 
 ### Testing without the panel
 
-`firmware/s3/test/` already holds four host tests with a Makefile (`net_cfg`, `tcp_pending`,
+`firmware/dongle/test/` already holds four host tests with a Makefile (`net_cfg`, `tcp_pending`,
 `udp_sess`, `wifi_state`). `screens.c` is pure by construction and joins them: given a state, it
 returns a screen and its rows, and that is assertable without ESP-IDF, I²C or glass.
 

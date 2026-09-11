@@ -7,7 +7,7 @@
 #
 # 4 MB slots against a 386 KB image — ~900 KB once the radio is linked — is roughly tenfold
 # headroom. Nothing is bought by trimming it: the alternative use for those megabytes is lying
-# unallocated. The layout is byte-identical to firmware/p4/partitions.csv so both boards in this
+# unallocated. The layout is byte-identical to firmware/car/core/partitions.csv so both boards in this
 # project answer at the same offsets.
 #
 # `storage` is a reservation, not a filesystem choice — nothing mounts or formats it, and the

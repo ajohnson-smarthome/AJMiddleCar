@@ -57,7 +57,7 @@ static bool want_addr(esp_ip4_addr_t *out)
 }
 
 /* esp_http_server's listener is AF_INET6 whenever CONFIG_LWIP_IPV6=y — IDF 6.0.2's own
- * default (firmware/s3/sdkconfig: CONFIG_LWIP_IPV6=y; nothing this project set), and
+ * default (firmware/dongle/sdkconfig: CONFIG_LWIP_IPV6=y; nothing this project set), and
  * esp_http_server's httpd_server_init picks `socket(PF_INET6, ...)` under exactly that
  * `#if CONFIG_LWIP_IPV6` (esp_http_server/src/httpd_main.c). Every accepted connection then
  * inherits an IPv6 netconn (lwIP's api_msg.c: the new netconn is allocated with the

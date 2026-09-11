@@ -56,7 +56,7 @@ static void read_radio_version(void) {
          * image first, and only a spent attempt budget or a build with no image reaches here
          * still mismatched. */
         ESP_LOGW(TAG, "radio firmware %s, expected %s — the car could not correct it; "
-                      "the manual route is firmware/c6/README.md",
+                      "the manual route is firmware/car/modem/README.md",
                  s_radio_fw, RADIO_EXPECTED_FW);
     }
 }

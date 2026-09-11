@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A new `firmware/s3/` project that enumerates on a USB host as an Ethernet interface, hands that host an address by DHCP, answers ping, and serves `GET /status` — proven on macOS first and on an iPhone second.
+**Goal:** A new `firmware/dongle/` project that enumerates on a USB host as an Ethernet interface, hands that host an address by DHCP, answers ping, and serves `GET /status` — proven on macOS first and on an iPhone second.
 
 **Architecture:** `esp_tinyusb`'s NCM class provides the USB wire. Unlike IDF's `tusb_ncm` example — which is a transparent L2 bridge with no IP stack on the USB side — this firmware attaches its **own `esp_netif`** to that wire, with a static address and a DHCP server. That is what makes the dongle an endpoint the app can talk to before any radio exists, which the config channel in Plan 2 depends on. No Wi-Fi in this plan at all.
 
@@ -12,8 +12,8 @@
 
 ## Global Constraints
 
-- **The dongle knows nothing about any car.** No SSID, no password, no `device_id`, no protocol. It is a modem, not a brain — the same rule `firmware/c6/` lives under. Anything car-shaped that appears in `firmware/s3/` is a bug in this plan, not a feature.
-- **`firmware/s3/` does not reference `app/` or `firmware/p4/`,** and neither references it.
+- **The dongle knows nothing about any car.** No SSID, no password, no `device_id`, no protocol. It is a modem, not a brain — the same rule `firmware/car/modem/` lives under. Anything car-shaped that appears in `firmware/dongle/` is a bug in this plan, not a feature.
+- **`firmware/dongle/` does not reference `app/` or `firmware/car/core/`,** and neither references it.
 - USB-side network: **`192.168.7.1/24`**, dongle at `.1`, DHCP pool starts at `.2`. Chosen to miss the common home ranges (`192.168.0.x`, `192.168.1.x`, `10.x`).
 - Device identity string: **`ajdongle`**. Project name: `ajdongle`.
 - **The console lives on UART0**, reached through the board's second Type-C via its bridge chip. The native USB belongs to TinyUSB and cannot also be USB-Serial-JTAG — on ESP32-S3 GPIO19/20 are muxed between the two controllers, one at a time.
@@ -45,21 +45,21 @@ Everything after Plan 1 assumes iOS accepts a class-compliant CDC-NCM device, an
 
 This plan has **no host tests**, and that is not an oversight. Every line in it is ESP-IDF glue — driver installs, netif attachment, an HTTP handler. There is no pure logic to test, and unit tests around `tinyusb_driver_install` would be theatre. The deliverables are verified on the bench instead, and each task says exactly what to observe.
 
-Pure logic arrives in Plan 2 (config parsing and validation) and gets host tests under `firmware/s3/test/` then, following `firmware/p4/test/`'s pattern.
+Pure logic arrives in Plan 2 (config parsing and validation) and gets host tests under `firmware/dongle/test/` then, following `firmware/car/core/test/`'s pattern.
 
 ## File Structure
 
 | File | Responsibility |
 |---|---|
-| `firmware/s3/CMakeLists.txt` | Project definition. No version-from-git machinery yet — that belongs with OTA, which the dongle does not have |
-| `firmware/s3/sdkconfig.defaults` | Target, NCM mode, console on UART0, flash and PSRAM for N16R8. Every line commented with *why*, as in `firmware/p4/sdkconfig.defaults` |
-| `firmware/s3/main/CMakeLists.txt` | Component registration |
-| `firmware/s3/main/idf_component.yml` | `espressif/esp_tinyusb` dependency |
-| `firmware/s3/main/main.c` | `app_main`: brings up NCM, then the netif, then the HTTP server |
-| `firmware/s3/main/usb_net.{c,h}` | The seam between TinyUSB's frame callbacks and `esp_netif`. The only file that knows both sides exist |
-| `firmware/s3/main/status_api.{c,h}` | The `GET /status` handler and the HTTP server it registers on |
-| `firmware/s3/README.md` | What this board is, how to build and flash it, and the live record of what the hardware has answered |
-| `.gitignore` | `firmware/s3/build/`, `firmware/s3/managed_components/` |
+| `firmware/dongle/CMakeLists.txt` | Project definition. No version-from-git machinery yet — that belongs with OTA, which the dongle does not have |
+| `firmware/dongle/sdkconfig.defaults` | Target, NCM mode, console on UART0, flash and PSRAM for N16R8. Every line commented with *why*, as in `firmware/car/core/sdkconfig.defaults` |
+| `firmware/dongle/main/CMakeLists.txt` | Component registration |
+| `firmware/dongle/main/idf_component.yml` | `espressif/esp_tinyusb` dependency |
+| `firmware/dongle/main/main.c` | `app_main`: brings up NCM, then the netif, then the HTTP server |
+| `firmware/dongle/main/usb_net.{c,h}` | The seam between TinyUSB's frame callbacks and `esp_netif`. The only file that knows both sides exist |
+| `firmware/dongle/main/status_api.{c,h}` | The `GET /status` handler and the HTTP server it registers on |
+| `firmware/dongle/README.md` | What this board is, how to build and flash it, and the live record of what the hardware has answered |
+| `.gitignore` | `firmware/dongle/build/`, `firmware/dongle/managed_components/` |
 | `CLAUDE.md` | One line in the Layout section |
 
 ---
@@ -69,7 +69,7 @@ Pure logic arrives in Plan 2 (config parsing and validation) and gets host tests
 No code. Five minutes with a cable that prevents a week of misdiagnosis: if the board lacks CC pull-downs, an iPhone will not power it, and that failure is indistinguishable from "iOS refuses NCM" unless you have ruled it out first.
 
 **Files:**
-- Create: `firmware/s3/README.md`
+- Create: `firmware/dongle/README.md`
 
 - [ ] **Step 1: Identify which Type-C port is which**
 
@@ -101,7 +101,7 @@ Do not skip this decision and discover it during the iPhone test.
 - [ ] **Step 4: Write the README with what the board answered**
 
 ```markdown
-# firmware/s3 — the USB-Ethernet dongle
+# firmware/dongle — the USB-Ethernet dongle
 
 An ESP32-S3 that plugs into an iPhone's USB-C port, presents itself as an Ethernet
 adapter (CDC-NCM), and — from Plan 3 onwards — bridges that wire to a car's softAP.
@@ -110,7 +110,7 @@ The phone keeps its own Wi-Fi and cellular.
 Design: `docs/research/2026-08-21-usb-ethernet-dongle.md`.
 
 **This firmware knows nothing about any car.** No SSID, no protocol, no device id.
-Like `firmware/c6/`, it is a modem. Everything car-shaped is told to it at runtime.
+Like `firmware/car/modem/`, it is a modem. Everything car-shaped is told to it at runtime.
 
 ## The board
 
@@ -129,7 +129,7 @@ Micro-USB on both ports and cannot reach an iPhone at all.
 ```bash
 source tools/env-p4.sh        # the IDF export script is target-agnostic; the target
                               # comes from sdkconfig.defaults, not from the environment
-cd firmware/s3 && idf.py build
+cd firmware/dongle && idf.py build
 idf.py -p /dev/cu.<uart-bridge-port> flash monitor
 ```
 
@@ -142,7 +142,7 @@ test keeps its placeholder; an untested row must never read as a pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add firmware/s3/README.md
+git add firmware/dongle/README.md
 git commit -m "docs(s3): what the dongle board answered on the bench"
 ```
 
@@ -151,11 +151,11 @@ git commit -m "docs(s3): what the dongle board answered on the bench"
 ### Task 2: The project skeleton, and NCM enumerates
 
 **Files:**
-- Create: `firmware/s3/CMakeLists.txt`
-- Create: `firmware/s3/sdkconfig.defaults`
-- Create: `firmware/s3/main/CMakeLists.txt`
-- Create: `firmware/s3/main/idf_component.yml`
-- Create: `firmware/s3/main/main.c`
+- Create: `firmware/dongle/CMakeLists.txt`
+- Create: `firmware/dongle/sdkconfig.defaults`
+- Create: `firmware/dongle/main/CMakeLists.txt`
+- Create: `firmware/dongle/main/idf_component.yml`
+- Create: `firmware/dongle/main/main.c`
 - Modify: `.gitignore`
 - Modify: `CLAUDE.md`
 
@@ -164,7 +164,7 @@ git commit -m "docs(s3): what the dongle board answered on the bench"
 
 - [ ] **Step 1: Write the project files**
 
-`firmware/s3/CMakeLists.txt`:
+`firmware/dongle/CMakeLists.txt`:
 
 ```cmake
 cmake_minimum_required(VERSION 3.16)
@@ -172,7 +172,7 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(ajdongle)
 ```
 
-`firmware/s3/sdkconfig.defaults`:
+`firmware/dongle/sdkconfig.defaults`:
 
 ```
 CONFIG_IDF_TARGET="esp32s3"
@@ -199,7 +199,7 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 ```
 
-`firmware/s3/main/CMakeLists.txt`:
+`firmware/dongle/main/CMakeLists.txt`:
 
 ```cmake
 idf_component_register(SRCS "main.c"
@@ -207,7 +207,7 @@ idf_component_register(SRCS "main.c"
                        PRIV_REQUIRES nvs_flash)
 ```
 
-`firmware/s3/main/idf_component.yml`:
+`firmware/dongle/main/idf_component.yml`:
 
 ```yaml
 ## Pinned to the same major the IDF 6.0.2 tusb_ncm example uses.
@@ -271,24 +271,24 @@ void app_main(void)
 
 - [ ] **Step 3: Add the ignores and the layout line**
 
-Append to `.gitignore`, next to the existing `firmware/p4/build/` and `firmware/c6/build/` entries:
+Append to `.gitignore`, next to the existing `firmware/car/core/build/` and `firmware/car/modem/build/` entries:
 
 ```
-firmware/s3/build/
-firmware/s3/managed_components/
+firmware/dongle/build/
+firmware/dongle/managed_components/
 ```
 
-In `CLAUDE.md`, in the Layout code block, add after the `firmware/c6/` line:
+In `CLAUDE.md`, in the Layout code block, add after the `firmware/car/modem/` line:
 
 ```
-firmware/s3/   the USB-Ethernet dongle — knows nothing about the car
+firmware/dongle/   the USB-Ethernet dongle — knows nothing about the car
 ```
 
 - [ ] **Step 4: Build**
 
 ```bash
 source tools/env-p4.sh
-cd firmware/s3 && idf.py build
+cd firmware/dongle && idf.py build
 ```
 
 Expected: the component manager fetches `espressif/esp_tinyusb`, and the build succeeds.
@@ -324,7 +324,7 @@ this port is the native USB one.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add firmware/s3 .gitignore CLAUDE.md
+git add firmware/dongle .gitignore CLAUDE.md
 git commit -m "feat(s3): the dongle enumerates as a USB NCM device"
 ```
 
@@ -338,10 +338,10 @@ itself*, before any radio exists, because Plan 2's config channel is what tells 
 which car to join.
 
 **Files:**
-- Create: `firmware/s3/main/usb_net.h`
-- Create: `firmware/s3/main/usb_net.c`
-- Modify: `firmware/s3/main/main.c`
-- Modify: `firmware/s3/main/CMakeLists.txt`
+- Create: `firmware/dongle/main/usb_net.h`
+- Create: `firmware/dongle/main/usb_net.c`
+- Modify: `firmware/dongle/main/main.c`
+- Modify: `firmware/dongle/main/CMakeLists.txt`
 
 **Interfaces:**
 - Consumes: `tinyusb_net_init` from Task 2.
@@ -356,7 +356,7 @@ grep -n "esp_netif_set_driver_config\|driver_free_rx_buffer\|post_attach" \
   $IDF_PATH/components/esp_netif/include/esp_netif_defaults.h \
   $IDF_PATH/components/esp_netif/include/esp_netif_types.h
 grep -rn "tinyusb_net_send_sync" \
-  firmware/s3/managed_components/espressif__esp_tinyusb/include/
+  firmware/dongle/managed_components/espressif__esp_tinyusb/include/
 ```
 
 The signatures below are written against IDF 6.0.2's documented custom-I/O-driver
@@ -391,7 +391,7 @@ esp_netif_t *usb_net_netif(void);
 
 - [ ] **Step 3: Write `usb_net.c`**
 
-> **Superseded — do not copy this snippet.** `firmware/s3/main/usb_net.c` as shipped is the
+> **Superseded — do not copy this snippet.** `firmware/dongle/main/usb_net.c` as shipped is the
 > authority; two defects found after this was written make the code below actively harmful to
 > transcribe. It assigns `s_netif` at `esp_netif_new`, which opens a window where a frame arriving
 > before the driver config is installed calls a NULL `driver_free_rx_buffer` — the shipped code
@@ -588,7 +588,7 @@ void app_main(void)
 }
 ```
 
-And add the new source in `firmware/s3/main/CMakeLists.txt`:
+And add the new source in `firmware/dongle/main/CMakeLists.txt`:
 
 ```cmake
 idf_component_register(SRCS "main.c" "usb_net.c"
@@ -600,7 +600,7 @@ idf_component_register(SRCS "main.c" "usb_net.c"
 
 ```bash
 source tools/env-p4.sh
-cd firmware/s3 && idf.py -p /dev/cu.<uart-bridge-port> flash monitor
+cd firmware/dongle && idf.py -p /dev/cu.<uart-bridge-port> flash monitor
 ```
 
 Expected in the monitor: `usb net up on 192.168.7.1` then `dongle up`.
@@ -623,7 +623,7 @@ frames go out and nothing comes back — check `usb_transmit`'s return value in 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add firmware/s3
+git add firmware/dongle
 git commit -m "feat(s3): the dongle is an endpoint — its own address, and DHCP for the host"
 ```
 
@@ -632,10 +632,10 @@ git commit -m "feat(s3): the dongle is an endpoint — its own address, and DHCP
 ### Task 4: `GET /status`, so the iPhone can be tested with nothing but Safari
 
 **Files:**
-- Create: `firmware/s3/main/status_api.h`
-- Create: `firmware/s3/main/status_api.c`
-- Modify: `firmware/s3/main/main.c`
-- Modify: `firmware/s3/main/CMakeLists.txt`
+- Create: `firmware/dongle/main/status_api.h`
+- Create: `firmware/dongle/main/status_api.c`
+- Modify: `firmware/dongle/main/main.c`
+- Modify: `firmware/dongle/main/CMakeLists.txt`
 
 **Interfaces:**
 - Consumes: `usb_net_start()` from Task 3.
@@ -725,7 +725,7 @@ In `main.c`, after `usb_net_start()`:
 ```
 
 with `#include "status_api.h"` alongside the existing includes, and in
-`firmware/s3/main/CMakeLists.txt`:
+`firmware/dongle/main/CMakeLists.txt`:
 
 ```cmake
 idf_component_register(SRCS "main.c" "usb_net.c" "status_api.c"
@@ -737,7 +737,7 @@ idf_component_register(SRCS "main.c" "usb_net.c" "status_api.c"
 
 ```bash
 source tools/env-p4.sh
-cd firmware/s3 && idf.py -p /dev/cu.<uart-bridge-port> flash monitor
+cd firmware/dongle && idf.py -p /dev/cu.<uart-bridge-port> flash monitor
 curl -s http://192.168.7.1/status
 ```
 
@@ -746,7 +746,7 @@ Expected: `{"dev":"ajdongle","fw":"...","idf":"v6.0.2","usb":"up"}`
 - [ ] **Step 5: Commit**
 
 ```bash
-git add firmware/s3
+git add firmware/dongle
 git commit -m "feat(s3): GET /status, so the dongle can be checked from a browser"
 ```
 
@@ -757,7 +757,7 @@ git commit -m "feat(s3): GET /status, so the dongle can be checked from a browse
 This is what the plan exists for. Everything before it was making the question askable.
 
 **Files:**
-- Modify: `firmware/s3/README.md`
+- Modify: `firmware/dongle/README.md`
 - Modify: `docs/research/2026-08-21-usb-ethernet-dongle.md`
 
 - [ ] **Step 1: Connect the dongle to the iPhone**
@@ -807,7 +807,7 @@ plan was built to detect early.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add firmware/s3/README.md docs/research/2026-08-21-usb-ethernet-dongle.md
+git add firmware/dongle/README.md docs/research/2026-08-21-usb-ethernet-dongle.md
 git commit -m "docs(s3): what iOS did with a class-compliant NCM device"
 ```
 
@@ -818,7 +818,7 @@ git commit -m "docs(s3): what iOS did with a class-compliant NCM device"
 If Task 5 came back yes, **Plan 2** gives the dongle its configuration: `POST /net` to
 set an AP, `GET /net` to read back what it is set to (never the password), NVS
 persistence as one JSON string per domain, and the validation host-tested under
-`firmware/s3/test/`. No radio, no car — a laptop and `curl` exercise all of it.
+`firmware/dongle/test/`. No radio, no car — a laptop and `curl` exercise all of it.
 
 **Plan 3** then switches the radio on and makes the dongle a proxy, and it inherits
 two questions this plan deliberately did not answer:

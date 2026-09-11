@@ -11,20 +11,20 @@ the P4 over SDIO, and that is all. The P4 calls the ordinary `esp_wifi` API; `es
 marshals those calls across.
 
 **We do not author this image.** It is built from the exact `esp_hosted` version the host is
-pinned to in `firmware/p4/main/idf_component.yml` — currently **3.0.6** — using the project that
+pinned to in `firmware/car/core/main/idf_component.yml` — currently **3.0.6** — using the project that
 ships inside that component. Host and co-processor versions must match: `/status` reports what
 the C6 actually runs, `board.h` records what this firmware expects, and a mismatch shows up as
 `radio.ok: false` rather than as WiFi behaving strangely for no visible reason.
 
 There is no `CMakeLists.txt` here because there is nothing of ours to build. The image comes from
-`firmware/p4/managed_components/espressif__esp_hosted/examples/wifi/sta/cp`, which arrives with
+`firmware/car/core/managed_components/espressif__esp_hosted/examples/wifi/sta/cp`, which arrives with
 the host build and is not in git — `dependencies.lock` pins it, which is the actual guarantee.
 
 ## Building
 
 ```bash
-firmware/c6/flash-radio.sh                        # build only
-firmware/c6/flash-radio.sh /dev/cu.usbserial-XXX  # build and flash over the C6 UART header
+firmware/car/modem/flash-radio.sh                        # build only
+firmware/car/modem/flash-radio.sh /dev/cu.usbserial-XXX  # build and flash over the C6 UART header
 ```
 
 Either route below flashes the same artifact, `eh_cp_wifi_sta.bin` (~1.15 MB), and the script is
@@ -41,7 +41,7 @@ what builds it.
 and nothing physical — the image travels over the SDIO link that already exists. The host API is
 `esp_hosted_cp_ota_begin()` → `_write()` in chunks of at most 1536 bytes → `_end()` →
 `_activate()`, and the host must be built with `CONFIG_ESP_HOSTED_HOST_FEAT_OTA=y` — pinned
-explicitly in `firmware/p4/sdkconfig.defaults` (it used to hold only via the component's
+explicitly in `firmware/car/core/sdkconfig.defaults` (it used to hold only via the component's
 promptless default).
 
 It works even against a co-processor far older than the host, because the OTA calls are RPC
@@ -90,7 +90,7 @@ video shares this bus.
 ## Wiring
 
 The two chips number their own pins, so the tables differ. The P4 side is pinned in
-`firmware/p4/sdkconfig.defaults`; the C6 side is fixed by its SDIO slave peripheral.
+`firmware/car/core/sdkconfig.defaults`; the C6 side is fixed by its SDIO slave peripheral.
 
 | Signal | P4 (host) | C6 (co-processor) |
 |---|---|---|

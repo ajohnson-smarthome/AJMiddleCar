@@ -197,7 +197,7 @@ portal. Всё это нужно, потому что до настройки к
 `identity.h`.
 
 Ответ подсказан самим проектом. Про радиомодуль в CLAUDE.md сказано: «The C6 is a modem, not a
-brain», и `firmware/c6/` «knows nothing about the car at all». **Донгл — такой же зверь.** Он не
+brain», и `firmware/car/modem/` «knows nothing about the car at all». **Донгл — такой же зверь.** Он не
 знает ни одной машинки и всегда узнаёт от аппа:
 
 > Каждый апп знает свой контракт. Какой апп запущен — на ту машинку донгл и наводится.

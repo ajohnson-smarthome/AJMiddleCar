@@ -137,7 +137,7 @@ the whole seam.
 session taught that a car losing its link stops. It reverses along its own path for up to five
 seconds.
 
-### B3 — the firmware (`firmware/p4/main/`)
+### B3 — the firmware (`firmware/car/core/main/`)
 
 - `rt_link.{c,h}` — one task, `recvfrom` with `SO_RCVTIMEO` at 20 ms. The timeout is the tick, so
   three things live in one loop: receive and apply a command, notice silence past `RT_WATCHDOG_MS`,

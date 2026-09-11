@@ -1,4 +1,4 @@
-# firmware/s3 — the USB-Ethernet dongle
+# firmware/dongle — the USB-Ethernet dongle
 
 An ESP32-S3 that plugs into an iPhone's USB-C port, presents itself as an Ethernet
 adapter (CDC-NCM), and — from Plan 4 onwards — bridges that wire to a car's softAP.
@@ -7,7 +7,7 @@ The phone keeps its own Wi-Fi and cellular.
 Design: `docs/research/2026-08-21-usb-ethernet-dongle.md`.
 
 **This firmware knows nothing about any car.** No SSID, no protocol, no device id.
-Like `firmware/c6/`, it is a modem. Everything car-shaped is told to it at runtime.
+Like `firmware/car/modem/`, it is a modem. Everything car-shaped is told to it at runtime.
 
 ## The board
 
@@ -131,7 +131,7 @@ plan forwards through the dongle untouched, so that the car's own contract and t
 The host is measurably no worse off for having the dongle plugged in, which is the whole premise —
 and the strong evidence for that is the unchanged routing decision and the absent `router` option,
 not the two rows above that merely happened to come back faster.
-The script that produces this, `firmware/s3/verify-on-host.sh`, is checked in for Plan 2: it checks
+The script that produces this, `firmware/dongle/verify-on-host.sh`, is checked in for Plan 2: it checks
 the deliverable and the regression in the same run, so a returning route capture is caught by a test
 rather than by losing somebody's connectivity.
 
@@ -212,7 +212,7 @@ static TX buffers are not a tuning preference, they are a requirement.
 ```bash
 source tools/env-p4.sh        # the IDF export script is target-agnostic; the target
                               # comes from sdkconfig.defaults, not from the environment
-cd firmware/s3 && idf.py build
+cd firmware/dongle && idf.py build
 idf.py -p /dev/cu.wchusbserial5C840016191 flash monitor
 ```
 
@@ -232,7 +232,7 @@ because TinyUSB owns that peripheral.
 Once the dongle is running an image with `/ota`, the cable is only needed for the first flash:
 
 ```bash
-cd firmware/s3 && idf.py build
+cd firmware/dongle && idf.py build
 curl --data-binary @build/ajdongle.bin \
      -H 'Content-Type: application/octet-stream' \
      http://192.168.7.1:8080/ota

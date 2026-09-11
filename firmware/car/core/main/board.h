@@ -38,10 +38,10 @@
 #define BOARD_PCA_ADDR_REAR   0x60
 #define BOARD_PCA_CH_PER_CHIP 4
 
-// The C6 runs esp_hosted's slave image, delivered out of band (firmware/c6/README.md) —
+// The C6 runs esp_hosted's slave image, delivered out of band (firmware/car/modem/README.md) —
 // over SDIO from the host is the recorded route, the UART header the fallback. The
 // EXPECTED slave version is no longer pinned here by hand: status_api derives it at
 // compile time from the host component's own version macros (eh_common_fw_version.h),
-// so the expectation cannot drift from firmware/p4/main/idf_component.yml.
+// so the expectation cannot drift from firmware/car/core/main/idf_component.yml.
 
 #endif // BOARD_H

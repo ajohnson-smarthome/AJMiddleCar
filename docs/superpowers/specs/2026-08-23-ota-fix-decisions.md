@@ -57,7 +57,7 @@
 
 8. Refuse to publish unless `git rev-parse HEAD` equals the head of `origin/main`
    (and pass `--target "$(git rev-parse HEAD)"` anyway, belt-and-braces).
-9. Delete `firmware/p4/sdkconfig`/`sdkconfig.old` before the release build (regenerate
+9. Delete `firmware/car/core/sdkconfig`/`sdkconfig.old` before the release build (regenerate
    purely from defaults).
 10. Parse `--dry-run` anywhere in the argv; run the dry-run branch BEFORE the clean-tree
     check (a dry run is read-only and must work on a dirty tree).
@@ -87,7 +87,7 @@
 20. CLAUDE.md Status section: the unwired-bus sentence rewritten to the shipped behavior
     (boots with bus_ok:false, network and OTA up, motors inert); board.h's "wire-flashed
     once" comment corrected (SDIO reflash is the recorded route).
-21. firmware/c6/README.md: FEAT_OTA sentence points at the new explicit pin in
+21. firmware/car/modem/README.md: FEAT_OTA sentence points at the new explicit pin in
     sdkconfig.defaults; flash-radio.sh gains a built-version-vs-pin check (warn+confirm).
 
 ## Deliberately NOT in scope

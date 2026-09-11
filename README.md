@@ -60,32 +60,34 @@ flowchart LR
 
 ```bash
 source tools/env-p4.sh
-cd firmware/p4 && idf.py build && idf.py -p /dev/cu.usbmodem* flash monitor
+cd firmware/car/core && idf.py build && idf.py -p /dev/cu.usbmodem* flash monitor
 ```
 
-Host tests: `cd firmware/p4/test && make run`
+Host tests: `cd firmware/car/core/test && make run`
 iOS app: `cd app && xcodegen generate && open AJMiddleCar.xcodeproj`
 Mock car: `cd tools/mock_car && .venv/bin/python mock_car.py`
-The radio's image is flashed once by wire — `firmware/c6/flash-radio.sh`, and `firmware/c6/README.md`.
+The radio's image is flashed once by wire — `firmware/car/modem/flash-radio.sh`, and `firmware/car/modem/README.md`.
 
 ## Layout
 
 ```
-app/            iOS pult
-firmware/p4/    the car's firmware — all logic
-firmware/c6/    the radio's slave image build
-tools/          mock car, release script, IDF environment
-docs/           protocol.md · bringup.md · specs · plans · research
+app/                 iOS pult
+firmware/
+  car/core/          the car's firmware — all logic
+  car/modem/         the radio's slave image build
+  dongle/            the USB-Ethernet dongle — knows nothing about the car
+tools/               mock car, release script, IDF environment
+docs/                protocol.md · bringup.md · specs · plans · research
 ```
 
-`app/` and `firmware/p4/` never reference each other. The contract between them is
+`app/` and `firmware/car/core/` never reference each other. The contract between them is
 [`docs/protocol.md`](docs/protocol.md), and `tools/mock_car` is that contract made executable.
 
 ## Status
 
 Ported from AJPicoCar with feature parity and **not yet run on hardware** — the board was on
 order while this was written, so every hardware assumption is quarantined in
-`firmware/p4/main/board.h` and listed in [`docs/bringup.md`](docs/bringup.md). Everything
+`firmware/car/core/main/board.h` and listed in [`docs/bringup.md`](docs/bringup.md). Everything
 provable at a desk is proven; screenshots follow once it drives.
 
 ## License

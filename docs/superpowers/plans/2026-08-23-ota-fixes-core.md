@@ -43,7 +43,7 @@ stdlib struct math and mirrors the two new `/status` keys, settable for rehearsa
 - Modify: `tools/release.sh` (full rewrite)
 
 **Interfaces:**
-- Consumes: `firmware/p4/main/idf_component.yml` (the esp_hosted pin), `gh`, `git ls-remote`.
+- Consumes: `firmware/car/core/main/idf_component.yml` (the esp_hosted pin), `gh`, `git ls-remote`.
 - Produces: the release entrypoint; Task 8's README text references its `--radio-bumped` flag.
 
 - [ ] **Step 1: Replace `tools/release.sh` with:**
@@ -71,30 +71,30 @@ done
 
 # version.txt must be exactly one line: CMake reads only the first, this script strips
 # whitespace — a second line would let the tag and the embedded version disagree.
-if [ "$(grep -c '' firmware/p4/version.txt)" != 1 ]; then
-    echo "ERROR: firmware/p4/version.txt must be exactly one line"; exit 1
+if [ "$(grep -c '' firmware/car/core/version.txt)" != 1 ]; then
+    echo "ERROR: firmware/car/core/version.txt must be exactly one line"; exit 1
 fi
-SEMVER=$(tr -d '[:space:]' < firmware/p4/version.txt)
+SEMVER=$(tr -d '[:space:]' < firmware/car/core/version.txt)
 BUILD_NUM=$(git rev-list --count HEAD)
 VER="v${SEMVER}+${BUILD_NUM}"
 TITLE="v${SEMVER} (build ${BUILD_NUM})"
-BIN="firmware/p4/build/ajmiddlecar.bin"
+BIN="firmware/car/core/build/ajmiddlecar.bin"
 NOTES="${NOTES_ARG:-Release ${VER}}"
 
 # The radio half rides OUTSIDE this channel: /ota updates only the P4, so a release whose
 # firmware pins a newer esp_hosted strands every OTA'd car on a bench reflash of the C6.
 # Detect the pin moving since the previous release and refuse to ship it silently.
 radio_pin() { grep -E 'espressif/esp_hosted:' "$1" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1; }
-PIN=$(radio_pin firmware/p4/main/idf_component.yml)
+PIN=$(radio_pin firmware/car/core/main/idf_component.yml)
 PREV_TAG=$(git tag --list 'v*' --sort=-creatordate | head -1 || true)
 PIN_MOVED=0
 if [ -n "$PREV_TAG" ]; then
-    PREV_PIN=$(git show "${PREV_TAG}:firmware/p4/main/idf_component.yml" 2>/dev/null | \
+    PREV_PIN=$(git show "${PREV_TAG}:firmware/car/core/main/idf_component.yml" 2>/dev/null | \
                { grep -E 'espressif/esp_hosted:' || true; } | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
     if [ -n "$PREV_PIN" ] && [ "$PREV_PIN" != "$PIN" ]; then PIN_MOVED=1; fi
 fi
 if [ "$PIN_MOVED" = 1 ]; then
-    NOTES="${NOTES}"$'\n\n'"⚠️ Этот релиз меняет радио-пин (esp_hosted ${PREV_PIN} → ${PIN}): после OTA потребуется стендовая перепрошивка радио C6 (firmware/c6/README.md)."
+    NOTES="${NOTES}"$'\n\n'"⚠️ Этот релиз меняет радио-пин (esp_hosted ${PREV_PIN} → ${PIN}): после OTA потребуется стендовая перепрошивка радио C6 (firmware/car/modem/README.md)."
 fi
 
 if [ "$DRY_RUN" = 1 ]; then
@@ -110,7 +110,7 @@ fi
 
 # Only tracked changes matter — the build number comes from committed history; untracked
 # build artifacts don't change the release commit. (The one untracked file that COULD —
-# firmware/p4/sdkconfig — is deleted below so the build regenerates it from defaults.)
+# firmware/car/core/sdkconfig — is deleted below so the build regenerates it from defaults.)
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
     echo "ERROR: tracked changes present — commit them so the build number matches the release commit"; exit 1
 fi
@@ -137,8 +137,8 @@ echo "Running the test suite before building..."
 
 source tools/env-p4.sh >/dev/null 2>&1
 # A stray bench sdkconfig must not configure a release: regenerate purely from defaults.
-rm -f firmware/p4/sdkconfig firmware/p4/sdkconfig.old
-(cd firmware/p4 && idf.py fullclean >/dev/null && idf.py build)
+rm -f firmware/car/core/sdkconfig firmware/car/core/sdkconfig.old
+(cd firmware/car/core && idf.py fullclean >/dev/null && idf.py build)
 [ -f "$BIN" ] || { echo "ERROR: $BIN not built"; exit 1; }
 
 gh release create "$VER" "$BIN" --target "$LOCAL_HEAD" --title "$TITLE" --notes "$NOTES"
@@ -155,15 +155,15 @@ tools/release.sh --dry-run                     # prints the block, exit 0 — ev
 tools/release.sh "notes text" --dry-run        # SAME: flag parsed anywhere, notes preserved
 tools/release.sh --dry-run "notes text" | grep 'notes   : notes text'
 tools/release.sh --no-such-flag; echo "exit=$?" # ERROR: unknown flag, exit 1
-printf '1.0\nextra\n' > /tmp/v2.txt && cp firmware/p4/version.txt /tmp/v1.txt \
-  && cp /tmp/v2.txt firmware/p4/version.txt \
-  && { tools/release.sh --dry-run; echo "exit=$?"; } ; cp /tmp/v1.txt firmware/p4/version.txt
+printf '1.0\nextra\n' > /tmp/v2.txt && cp firmware/car/core/version.txt /tmp/v1.txt \
+  && cp /tmp/v2.txt firmware/car/core/version.txt \
+  && { tools/release.sh --dry-run; echo "exit=$?"; } ; cp /tmp/v1.txt firmware/car/core/version.txt
                                                # ERROR: version.txt must be exactly one line, exit 1; then restored
 tools/release.sh; echo "exit=$?"               # reaches the branch check -> ERROR: not on main, exit 1
 ```
 
 Also verify the pin extraction expression against the real file:
-`grep -E 'espressif/esp_hosted:' firmware/p4/main/idf_component.yml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1`
+`grep -E 'espressif/esp_hosted:' firmware/car/core/main/idf_component.yml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1`
 must print `3.0.6`.
 
 - [ ] **Step 3: Full suite and commit**
@@ -187,13 +187,13 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 2: CMake — version.txt becomes a configure dependency
 
 **Files:**
-- Modify: `firmware/p4/CMakeLists.txt`
+- Modify: `firmware/car/core/CMakeLists.txt`
 
 **Interfaces:** none new. Bench honesty only; the release path already fullcleans.
 
 - [ ] **Step 1: Implement**
 
-In `firmware/p4/CMakeLists.txt`, directly after the `file(STRINGS ...)` line, add:
+In `firmware/car/core/CMakeLists.txt`, directly after the `file(STRINGS ...)` line, add:
 
 ```cmake
 # Re-run configure when version.txt changes. The commit COUNT still refreshes only on
@@ -208,7 +208,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 
 ```bash
 ./tools/test-all.sh
-git add firmware/p4/CMakeLists.txt
+git add firmware/car/core/CMakeLists.txt
 git commit -m "fix(build): version.txt is a configure dependency
 
 A semver bump without a reconfigure used to leave the old version in the
@@ -223,7 +223,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 3: /status gains rollback and nvs_wiped
 
 **Files:**
-- Modify: `firmware/p4/main/status_api.c`, `firmware/p4/main/status_api.h`, `firmware/p4/main/main.c` (erase path only)
+- Modify: `firmware/car/core/main/status_api.c`, `firmware/car/core/main/status_api.h`, `firmware/car/core/main/main.c` (erase path only)
 
 **Interfaces:**
 - Consumes: `esp_ota_get_next_update_partition`, `esp_ota_get_state_partition`.
@@ -301,7 +301,7 @@ stay independently committable.)
 
 ```bash
 ./tools/test-all.sh
-git add firmware/p4/main/status_api.c firmware/p4/main/status_api.h firmware/p4/main/main.c
+git add firmware/car/core/main/status_api.c firmware/car/core/main/status_api.h firmware/car/core/main/main.c
 git commit -m "feat(fw): /status says when an OTA rolled back and when NVS was wiped
 
 The bootloader reverting an update was invisible — the app's success detector
@@ -318,7 +318,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 4: mark-valid moves to right after the AP is up
 
 **Files:**
-- Modify: `firmware/p4/main/main.c`
+- Modify: `firmware/car/core/main/main.c`
 
 **Interfaces:** consumes nothing new; the boot-order change Task 3's rollback key reports on.
 
@@ -347,7 +347,7 @@ block (currently after `cfg_api_start()`), and insert immediately after
 
 ```bash
 ./tools/test-all.sh
-git add firmware/p4/main/main.c
+git add firmware/car/core/main/main.c
 git commit -m "fix(fw): mark-valid runs the moment the AP is up, not after the whole bring-up
 
 The window between reboot and validation spanned every API registration plus
@@ -363,7 +363,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 5: the radio expectation is derived, not hand-copied — and FEAT_OTA is pinned
 
 **Files:**
-- Modify: `firmware/p4/main/status_api.c`, `firmware/p4/main/board.h`, `firmware/p4/sdkconfig.defaults`
+- Modify: `firmware/car/core/main/status_api.c`, `firmware/car/core/main/board.h`, `firmware/car/core/sdkconfig.defaults`
 
 **Interfaces:**
 - Consumes: esp_hosted's version macros (`eh_common_fw_version.h`, fetched with the component).
@@ -375,9 +375,9 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 `managed_components/` is absent in this fresh worktree. Fetch it:
 
 ```bash
-bash -c 'source tools/env-p4.sh && cd firmware/p4 && idf.py reconfigure' 2>&1 | tail -3
-ls firmware/p4/managed_components/espressif__esp_hosted/common/eh_common/include/eh_common_fw_version.h
-grep -n 'PROJECT_VERSION_' firmware/p4/managed_components/espressif__esp_hosted/common/eh_common/include/eh_common_fw_version.h
+bash -c 'source tools/env-p4.sh && cd firmware/car/core && idf.py reconfigure' 2>&1 | tail -3
+ls firmware/car/core/managed_components/espressif__esp_hosted/common/eh_common/include/eh_common_fw_version.h
+grep -n 'PROJECT_VERSION_' firmware/car/core/managed_components/espressif__esp_hosted/common/eh_common/include/eh_common_fw_version.h
 ```
 
 Expected: the header exists and defines `PROJECT_VERSION_MAJOR_1 3`, `PROJECT_VERSION_MINOR_1 0`,
@@ -386,7 +386,7 @@ to what is actually there and record the difference in your report.** Also verif
 reachable from `main`'s include path (it is expected to be exported by the component; if the
 trial build in Step 3 says otherwise, the fallback is `#include` via the component's
 already-exported umbrella that carries the macros — find it with
-`grep -rl PROJECT_VERSION_MAJOR_1 firmware/p4/managed_components/espressif__esp_hosted/*/include/` —
+`grep -rl PROJECT_VERSION_MAJOR_1 firmware/car/core/managed_components/espressif__esp_hosted/*/include/` —
 and record which header you used).
 
 - [ ] **Step 2: Implement**
@@ -410,21 +410,21 @@ Replace every `BOARD_RADIO_SLAVE_FW` in the file with `RADIO_EXPECTED_FW` (three
 strcmp in `read_radio_version`, the mismatch log line, and the `"expected"` field in
 `status_get`'s snprintf).
 
-**(b)** `firmware/p4/main/board.h` — replace the `BOARD_RADIO_SLAVE_FW` define and its comment
+**(b)** `firmware/car/core/main/board.h` — replace the `BOARD_RADIO_SLAVE_FW` define and its comment
 block with:
 
 ```c
-// The C6 runs esp_hosted's slave image, delivered out of band (firmware/c6/README.md) —
+// The C6 runs esp_hosted's slave image, delivered out of band (firmware/car/modem/README.md) —
 // over SDIO from the host is the recorded route, the UART header the fallback. The
 // EXPECTED slave version is no longer pinned here by hand: status_api derives it at
 // compile time from the host component's own version macros (eh_common_fw_version.h),
-// so the expectation cannot drift from firmware/p4/main/idf_component.yml.
+// so the expectation cannot drift from firmware/car/core/main/idf_component.yml.
 ```
 
 **(c)** Confirm nothing else references the define: `grep -rn BOARD_RADIO_SLAVE_FW firmware/ app/ tools/ docs/ CLAUDE.md`
 — expected: only docs hits, which Task 8 rewrites (list them in your report).
 
-**(d)** `firmware/p4/sdkconfig.defaults` — append after the SDIO block:
+**(d)** `firmware/car/core/sdkconfig.defaults` — append after the SDIO block:
 
 ```
 # Host-side OTA of the C6 co-processor (esp_hosted_cp_ota_*). Holds today only via the
@@ -435,7 +435,7 @@ CONFIG_ESP_HOSTED_HOST_FEAT_OTA=y
 
 - [ ] **Step 3: Trial-compile the touched translation unit early**
 
-Cheaper than waiting for Task 9: `bash -c 'source tools/env-p4.sh && cd firmware/p4 && idf.py build' 2>&1 | tail -5`
+Cheaper than waiting for Task 9: `bash -c 'source tools/env-p4.sh && cd firmware/car/core && idf.py build' 2>&1 | tail -5`
 Expected: `Project build complete.` (this also regenerates sdkconfig with the new pin). If the
 include fails, apply Step 1's fallback and record it.
 
@@ -443,7 +443,7 @@ include fails, apply Step 1's fallback and record it.
 
 ```bash
 ./tools/test-all.sh
-git add firmware/p4/main/status_api.c firmware/p4/main/board.h firmware/p4/sdkconfig.defaults
+git add firmware/car/core/main/status_api.c firmware/car/core/main/board.h firmware/car/core/sdkconfig.defaults
 git commit -m "fix(fw): the radio expectation derives from the component, and FEAT_OTA is pinned
 
 BOARD_RADIO_SLAVE_FW was a hand-copied string tied to nothing: bumped one way
@@ -459,7 +459,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 6: ota_api — tell esp_ota_begin the real size, and cap it at the slot
 
 **Files:**
-- Modify: `firmware/p4/main/ota_api.c`
+- Modify: `firmware/car/core/main/ota_api.c`
 
 **Interfaces:** none new.
 
@@ -494,7 +494,7 @@ with the comment above it:
 
 ```bash
 ./tools/test-all.sh
-git add firmware/p4/main/ota_api.c
+git add firmware/car/core/main/ota_api.c
 git commit -m "fix(fw): /ota erases what the image needs, not the whole slot
 
 OTA_SIZE_UNKNOWN erased all 4 MB before any validation — seconds of wear for
@@ -692,7 +692,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `docs/protocol.md` (/status section), `CLAUDE.md` (Status sentence + board.h bullet),
-  `firmware/c6/README.md` (FEAT_OTA sentence), `firmware/c6/flash-radio.sh` (pin guard)
+  `firmware/car/modem/README.md` (FEAT_OTA sentence), `firmware/car/modem/flash-radio.sh` (pin guard)
 
 **Interfaces:** consumes Tasks 3/5's shipped shapes.
 
@@ -744,34 +744,34 @@ boots anyway with `bus_ok:false` (network and OTA up, motors inert, by design)
 
 - [ ] **Step 3: c6/README + flash-radio.sh**
 
-In `firmware/c6/README.md`, replace `the host must be built with
+In `firmware/car/modem/README.md`, replace `the host must be built with
 `CONFIG_ESP_HOSTED_HOST_FEAT_OTA=y` (it is).` with `the host must be built with
-`CONFIG_ESP_HOSTED_HOST_FEAT_OTA=y` — pinned explicitly in `firmware/p4/sdkconfig.defaults`
+`CONFIG_ESP_HOSTED_HOST_FEAT_OTA=y` — pinned explicitly in `firmware/car/core/sdkconfig.defaults`
 (it used to hold only via the component's promptless default).`
 
-In `firmware/c6/flash-radio.sh`, after the `source .../env-p4.sh` line, insert:
+In `firmware/car/modem/flash-radio.sh`, after the `source .../env-p4.sh` line, insert:
 
 ```bash
 # The image about to be built must be the slave the host pins — after a pin bump with a
 # stale managed_components, this script would otherwise flash the OLD slave silently.
-PIN=$(grep -E 'espressif/esp_hosted:' "$ROOT/firmware/p4/main/idf_component.yml" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+PIN=$(grep -E 'espressif/esp_hosted:' "$ROOT/firmware/car/core/main/idf_component.yml" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 GOT=$(grep -E '^version:' "$HOSTED/idf_component.yml" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 if [ -n "$PIN" ] && [ -n "$GOT" ] && [ "$PIN" != "$GOT" ]; then
     echo "WARNING: fetched esp_hosted is $GOT but the host pins $PIN."
     echo "The image you are about to build is NOT the pinned slave; run"
-    echo "  (cd firmware/p4 && source ../../tools/env-p4.sh && idf.py reconfigure)"
+    echo "  (cd firmware/car/core && source ../../tools/env-p4.sh && idf.py reconfigure)"
     read -r -p "Continue with $GOT anyway? [y/N] " a; [ "$a" = "y" ] || exit 1
 fi
 ```
 
-Verify the field name first: `grep -n '^version:' firmware/p4/managed_components/espressif__esp_hosted/idf_component.yml`
+Verify the field name first: `grep -n '^version:' firmware/car/core/managed_components/espressif__esp_hosted/idf_component.yml`
 (the component is fetched since Task 5). If the manifest spells it differently, adapt and record.
 
 - [ ] **Step 4: Suite and commit**
 
 ```bash
 ./tools/test-all.sh
-git add docs/protocol.md CLAUDE.md firmware/c6/README.md firmware/c6/flash-radio.sh
+git add docs/protocol.md CLAUDE.md firmware/car/modem/README.md firmware/car/modem/flash-radio.sh
 git commit -m "docs: rollback and nvs_wiped documented; the docs stop describing the old radio pin
 
 protocol.md documents the two new /status keys and the derived expectation;
@@ -790,9 +790,9 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1:** `CONFORMANCE=required ./tools/test-all.sh` → `== all green ==` with both
   conformance suites running.
-- [ ] **Step 2:** `bash -c 'source tools/env-p4.sh && cd firmware/p4 && idf.py fullclean >/dev/null && idf.py build' 2>&1 | tail -5`
+- [ ] **Step 2:** `bash -c 'source tools/env-p4.sh && cd firmware/car/core && idf.py fullclean >/dev/null && idf.py build' 2>&1 | tail -5`
   → `Project build complete.` — this is the compile gate for Tasks 3–6 and proves the Task 5
-  derivation resolves. Then `strings firmware/p4/build/ajmiddlecar.bin | grep -m1 'v1\.0+'` —
+  derivation resolves. Then `strings firmware/car/core/build/ajmiddlecar.bin | grep -m1 'v1\.0+'` —
   record the embedded version in your report (fullclean makes it the current count).
 - [ ] **Step 3:** `git status --short` — no tracked changes (untracked build/, sdkconfig,
   managed_components/, dependencies.lock changes? `dependencies.lock` IS tracked: if the

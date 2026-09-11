@@ -105,7 +105,7 @@ for i in $(seq 1 300); do
       echo "NOT testable from this bench: a request to the dongle's STATION address on :8080 must"
       echo "be refused (open_fn rejects any connection whose local address is not DONGLE_HOST)."
       echo "That needs the dongle joined to a car and a second machine on the car's network --"
-      echo "see the pending row in firmware/s3/README.md's bench table."
+      echo "see the pending row in firmware/dongle/README.md's bench table."
     } >> "$OUT" 2>&1
     break
   fi

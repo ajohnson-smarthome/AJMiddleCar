@@ -24,18 +24,18 @@ from generated import (CTL_CALIB, CTL_CONSOLE, CTL_NONE, CTL_OTA, CTL_RECOVER,
                        TELEMETRY_FIELDS, validate)
 
 # Ownership of the actuator, lowest priority first. `link_src_t` in
-# firmware/p4/main/link.h is generated from the same list, and these names are
+# firmware/car/core/main/link.h is generated from the same list, and these names are
 # what telemetry reports in `ctl`. Position is rank on all three sides, and the
 # per-name symbols come from the generator, same as C's and Swift's.
 PRIORITY = tuple(CTL_VALUES)
 
-# The session id, as `parse_sid` in firmware/p4/main/control_proto.c accepts it:
+# The session id, as `parse_sid` in firmware/car/core/main/control_proto.c accepts it:
 # non-empty, alphanumeric, and short enough to fit that file's CONTROL_SID_MAX with its
 # NUL. Not in contract/car-api.json on any of the three sides, so it is mirrored here by
 # hand — see the report. Anything else is not "an id the car will not like": it is a
 # datagram the car drops whole, because the id is echoed into the hello reply and a
 # quote in it would let the sender shape that JSON.
-SID_MAX_CHARS = 15         # mirrors CONTROL_SID_MAX - 1 in firmware/p4/main/control_proto.h
+SID_MAX_CHARS = 15         # mirrors CONTROL_SID_MAX - 1 in firmware/car/core/main/control_proto.h
 _SID_RE = re.compile(r"[A-Za-z0-9]{1,%d}\Z" % SID_MAX_CHARS)
 
 
@@ -140,7 +140,7 @@ def parse_image_version(data):
 def parse_frame(data, max_command=None):
     """One inbound datagram -> a dict of the fields it carried, or None to drop it.
 
-    The mock's `control_parse_frame` (firmware/p4/main/control_proto.c). Same answer for
+    The mock's `control_parse_frame` (firmware/car/core/main/control_proto.c). Same answer for
     the same bytes is the whole point, so the rules are the car's, not JSON's:
 
       * over the *command* cap -> dropped. `max_datagram` sizes a receive buffer; what
@@ -213,14 +213,14 @@ class CarState:
     """Config, the control watchdog, the retreat, and everything telemetry reports."""
 
     # Constants that belong to the firmware's behaviour rather than to the wire, kept at
-    # the values firmware/p4/main defines so the mock retreats for the same duration the
+    # the values firmware/car/core/main defines so the mock retreats for the same duration the
     # car does.
     # None of these three is in contract/car-api.json, so they are mirrored by hand from
     # the file named beside each one. See the report for the schema additions that would
     # let them be generated instead.
-    MOVE_EPS = 0.02        # firmware/p4/main/recovery.c: below this a sample is stationary
-    SEG_MAX_MS = 250       # firmware/p4/main/recovery.h RECOVER_SEG_MAX_MS: per-segment cap
-    CALIB_HOLD_MS = 600    # firmware/p4/main/link.h LINK_HOLD_CALIB_MS: one pulse
+    MOVE_EPS = 0.02        # firmware/car/core/main/recovery.c: below this a sample is stationary
+    SEG_MAX_MS = 250       # firmware/car/core/main/recovery.h RECOVER_SEG_MAX_MS: per-segment cap
+    CALIB_HOLD_MS = 600    # firmware/car/core/main/link.h LINK_HOLD_CALIB_MS: one pulse
 
     def __init__(self, device=DEVICE, fw="v1.0+9000", now=0.0):
         self.device = device

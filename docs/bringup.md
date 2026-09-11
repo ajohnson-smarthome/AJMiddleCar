@@ -19,12 +19,12 @@ closed.**
 | 3 | `esp_wifi_remote` proxies `esp_wifi_ap_get_sta_list` | **Resolved — it links.** RSSI telemetry survives the port |
 | 4 | An explicit hosted transport-init call in `app_main` | **Resolved — none needed.** `ESP_HOSTED_AUTO_CALL_INIT_BEFORE_APP_MAIN` brings the transport up before `app_main` |
 | 5 | 5.4-era code builds unchanged on IDF 6.0.2 | **Resolved — one break.** cJSON left ESP-IDF for the component manager; declared in `idf_component.yml`. Nothing else needed changing |
-| 6 | The `esp_hosted` slave builds as a project we own | **Resolved — it is theirs, and it builds.** A standard IDF project inside the pinned component; `firmware/c6/` holds only the procedure. Needs a vendor patch to ESP-IDF (`eh.py patch-idf`), applied automatically |
+| 6 | The `esp_hosted` slave builds as a project we own | **Resolved — it is theirs, and it builds.** A standard IDF project inside the pinned component; `firmware/car/modem/` holds only the procedure. Needs a vendor patch to ESP-IDF (`eh.py patch-idf`), applied automatically |
 | 2 | The C6 arrives already flashed with the slave image | **Resolved — flashed, but not with our version.** It shipped an image reporting `0.0.0`, four major versions behind the pinned 3.0.6. WiFi worked anyway; see the bench notes for how it was updated |
 | 1 | The I2C pins in `board.h` are free and clear of the SDIO link | **Resolved — but not at the pins the code first guessed.** The header's I2C is SDA `GPIO7` / SCL `GPIO8`; both boards answer and initialise there |
 
 **What is now known about the pins.** SDIO reserves **GPIO 14–19** on the P4 (D0–D3, CLK, CMD)
-plus **GPIO 54** for co-processor reset, pinned in `firmware/p4/sdkconfig.defaults`. Neither
+plus **GPIO 54** for co-processor reset, pinned in `firmware/car/core/sdkconfig.defaults`. Neither
 appears on the 2×20 header except GPIO 54, which sits on physical pin 32 — leave that one alone or
 the radio resets.
 
@@ -40,7 +40,7 @@ component defaults to — answered itself: the radio comes up, so they do.
 
 1. See above.
 2. Answered, and the fix turned out not to need the wire the README assumed — the co-processor
-   was updated over SDIO from the host. `firmware/c6/README.md` now carries both procedures.
+   was updated over SDIO from the host. `firmware/car/modem/README.md` now carries both procedures.
 3. Already resolved; no action.
 
 ## Bench sequence
@@ -58,7 +58,7 @@ component defaults to — answered itself: the radio comes up, so they do.
       enumerating partway through the first session and never came back — see the bench notes.
       The bridge became the working channel, and the sanctioned fix applied: the console moved
       rather than the cable.
-- [x] **Flash.** `cd firmware/p4 && source ../../tools/env-p4.sh && idf.py -p /dev/cu.usbmodem* flash monitor`
+- [x] **Flash.** `cd firmware/car/core && source ../../tools/env-p4.sh && idf.py -p /dev/cu.usbmodem* flash monitor`
       — works on either port. Needed one config change first; see the bench notes on chip revision.
 - [x] **Radio.** `esp-hosted fw versions: host=3.0.6 coprocessor=3.0.6 (match)`, and `status_api`
       logs `radio firmware 3.0.6`, which it only does when `radio.ok` is true.
@@ -102,7 +102,7 @@ so the first flash stopped with:
 ```
 
 The two families are **mutually exclusive** in Kconfig — a build supports either `<3.0` or `>=3.0`,
-never both — so the fix is two lines in `firmware/p4/sdkconfig.defaults`:
+never both — so the fix is two lines in `firmware/car/core/sdkconfig.defaults`:
 
 ```
 CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
@@ -259,7 +259,7 @@ three-attempt budget. Reflash the C6 by hand with an older image, reset the car,
 correct itself; then make the flash impossible and confirm the car gives up and drives.
 
 **A build-number trap worth knowing.** The dongle was reflashed from the same tree and reported
-`v1.0+727` — the previous release's number. Nothing in `firmware/s3` had changed, so CMake never
+`v1.0+727` — the previous release's number. Nothing in `firmware/dongle` had changed, so CMake never
 reconfigured, and the version string (derived from `git rev-list --count HEAD`) stayed at whatever
 the last configure saw. The image was correct; only its label was stale. `idf.py reconfigure`
 fixes it, and releases are immune because `tools/release.sh` runs `fullclean` first — but an
@@ -268,7 +268,7 @@ an afternoon.
 
 ### The radio was updated over SDIO, with no wire at all (2026-08-20)
 
-`firmware/c6/README.md` said the C6 is flashed through its UART header. It can also be updated
+`firmware/car/modem/README.md` said the C6 is flashed through its UART header. It can also be updated
 **from the host over the existing SDIO link**, and that is how it was done — no adapter, no
 connector, nothing physical.
 

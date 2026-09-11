@@ -5,11 +5,11 @@ cmake_minimum_required(VERSION 3.16)
 # (takes precedence over IDF's version.txt auto-detection and git-describe fallback).
 #
 # The file sits at the repo root, not here, because the version identifies a RELEASE and a release
-# carries two images — this one and firmware/s3's. firmware/s3/CMakeLists.txt reads the same file
+# carries two images — this one and firmware/dongle's. firmware/dongle/CMakeLists.txt reads the same file
 # the same way. The EXISTS check is not ceremony: the 2026-08-19 migration noted that a
 # mispointed path "would not fail loudly", producing an empty semver and a car reporting a
 # garbage version. It fails loudly now.
-set(VERSION_FILE "${CMAKE_CURRENT_LIST_DIR}/../../version.txt")
+set(VERSION_FILE "${CMAKE_CURRENT_LIST_DIR}/../../../version.txt")
 if(NOT EXISTS "${VERSION_FILE}")
     message(FATAL_ERROR "version.txt not found at ${VERSION_FILE}")
 endif()

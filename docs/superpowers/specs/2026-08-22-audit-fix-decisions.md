@@ -3,7 +3,7 @@
 > **For agentic workers:** this spec records the *decisions* behind the 2026-08-22 audit-fix
 > plans (`docs/superpowers/plans/2026-08-22-audit-fixes-*.md`). Where a decision changes wire
 > or session behavior it MUST land identically on every side that implements it: firmware
-> (`firmware/p4/main/`), mock (`tools/mock_car/`), and the contract documents. The audit that
+> (`firmware/car/core/main/`), mock (`tools/mock_car/`), and the contract documents. The audit that
 > produced these findings: 51 confirmed defects, each verified against
 > `link-layer-cutover @ 3fa2c0a`.
 

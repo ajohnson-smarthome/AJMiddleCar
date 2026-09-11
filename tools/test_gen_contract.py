@@ -70,7 +70,7 @@ class TestSchema(unittest.TestCase):
 
     def test_ranges_match_the_firmware_today(self):
         """The schema must describe the firmware that exists, not one we imagined."""
-        main = ROOT / "firmware" / "p4" / "main"
+        main = ROOT / "firmware" / "car" / "core" / "main"
         # The five *_api.c files are gone: cfg_api.c drives all of them from the
         # generated table, so a range literal no longer appears in any handler. What
         # remains are the setters' own clamps, which are the C-side constants this
@@ -139,10 +139,10 @@ class TestArtifactListing(unittest.TestCase):
             [sys.executable, str(ROOT / "tools" / "gen_contract.py"), "--list-artifacts"],
             capture_output=True, text=True, check=True).stdout.split()
         self.assertEqual(out, [
-            "firmware/p4/main/cfg_table.inc",
+            "firmware/car/core/main/cfg_table.inc",
             "app/AJMiddleCar/Generated/CarAPI.swift",
             "tools/mock_car/generated.py",
-            "firmware/s3/main/dongle_contract.inc",
+            "firmware/dongle/main/dongle_contract.inc",
             "app/AJMiddleCar/Generated/DongleAPI.swift",
         ])
 
@@ -450,7 +450,7 @@ class TestDongleAgreesWithTheCar(unittest.TestCase):
         the assertion that fails the day either side of it moves.
         """
         httpd_default_port = 80          # esp_http_server's HTTPD_DEFAULT_CONFIG()
-        car_http = (ROOT / "firmware" / "p4" / "main" / "http_server.c").read_text()
+        car_http = (ROOT / "firmware" / "car" / "core" / "main" / "http_server.c").read_text()
         self.assertIn("HTTPD_DEFAULT_CONFIG()", car_http,
                       "the car's REST server no longer starts from HTTPD_DEFAULT_CONFIG, so "
                       "its port is no longer the default this test ties the relay to")

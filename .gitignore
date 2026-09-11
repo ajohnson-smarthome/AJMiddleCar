@@ -1,7 +1,7 @@
-firmware/p4/build/
-firmware/c6/build/
-firmware/s3/build/
-firmware/p4/main/radio_image.bin
+firmware/car/core/build/
+firmware/car/modem/build/
+firmware/dongle/build/
+firmware/car/core/main/radio_image.bin
 sdkconfig
 sdkconfig.old
 *.o
@@ -15,15 +15,15 @@ app/DerivedData/
 tools/mock_car/.venv/
 
 # compiled host-test binaries (sources stay tracked)
-firmware/p4/test/test_*
-!firmware/p4/test/test_*.c
-firmware/s3/test/test_*
-!firmware/s3/test/test_*.c
+firmware/car/core/test/test_*
+!firmware/car/core/test/test_*.c
+firmware/dongle/test/test_*
+!firmware/dongle/test/test_*.c
 # Fetched by the component manager from dependencies.lock, which is tracked — that lock file
 # is the reproducibility guarantee, not 37 MB of vendored source.
-firmware/p4/managed_components/
-firmware/c6/managed_components/
-firmware/s3/managed_components/
+firmware/car/core/managed_components/
+firmware/car/modem/managed_components/
+firmware/dongle/managed_components/
 
 # Python bytecode from the contract generator and its tests
 __pycache__/

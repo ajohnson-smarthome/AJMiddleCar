@@ -71,13 +71,13 @@ a pair, not just a host.
 
 **It comes out when the bench says the relay works.** That is a real deletion with a real trigger,
 and the plan records it rather than leaving a permanent second path nobody removes: the row in
-`firmware/s3/README.md` proving a drive through the relay is what retires it.
+`firmware/dongle/README.md` proving a drive through the relay is what retires it.
 
 ## Global Constraints
 
 - **The app is the only place the two contracts meet.** It reads `CarContract` for the car's
   identity and hands the SSID and password to the dongle as opaque strings. Nothing in
-  `firmware/s3` learns whose they are, and nothing in the app teaches it.
+  `firmware/dongle` learns whose they are, and nothing in the app teaches it.
 - **Generated files are never hand-edited.** `app/AJMiddleCar/Generated/DongleAPI.swift` comes
   from `contract/dongle-api.json`. Neither side writes an agreed name, number or path as a
   literal — that includes the app.
@@ -302,7 +302,7 @@ so put the choice in one place both read rather than two flags that can disagree
 
 No setting, no screen, no persistence, and a comment saying all three: this is a bench instrument
 for answering "is this the app or the dongle", and the plan's cutover section records the row in
-`firmware/s3/README.md` that retires it.
+`firmware/dongle/README.md` that retires it.
 
 - [ ] **Step 3: `CarPath` monitors the dongle's interface**
 
@@ -334,7 +334,7 @@ for no reason.
 
 - [ ] **Step 4: The bench step that settles U1 — write it down, do not guess**
 
-Add to `firmware/s3/README.md`'s bench table a pending row: *which `NWInterface.InterfaceType` the
+Add to `firmware/dongle/README.md`'s bench table a pending row: *which `NWInterface.InterfaceType` the
 dongle presents on a real device*. The measurement is one throwaway build that logs
 `NWPath.availableInterfaces` while the dongle is attached, and it decides `CarNet.dongleInterface`.
 
@@ -352,7 +352,7 @@ cd app && xcodegen generate && cd ..
 xcodebuild build -scheme AJMiddleCar -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath /tmp/ddata-middle 2>&1 | tail -5
 tools/test-all.sh
 git add app/AJMiddleCar/CarNet.swift app/AJMiddleCar/CarHost.swift app/AJMiddleCar/CarPath.swift \
-        app/AJMiddleCar/LinkState.swift firmware/s3/README.md
+        app/AJMiddleCar/LinkState.swift firmware/dongle/README.md
 git commit -m "feat(app): the car is reached over the dongle's wire, named in one place"
 ```
 
@@ -515,4 +515,4 @@ Then, in order:
    this plan has to be.
 5. **Unplug mid-drive.** The app must reach a screen that says the wire is gone, not a hang. This
    is the state `PathState`'s renamed cases exist to express, and nothing else tests them.
-6. **Record every result** in `firmware/s3/README.md`'s bench table.
+6. **Record every result** in `firmware/dongle/README.md`'s bench table.

@@ -231,7 +231,7 @@ async def root(request):
 
 def build_app(car, link, rollback_mode=False):
     # aiohttp's default client_max_size is 1 MB. A real image is already ~0.75 MB
-    # (firmware/p4/build/ajmiddlecar.bin) and growing, so the default would 413 a
+    # (firmware/car/core/build/ajmiddlecar.bin) and growing, so the default would 413 a
     # legitimate upload — and, without the read() guard above, wedge the actuator
     # on the way. The P4 has 16 MB of flash; set the cap generously above that.
     app = web.Application(middlewares=[one_at_a_time], client_max_size=17 * 1024 * 1024)

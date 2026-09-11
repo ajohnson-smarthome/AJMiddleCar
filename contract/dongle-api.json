@@ -1,6 +1,6 @@
 {
   "device": "ajdongle",
-  "doc": "The vocabulary the app and the dongle must spell identically. Rules live in firmware/s3/main/net_cfg.{c,h}, which is host-tested; this file carries only names, numbers and paths.",
+  "doc": "The vocabulary the app and the dongle must spell identically. Rules live in firmware/dongle/main/net_cfg.{c,h}, which is host-tested; this file carries only names, numbers and paths.",
   "network": {
     "host": "192.168.7.1",
     "port": 8080,

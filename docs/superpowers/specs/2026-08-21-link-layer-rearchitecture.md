@@ -1,6 +1,6 @@
 # Re-architecting the link layer
 
-The layer where `app/AJMiddleCar` and `firmware/p4` meet. This spec replaces the transport, the
+The layer where `app/AJMiddleCar` and `firmware/car/core` meet. This spec replaces the transport, the
 authority model on both sides, and the way the contract between them is maintained.
 
 It supersedes `2026-08-21-wifi-pinned-networking.md`, which fixed one real problem — iOS demoting a
@@ -170,7 +170,7 @@ The app refuses an unknown `proto` by name rather than mis-parsing it silently.
 
 | Artefact | Contents |
 |---|---|
-| `firmware/p4/main/cfg_table.inc` | C descriptor table for the generic config handler |
+| `firmware/car/core/main/cfg_table.inc` | C descriptor table for the generic config handler |
 | `app/AJMiddleCar/Generated/CarAPI.swift` | `Codable` structs and range constants |
 | `tools/mock_car/generated.py` | mock handlers and input assertions |
 | `docs/protocol.md` | the endpoint table |

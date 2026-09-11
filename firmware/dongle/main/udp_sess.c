@@ -53,7 +53,7 @@ uint32_t udp_sess_expire(udp_sess_table_t *t, uint32_t now_ms, uint32_t idle_ms)
     for (int i = 0; i < UDP_SESS_MAX; i++) {
         /* Unsigned subtraction rather than a signed comparison: a millisecond counter that
          * wraps at 2^32 still elapses correctly this way — the same idiom as the car's
-         * watchdog_stale (firmware/p4/main/watchdog.h). */
+         * watchdog_stale (firmware/car/core/main/watchdog.h). */
         if (t->s[i].used && (uint32_t)(now_ms - t->s[i].last_ms) > idle_ms) {
             t->s[i].used = false;
             freed |= (1u << i);

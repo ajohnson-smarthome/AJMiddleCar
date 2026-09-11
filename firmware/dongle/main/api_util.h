@@ -8,7 +8,7 @@
 /* The REST surface's shared plumbing: one error shape for every endpoint, and one body
  * reader that copes with a body TCP split across segments.
  *
- * A deliberate twin of firmware/p4/main/api_util.{c,h} rather than a shared file. The two
+ * A deliberate twin of firmware/car/core/main/api_util.{c,h} rather than a shared file. The two
  * firmwares do not reference each other — that independence is what lets the dongle stay
  * ignorant of the car — and the price of it is this much duplication, paid knowingly. */
 

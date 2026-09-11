@@ -23,7 +23,7 @@ re-deleting the same two files, not a merge against local edits.
 The three fonts this project generates (`u8g2_font_10x20_t_cyrillic`,
 `u8g2_font_9x15_t_cyrillic`, `u8g2_font_6x12_t_cyrillic`) come separately, from
 upstream's own BDFs and its own `bdfconv` converter, by `tools/gen_dongle_fonts.sh`. Its
-output is `firmware/s3/main/fonts_cyrillic.c` — generated, never hand-edited. That script
+output is `firmware/dongle/main/fonts_cyrillic.c` — generated, never hand-edited. That script
 reads the `Upstream commit:` line above to pin the same revision this component vendors, so
 the generated fonts and the vendored library never drift apart.
 
@@ -48,9 +48,9 @@ component-manager dependency would have pulled in whole.
 
 ```bash
 git clone --depth 1 https://github.com/olikraus/u8g2.git /tmp/u8g2-src
-rm -rf firmware/s3/components/u8g2/csrc
-cp -R /tmp/u8g2-src/csrc firmware/s3/components/u8g2/
-rm firmware/s3/components/u8g2/csrc/u8g2_fonts.c firmware/s3/components/u8g2/csrc/u8x8_fonts.c
+rm -rf firmware/dongle/components/u8g2/csrc
+cp -R /tmp/u8g2-src/csrc firmware/dongle/components/u8g2/
+rm firmware/dongle/components/u8g2/csrc/u8g2_fonts.c firmware/dongle/components/u8g2/csrc/u8x8_fonts.c
 ```
 
 Then update the `Upstream commit:` line above to the new commit's full SHA, and re-run

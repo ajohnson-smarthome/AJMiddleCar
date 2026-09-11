@@ -1,6 +1,6 @@
 # Wire protocol — app ↔ car
 
-The contract between `app/` and `firmware/p4/`. These two never reference each other in code;
+The contract between `app/` and `firmware/car/core/`. These two never reference each other in code;
 this document and `tools/mock_car` are the whole seam. Either side should be reimplementable
 from this file alone.
 
@@ -183,7 +183,7 @@ silently.
 
 `radio` reports the ESP32-C6 co-processor that provides WiFi. The version it must run is derived
 from the host's own `esp_hosted` component pin and delivered out of band — over SDIO from the
-host, or over its UART header (`firmware/c6/README.md`) — never through `/ota`. `ok:false` means
+host, or over its UART header (`firmware/car/modem/README.md`) — never through `/ota`. `ok:false` means
 the image on the radio is not the one this firmware expects. Nothing else in the system reports
 this, so a client should surface it.
 
@@ -246,7 +246,7 @@ next boot the firmware marks the image valid, which cancels the bootloader's rol
 image that cannot boot far enough to do that is rolled back automatically.
 
 The radio co-processor's image is **not** delivered this way — see `/status` above and
-`firmware/c6/README.md`.
+`firmware/car/modem/README.md`.
 
 ## Not part of this protocol
 

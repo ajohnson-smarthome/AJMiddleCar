@@ -35,14 +35,14 @@ The watchdog revokes `RT` explicitly (`link_release(LINK_SRC_RT)`) before handin
 
 | File | Responsibility |
 |---|---|
-| `firmware/p4/main/link.h` | The pure arbitration state machine (`link_arb_t` + three `static inline` functions), the source enum, and the ESP-side API |
-| `firmware/p4/main/link.c` | Owns the arbiter, the 50 Hz writer task, the duty target and shadow. Sole PCA9685 writer |
-| `firmware/p4/test/test_link.c` | Host test for the arbitration state machine |
-| `firmware/p4/main/ramp.{c,h}` | Shrinks to the pure `ramp_step` plus the NVS-backed `ramp_ms` setting. Loses the task and `ramp_set_target` |
-| `firmware/p4/main/pca9685.{c,h}` | Bounded I2C timeout, one retry, and a new `pca9685_zero_all()` |
-| `firmware/p4/main/car.{c,h}` | Mixing and planning; calibration read through an atomic pointer; `car_drive`/`car_stop` gain a source |
-| `firmware/p4/main/{ws_control,main,calib_api,recovery,ota_api}.c` | Each producer names its source |
-| `firmware/p4/main/telemetry.{c,h}` | Two additive fields: `ctl` and `bus_ok` |
+| `firmware/car/core/main/link.h` | The pure arbitration state machine (`link_arb_t` + three `static inline` functions), the source enum, and the ESP-side API |
+| `firmware/car/core/main/link.c` | Owns the arbiter, the 50 Hz writer task, the duty target and shadow. Sole PCA9685 writer |
+| `firmware/car/core/test/test_link.c` | Host test for the arbitration state machine |
+| `firmware/car/core/main/ramp.{c,h}` | Shrinks to the pure `ramp_step` plus the NVS-backed `ramp_ms` setting. Loses the task and `ramp_set_target` |
+| `firmware/car/core/main/pca9685.{c,h}` | Bounded I2C timeout, one retry, and a new `pca9685_zero_all()` |
+| `firmware/car/core/main/car.{c,h}` | Mixing and planning; calibration read through an atomic pointer; `car_drive`/`car_stop` gain a source |
+| `firmware/car/core/main/{ws_control,main,calib_api,recovery,ota_api}.c` | Each producer names its source |
+| `firmware/car/core/main/telemetry.{c,h}` | Two additive fields: `ctl` and `bus_ok` |
 | `docs/protocol.md` | Documents the two new telemetry fields |
 
 ---
@@ -50,16 +50,16 @@ The watchdog revokes `RT` explicitly (`link_release(LINK_SRC_RT)`) before handin
 ### Task 1: The arbitration state machine, pure and host-tested
 
 **Files:**
-- Create: `firmware/p4/main/link.h`
-- Create: `firmware/p4/test/test_link.c`
-- Modify: `firmware/p4/test/Makefile`
+- Create: `firmware/car/core/main/link.h`
+- Create: `firmware/car/core/test/test_link.c`
+- Modify: `firmware/car/core/test/Makefile`
 
 **Interfaces:**
 - Produces: `link_src_t {LINK_SRC_NONE = -1, LINK_SRC_RECOVER = 0, LINK_SRC_CONSOLE, LINK_SRC_RT, LINK_SRC_CALIB, LINK_SRC_OTA, LINK_SRC_SAFE}`; `link_arb_t {link_src_t owner; uint32_t until_ms; bool sticky;}`; `bool link_arb_lapsed(const link_arb_t *, uint32_t now)`; `bool link_arb_grant(link_arb_t *, link_src_t src, uint32_t now, uint32_t hold_ms, bool sticky)`; `void link_arb_release(link_arb_t *, link_src_t src)`; `const char *link_src_name(link_src_t)`.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `firmware/p4/test/test_link.c`:
+Create `firmware/car/core/test/test_link.c`:
 
 ```c
 #define LINK_HOST_TEST
@@ -132,7 +132,7 @@ int main(void) {
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-cd ~/VSCode/esp32-p4-car/firmware/p4/test
+cd ~/VSCode/esp32-p4-car/firmware/car/core/test
 cc -I../main -Wall -Wextra -Werror -std=c11 -o /tmp/test_link test_link.c -lm
 ```
 
@@ -140,7 +140,7 @@ Expected: `fatal error: '../main/link.h' file not found`.
 
 - [ ] **Step 3: Write the header**
 
-Create `firmware/p4/main/link.h`:
+Create `firmware/car/core/main/link.h`:
 
 ```c
 #ifndef LINK_H
@@ -256,7 +256,7 @@ bool link_bus_ok(void);
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-cd ~/VSCode/esp32-p4-car/firmware/p4/test
+cd ~/VSCode/esp32-p4-car/firmware/car/core/test
 cc -I../main -Wall -Wextra -Werror -std=c11 -o /tmp/test_link test_link.c -lm && /tmp/test_link
 ```
 
@@ -264,7 +264,7 @@ Expected: `test_link: all passed`.
 
 - [ ] **Step 5: Wire it into the host Makefile**
 
-In `firmware/p4/test/Makefile`, add `test_link` to the `all:` list, to the `run:` chain and to `clean:`, and add the rule in the same shape as the others:
+In `firmware/car/core/test/Makefile`, add `test_link` to the `all:` list, to the `run:` chain and to `clean:`, and add the rule in the same shape as the others:
 
 ```make
 test_link: test_link.c
@@ -283,7 +283,7 @@ Expected: `test_link: all passed` among the rest, ending in `== all green ==`.
 
 ```bash
 cd ~/VSCode/esp32-p4-car
-git add firmware/p4/main/link.h firmware/p4/test/test_link.c firmware/p4/test/Makefile
+git add firmware/car/core/main/link.h firmware/car/core/test/test_link.c firmware/car/core/test/Makefile
 git commit -m "feat(fw): the actuator arbiter, as a pure state machine
 
 Five things want to command the motors and nothing arbitrates between them:
@@ -307,7 +307,7 @@ way ramp_step and watchdog_stale are.
 `pca9685.c:107` passes `-1` as the I2C timeout, which is "wait forever". A slave holding SDA low — a loose cable, a glitched board, and there are three devices on this bus — freezes the sole actuator writer permanently. Separately, nothing can currently command the chip to zero without going through the ramp, which Task 3 needs at boot.
 
 **Files:**
-- Modify: `firmware/p4/main/pca9685.c`, `firmware/p4/main/pca9685.h`
+- Modify: `firmware/car/core/main/pca9685.c`, `firmware/car/core/main/pca9685.h`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -315,7 +315,7 @@ way ramp_step and watchdog_stale are.
 
 - [ ] **Step 1: Bound every I2C wait and retry once**
 
-In `firmware/p4/main/pca9685.c`, under the existing `#define`s add:
+In `firmware/car/core/main/pca9685.c`, under the existing `#define`s add:
 
 ```c
 /* Never wait forever on the bus. The sole actuator writer runs here, and a slave
@@ -352,7 +352,7 @@ And at the end of `pca9685_set_pwm`, replace the single `return i2c_master_trans
 
 - [ ] **Step 2: Add `pca9685_zero_all`**
 
-Append to `firmware/p4/main/pca9685.c`:
+Append to `firmware/car/core/main/pca9685.c`:
 
 ```c
 esp_err_t pca9685_zero_all(void) {
@@ -372,7 +372,7 @@ esp_err_t pca9685_zero_all(void) {
 }
 ```
 
-In `firmware/p4/main/pca9685.h`, declare it above the closing guard:
+In `firmware/car/core/main/pca9685.h`, declare it above the closing guard:
 
 ```c
 // Drive every channel of every board fully off. Used at boot, because the chip's
@@ -383,7 +383,7 @@ esp_err_t pca9685_zero_all(void);
 - [ ] **Step 3: Build the firmware**
 
 ```bash
-cd ~/VSCode/esp32-p4-car/firmware/p4
+cd ~/VSCode/esp32-p4-car/firmware/car/core
 source ~/esp/esp-idf-v6.0.2/export.sh >/dev/null 2>&1
 idf.py build 2>&1 | tail -4
 ```
@@ -394,7 +394,7 @@ Expected: `Project build complete.`
 
 ```bash
 cd ~/VSCode/esp32-p4-car
-git add firmware/p4/main/pca9685.c firmware/p4/main/pca9685.h
+git add firmware/car/core/main/pca9685.c firmware/car/core/main/pca9685.h
 git commit -m "fix(fw): bound the I2C wait, and give the chip a way to be zeroed
 
 The sole actuator writer waited forever on the bus. A slave holding SDA low —
@@ -418,8 +418,8 @@ The 50 Hz task moves out of `ramp.c` and into `link.c`, which also holds the arb
 Two bugs are fixed by construction here. The shadow `s_current[ch]` is currently updated *before* the write succeeds, so one NACK leaves the firmware believing a channel is at zero while the motor keeps spinning, and `dirty` never rises again for it. And at boot `s_current == s_target == 0`, so `dirty` is false and **nothing at all is written** — the safety stop never reaches the chip.
 
 **Files:**
-- Create: `firmware/p4/main/link.c`
-- Modify: `firmware/p4/main/ramp.c`, `firmware/p4/main/ramp.h`, `firmware/p4/main/CMakeLists.txt`
+- Create: `firmware/car/core/main/link.c`
+- Modify: `firmware/car/core/main/ramp.c`, `firmware/car/core/main/ramp.h`, `firmware/car/core/main/CMakeLists.txt`
 
 **Interfaces:**
 - Consumes: `link_arb_*` from Task 1; `pca9685_set_pwm`, `pca9685_zero_all` from Task 2; `ramp_step`, `ramp_get_ms` from `ramp.h`.
@@ -427,7 +427,7 @@ Two bugs are fixed by construction here. The shadow `s_current[ch]` is currently
 
 - [ ] **Step 1: Write `link.c`**
 
-Create `firmware/p4/main/link.c`:
+Create `firmware/car/core/main/link.c`:
 
 ```c
 #include "link.h"
@@ -559,7 +559,7 @@ esp_err_t link_init(void) {
 
 - [ ] **Step 2: Shrink `ramp` to the setting and the pure step**
 
-In `firmware/p4/main/ramp.h`, move the per-tick rise calculation into the pure section so `link.c` can use it, and delete the task-side API. Replace the whole file with:
+In `firmware/car/core/main/ramp.h`, move the per-tick rise calculation into the pure section so `link.c` can use it, and delete the task-side API. Replace the whole file with:
 
 ```c
 #ifndef RAMP_H
@@ -595,7 +595,7 @@ void ramp_save(void);
 #endif // RAMP_H
 ```
 
-In `firmware/p4/main/ramp.c`, delete `TICK_MS`, `max_up_per_tick`, `ramp_task`, `ramp_set_target`, `s_target`, `s_current`, and the `pca9685.h` and `freertos/task.h` includes. `ramp_init` keeps only the NVS load and returns `ESP_OK`:
+In `firmware/car/core/main/ramp.c`, delete `TICK_MS`, `max_up_per_tick`, `ramp_task`, `ramp_set_target`, `s_target`, `s_current`, and the `pca9685.h` and `freertos/task.h` includes. `ramp_init` keeps only the NVS load and returns `ESP_OK`:
 
 ```c
 esp_err_t ramp_init(void) {
@@ -618,7 +618,7 @@ esp_err_t ramp_init(void) {
 
 - [ ] **Step 3: Extend the ramp host test to cover the moved function**
 
-In `firmware/p4/test/test_ramp.c`, before the `printf`, add:
+In `firmware/car/core/test/test_ramp.c`, before the `printf`, add:
 
 ```c
     // ramp_max_up_per_tick: a full-scale rise spread over ramp_ms
@@ -634,7 +634,7 @@ In `firmware/p4/test/test_ramp.c`, before the `printf`, add:
 
 - [ ] **Step 4: Register `link.c` with the build**
 
-In `firmware/p4/main/CMakeLists.txt`, add `"link.c"` to the `SRCS` list.
+In `firmware/car/core/main/CMakeLists.txt`, add `"link.c"` to the `SRCS` list.
 
 - [ ] **Step 5: Run the host tests**
 
@@ -648,8 +648,8 @@ Expected: `test_ramp: all passed` and `== all green ==`. The firmware will not b
 
 ```bash
 cd ~/VSCode/esp32-p4-car
-git add firmware/p4/main/link.c firmware/p4/main/ramp.c firmware/p4/main/ramp.h \
-        firmware/p4/main/CMakeLists.txt firmware/p4/test/test_ramp.c
+git add firmware/car/core/main/link.c firmware/car/core/main/ramp.c firmware/car/core/main/ramp.h \
+        firmware/car/core/main/CMakeLists.txt firmware/car/core/test/test_ramp.c
 git commit -m "feat(fw): link.c owns the actuator, and ramp_set_target stops existing
 
 The 50 Hz task moves out of ramp.c and in beside the arbiter, so one module owns
@@ -675,7 +675,7 @@ now zeroes the hardware and starts the shadow at a value no duty can equal.
 `car_drive` takes a mutex with a 200 ms timeout and, on timeout, returns having commanded **nothing** — so the watchdog's emergency stop can silently vanish. The lock exists only to keep a calibration write from tearing a read. An immutable config published by pointer swap removes the read side of the lock entirely, and with it both the stall and the failure mode.
 
 **Files:**
-- Modify: `firmware/p4/main/car.c`, `firmware/p4/main/car.h`
+- Modify: `firmware/car/core/main/car.c`, `firmware/car/core/main/car.h`
 
 **Interfaces:**
 - Consumes: `link_set`, `link_release`, `link_src_t` from Tasks 1 and 3.
@@ -683,7 +683,7 @@ now zeroes the hardware and starts the shadow at a value no duty can equal.
 
 - [ ] **Step 1: Rewrite the state and the hot path**
 
-In `firmware/p4/main/car.c`, replace the `g_cfg` / `g_lock` / `g_trim_pct` block and `car_drive` with:
+In `firmware/car/core/main/car.c`, replace the `g_cfg` / `g_lock` / `g_trim_pct` block and `car_drive` with:
 
 ```c
 #include <stdatomic.h>
@@ -809,7 +809,7 @@ bool car_spin_pair(uint8_t pair, bool forward);
 - [ ] **Step 3: Build — it will fail, and the failures are the list of callers to fix**
 
 ```bash
-cd ~/VSCode/esp32-p4-car/firmware/p4
+cd ~/VSCode/esp32-p4-car/firmware/car/core
 source ~/esp/esp-idf-v6.0.2/export.sh >/dev/null 2>&1
 idf.py build 2>&1 | grep -E "error:" | head -20
 ```
@@ -820,7 +820,7 @@ Expected: errors in `ws_control.c`, `main.c`, `recovery.c`, `ota_api.c`, `calib_
 
 ```bash
 cd ~/VSCode/esp32-p4-car
-git add firmware/p4/main/car.c firmware/p4/main/car.h
+git add firmware/car/core/main/car.c firmware/car/core/main/car.h
 git commit -m "fix(fw): a calibration read that cannot block, a stop that cannot vanish
 
 car_drive took a mutex with a 200 ms timeout on the control path and, on
@@ -843,7 +843,7 @@ declare what it is."
 ### Task 5: Every producer names itself
 
 **Files:**
-- Modify: `firmware/p4/main/ws_control.c`, `firmware/p4/main/main.c`, `firmware/p4/main/recovery.c`, `firmware/p4/main/ota_api.c`, `firmware/p4/main/calib_api.c`, `firmware/p4/main/watchdog.c`, `firmware/p4/main/telemetry.c`, `firmware/p4/main/telemetry.h`
+- Modify: `firmware/car/core/main/ws_control.c`, `firmware/car/core/main/main.c`, `firmware/car/core/main/recovery.c`, `firmware/car/core/main/ota_api.c`, `firmware/car/core/main/calib_api.c`, `firmware/car/core/main/watchdog.c`, `firmware/car/core/main/telemetry.c`, `firmware/car/core/main/telemetry.h`
 
 **Interfaces:**
 - Consumes: `car_drive(src, ...)`, `car_stop(src)`, `link_release`, `link_owner`, `link_bus_ok`, `link_src_name`.
@@ -851,7 +851,7 @@ declare what it is."
 
 - [ ] **Step 1: The control path feeds the watchdog only on a real apply**
 
-In `firmware/p4/main/ws_control.c`, the handler currently reads:
+In `firmware/car/core/main/ws_control.c`, the handler currently reads:
 
 ```c
     if (control_parse_json((const char *)buf, &t, &y) == 0) {
@@ -879,7 +879,7 @@ Replace with:
 
 - [ ] **Step 2: The console names itself**
 
-In `firmware/p4/main/main.c`, add `#include "link.h"` and change the REPL's call:
+In `firmware/car/core/main/main.c`, add `#include "link.h"` and change the REPL's call:
 
 ```c
         if (parse_mix(line, &t, &y) == 0) {
@@ -891,7 +891,7 @@ In `firmware/p4/main/main.c`, add `#include "link.h"` and change the REPL's call
 
 - [ ] **Step 3: Recovery takes and releases the actuator**
 
-In `firmware/p4/main/recovery.c`, add `#include "link.h"`. In `retreat_task`, replace the three `car_stop()` calls with `car_stop(LINK_SRC_RECOVER)` and `car_drive(rt, ry)` with `car_drive(LINK_SRC_RECOVER, rt, ry)`. At the end of the retreat — both the aborted and the exhausted branch — release:
+In `firmware/car/core/main/recovery.c`, add `#include "link.h"`. In `retreat_task`, replace the three `car_stop()` calls with `car_stop(LINK_SRC_RECOVER)` and `car_drive(rt, ry)` with `car_drive(LINK_SRC_RECOVER, rt, ry)`. At the end of the retreat — both the aborted and the exhausted branch — release:
 
 ```c
         if (aborted) {
@@ -907,7 +907,7 @@ In `recovery_on_link_lost`, the disabled branch becomes `car_stop(LINK_SRC_RECOV
 
 - [ ] **Step 4: The watchdog revokes the dead stream before handing over**
 
-In `firmware/p4/main/watchdog.c`, add `#include "link.h"` and in `wdt_cb`, before `recovery_on_link_lost()`:
+In `firmware/car/core/main/watchdog.c`, add `#include "link.h"` and in `wdt_cb`, before `recovery_on_link_lost()`:
 
 ```c
         /* The stream is gone. Revoke its grant explicitly rather than waiting for it
@@ -919,7 +919,7 @@ In `firmware/p4/main/watchdog.c`, add `#include "link.h"` and in `wdt_cb`, befor
 
 - [ ] **Step 5: OTA forces safe and holds it**
 
-In `firmware/p4/main/ota_api.c`, replace `car_stop();` at the top of `ota_post` with:
+In `firmware/car/core/main/ota_api.c`, replace `car_stop();` at the top of `ota_post` with:
 
 ```c
     car_stop(LINK_SRC_OTA);   /* sticky: nothing may command the motors during a flash */
@@ -927,7 +927,7 @@ In `firmware/p4/main/ota_api.c`, replace `car_stop();` at the top of `ota_post` 
 
 - [ ] **Step 6: Calibration reports a refusal instead of pretending**
 
-In `firmware/p4/main/calib_api.c`, replace the spin body's tail:
+In `firmware/car/core/main/calib_api.c`, replace the spin body's tail:
 
 ```c
     ESP_LOGI(TAG, "spin pair %d %s", pair, dir ? "fwd" : "rev");
@@ -956,7 +956,7 @@ Add `#include "link.h"`.
 
 - [ ] **Step 7: Telemetry reports the owner and the bus**
 
-In `firmware/p4/main/telemetry.h`, add to `telemetry_t`:
+In `firmware/car/core/main/telemetry.h`, add to `telemetry_t`:
 
 ```c
     const char *ctl;      /* which source owns the actuator */
@@ -980,7 +980,7 @@ Extend the `fields` buffer in `telemetry_json` and in `status_api.c` from 160 to
 
 - [ ] **Step 8: Update the telemetry host test**
 
-`firmware/p4/test/test_telemetry.c` tests `telemetry_fields`. Add the two fields to whatever fixture it builds and assert they appear:
+`firmware/car/core/test/test_telemetry.c` tests `telemetry_fields`. Add the two fields to whatever fixture it builds and assert they appear:
 
 ```c
     assert(strstr(buf, "\"ctl\":\"rt\"") != NULL);
@@ -990,7 +990,7 @@ Extend the `fields` buffer in `telemetry_json` and in `status_api.c` from 160 to
 - [ ] **Step 9: Build and run everything**
 
 ```bash
-cd ~/VSCode/esp32-p4-car/firmware/p4
+cd ~/VSCode/esp32-p4-car/firmware/car/core
 source ~/esp/esp-idf-v6.0.2/export.sh >/dev/null 2>&1
 idf.py build 2>&1 | tail -4
 cd ~/VSCode/esp32-p4-car && ./tools/test-all.sh 2>&1 | tail -4
@@ -1002,7 +1002,7 @@ Expected: `Project build complete.` and `== all green ==`.
 
 ```bash
 cd ~/VSCode/esp32-p4-car
-git add firmware/p4/main firmware/p4/test
+git add firmware/car/core/main firmware/car/core/test
 git commit -m "feat(fw): every producer names its source, and telemetry reports the owner
 
 The compiler's error list from the previous commit was the set of things that
@@ -1027,7 +1027,7 @@ Telemetry gains ctl and bus_ok. Both are additive, so an older app ignores them.
 `app_main` starts with `ESP_ERROR_CHECK(pca9685_bus_init(...))` and `ESP_ERROR_CHECK(pca9685_init(...))`. A dead I2C bus therefore means a boot loop with no Wi-Fi, no API and no OTA — recoverable only over USB. That is exactly what the bench hit while the PCA9685 boards were still unwired, and `docs/bringup.md` records it as a known trap rather than a bug.
 
 **Files:**
-- Modify: `firmware/p4/main/main.c`
+- Modify: `firmware/car/core/main/main.c`
 
 - [ ] **Step 1: Make the motor bus a soft failure**
 
@@ -1056,7 +1056,7 @@ Replace the first two lines of `app_main` with:
 - [ ] **Step 3: Build and verify the binary still fits**
 
 ```bash
-cd ~/VSCode/esp32-p4-car/firmware/p4
+cd ~/VSCode/esp32-p4-car/firmware/car/core
 source ~/esp/esp-idf-v6.0.2/export.sh >/dev/null 2>&1
 idf.py build 2>&1 | grep -E "binary size|Project build complete"
 ```
@@ -1067,7 +1067,7 @@ Expected: `Project build complete.` and a size still far under the 0x400000 part
 
 ```bash
 cd ~/VSCode/esp32-p4-car
-git add firmware/p4/main/main.c
+git add firmware/car/core/main/main.c
 git commit -m "fix(fw): a dead motor bus no longer takes the radio with it
 
 app_main aborted on the I2C bus, so a car with an unplugged PCA9685 boot-looped

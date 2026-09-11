@@ -23,7 +23,7 @@ enum CarHost {
     /// both `CarNet`'s socket pinning and `CarPath`'s presence test branch on this same `direct`
     /// flag, so host and wire cannot disagree — direct mode pins to Wi-Fi by type, where the type
     /// is known; dongle mode asks `CarInterface` which wire carries the dongle's address. It comes
-    /// It was meant to come out once `firmware/s3/README.md`'s bench table recorded a drive
+    /// It was meant to come out once `firmware/dongle/README.md`'s bench table recorded a drive
     /// through the relay. That row is now filled in — the app reached the car through the dongle
     /// on 2026-08-31 — and this stays anyway, deliberately: the dongle's own OTA cycle and its
     /// rollback proof are still unrun, and those are precisely the tests that can leave it unable

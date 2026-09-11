@@ -169,7 +169,7 @@ static void fill_updating(const dongle_view_t *v, screen_t *out)
      *
      * Unbounded by construction here, and that is fine: ota_done/ota_total cannot exceed the
      * OTA partition size, because ota_api.c rejects any upload whose content_len is larger
-     * than that partition before this row is ever built (firmware/s3/partitions.csv: ota_0
+     * than that partition before this row is ever built (firmware/dongle/partitions.csv: ota_0
      * and ota_1 are each 0x400000 = 4 MB, so this row never needs more than one digit of MB
      * on either side of the decimal). The bound lives in ota_api.c and partitions.csv, not
      * here — a larger partition would silently widen this row again. */
@@ -255,7 +255,7 @@ static void fill_splash(const dongle_view_t *v, screen_t *out)
 {
     out->id = SCREEN_SPLASH;
     put_head(out, "AJDONGLE");
-    /* v->fw already carries its own leading 'v' (firmware/s3/CMakeLists.txt sets
+    /* v->fw already carries its own leading 'v' (firmware/dongle/CMakeLists.txt sets
      * PROJECT_VER to "v${SEMVER}+${BUILD_NUM}"), so this shows it as-is rather than
      * prepending a second one. */
     put_row_bounded(out, 0, v->fw);
@@ -322,7 +322,7 @@ static void diag_page_address(const dongle_view_t *v, screen_t *out)
 {
     /* Unbounded by construction here too: ip_be is always DONGLE_HOST and gw_be is always an
      * address the DHCP server hands out on the same link, and both are addresses inside a
-     * fixed /24 (firmware/s3/main/usb_net.h: USB_NET_ADDR = DONGLE_HOST, USB_NET_MASK =
+     * fixed /24 (firmware/dongle/main/usb_net.h: USB_NET_ADDR = DONGLE_HOST, USB_NET_MASK =
      * 255.255.255.0) — the bound on how wide these octets can ever get lives there, not
      * here. */
     snprintf(out->row[0], SCREEN_ROW_MAX, "Адрес  %u.%u.%u.%u",

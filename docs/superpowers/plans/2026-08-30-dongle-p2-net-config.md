@@ -12,8 +12,8 @@
 
 ## Global Constraints
 
-- **The dongle knows nothing about any car.** No SSID, no password, no `device_id`, no protocol compiled in. The SSID it stores arrives at runtime and is an opaque string to it. Anything car-shaped appearing in `firmware/s3/` is a bug in this plan, not a feature.
-- **`firmware/s3/` does not reference `app/` or `firmware/p4/`,** and neither references it. Where this plan duplicates a small helper the car also has, that duplication is the price of the rule and is deliberate.
+- **The dongle knows nothing about any car.** No SSID, no password, no `device_id`, no protocol compiled in. The SSID it stores arrives at runtime and is an opaque string to it. Anything car-shaped appearing in `firmware/dongle/` is a bug in this plan, not a feature.
+- **`firmware/dongle/` does not reference `app/` or `firmware/car/core/`,** and neither references it. Where this plan duplicates a small helper the car also has, that duplication is the price of the rule and is deliberate.
 - The dongle's own API moves to port **8080**. Port 80 is being reserved for the car in Plan 3.
 - The identity key in `/status` is **`device`**, matching the car's `device_field`.
 - Configuration persists in NVS as **one JSON string per domain**, with a dirty check so an unchanged POST does not rewrite flash.
@@ -37,35 +37,35 @@ It also matters for a specific hazard the spec names: this plan adds an endpoint
 
 | File | Responsibility |
 |---|---|
-| `firmware/s3/main/net_cfg.{c,h}` | **Pure.** Validates an SSID and password, renders both JSON shapes, and maps each rejection to its field and message. No ESP-IDF headers |
-| `firmware/s3/test/test_net_cfg.c` | Host test for the above |
-| `firmware/s3/test/Makefile` | Host-test harness, modelled on `firmware/p4/test/Makefile` |
-| `firmware/s3/main/api_util.{c,h}` | The shared reply shapes and a whole-body reader. A deliberate small twin of the car's, because the two firmwares may not share code |
-| `firmware/s3/main/net_api.{c,h}` | `GET`/`POST /net`: cJSON extraction, NVS persistence, the handlers |
-| `firmware/s3/main/status_api.c` | Moves to port 8080, renames `dev` to `device`, and grows the `net` block |
-| `firmware/s3/main/main.c` | Registers the new endpoints |
-| `firmware/s3/main/CMakeLists.txt` | New sources; `esp_http_server`, `nvs_flash` and `json` requirements |
-| `firmware/s3/verify-on-host.sh` | The port move, and a `/net` round trip |
-| `firmware/s3/README.md` | The port move |
+| `firmware/dongle/main/net_cfg.{c,h}` | **Pure.** Validates an SSID and password, renders both JSON shapes, and maps each rejection to its field and message. No ESP-IDF headers |
+| `firmware/dongle/test/test_net_cfg.c` | Host test for the above |
+| `firmware/dongle/test/Makefile` | Host-test harness, modelled on `firmware/car/core/test/Makefile` |
+| `firmware/dongle/main/api_util.{c,h}` | The shared reply shapes and a whole-body reader. A deliberate small twin of the car's, because the two firmwares may not share code |
+| `firmware/dongle/main/net_api.{c,h}` | `GET`/`POST /net`: cJSON extraction, NVS persistence, the handlers |
+| `firmware/dongle/main/status_api.c` | Moves to port 8080, renames `dev` to `device`, and grows the `net` block |
+| `firmware/dongle/main/main.c` | Registers the new endpoints |
+| `firmware/dongle/main/CMakeLists.txt` | New sources; `esp_http_server`, `nvs_flash` and `json` requirements |
+| `firmware/dongle/verify-on-host.sh` | The port move, and a `/net` round trip |
+| `firmware/dongle/README.md` | The port move |
 | `tools/test-all.sh` | Runs the dongle's host tests |
 
 ---
 
 ### Task 1: The two corrections Plan 1 left behind
 
-The spec names both: the dongle's server must vacate port 80 for the car, and its identity key must match the car's spelling. Neither has a consumer outside `firmware/s3/` yet, which is what makes now the cheap moment.
+The spec names both: the dongle's server must vacate port 80 for the car, and its identity key must match the car's spelling. Neither has a consumer outside `firmware/dongle/` yet, which is what makes now the cheap moment.
 
 **Files:**
-- Modify: `firmware/s3/main/status_api.c`
-- Modify: `firmware/s3/verify-on-host.sh`
-- Modify: `firmware/s3/README.md`
+- Modify: `firmware/dongle/main/status_api.c`
+- Modify: `firmware/dongle/verify-on-host.sh`
+- Modify: `firmware/dongle/README.md`
 
 **Interfaces:**
 - Produces: the dongle's HTTP surface on `192.168.7.1:8080`, with `{"device":"ajdongle",…}`. Every later task and plan assumes both.
 
 - [ ] **Step 1: Move the server to port 8080**
 
-In `firmware/s3/main/status_api.c`, find `cfg.server_port = 80;` and replace it, comment included:
+In `firmware/dongle/main/status_api.c`, find `cfg.server_port = 80;` and replace it, comment included:
 
 ```c
     /* 8080, not 80: port 80 belongs to the car. Plan 3 forwards it straight through to
@@ -106,7 +106,7 @@ Its `GET /status` probe hardcodes the old URL. Find the line containing `http://
 
 - [ ] **Step 5: Update the README**
 
-In `firmware/s3/README.md`, the acceptance-run section quotes `GET /status`. Change the URL in that quote to carry `:8080`, and add one sentence beneath the quoted block:
+In `firmware/dongle/README.md`, the acceptance-run section quotes `GET /status`. Change the URL in that quote to carry `:8080`, and add one sentence beneath the quoted block:
 
 ```markdown
 The dongle answers on `:8080`, not `:80`: port 80 is reserved for the car, which Plan 3
@@ -116,14 +116,14 @@ forwards through untouched so its own contract and the app's `CarHost.port` neve
 - [ ] **Step 6: Build and confirm nothing else referenced the old shape**
 
 ```bash
-source tools/env-p4.sh && cd firmware/s3 && idf.py build
+source tools/env-p4.sh && cd firmware/dongle && idf.py build
 ```
 
 Then, from the repo root, confirm no stale references remain:
 
 ```bash
-grep -rn '"dev"' firmware/s3/ --include=*.c --include=*.h
-grep -rn '192.168.7.1/status' firmware/s3/
+grep -rn '"dev"' firmware/dongle/ --include=*.c --include=*.h
+grep -rn '192.168.7.1/status' firmware/dongle/
 ```
 
 Expected: both print nothing. A hit means a caller was missed.
@@ -131,7 +131,7 @@ Expected: both print nothing. A hit means a caller was missed.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add firmware/s3
+git add firmware/dongle
 git commit -m "fix(s3): vacate port 80 for the car, and spell identity as the car does"
 ```
 
@@ -140,10 +140,10 @@ git commit -m "fix(s3): vacate port 80 for the car, and spell identity as the ca
 ### Task 2: The pure configuration module, host-tested
 
 **Files:**
-- Create: `firmware/s3/main/net_cfg.h`
-- Create: `firmware/s3/main/net_cfg.c`
-- Create: `firmware/s3/test/test_net_cfg.c`
-- Create: `firmware/s3/test/Makefile`
+- Create: `firmware/dongle/main/net_cfg.h`
+- Create: `firmware/dongle/main/net_cfg.c`
+- Create: `firmware/dongle/test/test_net_cfg.c`
+- Create: `firmware/dongle/test/Makefile`
 - Modify: `tools/test-all.sh`
 - Modify: `.gitignore`
 
@@ -162,7 +162,7 @@ This is TDD: the test is written and seen to fail before the implementation exis
 
 - [ ] **Step 1: Write the header**
 
-`firmware/s3/main/net_cfg.h`:
+`firmware/dongle/main/net_cfg.h`:
 
 ```c
 #ifndef NET_CFG_H
@@ -232,7 +232,7 @@ bool net_cfg_equal(const net_cfg_t *a, const net_cfg_t *b);
 
 - [ ] **Step 2: Write the failing test**
 
-`firmware/s3/test/test_net_cfg.c`:
+`firmware/dongle/test/test_net_cfg.c`:
 
 ```c
 #include "../main/net_cfg.h"
@@ -371,7 +371,7 @@ int main(void) {
 
 - [ ] **Step 3: Write the test Makefile**
 
-`firmware/s3/test/Makefile`, modelled on `firmware/p4/test/Makefile`:
+`firmware/dongle/test/Makefile`, modelled on `firmware/car/core/test/Makefile`:
 
 ```make
 CC = cc
@@ -392,14 +392,14 @@ clean:
 - [ ] **Step 4: Run the test and watch it fail**
 
 ```bash
-make -C firmware/s3/test run
+make -C firmware/dongle/test run
 ```
 
 Expected: a compile failure — `net_cfg.c` does not exist yet. That is the RED step; do not skip past it, and record the message in your report.
 
 - [ ] **Step 5: Write the implementation**
 
-`firmware/s3/main/net_cfg.c`:
+`firmware/dongle/main/net_cfg.c`:
 
 ```c
 #include "net_cfg.h"
@@ -487,7 +487,7 @@ bool net_cfg_equal(const net_cfg_t *a, const net_cfg_t *b)
 - [ ] **Step 6: Run the test and watch it pass**
 
 ```bash
-make -C firmware/s3/test run
+make -C firmware/dongle/test run
 ```
 
 Expected: `test_net_cfg: all passed`, with no compiler warnings — the flags include `-Werror`, so a warning is a failure.
@@ -497,15 +497,15 @@ Expected: `test_net_cfg: all passed`, with no compiler warnings — the flags in
 In `tools/test-all.sh`, under the `== firmware host tests ==` heading, add the dongle beside the car:
 
 ```bash
-make -C firmware/p4/test run
-make -C firmware/s3/test run
+make -C firmware/car/core/test run
+make -C firmware/dongle/test run
 ```
 
 And in `.gitignore`, beside the existing compiled-test entries for the car:
 
 ```
-firmware/s3/test/test_*
-!firmware/s3/test/test_*.c
+firmware/dongle/test/test_*
+!firmware/dongle/test/test_*.c
 ```
 
 - [ ] **Step 8: Run the whole suite**
@@ -519,7 +519,7 @@ Expected: `== all green ==`, now with the dongle's test in the run.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add firmware/s3 tools/test-all.sh .gitignore
+git add firmware/dongle tools/test-all.sh .gitignore
 git commit -m "feat(s3): the network config domain, validated where it can be tested"
 ```
 
@@ -528,14 +528,14 @@ git commit -m "feat(s3): the network config domain, validated where it can be te
 ### Task 3: `GET` and `POST /net`
 
 **Files:**
-- Create: `firmware/s3/main/api_util.h`
-- Create: `firmware/s3/main/api_util.c`
-- Create: `firmware/s3/main/net_api.h`
-- Create: `firmware/s3/main/net_api.c`
-- Modify: `firmware/s3/main/status_api.h`
-- Modify: `firmware/s3/main/status_api.c`
-- Modify: `firmware/s3/main/main.c`
-- Modify: `firmware/s3/main/CMakeLists.txt`
+- Create: `firmware/dongle/main/api_util.h`
+- Create: `firmware/dongle/main/api_util.c`
+- Create: `firmware/dongle/main/net_api.h`
+- Create: `firmware/dongle/main/net_api.c`
+- Modify: `firmware/dongle/main/status_api.h`
+- Modify: `firmware/dongle/main/status_api.c`
+- Modify: `firmware/dongle/main/main.c`
+- Modify: `firmware/dongle/main/CMakeLists.txt`
 
 **Interfaces:**
 - Consumes from Task 2: `net_cfg_t`, `net_cfg_validate`, `net_cfg_err_field`, `net_cfg_err_msg`, `net_cfg_render_public`, `net_cfg_render_stored`, `net_cfg_equal`.
@@ -561,7 +561,7 @@ git commit -m "feat(s3): the network config domain, validated where it can be te
 /* The REST surface's shared plumbing: one error shape for every endpoint, and one body
  * reader that copes with a body TCP split across segments.
  *
- * A deliberate twin of firmware/p4/main/api_util.{c,h} rather than a shared file. The two
+ * A deliberate twin of firmware/car/core/main/api_util.{c,h} rather than a shared file. The two
  * firmwares do not reference each other — that independence is what lets the dongle stay
  * ignorant of the car — and the price of it is this much duplication, paid knowingly. */
 
@@ -630,7 +630,7 @@ int api_read_body(httpd_req_t *req, char *buf, size_t n)
 
 - [ ] **Step 3: Expose the running server from `status_api`**
 
-In `firmware/s3/main/status_api.h`, add the accessor beside `status_api_start`:
+In `firmware/dongle/main/status_api.h`, add the accessor beside `status_api_start`:
 
 ```c
 /* The running server, so another module can register its handlers on it rather than
@@ -864,7 +864,7 @@ Add `#include "net_api.h"` beside the existing includes, and after `status_api_s
 
 - [ ] **Step 7: Add the sources and the cJSON requirement**
 
-`firmware/s3/main/CMakeLists.txt`:
+`firmware/dongle/main/CMakeLists.txt`:
 
 ```cmake
 idf_component_register(SRCS "main.c" "usb_net.c" "status_api.c" "api_util.c" "net_api.c" "net_cfg.c"
@@ -877,7 +877,7 @@ idf_component_register(SRCS "main.c" "usb_net.c" "status_api.c" "api_util.c" "ne
 - [ ] **Step 8: Build**
 
 ```bash
-source tools/env-p4.sh && cd firmware/s3 && idf.py build
+source tools/env-p4.sh && cd firmware/dongle && idf.py build
 ```
 
 Expected: success with no warnings. Then `tools/test-all.sh` — still green; this task adds no host tests because everything it introduces is IDF glue around the module Task 2 already covers.
@@ -885,7 +885,7 @@ Expected: success with no warnings. Then `tools/test-all.sh` — still green; th
 - [ ] **Step 9: Commit**
 
 ```bash
-git add firmware/s3
+git add firmware/dongle
 git commit -m "feat(s3): GET and POST /net, persisted without needless flash writes"
 ```
 
@@ -894,7 +894,7 @@ git commit -m "feat(s3): GET and POST /net, persisted without needless flash wri
 ### Task 4: `/status` reports the configured network
 
 **Files:**
-- Modify: `firmware/s3/main/status_api.c`
+- Modify: `firmware/dongle/main/status_api.c`
 
 **Interfaces:**
 - Consumes from Task 3: `net_api_current(net_cfg_t *out)`.
@@ -934,7 +934,7 @@ Note the buffer grew from 192 to 256: the `net` block adds up to ~60 bytes, and 
 - [ ] **Step 2: Build and check the size claim holds**
 
 ```bash
-source tools/env-p4.sh && cd firmware/s3 && idf.py build
+source tools/env-p4.sh && cd firmware/dongle && idf.py build
 ```
 
 Then satisfy yourself on paper that the buffer cannot truncate: the fixed template is 118 bytes, `version` and `idf_ver` are `char[32]` in `esp_app_desc_t` (31 usable each), and the SSID is at most 32 — 118 + 31 + 31 + 32 = 212 of 256. Record that arithmetic in your report; the truncation branch is unreachable and should be shown to be, not assumed.
@@ -942,7 +942,7 @@ Then satisfy yourself on paper that the buffer cannot truncate: the fixed templa
 - [ ] **Step 3: Commit**
 
 ```bash
-git add firmware/s3
+git add firmware/dongle
 git commit -m "feat(s3): /status reports the network the dongle was told to join"
 ```
 
@@ -953,12 +953,12 @@ git commit -m "feat(s3): /status reports the network the dongle was told to join
 The endpoints are exercisable with nothing but a laptop and `curl`, which is the property the plan was cut to preserve. This task spends it.
 
 **Files:**
-- Modify: `firmware/s3/verify-on-host.sh`
-- Modify: `firmware/s3/README.md`
+- Modify: `firmware/dongle/verify-on-host.sh`
+- Modify: `firmware/dongle/README.md`
 
 - [ ] **Step 1: Add a `/net` round trip to the verification script**
 
-In `firmware/s3/verify-on-host.sh`, inside the attached block after the `GET /status` probe, add:
+In `firmware/dongle/verify-on-host.sh`, inside the attached block after the `GET /status` probe, add:
 
 ```bash
       echo "GET /net (before):"
@@ -984,7 +984,7 @@ In `firmware/s3/verify-on-host.sh`, inside the attached block after the `GET /st
 Flash over the `COM` port, move the cable to `USB`, and run:
 
 ```bash
-firmware/s3/verify-on-host.sh /tmp/dongle-p2.log && cat /tmp/dongle-p2.log
+firmware/dongle/verify-on-host.sh /tmp/dongle-p2.log && cat /tmp/dongle-p2.log
 ```
 
 What must be true, and what each failure would mean:
@@ -1024,7 +1024,7 @@ Replace each placeholder with the observation. A check you did not run keeps its
 - [ ] **Step 5: Commit**
 
 ```bash
-git add firmware/s3
+git add firmware/dongle
 git commit -m "docs(s3): what the config domain answered on the bench"
 ```
 

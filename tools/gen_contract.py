@@ -274,7 +274,7 @@ TARGETS = [
         "name": "car",
         "schema": SCHEMA,
         "artifacts": [
-            ("firmware/p4/main/cfg_table.inc", emit_c),
+            ("firmware/car/core/main/cfg_table.inc", emit_c),
             ("app/AJMiddleCar/Generated/CarAPI.swift", emit_swift),
             ("tools/mock_car/generated.py", emit_python),
         ],
@@ -286,7 +286,7 @@ TARGETS = [
         "name": "dongle",
         "schema": ROOT / "contract" / "dongle-api.json",
         "artifacts": [
-            ("firmware/s3/main/dongle_contract.inc", emit_dongle_c),
+            ("firmware/dongle/main/dongle_contract.inc", emit_dongle_c),
             ("app/AJMiddleCar/Generated/DongleAPI.swift", emit_dongle_swift),
         ],
         # No spliced documentation: the dongle's endpoints are described in its spec as

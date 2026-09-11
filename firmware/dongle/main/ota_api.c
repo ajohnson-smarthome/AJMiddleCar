@@ -34,7 +34,7 @@ static void ota_progress_clear(void)
     atomic_store(&s_ota_done, 0);
 }
 
-/* A deliberate twin of firmware/p4/main/ota_api.c, not a shared file — the two firmwares do not
+/* A deliberate twin of firmware/car/core/main/ota_api.c, not a shared file — the two firmwares do not
  * reference each other. What is missing here is the car's actuator arbitration: the car seizes
  * the motors for the length of the flash and releases them on every failure path, because a
  * refused upload must not leave a car undriveable. The dongle has nothing that moves, so that
@@ -112,7 +112,7 @@ static esp_err_t ota_post(httpd_req_t *req)
                 api_reply_error(req, "400 Bad Request", "", "image invalid");
             } else {
                 /* Anything else (e.g. an esp_partition_write flash error) is this device's
-                   fault, not the client's. The car's twin (firmware/p4/main/ota_api.c) reports
+                   fault, not the client's. The car's twin (firmware/car/core/main/ota_api.c) reports
                    500 for both cases, which is wrong in the other direction — most of its
                    failures here are this same magic-byte rejection, not a device fault. */
                 ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(werr));

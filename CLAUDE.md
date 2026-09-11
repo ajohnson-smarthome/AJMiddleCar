@@ -23,7 +23,7 @@ built into the car's own firmware and delivered over SDIO by the car itself: a m
 makes the car push the embedded image at the C6 and restart, so one OTA updates both processors
 and an `esp_hosted` pin bump no longer means a bench visit
 (`docs/superpowers/specs/2026-08-31-radio-in-one-image-design.md`). The UART header remains the
-recovery path, and `firmware/c6/flash-radio.sh` still builds the image standalone.
+recovery path, and `firmware/car/modem/flash-radio.sh` still builds the image standalone.
 
 ### Motor channel mapping (sequential, stride 2)
 
@@ -46,19 +46,21 @@ impossible: per wheel it sets exactly one of the pair nonzero, or neither.
 ## Layout
 
 ```
-app/            iOS pult (XcodeGen; the .xcodeproj is generated and gitignored)
-firmware/p4/    the car's firmware — all logic
-firmware/c6/    the radio's slave image build
-firmware/s3/    the USB-Ethernet dongle — knows nothing about the car
-tools/          mock_car, release.sh, env-p4.sh
-docs/           protocol.md, bringup.md, specs/, plans/, research/
+app/                 iOS pult (XcodeGen; the .xcodeproj is generated and gitignored)
+firmware/
+  car/core/          the car's firmware — all logic
+  car/modem/         the radio's slave image build
+  dongle/            the USB-Ethernet dongle — knows nothing about the car
+tools/               mock_car, release.sh, env-p4.sh
+docs/                protocol.md, bringup.md, specs/, plans/, research/
 ```
 
-`app/` and `firmware/p4/` **do not reference each other**. Their only seam is
+`app/` and `firmware/car/core/` **do not reference each other**. Their only seam is
 `docs/protocol.md` (the wire contract) and `tools/mock_car` (an executable stand-in for the
 car). If a change makes one need to know about the other, the change is wrong.
 
-`firmware/c6/` knows nothing about the car at all — not the motors, not the protocol.
+`firmware/car/modem/` sits under `car/` because it is the car's second processor, not
+because it knows anything about the car — it knows neither the motors nor the protocol.
 
 ## The contract
 
@@ -110,7 +112,7 @@ unchanged POST does not rewrite flash.
 
 ```bash
 source tools/env-p4.sh          # ESP-IDF 6.0.2; the 5.4 install AJPicoCar uses is untouched
-cd firmware/p4 && idf.py build
+cd firmware/car/core && idf.py build
 idf.py -p /dev/cu.usbmodem* flash monitor
 ```
 
@@ -123,9 +125,9 @@ tools/test-all.sh
 ```
 
 That covers the contract (schema, generator, drift), the firmware's pure modules and the
-app's pure Swift. `make -C firmware/p4/test run` still works on its own for the C half.
+app's pure Swift. `make -C firmware/car/core/test run` still works on its own for the C half.
 
-**Radio image** (rare): `firmware/c6/flash-radio.sh` builds it; `firmware/c6/README.md` covers both
+**Radio image** (rare): `firmware/car/modem/flash-radio.sh` builds it; `firmware/car/modem/README.md` covers both
 ways to get it onto the C6 — over SDIO from the host, or over its UART header.
 
 ## iOS app
@@ -174,7 +176,7 @@ Pure Swift modules are host-tested with `swiftc` directly — no XCTest runtime 
 9. **Both Type-C ports go to the P4, not to the C6.** esptool reports the same MAC on each; one is
    the native USB (`usbmodem*`), the other the CH343P bridge on UART0 (`wchusbserial*`). The C6 has
    its own UART header — but it can also be reflashed over SDIO with no wire at all
-   (`firmware/c6/README.md`).
+   (`firmware/car/modem/README.md`).
 10. **The radio's version is load-bearing, not cosmetic.** A mismatch costs five seconds of every
     boot (a timed-out RPC), disables SDIO aggregation, and leaves `radio.ok` false.
 
@@ -189,5 +191,5 @@ stock build boots anyway with `bus_ok:false` (network and OTA up, motors inert, 
 Two notes that used to live here are stale as of 2026-08-31 and were corrected on the bench:
 the native USB port **does** enumerate (esptool detects the P4 on `/dev/cu.usbmodem*` and
 flashes over it), and the console on UART0 is not a local override — it is committed policy in
-`firmware/p4/sdkconfig.defaults`, with the reason written at that line: a board whose native USB
+`firmware/car/core/sdkconfig.defaults`, with the reason written at that line: a board whose native USB
 goes silent would otherwise have no console at all.

@@ -198,7 +198,7 @@ public enum DongleLink {
 
         // Compared, not just checked for emptiness: `net.ssid` is the same signal `GET /net`'s
         // `configured` reports (both come from the firmware's single `s_configured`/`s_cfg` pair
-        // — `firmware/s3/main/status_api.c`, `firmware/s3/main/net_api.c`), so an empty value
+        // — `firmware/dongle/main/status_api.c`, `firmware/dongle/main/net_api.c`), so an empty value
         // still means "never configured". But a NON-empty value that disagrees with
         // `expectedSSID` means "configured for something else" — stale bench credentials, a
         // different car — and that is exactly as unready as empty, not a state to hand off from.
@@ -215,7 +215,7 @@ public enum DongleLink {
         // early and leaves the state machine untouched — "net.state still reflects the previous
         // attempt, not this request... The two legitimately disagree until this is retried (a
         // corrected POST /net, which restarts the whole budget)". And IDLE has exactly one exit,
-        // `WIFI_EV_CONFIGURED` (`firmware/s3/main/wifi_state.c`), raised only by
+        // `WIFI_EV_CONFIGURED` (`firmware/dongle/main/wifi_state.c`), raised only by
         // `wifi_sta_join`, which only a POST /net (or a boot) calls. So nothing the dongle does
         // on its own leaves this state: waiting here waits forever. Reachable from a stored
         // network the radio refused at boot, and from a POST /net that stored the config and

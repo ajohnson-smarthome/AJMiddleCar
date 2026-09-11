@@ -29,13 +29,13 @@ Almost all of it, which is why this is worth doing now.
   component's compat header. **This route was used on this hardware on 2026-08-20** to bring the
   radio from its shipped image to 3.0.6. It is not a theory.
 - **The capability is compiled in.** `CONFIG_ESP_HOSTED_HOST_FEAT_OTA=y` is pinned explicitly in
-  `firmware/p4/sdkconfig.defaults`.
+  `firmware/car/core/sdkconfig.defaults`.
 - **The car already detects the mismatch.** `status_api.c`'s `read_radio_version()` reads the
   slave's version over RPC at boot and compares it against `RADIO_EXPECTED_FW`, which is derived
   from the host library's own version macros — so it tracks the component pin with no hand-copied
   string to drift. `/status` reports `radio:{fw,expected,ok}`. Today the mismatch branch logs
   "reflash the C6" and stops there.
-- **The slave image is derived from the pin, not stored.** `firmware/c6/flash-radio.sh` builds it
+- **The slave image is derived from the pin, not stored.** `firmware/car/modem/flash-radio.sh` builds it
   from `examples/wifi/sta/cp` **inside the pinned component**. There is no vendor binary to check
   in and no second version to keep in step: the pin determines both halves by construction.
 - **A failed write is safe.** The slave's OTA lands in its inactive slot; an interrupted or
@@ -51,7 +51,7 @@ can reach it, and a release that carries both.
 
 `tools/release.sh` builds the C6 image before it builds the car's, using the same
 `examples/wifi/sta/cp` path `flash-radio.sh` uses, from the component the car's own build fetched.
-The result is copied to **`firmware/p4/main/radio_image.bin`**, which is git-ignored: it is a build
+The result is copied to **`firmware/car/core/main/radio_image.bin`**, which is git-ignored: it is a build
 product of a pinned dependency, not a source file, and checking it in would create exactly the
 second version this design exists to remove.
 
@@ -67,7 +67,7 @@ symbols `EMBED_FILES` always defines — reports it as 0. There is deliberately 
 as `RADIO_IMAGE_ABSENT`: the zero length already *is* the signal, and a boolean sitting next to it
 would only be a second thing that could say something different from the length it is supposed to
 describe. The firmware then behaves exactly as it does today — it detects the mismatch, logs it,
-and tells the reader to reach for `firmware/c6/README.md`. The one place that must never ship
+and tells the reader to reach for `firmware/car/modem/README.md`. The one place that must never ship
 without the image is the release, and `release.sh` verifies the embedded length is non-zero before
 it uploads anything.
 
@@ -105,7 +105,7 @@ increments it; on a boot where the versions match, it clears it. At `RADIO_OTA_M
 (three) the car stops trying and boots normally with a mismatched radio — which is precisely
 today's behaviour, and today's behaviour is a car that drives. Giving up is the safe direction.
 
-Two failure modes the vendor documents, both already written up in `firmware/c6/README.md`, are
+Two failure modes the vendor documents, both already written up in `firmware/car/modem/README.md`, are
 treated as success rather than as errors:
 
 - **`activate()` returns `ESP_FAIL`** against a slave older than v2.6.0 — the old image applies the
