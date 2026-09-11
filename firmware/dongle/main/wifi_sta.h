@@ -44,6 +44,15 @@ esp_err_t wifi_sta_join(const net_cfg_t *cfg);
  * and you are asking again". */
 bool wifi_sta_connected(void);
 
+/* Whether the station is still WORKING on a join — scanning or associating, with its budget
+ * not yet spent. The same lock-free mirror as wifi_sta_connected, for the same caller and the
+ * same reason. net_api needs both halves of "the radio is already doing what you asked": an
+ * unchanged POST /net must leave a connected radio alone, and it must equally leave a
+ * SEARCHING one alone — restarting a join that is on attempt three of five throws those three
+ * away and counts from one again, which is what the panel showed whenever the app launched
+ * while the dongle was already looking for the car on its own. */
+bool wifi_sta_trying(void);
+
 /* GET /status's `net.state`, spelled by the generated contract. */
 const char *wifi_sta_state_name(void);
 

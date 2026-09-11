@@ -378,6 +378,13 @@ bool wifi_sta_connected(void)
     return atomic_load(&s_state_view) == WIFI_CONNECTED;
 }
 
+bool wifi_sta_trying(void)
+{
+    /* JOINING covers both «Поиск сети» and «Подключение»: from the state machine's point of
+     * view they are one state, and from net_api's they are one answer — "already on it". */
+    return atomic_load(&s_state_view) == WIFI_JOINING;
+}
+
 /* Split WIFI_JOINING into the two things a person needs told apart. Everything else the pure
  * state machine names is already as specific as it can be. */
 static const char *refine(const char *name)

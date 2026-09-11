@@ -162,8 +162,16 @@ static esp_err_t net_post(httpd_req_t *req)
          * how a retry is requested. Returning 200 here without calling the radio meant that
          * once the state reached `failed`, re-POSTing the same credentials did nothing at all
          * and only a power cycle recovered. The rule the plan actually stated is "an unchanged
-         * POST must not restart a WORKING radio", and that is what this now enforces. */
-        if (wifi_sta_connected()) {
+         * POST must not restart a WORKING radio", and that is what this now enforces.
+         *
+         * WORKING means connected OR still trying. The first version checked only "connected",
+         * and an unchanged POST that landed while the station was on attempt three of five —
+         * the app launching while the dongle was already looking for the car it had been told
+         * about at boot — restarted the budget from one. Two searches, the second cancelling
+         * the first, and «Попытка 1 из 5» on the panel twice over for no reason a person could
+         * see. A radio mid-search is doing exactly what the POST asks; the only honest answer
+         * is 200 and hands off. A rejoin is asked for from `failed` and `idle` alone. */
+        if (wifi_sta_connected() || wifi_sta_trying()) {
             return api_reply_ok(req);
         }
         ESP_LOGI(TAG, "network unchanged, but the station is not connected — rejoining %s",
