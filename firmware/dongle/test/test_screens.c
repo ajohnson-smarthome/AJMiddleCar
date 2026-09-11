@@ -138,7 +138,7 @@ static void test_every_headline_fits_twelve_characters(void)
      * person actually sees. */
     {
         dongle_view_t v = base();
-        v.ip_be = 0xC0A80402; v.gw_be = 0xC0A80401;
+        v.ip_msb_first = 0xC0A80402; v.gw_msb_first = 0xC0A80401;
         v.to_car_x10 = 100;
         v.to_phone_x10 = 50;
         for (uint8_t p = 0; p < screens_diag_pages(); p++) {
@@ -273,8 +273,16 @@ static void test_a_dropped_link_reports_no_reading_rather_than_a_perfect_one(voi
     check(strstr(s.row[0], "нет") != NULL, "it says there is none");
 
     screens_diag(&v, 1, &s);
-    check(strcmp(s.row[0], "Канал          нет") == 0, "no channel to report");
-    check(strcmp(s.row[1], "Уровень        нет") == 0, "no level to report");
+    /* The label and the sentinel, not the exact run of spaces between them. Pinning the whole
+     * literal pinned the hand-counted padding — which lined these two rows up only because both
+     * «нет» rows happen to be the same width, and pulled a real reading apart the moment they
+     * were not. How wide the gap is belongs to put_row_lr; that the rows share a width is
+     * asserted against a real join in its own test. */
+    check(strstr(s.row[0], "Канал") != NULL && strstr(s.row[0], "нет") != NULL,
+          "no channel to report");
+    check(strstr(s.row[1], "Уровень") != NULL && strstr(s.row[1], "нет") != NULL,
+          "no level to report");
+    check(glyphs(s.row[0]) == glyphs(s.row[1]), "and the two rows still share a width");
     check(glyphs(s.row[0]) <= SCREEN_ROW_GLYPHS && glyphs(s.row[1]) <= SCREEN_ROW_GLYPHS,
           "both rows still fit");
 
@@ -316,7 +324,7 @@ static void test_rssi_maps_over_the_range_that_matters(void)
 static void test_diagnostics_pages_are_four_and_wrap(void)
 {
     dongle_view_t v = base();
-    v.ip_be = 0xC0A80402; v.gw_be = 0xC0A80401;   /* 192.168.4.2, 192.168.4.1 */
+    v.ip_msb_first = 0xC0A80402; v.gw_msb_first = 0xC0A80401;   /* 192.168.4.2, 192.168.4.1 */
     v.last_errno = 0;
     /* The base fixture leaves these at zero, which renders a far shorter packet row than the
      * one a person actually sees -- 10.0/5.0 pkt/s is the car's nominal 10 Hz control cadence,
@@ -413,6 +421,7 @@ static void test_the_fault_row_stays_in_budget_at_its_widest(void)
     dongle_view_t v = base();
     v.last_errno = 12345;        /* clamps to 999 */
     v.errno_count = 999999999u;  /* clamps to 99999, marked with a trailing '+' */
+    v.fault_age_s = 4000u * 3600u;  /* clamps to 99ч — the third clamped field on this row */
     screen_t s;
     screens_diag(&v, 3, &s);
     check(glyphs(s.row[0]) <= 21, "the fault row fits even past both clamps");
@@ -431,6 +440,112 @@ static void test_the_uptime_row_stays_in_budget_at_its_clamp(void)
     check(strstr(s.row[1], "99999:") != NULL, "the hours field clamps");
 }
 
+/* The panel renders an ORDINAL out of a count of attempts CONSUMED, and wifi_sta publishes the
+ * count and the state as two separate atomic stores. A reader that catches the new count under
+ * the old state is handed attempts == attempts_max while the state still says «searching» —
+ * which is what status_api.c did until its read order was fixed, and what view_build's read
+ * order makes unlikely rather than impossible. The row must not read past the budget it is
+ * measured against, whatever the caller hands it: this module is where that is made true, not
+ * at each call site. */
+static void test_the_attempt_ordinal_never_exceeds_the_budget(void)
+{
+    dongle_view_t v = base();
+    v.state = DONGLE_STATE_SEARCHING;
+    v.attempts = 5;          /* the whole budget consumed, under a state that has not caught up */
+    v.attempts_max = 5;
+    screen_t s;
+    screens_for(&v, &s);
+    check(strcmp(s.row[1], "Попытка 5 из 5") == 0, "the ordinal clamps at the budget");
+}
+
+/* ip_msb_first and gw_msb_first carry the address of the WIFI STATION — display.c reads them out of
+ * esp_netif_get_ip_info(s_sta_netif) — so they are whatever the joined network's DHCP server
+ * handed out, not an address on a fixed /24. 255.255.255.255 is fifteen glyphs, the widest an
+ * IPv4 dotted quad gets, and the row has to hold it. */
+static void test_the_address_rows_stay_in_budget_at_their_widest(void)
+{
+    dongle_view_t v = base();
+    v.ip_msb_first = 0xFFFFFFFFu;
+    v.gw_msb_first = 0xFFFFFFFFu;
+    screen_t s;
+    screens_diag(&v, 0, &s);
+    check(glyphs(s.row[0]) <= 21, "the address row fits at its widest");
+    check(glyphs(s.row[1]) <= 21, "the gateway row fits at its widest");
+}
+
+/* display.c draws every row through draw_centred(), so two rows share a column only when they
+ * are the same width — padding counted inside one row buys nothing by itself. Channel 11 beside
+ * -53 dBm is the first case that breaks it: 19 glyphs against 18, which centring turns into a
+ * three-pixel step between the two values the page exists to compare. Addresses of different
+ * digit counts do the same on page 1. */
+static void test_diagnostic_rows_share_one_width_so_centring_aligns_them(void)
+{
+    dongle_view_t v = base();
+    v.state = DONGLE_STATE_CONNECTED;
+    v.ip_msb_first = 0xC0A80402;   /* 192.168.4.2 above ... */
+    v.gw_msb_first = 0xC0A8040A;   /* ... 192.168.4.10, one digit wider */
+    v.channel = 11;
+    v.rssi = -53;
+    v.to_car_x10 = 100;
+    v.to_phone_x10 = 50;
+    v.last_errno = 12;
+    v.errno_count = 3;
+    v.uptime_s = 4567;
+    for (uint8_t p = 0; p < screens_diag_pages(); p++) {
+        screen_t s;
+        screens_diag(&v, p, &s);
+        check(glyphs(s.row[0]) == glyphs(s.row[1]), "both rows of a page are one width");
+    }
+}
+
+/* A fault that healed three hours ago and a link failing right now left this row identical, so
+ * it reported both as current — the reassuring direction, and the one the 2026-08-31 incident
+ * this instrument exists for lives in. The row carries how long ago the last failure was.
+ * Three glyphs at most, because the row also carries a clamped errno and a clamped repeat
+ * count, and 999 + x99999+ + 99ч beside a five-glyph label is exactly the budget. */
+static void test_the_fault_row_says_how_long_ago(void)
+{
+    dongle_view_t v = base();
+    v.last_errno = 12;
+    v.errno_count = 3;
+    screen_t s;
+
+    v.fault_age_s = 5;
+    screens_diag(&v, 3, &s);
+    check(strstr(s.row[0], "<1м") != NULL, "a failure seconds old reads as just now");
+
+    v.fault_age_s = 7 * 60 + 30;
+    screens_diag(&v, 3, &s);
+    check(strstr(s.row[0], "7м") != NULL, "minutes, rounded down");
+
+    v.fault_age_s = 3 * 3600 + 100;
+    screens_diag(&v, 3, &s);
+    check(strstr(s.row[0], "3ч") != NULL, "hours, rounded down");
+
+    /* Past the clamp a fault reads as very old rather than as a wider row: at this age the
+     * exact figure has stopped being the interesting thing. */
+    v.fault_age_s = 4000u * 3600u;
+    screens_diag(&v, 3, &s);
+    check(strstr(s.row[0], "99ч") != NULL, "an ancient fault clamps");
+    check(glyphs(s.row[0]) <= 21, "and does not widen the row to say so");
+}
+
+/* Where BOOT moves next. This was integer logic inside display.c's poll_button, which no host
+ * test could reach — and the test that claimed to cover it, test_diagnostics_pages_are_four_and
+ * _wrap, asserted only the page count and never once walked the cycle its name promises. The
+ * rule itself has nothing to do with a GPIO: the four reference pages, then «Сигнал», then back
+ * to the state screen the device is actually for. */
+static void test_the_button_walks_the_pages_and_wraps_home(void)
+{
+    int p = SCREENS_PAGE_STATE;
+    p = screens_next_page(p); check(p == 0, "the first press opens the first reference page");
+    p = screens_next_page(p); check(p == 1, "then the second");
+    p = screens_next_page(p); check(p == 2, "then the third");
+    p = screens_next_page(p); check(p == 3, "then the fourth");
+    p = screens_next_page(p); check(p == 4, "then «Сигнал», which is not one of the four");
+    p = screens_next_page(p); check(p == SCREENS_PAGE_STATE, "and then home");
+}
+
 int main(void)
 {
     test_every_headline_fits_twelve_characters();
@@ -438,6 +553,7 @@ int main(void)
     test_rollback_outranks_the_network();
     test_update_outranks_rollback();
     test_searching_counts_attempts_from_one();
+    test_the_attempt_ordinal_never_exceeds_the_budget();
     test_an_ssid_at_the_contract_limit_stays_inside_the_row();
     test_a_row_is_never_cut_through_a_character();
     test_linked_fills_the_rule_from_the_signal();
@@ -445,9 +561,13 @@ int main(void)
     test_an_unfilled_history_reports_no_minimum();
     test_rssi_maps_over_the_range_that_matters();
     test_diagnostics_pages_are_four_and_wrap();
+    test_the_button_walks_the_pages_and_wraps_home();
+    test_the_address_rows_stay_in_budget_at_their_widest();
+    test_diagnostic_rows_share_one_width_so_centring_aligns_them();
     test_a_quiet_relay_reports_no_error();
     test_a_faulted_relay_names_the_errno_and_the_repeats();
     test_the_fault_row_stays_in_budget_at_its_widest();
+    test_the_fault_row_says_how_long_ago();
     test_the_uptime_row_stays_in_budget_at_its_clamp();
     test_history_reads_back_oldest_first();
     test_history_wraps_and_drops_the_oldest();

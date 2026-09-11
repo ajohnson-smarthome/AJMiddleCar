@@ -120,17 +120,25 @@ typedef struct {
     uint32_t    ota_done;     /* bytes */
     uint32_t    ota_total;    /* bytes */
 
-    /* NOT network byte order, whatever the names say — the leading octet is the MOST
-     * significant byte, so 192.168.4.2 is 0xC0A80402 (screens.c renders from bit 31 down, and
-     * test_screens pins exactly that). On a little-endian target that is the byte-REVERSE of
-     * what lwIP keeps in esp_ip4_addr_t.addr, so a caller must not hand these a raw address:
-     * display.c's view_addr() assembles them octet by octet. The names are wrong and are kept
-     * only because renaming a field two shipped callers use buys nothing this comment does. */
-    uint32_t    ip_be;        /* this dongle's own address */
-    uint32_t    gw_be;        /* the gateway of the network it joined */
+    /* The leading octet is the MOST SIGNIFICANT byte, so 192.168.4.2 is 0xC0A80402 — screens.c
+     * renders from bit 31 down and test_screens pins exactly that. On a little-endian target
+     * this is the byte-REVERSE of what lwIP keeps in esp_ip4_addr_t.addr, so a raw address
+     * assigned straight in would render as 2.4.168.192; display.c's view_addr() assembles the
+     * octets instead. These were called ip_be/gw_be, which said the opposite of what they hold
+     * and left the next caller one silent assignment away from that — a comment cannot stop a
+     * field whose name invites the mistake. Both of them carry the WIFI STATION's numbers, not
+     * the USB side's. */
+    uint32_t    ip_msb_first;   /* this dongle's own address on the network it joined */
+    uint32_t    gw_msb_first;   /* that network's gateway */
 
     int         last_errno;   /* 0 when nothing has failed; relay_stats_t's own type */
     uint32_t    errno_count;
+    /* How long ago the last failure was, in seconds. Meaningless when last_errno is 0, and not
+     * read then. It is what separates a link failing right now from one transient errno at boot
+     * three hours ago — the two left this view identical, and the fault page reported both as
+     * current. relay_stats.c keeps the stamp; the age is the caller's subtraction because this
+     * module has no clock (see relay_stats.h, which keeps every ms field on one). */
+    uint32_t    fault_age_s;
 
     uint16_t    to_car_x10;   /* packets per second, x10 — relay_stats_t's own unit */
     uint16_t    to_phone_x10;
@@ -155,6 +163,16 @@ void screens_signal(const dongle_view_t *v, screen_t *out);
  * function's — pass anything in range and it renders exactly that page. */
 void    screens_diag(const dongle_view_t *v, uint8_t page, screen_t *out);
 uint8_t screens_diag_pages(void);
+
+/* Where the BOOT button has paged to. SCREENS_PAGE_STATE means "showing the state screen",
+ * which is both the resting place and where the five-second timeout returns to; 0..diag_pages-1
+ * are the reference pages and diag_pages itself is «Сигнал», the last stop before the wrap. */
+#define SCREENS_PAGE_STATE (-1)
+
+/* The page one press of BOOT moves to from `page`. Here and not in the task that polls the pin:
+ * it is integer logic about this module's own pages, and in display.c no host test could reach
+ * it — which is how the wrap came to be asserted by a test that only ever counted the pages. */
+int screens_next_page(int page);
 
 /* Maps this radio's working range to a fill percentage: -85 dBm is where a join stops
  * holding, -25 dBm is desk distance. Clamped at both ends. */

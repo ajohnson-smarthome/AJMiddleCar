@@ -4,6 +4,7 @@
 #include <fcntl.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -11,7 +12,6 @@
 
 #include "dongle_contract.inc"
 #include "relay_stats.h"
-#include "relay_tcp.h"
 #include "udp_sess.h"
 #include "usb_net.h"
 #include "wifi_sta.h"
@@ -59,6 +59,17 @@ typedef struct {
 static uint32_t now_ms(void)
 {
     return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+}
+
+/* All the millisecond fields in relay_stats_t are esp_timer milliseconds since boot — the same
+ * clock display.c hands relay_stats_sample(). NOT the FreeRTOS tick count both relays use for
+ * their own session and slot timers: the tick starts when the scheduler does, so the two differ
+ * by the pre-scheduler boot interval, and a reader subtracting one from the other would get an
+ * age wrong by that offset for free. One clock in this struct, so any reader with esp_timer can
+ * subtract from any field in it. The extra read costs nothing here — this is a failure path. */
+static uint32_t stats_ms(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000);
 }
 
 /* Every socket this relay opens is made non-blocking, here, right after it is created —
@@ -175,7 +186,7 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
     }
 
     if (send(r->car_sock[idx], buf, (size_t)n, 0) < 0) {
-        relay_stats_failed(relay_stats_shared(), errno);
+        relay_stats_failed(relay_stats_shared(), errno, stats_ms());
         /* Rate-limited: a Wi-Fi drop fails every send, and udp_sess_touch (above) refreshes
          * this session's deadline on every phone datagram regardless of whether the send that
          * follows succeeds — so the session cannot age out while the phone keeps streaming,
@@ -205,7 +216,7 @@ static void handle_car_datagram(relay_state_t *r, int idx, const char *buf, int 
         .sin_port = htons(s->port),
     };
     if (sendto(r->phone_sock, buf, (size_t)n, 0, (struct sockaddr *)&to, sizeof(to)) < 0) {
-        relay_stats_failed(relay_stats_shared(), errno);
+        relay_stats_failed(relay_stats_shared(), errno, stats_ms());
         /* Rate-limited for the same reason as the phone->car send above. */
         static uint32_t last_log;
         uint32_t t = now_ms();
@@ -323,19 +334,12 @@ static void relay_task(void *arg)
         FD_ZERO(&rfds);
         FD_SET(r.phone_sock, &rfds);
         int maxfd = r.phone_sock;
-        /* Session occupancy, sampled once per pass from the same loop that already visits
-         * every slot to build the fd set — see relay_tcp.c's identical reasoning for its own
-         * slot count. car_sock[i] >= 0 mirrors sess.s[i].used exactly (relay_state_t's own
-         * comment), so this counts live sessions without a second pass over the table. */
-        int used = 0;
         for (int i = 0; i < UDP_SESS_MAX; i++) {
             if (r.car_sock[i] >= 0) {
                 FD_SET(r.car_sock[i], &rfds);
                 if (r.car_sock[i] > maxfd) maxfd = r.car_sock[i];
-                used++;
             }
         }
-        relay_stats_udp_slots(relay_stats_shared(), (uint8_t)used);
 
         struct timeval tv = { .tv_sec = RELAY_LOOP_MS / 1000, .tv_usec = 0 };
         int nready = select(maxfd + 1, &rfds, NULL, NULL, &tv);
@@ -388,6 +392,26 @@ static void relay_task(void *arg)
         }
 
         expire_sessions(&r);
+
+        /* Session occupancy, published at the END of the pass. Counted here rather than kept
+         * as a running counter for the reason relay_tcp.c gives for its own slots: every place
+         * that opens or closes one would otherwise have to remember to adjust it, and a
+         * miscount there would be silent. car_sock[i] >= 0 mirrors sess.s[i].used exactly
+         * (relay_state_t's own comment), so this is the live count without a second structure
+         * to keep in step.
+         *
+         * At the end and not while building the fd set above, which is where it used to be:
+         * that placement counted sessions before select()'s wait AND before expire_sessions()
+         * ran just now, so a session that aged out during this pass stayed in the published
+         * figure until the next pass closed the window — a whole RELAY_LOOP_MS later, longer
+         * if select() took its full timeout. The display reads this five times a second off a
+         * number that can only move once a second; the least it can be is the count as of the
+         * end of the pass that produced it. */
+        int live = 0;
+        for (int i = 0; i < UDP_SESS_MAX; i++) {
+            if (r.car_sock[i] >= 0) live++;
+        }
+        relay_stats_udp_slots(relay_stats_shared(), (uint8_t)live);
     }
 }
 
@@ -397,7 +421,7 @@ esp_err_t relay_udp_start(void)
      * ahead of relay_tcp_start(), and this runs before this file's own xTaskCreate below, so
      * the shared instance is zeroed and sized before a byte of either relay's traffic can
      * reach it — no task ever observes it half-initialised. */
-    relay_stats_init(relay_stats_shared(), UDP_SESS_MAX, RELAY_POOL_SIZE);
+    relay_stats_init(relay_stats_shared());
     if (xTaskCreate(relay_task, "relay_udp", 4096, NULL, 5, NULL) != pdPASS) {
         return ESP_FAIL;
     }

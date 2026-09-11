@@ -27,17 +27,32 @@ typedef struct {
     uint16_t to_phone_x10;
     int      last_errno;        /* 0 when nothing has failed */
     uint32_t errno_count;       /* repeats of last_errno, restarted when it changes */
-    uint8_t  udp_used, udp_max;
-    uint8_t  tcp_used, tcp_max;
+    uint32_t last_fail_ms;      /* when the last failure happened; 0 when none has */
+    uint8_t  udp_used;
+    uint8_t  tcp_used;
 } relay_stats_t;
 
-void relay_stats_init(relay_stats_t *s, uint8_t udp_max, uint8_t tcp_max);
+/* Takes no pool sizes. It carried udp_max and tcp_max until nothing turned out to read them:
+ * the display prints «Слоты TCP 1 UDP 2» with no denominator, dongle_view_t has no field for
+ * one, and /status emits only the used counts. Their one real cost was not the two bytes — it
+ * was relay_udp.c including relay_tcp.h to pass RELAY_POOL_SIZE into a field nobody read, one
+ * relay reaching into the other's header for a number neither of them used. */
+void relay_stats_init(relay_stats_t *s);
 
 /* One datagram forwarded. `to_car` false means the other direction. */
 void relay_stats_forwarded(relay_stats_t *s, bool to_car);
 
-/* One forwarding failure, with its errno. */
-void relay_stats_failed(relay_stats_t *s, int err);
+/* One forwarding failure, with its errno and the moment it happened.
+ *
+ * The errno LATCHES — nothing clears it on a later success, deliberately: a fault that healed
+ * is still a fault that happened, and a reader that has never seen one is entitled to know the
+ * difference. That alone made this instrument answer its own founding question wrong, though.
+ * A single failure at boot and a link failing continuously right now leave identical fields,
+ * and the fault page and /status reported both as current. `last_fail_ms` is what separates
+ * them: the record is kept AND its age is knowable, where clearing on success would have
+ * thrown the record away and clearing on nothing at all kept a lie. The caller passes the
+ * clock for the same reason relay_stats_sample does — this module has none of its own. */
+void relay_stats_failed(relay_stats_t *s, int err, uint32_t now_ms);
 
 /* One per relay, not one taking both: the two run in different tasks, and a single setter
  * would make each of them read the other's field and write it back — a lost update every time

@@ -74,32 +74,57 @@ static esp_err_t status_get(httpd_req_t *req)
      * under wifi_sta's lock, the radio's figures are an unlocked esp_wifi_sta_get_ap_info.
      * Evaluated right-to-left, they could be sampled while the station was still down and
      * state a moment later once it was up, publishing {"state":"connected","rssi":0} out of
-     * two readings that were each correct. Taking state FIRST leaves only the honest version
-     * of that pairing: if state says connected, the radio was read afterwards, so a 0 means
-     * the link genuinely dropped in between. Not atomicity — there is no lock spanning both —
-     * but an ordering that cannot invent a contradiction.
+     * two readings that were each correct. Not atomicity — there is no lock spanning any of
+     * them — but an ordering that cannot invent a contradiction.
+     *
+     * The attempt count BEFORE the state, for the reason display.c's view_build() gives at
+     * length and this file must not contradict: wifi_sta publishes the two as separate atomic
+     * stores, STATE first (publish_state_locked), so a reader taking state first can pair an
+     * old «searching» with a count that has already reached the budget — {"state":"searching",
+     * "attempts":5,"attempts_max":5}, a station still trying with nothing left to try with.
+     * Taken this way round the count can only be OLDER than the state framing it, and a count
+     * older than a «searching» was inside the budget. No consumer renders an ordinal from these
+     * two today, which is why this published a contradiction rather than a visible "attempt 6
+     * of 5" — the panel is where that shows, and screens.c clamps it at the point of use. This
+     * endpoint still owes its readers a document that cannot disagree with itself.
+     *
+     * The state BEFORE the radio's figures: if state says connected, the radio was read
+     * afterwards, so a 0 means the link genuinely dropped in between — the pessimistic half of
+     * that pairing rather than the impossible one.
      *
      * `rssi` and `channel` are real readings from the dongle's own receiver, not placeholders:
      * 0 when not connected, whatever esp_wifi_sta_get_ap_info reports otherwise. They come
      * from one call because they are one reading — see wifi_sta_ap_info's own comment for what
      * two calls could publish. */
+    unsigned attempts = (unsigned)wifi_sta_attempts();
     const char *net_state = wifi_sta_state_name();
     int8_t ap_rssi;
     uint8_t ap_channel;
     wifi_sta_ap_info(&ap_rssi, &ap_channel);
     int net_rssi = (int)ap_rssi;
 
-    /* Independent of the net trio above, and of each other: none of these can disagree with
-     * another the way state/rssi can, so no read-ordering constraint applies among them —
-     * each is a single self-contained fact, read once, right here. The one field below that
-     * can still come back torn is relay_stats_shared()'s errno/errno_count pair — accepted
-     * on purpose there, for the reason relay_stats.h gives: cheaper than a lock on a
+    /* Independent of the net readings above, and of each other: none of these can disagree
+     * with another the way state/attempts and state/rssi can, so no read-ordering constraint
+     * applies among THESE — each is a single self-contained fact, read once, right here. The
+     * one field below that can still come back torn is relay_stats_shared()'s errno pair —
+     * accepted on purpose there, for the reason relay_stats.h gives: cheaper than a lock on a
      * forwarding path that must never wait. */
     const char *usb_state = usb_net_host_attached() ? DONGLE_USB_STATE_UP : DONGLE_USB_STATE_DOWN;
     relay_stats_t *relay = relay_stats_shared();
+    /* Seconds since the last forwarding failure, and 0 when there has never been one — without
+     * it a caller cannot tell a link failing right now from one transient errno at boot hours
+     * ago, because the errno itself latches and never clears (relay_stats.h says why it must
+     * not). 0 for "no fault" rather than the uptime the raw subtraction would give: errno is 0
+     * there too, and two fields that agree on "nothing has failed" beat one that quietly
+     * reports the age of the device. Same esp_timer milliseconds relay_stats is kept on, and
+     * unsigned throughout so the arithmetic is correct across the wrap. */
+    unsigned errno_age = 0;
+    if (relay->last_errno != 0) {
+        errno_age = (unsigned)(((uint32_t)(esp_timer_get_time() / 1000) - relay->last_fail_ms)
+                               / 1000u);
+    }
     long uptime_s = (long)(esp_timer_get_time() / 1000000);
     unsigned heap = (unsigned)esp_get_free_heap_size();
-    unsigned attempts = (unsigned)wifi_sta_attempts();
     unsigned channel = (unsigned)ap_channel;
 
     /* 512, not 448. Worst case with the rollback, net and new fields: 243 bytes of literal
@@ -110,8 +135,9 @@ static esp_err_t status_get(httpd_req_t *req)
      * + 4 ("-128") + 10 (uptime_s, a positive long) + 10 (heap, uint32_t) + 3 (attempts,
      * uint8_t) + 3 (attempts_max, WIFI_JOIN_ATTEMPTS) + 2 (channel, 1..14 in practice)
      * + 5 (to_car_x10, uint16_t) + 5 (to_phone_x10, likewise) + 3 (udp_used) + 3 (tcp_used)
-     * + 4 (last_errno) + 10 (errno_count, uint32_t) + NUL = 450. The margin is deliberate:
-     * adding one field should not also be a buffer calculation. */
+     * + 4 (last_errno) + 10 (errno_count, uint32_t) + 10 (errno_age, likewise) + NUL = 460,
+     * plus the 13 bytes "errno_age" costs as a key with its quotes, colon and comma = 473. The
+     * margin is deliberate: adding one field should not also be a buffer calculation. */
     char body[512];
     int n = snprintf(body, sizeof(body),
                      "{\"" DONGLE_KEY_DEVICE "\":\"" DONGLE_DEVICE "\","
@@ -134,13 +160,14 @@ static esp_err_t status_get(httpd_req_t *req)
                      "\"" DONGLE_KEY_RELAY_SLOTS_UDP "\":%u,"
                      "\"" DONGLE_KEY_RELAY_SLOTS_TCP "\":%u,"
                      "\"" DONGLE_KEY_RELAY_ERRNO "\":%d,"
-                     "\"" DONGLE_KEY_RELAY_ERRNO_COUNT "\":%u}}",
+                     "\"" DONGLE_KEY_RELAY_ERRNO_COUNT "\":%u,"
+                     "\"" DONGLE_KEY_RELAY_ERRNO_AGE "\":%u}}",
                      app->version, app->idf_ver, usb_state, s_rollback ? "true" : "false",
                      ssid_esc, net_state, net_rssi,
                      uptime_s, heap, attempts, (unsigned)WIFI_JOIN_ATTEMPTS, channel,
                      (unsigned)relay->to_car_x10, (unsigned)relay->to_phone_x10,
                      (unsigned)relay->udp_used, (unsigned)relay->tcp_used,
-                     relay->last_errno, (unsigned)relay->errno_count);
+                     relay->last_errno, (unsigned)relay->errno_count, errno_age);
     if (n < 0 || (size_t)n >= sizeof(body)) {
         /* Same rule as the car's own /status: truncated JSON parses as something else or
          * nothing, and shipping it under a 200 hides exactly that. Only reachable if a

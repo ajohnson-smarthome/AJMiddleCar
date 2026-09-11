@@ -37,7 +37,8 @@
     "relay_slots_udp": "slots_udp",
     "relay_slots_tcp": "slots_tcp",
     "relay_errno": "errno",
-    "relay_errno_count": "errno_count"
+    "relay_errno_count": "errno_count",
+    "relay_errno_age": "errno_age"
   },
   "net_fields": {
     "ssid": "ssid",

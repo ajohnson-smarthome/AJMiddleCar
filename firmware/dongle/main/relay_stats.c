@@ -2,9 +2,8 @@
 
 #include <string.h>
 
-/* RELAY_POOL_SIZE lives in relay_tcp.h and UDP_SESS_MAX in udp_sess.h; both are passed in at
- * first use (relay_udp_start's relay_stats_init call) rather than included here, which is
- * what keeps this file free of ESP-IDF. */
+/* Nothing from either relay's header reaches this file, which is what keeps it free of
+ * ESP-IDF and host-testable with plain cc. */
 static relay_stats_t s_shared;
 
 relay_stats_t *relay_stats_shared(void)
@@ -12,11 +11,9 @@ relay_stats_t *relay_stats_shared(void)
     return &s_shared;
 }
 
-void relay_stats_init(relay_stats_t *s, uint8_t udp_max, uint8_t tcp_max)
+void relay_stats_init(relay_stats_t *s)
 {
     memset(s, 0, sizeof(*s));
-    s->udp_max = udp_max;
-    s->tcp_max = tcp_max;
 }
 
 void relay_stats_forwarded(relay_stats_t *s, bool to_car)
@@ -25,7 +22,7 @@ void relay_stats_forwarded(relay_stats_t *s, bool to_car)
     else        s->total_to_phone++;
 }
 
-void relay_stats_failed(relay_stats_t *s, int err)
+void relay_stats_failed(relay_stats_t *s, int err, uint32_t now_ms)
 {
     if (err == s->last_errno) {
         s->errno_count++;
@@ -33,6 +30,7 @@ void relay_stats_failed(relay_stats_t *s, int err)
         s->last_errno = err;
         s->errno_count = 1;
     }
+    s->last_fail_ms = now_ms;
 }
 
 void relay_stats_udp_slots(relay_stats_t *s, uint8_t used) { s->udp_used = used; }

@@ -114,10 +114,6 @@ _Static_assert(ROW1_BASE + ROW_DESCENT <= PANEL_H - 1, "the lower row must fit t
  * had to be a second. */
 #define SECOND_US (1000 * 1000LL)
 
-/* Where the BOOT button has paged to. PAGE_STATE means "showing the state screen", which is
- * both the resting place and where the five-second timeout returns to; 0..diag_pages-1 are the
- * diagnostics pages and diag_pages itself is «Сигнал», the last stop before the wrap. */
-#define PAGE_STATE (-1)
 
 /* wifi_sta_ap_info() answers 0 dBm when the station is not connected — a documented sentinel,
  * not a reading. Pushed into the history unchanged it would be the STRONGEST sample the strip can
@@ -142,9 +138,39 @@ static screens_history_t s_history;
 static esp_netif_t *s_sta_netif;
 
 static int64_t s_start_us;
-static int     s_page = PAGE_STATE;
+static int     s_page = SCREENS_PAGE_STATE;
 static int64_t s_press_us;
 static bool    s_button_down;
+
+/* False until gpio_config() has actually made BOOT an input. display_start() logs a failure
+ * there and carries on — the state screens are the device's job and do not need a button — but
+ * "carries on" has to mean the pin is never read, not that it is read anyway. gpio_get_level()
+ * on a pad this firmware never configured returns whatever the strapping left it at, and one
+ * value of that is indistinguishable from a press: the first pass would see an edge, page to
+ * «Диагностика», and the device would open on a reference page for five seconds after every
+ * boot. This flag is what makes display_start's "only the reference pages become unreachable"
+ * true rather than aspirational. */
+static bool    s_button_ok;
+
+/* The frame the panel is actually showing, so an identical one need not be sent again.
+ *
+ * The redraw runs at 5 Hz but the content clock is one second (SECOND_US): rssi, the history
+ * sample and the relay rates only move on that tick, and a resting «Связь» screen does not move
+ * for minutes. Four of every five passes were pushing the same 1024 bytes — by display_hal's
+ * own arithmetic, 64 transfers a frame, 320 a second — down the one bus this task is supposed
+ * to be the cheapest user of.
+ *
+ * REFRESH_FLOOR_US is why this is not simply "skip when equal". The panel's contents are state
+ * held in the SSD1306, not in this firmware: a glitch on the wire, a brown-out on the panel's
+ * rail, a controller that misses a command leaves it showing something this code has no way to
+ * detect. Never resending would make that permanent. Every five seconds the frame goes out
+ * whatever the comparison says, so the worst a corrupted panel can be is five seconds stale,
+ * and the saving on a resting screen is still four passes in five. */
+#define REFRESH_FLOOR_US (5 * 1000 * 1000LL)
+static screen_t s_shown;
+static uint16_t s_shown_hist;
+static bool     s_shown_valid;
+static int64_t  s_shown_us;
 
 /* --- drawing ----------------------------------------------------------------------------- */
 
@@ -244,8 +270,20 @@ static void draw_rule(const screen_t *s)
     }
 }
 
-static void draw(const screen_t *s)
+/* `hist_mark` fingerprints the history ring, which the strip is drawn from and screen_t does
+ * not carry — without it an unchanged screen_t would hide a moved graph. Zero on every screen
+ * that does not draw the strip, so a push a second does not force a redraw of a page that never
+ * shows it. */
+static void draw(const screen_t *s, uint16_t hist_mark, int64_t now_us)
 {
+    /* memcmp is honest here only because every screens_* entry point memsets its output first,
+     * so no padding byte is ever left holding whatever was on the stack. */
+    if (s_shown_valid && hist_mark == s_shown_hist &&
+        memcmp(s, &s_shown, sizeof(*s)) == 0 &&
+        (now_us - s_shown_us) < REFRESH_FLOOR_US) {
+        return;
+    }
+
     u8g2_ClearBuffer(&s_u8g2);
 
     u8g2_SetFont(&s_u8g2, u8g2_font_10x20_t_cyrillic);
@@ -259,17 +297,23 @@ static void draw(const screen_t *s)
 
     /* The one call that touches the bus. Everything above is memory. */
     u8g2_SendBuffer(&s_u8g2);
+
+    s_shown = *s;
+    s_shown_hist = hist_mark;
+    s_shown_valid = true;
+    s_shown_us = now_us;
 }
 
 /* --- the view ---------------------------------------------------------------------------- */
 
-/* screens.c renders an address's first octet from bit 31 down — `(ip_be >> 24) & 0xFF` — and
- * its host test pins that: 0xC0A80402 must read "192.168.4.2". The value it wants is therefore
- * the address as a NUMBER with the leading octet most significant, which on this little-endian
- * target is the byte-reverse of what lwIP keeps in esp_ip4_addr_t.addr, whatever the field's
- * `_be` name suggests. Assembled octet by octet through esp_netif's own accessors rather than
- * byte-swapped, so this says which octet goes where instead of depending on the build's
- * endianness to make it come out right. */
+/* screens.c renders an address's first octet from bit 31 down — `(ip_msb_first >> 24) & 0xFF`
+ * — and its host test pins that: 0xC0A80402 must read "192.168.4.2". The value it wants is
+ * therefore the address as a NUMBER with the leading octet most significant, which on this
+ * little-endian target is the byte-reverse of what lwIP keeps in esp_ip4_addr_t.addr.
+ * Assembled octet by octet through esp_netif's own accessors rather than byte-swapped, so this
+ * says which octet goes where instead of depending on the build's endianness to come out
+ * right — and so the field's name and its contents agree without a comment holding them
+ * together. */
 static uint32_t view_addr(const esp_ip4_addr_t *a)
 {
     return ((uint32_t)esp_ip4_addr1_16(a) << 24) |
@@ -339,8 +383,8 @@ static void view_build(dongle_view_t *v, net_cfg_t *cfg, const esp_app_desc_t *a
      * of the lwip_netif struct, no IPC at all (esp_netif_lwip.c:1980-1996). */
     esp_netif_ip_info_t ip;
     if (s_sta_netif != NULL && esp_netif_get_ip_info(s_sta_netif, &ip) == ESP_OK) {
-        v->ip_be = view_addr(&ip.ip);
-        v->gw_be = view_addr(&ip.gw);
+        v->ip_msb_first = view_addr(&ip.ip);
+        v->gw_msb_first = view_addr(&ip.gw);
     }
 
     /* Read field by field, not copied wholesale: relay_stats.h documents these as unlocked on
@@ -354,6 +398,13 @@ static void view_build(dongle_view_t *v, net_cfg_t *cfg, const esp_app_desc_t *a
     v->tcp_used = r->tcp_used;
     v->last_errno = r->last_errno;
     v->errno_count = r->errno_count;
+    /* The age of the fault, not the stamp: screens.c has no clock, and this task already holds
+     * the one relay_stats is kept on — relay_stats.h puts every ms field in that struct on
+     * esp_timer milliseconds precisely so this subtraction is legitimate. Unsigned throughout,
+     * so it is correct across the wrap. Read after last_errno: a stamp older than the errno it
+     * is paired with overstates the age, which errs towards "this fault is stale" — the
+     * direction that makes a reader look harder rather than relax. */
+    v->fault_age_s = (uint32_t)(((uint32_t)(now_us / 1000) - r->last_fail_ms) / 1000u);
 
     v->uptime_s = (uint32_t)(now_us / 1000000);
 
@@ -375,19 +426,20 @@ static void view_build(dongle_view_t *v, net_cfg_t *cfg, const esp_app_desc_t *a
  * tried on hardware. */
 static void poll_button(int64_t now_us)
 {
+    if (!s_button_ok) return;   /* the pin was never made an input; see s_button_ok */
+
     bool down = gpio_get_level(BOARD_BOOT_GPIO) == 0;   /* pulled up; pressed is low */
 
     if (down && !s_button_down) {
-        int last = (int)screens_diag_pages();   /* the diagnostics run 0..last-1, «Сигнал» is last */
-        s_page = (s_page >= last) ? PAGE_STATE : s_page + 1;
+        s_page = screens_next_page(s_page);   /* the cycle itself is screens.c's, and tested there */
         s_press_us = now_us;
     }
     s_button_down = down;
 
     /* Back to the state screen five seconds after the last press. The reference pages are
      * something a person went looking for; the state screen is what the device is for. */
-    if (s_page != PAGE_STATE && now_us - s_press_us > PAGE_HOLD_US) {
-        s_page = PAGE_STATE;
+    if (s_page != SCREENS_PAGE_STATE && now_us - s_press_us > PAGE_HOLD_US) {
+        s_page = SCREENS_PAGE_STATE;
     }
 }
 
@@ -437,7 +489,7 @@ static void display_task(void *arg)
              * itself on a bench-powered board. */
             dongle_view_t intro = { .host_attached = true, .fw = v.fw };
             screens_for(&intro, &s);
-        } else if (s_page == PAGE_STATE) {
+        } else if (s_page == SCREENS_PAGE_STATE) {
             screens_for(&v, &s);
         } else if (s_page < (int)screens_diag_pages()) {
             screens_diag(&v, (uint8_t)s_page, &s);
@@ -445,7 +497,13 @@ static void display_task(void *arg)
             screens_signal(&v, &s);
         }
 
-        draw(&s);
+        /* count and next together, not either alone: next wraps at SCREEN_HISTORY, so a full
+         * ring returning to the same slot would fingerprint identically on its own. */
+        uint16_t hist_mark = 0;
+        if (s.gauge == GAUGE_HISTORY) {
+            hist_mark = (uint16_t)(((uint16_t)s_history.count << 8) | s_history.next);
+        }
+        draw(&s, hist_mark, now_us);
 
         /* vTaskDelayUntil, so a slow pass — an I2C bus holding the line, say — costs cadence
          * and not drift. What it cannot do is give back the time a slow pass already spent,
@@ -483,6 +541,7 @@ esp_err_t display_start(void)
         .intr_type = GPIO_INTR_DISABLE,
     };
     esp_err_t err = gpio_config(&btn);
+    s_button_ok = (err == ESP_OK);
     if (err != ESP_OK) {
         /* Not fatal and not returned: the state screens are the device's job and they do not
          * need a button. Only the reference pages become unreachable. */

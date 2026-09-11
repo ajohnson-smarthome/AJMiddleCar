@@ -76,11 +76,15 @@ static esp_err_t ota_post(httpd_req_t *req)
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "OTA -> %s, %d bytes", part->label, (int)req->content_len);
-    /* s_ota_done follows, published as it's written below; setting it here rather than leaving
-     * the previous upload's leftover zero is what makes a reader see 0/total instead of a
+    /* done first, total second -- the mirror of ota_progress_clear(), which stores total first.
+     * Publishing total last means the field that gates the whole reading ("is one running at
+     * all") is never visible before the counter it frames, so a reader cannot pair a new total
+     * with the previous upload's leftover done. That leftover is zero today, because every
+     * return past esp_ota_begin clears it, but this ordering does not depend on that coverage.
+     * Setting done here rather than leaving it is what makes a reader see 0/total instead of a
      * one-chunk jump from whatever the last upload ended on. */
-    atomic_store(&s_ota_total, (uint32_t)req->content_len);
     atomic_store(&s_ota_done, 0);
+    atomic_store(&s_ota_total, (uint32_t)req->content_len);
 
     char buf[1024];
     int remaining = (int)req->content_len;
@@ -155,10 +159,16 @@ static esp_err_t ota_post(httpd_req_t *req)
 /* Bytes accepted of how many, while an upload is running. False when none is. */
 bool ota_api_progress(uint32_t *done, uint32_t *total)
 {
+    /* done BEFORE total, because ota_progress_clear() stores them the other way round (total
+     * first). Loading total first lets a clear land between the two loads and hand the caller a
+     * nonzero total with a done of 0 -- «Обновление» at 0% with an empty gauge, for one frame,
+     * at the exact end of a successful upload. This way round the interleaving yields total = 0
+     * instead, and the zero check below turns it into "no upload running", which is true. */
+    uint32_t d = atomic_load(&s_ota_done);
     uint32_t t = atomic_load(&s_ota_total);
     if (t == 0) return false;
     *total = t;
-    *done  = atomic_load(&s_ota_done);
+    *done  = d;
     return true;
 }
 

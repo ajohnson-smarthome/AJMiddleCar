@@ -39,6 +39,7 @@
 #define DONGLE_KEY_RELAY_SLOTS_TCP "slots_tcp"
 #define DONGLE_KEY_RELAY_ERRNO "errno"
 #define DONGLE_KEY_RELAY_ERRNO_COUNT "errno_count"
+#define DONGLE_KEY_RELAY_ERRNO_AGE "errno_age"
 
 #define DONGLE_NETKEY_SSID "ssid"
 #define DONGLE_NETKEY_PASSWORD "password"

@@ -66,6 +66,47 @@ static void put_row(screen_t *out, int r, const char *s)
     snprintf(out->row[r], SCREEN_ROW_MAX, "%s", s);
 }
 
+/* Glyphs, not bytes: every Cyrillic letter is two bytes in UTF-8, so strlen() measures a label
+ * at twice its width on the panel. A byte that is not a 10xxxxxx continuation begins a
+ * character — the same fact utf8_fit() below is built on. */
+static size_t utf8_glyphs(const char *s)
+{
+    size_t n = 0;
+    for (; *s != '\0'; s++) {
+        if ((*s & 0xC0) != 0x80) n++;
+    }
+    return n;
+}
+
+/* A reference row: `label` at the left, `value` flush to the right, the gap between them made
+ * of spaces, and the whole padded to exactly SCREEN_ROW_GLYPHS.
+ *
+ * The padding to a FIXED width is the point, not tidiness. display.c draws every row through
+ * draw_centred(), which centres each row on its own width — so two rows of a page share a
+ * column only when they are the same width, and the hand-counted spaces these pages used to
+ * carry aligned their values only for as long as both rows happened to come out equal.
+ * «Канал 11» against «Уровень -53 dBm» is 19 glyphs against 18, and centring turns that one
+ * glyph into a three-pixel step between the two figures the page exists to compare.
+ *
+ * A pair too wide for the row keeps the value and drops padding to a single space: the value
+ * is the reading, the label is the thing a person can infer from the page they paged to. No
+ * caller reaches that today — the widest pair is «Адрес» beside 255.255.255.255, which is
+ * exactly 21 — and it is here so that the next one cannot silently lose its right-hand end to
+ * the panel's edge instead. */
+static void put_row_lr(screen_t *out, int r, const char *label, const char *value)
+{
+    size_t lg = utf8_glyphs(label);
+    size_t vg = utf8_glyphs(value);
+    size_t gap = (lg + vg + 1 <= SCREEN_ROW_GLYPHS) ? SCREEN_ROW_GLYPHS - lg - vg : 1;
+
+    char pad[SCREEN_ROW_GLYPHS + 1];
+    if (gap > SCREEN_ROW_GLYPHS) gap = SCREEN_ROW_GLYPHS;
+    memset(pad, ' ', gap);
+    pad[gap] = '\0';
+
+    snprintf(out->row[r], SCREEN_ROW_MAX, "%s%s%s", label, pad, value);
+}
+
 /* Three ASCII dots and not "…": tools/gen_dongle_fonts.sh maps 32-127 and U+0400..U+04FF, so
  * U+2026 is in neither font and would draw as nothing at all — a truncation mark that is
  * itself invisible is worse than none. */
@@ -205,12 +246,22 @@ static void fill_searching(const dongle_view_t *v, screen_t *out)
     put_row_bounded(out, 0, v->ssid);
     /* attempts + 1, because the field counts attempts CONSUMED and this row is an ordinal:
      * the first join is in flight with none of them spent yet, so the raw count would open at
-     * «Попытка 0 из 5» and never once reach 5. Nothing to clamp — wifi_state.c enters this
-     * state with the count at 0 (a fresh configuration) or 1 (a link that dropped), and the
-     * attempt that takes it to attempts_max is the one that moves the state to failed, so a
-     * joining station is always inside 0..attempts_max-1 and this always reads 1..5. */
+     * «Попытка 0 из 5» and never once reach 5.
+     *
+     * Clamped, and the clamp is not belt and braces. wifi_state.c does enter this state with
+     * the count inside 0..attempts_max-1, but the count and the state do not reach this module
+     * together: wifi_sta publishes them as two separate atomic stores and a reader can catch
+     * the new count under the old state, which hands this row attempts == attempts_max under a
+     * «searching» and prints «Попытка 6 из 5». Callers order their two reads to make that
+     * unlikely — see display.c's view_build() — but an ordinal that can exceed its own budget
+     * is this row's problem to solve, once, here, rather than a property every present and
+     * future caller has to keep. */
+    unsigned ordinal = (unsigned)v->attempts + 1u;
+    if (v->attempts_max > 0 && ordinal > (unsigned)v->attempts_max) {
+        ordinal = (unsigned)v->attempts_max;
+    }
     snprintf(out->row[1], SCREEN_ROW_MAX, "Попытка %u из %u",
-             (unsigned)v->attempts + 1u, (unsigned)v->attempts_max);
+             ordinal, (unsigned)v->attempts_max);
 }
 
 static void fill_joining(screen_t *out)
@@ -318,37 +369,64 @@ uint8_t screens_diag_pages(void)
     return SCREENS_DIAG_PAGES;
 }
 
+int screens_next_page(int page)
+{
+    int last = (int)screens_diag_pages();   /* the reference pages are 0..last-1, «Сигнал» is last */
+    return (page >= last) ? SCREENS_PAGE_STATE : page + 1;
+}
+
+/* "255.255.255.255" is fifteen characters plus a NUL — the widest an IPv4 dotted quad gets. */
+static void fmt_ip(char *dst, size_t n, uint32_t addr)
+{
+    snprintf(dst, n, "%u.%u.%u.%u",
+             (unsigned)((addr >> 24) & 0xFF), (unsigned)((addr >> 16) & 0xFF),
+             (unsigned)((addr >> 8) & 0xFF), (unsigned)(addr & 0xFF));
+}
+
 static void diag_page_address(const dongle_view_t *v, screen_t *out)
 {
-    /* Unbounded by construction here too: ip_be is always DONGLE_HOST and gw_be is always an
-     * address the DHCP server hands out on the same link, and both are addresses inside a
-     * fixed /24 (firmware/dongle/main/usb_net.h: USB_NET_ADDR = DONGLE_HOST, USB_NET_MASK =
-     * 255.255.255.0) — the bound on how wide these octets can ever get lives there, not
-     * here. */
-    snprintf(out->row[0], SCREEN_ROW_MAX, "Адрес  %u.%u.%u.%u",
-             (unsigned)((v->ip_be >> 24) & 0xFF), (unsigned)((v->ip_be >> 16) & 0xFF),
-             (unsigned)((v->ip_be >> 8) & 0xFF), (unsigned)(v->ip_be & 0xFF));
-    snprintf(out->row[1], SCREEN_ROW_MAX, "Шлюз   %u.%u.%u.%u",
-             (unsigned)((v->gw_be >> 24) & 0xFF), (unsigned)((v->gw_be >> 16) & 0xFF),
-             (unsigned)((v->gw_be >> 8) & 0xFF), (unsigned)(v->gw_be & 0xFF));
+    /* These two are the WIFI STATION's address and gateway — whatever the joined network's
+     * DHCP server handed out. NOT the USB side: an earlier comment here derived this row's
+     * width from usb_net.h (USB_NET_ADDR = DONGLE_HOST, a fixed /24), but display.c fills both
+     * fields from esp_netif_get_ip_info() on the station netif, and POST /net can point this
+     * dongle at any network. A lease of 192.168.100.101 is fifteen glyphs, and the row that
+     * claimed to be unbounded by construction was seven glyphs of label plus those fifteen:
+     * 22 against a budget of 21, clipped by u8g2 with no ellipsis and no error.
+     *
+     * put_row_lr is what makes it fit — «Адрес» is five glyphs, so the widest possible pair
+     * comes to exactly 21 — and it is also what lines the two addresses up in a column when
+     * they differ in digit count, which centring would otherwise pull apart. */
+    char addr[16];
+    fmt_ip(addr, sizeof(addr), v->ip_msb_first);
+    put_row_lr(out, 0, "Адрес", addr);
+    fmt_ip(addr, sizeof(addr), v->gw_msb_first);
+    put_row_lr(out, 1, "Шлюз", addr);
 }
 
 static void diag_page_radio(const dongle_view_t *v, screen_t *out)
 {
-    /* Padded with literal spaces and not with a width specifier: printf counts BYTES, and
-     * «нет» is six of them for three columns, so "%18s" would align these two rows against a
-     * number the panel does not draw. */
-    if (v->channel == 0) put_row(out, 0, "Канал          нет");
-    else snprintf(out->row[0], SCREEN_ROW_MAX, "Канал            %u", (unsigned)v->channel);
-
-    if (v->rssi == 0) put_row(out, 1, "Уровень        нет");
-    else snprintf(out->row[1], SCREEN_ROW_MAX, "Уровень    %d dBm", (int)v->rssi);
+    /* Through put_row_lr rather than literal spaces counted by hand. The old padding was
+     * measured for the two «нет» rows, which are the same width as each other and hid the
+     * problem: a real join reads «Канал 11» at 19 glyphs beside «Уровень -53 dBm» at 18, and
+     * draw_centred starts them three pixels apart. printf's own width specifiers are no help
+     * here for the reason the old comment gave — "%18s" counts BYTES, and «нет» is six of them
+     * for three columns — which is why put_row_lr counts glyphs instead.
+     *
+     * fmt_channel and fmt_dbm rather than a second spelling of the 0 sentinel: «Связь» already
+     * renders both through them, and two places deciding what "no reading" looks like is how
+     * they come to disagree. */
+    char val[16];
+    fmt_channel(val, sizeof(val), v->channel);
+    put_row_lr(out, 0, "Канал", val);
+    fmt_dbm(val, sizeof(val), v->rssi);
+    put_row_lr(out, 1, "Уровень", val);
 }
 
 static void diag_page_relay(const dongle_view_t *v, screen_t *out)
 {
-    snprintf(out->row[0], SCREEN_ROW_MAX, "Слоты  TCP %u UDP %u",
-             (unsigned)v->tcp_used, (unsigned)v->udp_used);
+    char val[20];
+    snprintf(val, sizeof(val), "TCP %u UDP %u", (unsigned)v->tcp_used, (unsigned)v->udp_used);
+    put_row_lr(out, 0, "Слоты", val);
 
     /* to_car_x10 and to_phone_x10 are each a uint16_t and can reach 6553.5, but the real
      * ceiling is roughly 40/s — four phone sessions at 10 Hz each. A figure above 99.9 means
@@ -358,16 +436,18 @@ static void diag_page_relay(const dongle_view_t *v, screen_t *out)
      * this row used to carry — without a unit, a rate reads just as easily as a total. */
     unsigned to_car = (v->to_car_x10 > 999) ? 999 : (unsigned)v->to_car_x10;
     unsigned to_phone = (v->to_phone_x10 > 999) ? 999 : (unsigned)v->to_phone_x10;
-    snprintf(out->row[1], SCREEN_ROW_MAX, "Пак/с  %u.%u / %u.%u",
+    snprintf(val, sizeof(val), "%u.%u / %u.%u",
              to_car / 10, to_car % 10, to_phone / 10, to_phone % 10);
+    put_row_lr(out, 1, "Пак/с", val);
 }
 
 static void diag_page_fault(const dongle_view_t *v, screen_t *out)
 {
+    char val[20];
     if (v->last_errno == 0) {
         /* No fault reads as "none" — "нет" — never as the digit 0, which would read as an
          * errno of zero rather than the absence of one. */
-        put_row(out, 0, "errno          нет");
+        put_row_lr(out, 0, "errno", "нет");
     } else {
         /* errno_count is a uint32_t that only resets when the errno TYPE changes, never on
          * success, so a fault that never clears counts for as long as the dongle stays up —
@@ -383,7 +463,23 @@ static void diag_page_fault(const dongle_view_t *v, screen_t *out)
         uint32_t count = v->errno_count;
         const char *plus = "";
         if (count > 99999u) { count = 99999u; plus = "+"; }
-        snprintf(out->row[0], SCREEN_ROW_MAX, "errno %d  x%u%s", err_disp, (unsigned)count, plus);
+
+        /* Three glyphs at most, which is what lets this row hold all three clamped fields:
+         * 999 + x99999+ + 99ч beside a five-glyph label comes to exactly the row's budget.
+         * Under a minute reads «<1м» rather than a count of seconds — the question this
+         * answers is "is it failing NOW", and any answer inside a minute means yes. Past 99
+         * hours it clamps without a marker, unlike the repeat count above: at that age "very
+         * old" is the whole message and a wider row would cost the errno instead. */
+        char age[8];
+        if (v->fault_age_s < 60u)            snprintf(age, sizeof(age), "<1м");
+        else if (v->fault_age_s < 3600u)     snprintf(age, sizeof(age), "%uм",
+                                                      (unsigned)(v->fault_age_s / 60u));
+        else if (v->fault_age_s < 99u * 3600u) snprintf(age, sizeof(age), "%uч",
+                                                      (unsigned)(v->fault_age_s / 3600u));
+        else                                 snprintf(age, sizeof(age), "99ч");
+
+        snprintf(val, sizeof(val), "%d x%u%s %s", err_disp, (unsigned)count, plus, age);
+        put_row_lr(out, 0, "errno", val);
     }
 
     /* uptime_s is a uint32_t seconds counter with the identical shape: unclamped, the hours
@@ -395,7 +491,8 @@ static void diag_page_fault(const dongle_view_t *v, screen_t *out)
     if (h > 99999u) h = 99999u;
     unsigned m = (unsigned)((v->uptime_s / 60u) % 60u);
     unsigned s = (unsigned)(v->uptime_s % 60u);
-    snprintf(out->row[1], SCREEN_ROW_MAX, "Аптайм    %02u:%02u:%02u", h, m, s);
+    snprintf(val, sizeof(val), "%02u:%02u:%02u", h, m, s);
+    put_row_lr(out, 1, "Аптайм", val);
 }
 
 void screens_diag(const dongle_view_t *v, uint8_t page, screen_t *out)

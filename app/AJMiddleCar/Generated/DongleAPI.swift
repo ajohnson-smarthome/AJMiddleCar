@@ -44,6 +44,7 @@ public enum DongleStatusKey {
     public static let relaySlotsTcp = "slots_tcp"
     public static let relayErrno = "errno"
     public static let relayErrnoCount = "errno_count"
+    public static let relayErrnoAge = "errno_age"
 }
 
 /// What the dongle's radio is doing, as `/status` reports it.

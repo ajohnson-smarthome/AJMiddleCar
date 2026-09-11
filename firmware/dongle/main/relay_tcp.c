@@ -4,6 +4,7 @@
 #include <fcntl.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -84,6 +85,15 @@ static char s_car_buf[RELAY_BUF_LEN];
  * itself (stash a chunk, advance on partial progress, know when empty) lives in
  * tcp_pending.{c,h} as a pure, host-tested module; this file only owns the sockets around
  * it. */
+/* Pool size is a design number, not a detail — the spec says so. Four: the app can have a
+ * config POST and a firmware upload in flight at once, and a pool of one would deadlock the
+ * second behind the first. Four leaves room for the browser-style parallelism a REST client
+ * may use without letting a leaked slot starve the pool. */
+#define RELAY_POOL_SIZE 4
+
+/* Back in this file rather than the header, where it lived only so relay_udp.c could pass it
+ * into relay_stats_init's udp_max/tcp_max — parameters nothing read. Nothing outside this
+ * translation unit uses the pool's size. */
 static tcp_pending_t s_p2c_pending[RELAY_POOL_SIZE];   /* phone -> car backlog, by slot */
 static tcp_pending_t s_c2p_pending[RELAY_POOL_SIZE];   /* car -> phone backlog, by slot */
 
@@ -115,6 +125,17 @@ typedef struct {
 static uint32_t now_ms(void)
 {
     return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+}
+
+/* All the millisecond fields in relay_stats_t are esp_timer milliseconds since boot — the same
+ * clock display.c hands relay_stats_sample(). NOT the FreeRTOS tick count both relays use for
+ * their own session and slot timers: the tick starts when the scheduler does, so the two differ
+ * by the pre-scheduler boot interval, and a reader subtracting one from the other would get an
+ * age wrong by that offset for free. One clock in this struct, so any reader with esp_timer can
+ * subtract from any field in it. The extra read costs nothing here — this is a failure path. */
+static uint32_t stats_ms(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000);
 }
 
 /* Every socket this relay opens is made non-blocking, here, right after it is created —
@@ -195,7 +216,7 @@ static void flush_pending(relay_state_t *r, int idx, int dst, tcp_pending_t *p,
          * stays; select() will say so again next pass if dst is still not ready. */
         return;
     }
-    relay_stats_failed(relay_stats_shared(), errno);
+    relay_stats_failed(relay_stats_shared(), errno, stats_ms());
     ESP_LOGW(TAG, "%s forwarding failed on slot %d: errno %d", label, idx, errno);
     close_slot(r, idx, "forwarding failed");
 }
@@ -228,7 +249,7 @@ static void pump_read(relay_state_t *r, int idx, int src, int dst, char *scratch
             return;   /* the common case: forwarded whole, nothing left pending */
         }
         if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-            relay_stats_failed(relay_stats_shared(), errno);
+            relay_stats_failed(relay_stats_shared(), errno, stats_ms());
             ESP_LOGW(TAG, "%s forwarding failed on slot %d: errno %d", label, idx, errno);
             close_slot(r, idx, "forwarding failed");
             return;
@@ -565,14 +586,8 @@ static void relay_task(void *arg)
         FD_ZERO(&wfds);
         FD_SET(r.listen_sock, &rfds);
         int maxfd = r.listen_sock;
-        /* Slot occupancy, sampled once per pass rather than kept as a running counter: every
-         * close_slot() and every handle_accept() would otherwise need to remember to adjust
-         * it, and a miscount there would be silent — this loop already visits every slot each
-         * pass, so counting here costs nothing and cannot drift from r.slots[] itself. */
-        int busy = 0;
         for (int i = 0; i < RELAY_POOL_SIZE; i++) {
             tcp_slot_t *s = &r.slots[i];
-            if (s->state != SLOT_FREE) busy++;
             if (s->state == SLOT_ACTIVE) {
                 tcp_pending_t *p2c = &s_p2c_pending[i];
                 tcp_pending_t *c2p = &s_c2p_pending[i];
@@ -608,8 +623,6 @@ static void relay_task(void *arg)
                 if (s->car_sock > maxfd) maxfd = s->car_sock;
             }
         }
-        relay_stats_tcp_slots(relay_stats_shared(), (uint8_t)busy);
-
         struct timeval tv = { .tv_sec = RELAY_LOOP_MS / 1000, .tv_usec = 0 };
         int nready = select(maxfd + 1, &rfds, &wfds, NULL, &tv);
         if (nready < 0 && errno != EINTR) {
@@ -697,6 +710,20 @@ static void relay_task(void *arg)
                 pump_read(&r, i, s->car_sock, s->phone_sock, s_car_buf, c2p, "car->phone");
             }
         }
+
+        /* Slot occupancy, counted once per pass rather than kept as a running counter: every
+         * close_slot() and every handle_accept() would otherwise need to remember to adjust
+         * it, and a miscount there would be silent.
+         *
+         * At the END of the pass, where it can see this pass's own work. Counted while
+         * building the fd set — where it used to be — it was taken before select()'s wait,
+         * before handle_accept() took a slot and before every close_slot() above freed one, so
+         * the published figure was a full RELAY_LOOP_MS behind the pool it described. */
+        int busy = 0;
+        for (int i = 0; i < RELAY_POOL_SIZE; i++) {
+            if (r.slots[i].state != SLOT_FREE) busy++;
+        }
+        relay_stats_tcp_slots(relay_stats_shared(), (uint8_t)busy);
     }
 }
 
