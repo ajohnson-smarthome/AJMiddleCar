@@ -77,12 +77,16 @@ final class AppFlow: ObservableObject {
         case dongleConfiguring
         /// The dongle will not get any further on its own: the join budget ran out (`failed`),
         /// or its state machine never left `idle` — see `DongleStep.retryJoin`. The credentials
-        /// are already stored; `dongleGate()` asks the radio to try again, at most
-        /// `maxDongleJoinAttempts` times, and then holds here with a button. The spec is
-        /// explicit that this state is "reached and held rather than retried forever… A radio
-        /// that hunts for an absent car indefinitely is drawing the phone's battery for
-        /// nothing", and that after a few attempts the app says the car is not found and offers
-        /// a Retry.
+        /// are already stored; `dongleGate()` asks the radio to try again — once, see
+        /// `maxDongleJoinAttempts` — and then holds here with a button. The spec is explicit
+        /// that this state is "reached and held rather than retried forever… A radio that hunts
+        /// for an absent car indefinitely is drawing the phone's battery for nothing", and that
+        /// after a few attempts the app says the car is not found and offers a Retry.
+        ///
+        /// Shown only once the asking is over. While a retry is still owed, the gate keeps
+        /// `.carFinding` on screen instead: announcing "no link" for the one poll between the
+        /// dongle's `failed` and the re-ask that will put it straight back into `searching` was
+        /// a verdict the app itself overturned a second and a half later.
         case dongleJoinFailed
         case checkInternet, noInternet, checkUpdate, checkFailed, downloading
         /// The gate has passed; the car has not identified itself yet. What is on screen while
@@ -149,14 +153,19 @@ final class AppFlow: ObservableObject {
     /// early, few enough that a phone with no usable internet and no cache is told so within a
     /// few tries rather than re-fetching from GitHub on every poll forever.
 
-    /// The same shape, for the other unbounded loop: how many times `dongleGate()` will POST
-    /// the car's network at the dongle — the first configure and every retry together — before
-    /// it stops and waits for `retryDongleJoin()`. Nothing here was bounded at all: `.retryJoin`
-    /// re-POSTed on every poll forever, which is precisely the radio the spec says must not
-    /// hunt for an absent car indefinitely. Three is the update path's number and roughly the
-    /// firmware's own `WIFI_JOIN_ATTEMPTS` shape; each attempt costs a full join budget on the
-    /// dongle's side, so this is minutes of honest trying, not seconds.
-    private static let maxDongleJoinAttempts = 3
+    /// How many times `dongleGate()` will POST the car's network at the dongle — the first
+    /// configure and every retry together — before it stops and waits for `retryDongleJoin()`.
+    /// Nothing here was bounded at all once: `.retryJoin` re-POSTed on every poll forever, which
+    /// is precisely the radio the spec says must not hunt for an absent car indefinitely.
+    ///
+    /// ONE, not three. Each ask costs a full join budget on the dongle's side — five attempts,
+    /// counted out loud on its panel as «Попытка 1 из 5» through «5 из 5» — and three asks in a
+    /// row made that count run three times over, with nothing on either screen to say why the
+    /// radio had changed its mind. The bound is now the one the dongle already has: the app asks
+    /// once, the dongle tries five times, and then both say so and wait for a person. A car
+    /// switched on after that gets its join from the Retry button, which is what the button is
+    /// for.
+    private static let maxDongleJoinAttempts = 1
 
     /// Guards against a second `startupCheck()` running while one is already in flight — a
     /// second tap on a retry button whose screen has not yet updated `phase` (`dongleGate()`'s
@@ -346,7 +355,10 @@ final class AppFlow: ObservableObject {
             case .waiting:
                 setPhase(.dongleConfiguring)
             case .retryJoin:
-                setPhase(.dongleJoinFailed)
+                // The same rule `.sendCredentials` follows: the failure screen only when there
+                // is no ask left to make. With one still owed, the dongle will be searching
+                // again by the next poll, and «Ищу машинку» is what is true for that beat.
+                setPhase(dongleJoinGaveUp ? .dongleJoinFailed : .carFinding)
                 await askDongleToJoin(retry: true)
             case .readyForCar:
                 // The join worked, so the budget that got here is spent on nothing: reset it,
