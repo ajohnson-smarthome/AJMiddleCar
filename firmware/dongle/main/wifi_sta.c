@@ -7,12 +7,12 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
-#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
 #include "net_api.h"
+#include "dongle_clock.h"
 #include "wifi_state.h"
 
 static const char *TAG = "wifi_sta";
@@ -58,11 +58,6 @@ static bool s_has_gateway;
  * forever. An atomic store can't fail to happen the way a timed-out mutex acquisition can. */
 #define JOIN_QUIET_MS 1000u
 static _Atomic uint32_t s_join_quiet_until_ms;
-
-static uint32_t wifi_now_ms(void)
-{
-    return (uint32_t)(esp_timer_get_time() / 1000);
-}
 
 /* A lock-free mirror of s_sm.state, updated under s_lock alongside every real write to it.
  * wifi_state.h's wifi_sm_t is a pure, host-tested struct and gains no atomics of its own —
@@ -114,13 +109,24 @@ static void publish_state_locked(void)
 static void handle_disconnected(const wifi_event_sta_disconnected_t *ev)
 {
     uint32_t quiet_until = atomic_load(&s_join_quiet_until_ms);
-    if (quiet_until != 0 && (int32_t)(wifi_now_ms() - quiet_until) < 0) {
+    if (ev->reason == WIFI_REASON_ASSOC_LEAVE &&
+        quiet_until != 0 && (int32_t)(boot_ms() - quiet_until) < 0) {
         /* This is the disconnect wifi_sta_join issued deliberately, to leave the interface
          * idle before esp_wifi_set_config. Not a failure: consuming it here — rather than
          * stepping WIFI_EV_DISCONNECTED — is what stops it from charging one of the five
          * attempts and racing wifi_sta_join's own upcoming esp_wifi_connect(). Checked
          * before s_lock is even touched, so consuming it never depends on that lock being
-         * free — see s_join_quiet_until_ms's own comment for why that matters. Signed
+         * free — see s_join_quiet_until_ms's own comment for why that matters.
+         *
+         * The REASON is the discriminator; the window only bounds it in time. ESP-IDF
+         * reports WIFI_REASON_ASSOC_LEAVE (8) for a disconnect esp_wifi_disconnect() asked
+         * for (station-scenarios.rst, the reason-code table), and every way a join can fail
+         * — AUTH_FAIL, ASSOC_FAIL, HANDSHAKE_TIMEOUT, NO_AP_FOUND, the AP's own kicks —
+         * carries a different one. The window alone was not enough: when the deliberate
+         * disconnect had nothing to tear down and produced no event, the window stayed
+         * armed across esp_wifi_connect(), and a join the AP rejected within the second was
+         * swallowed here as "ours" — no attempt charged, no retry issued, the station left
+         * in JOINING with nothing in flight, on every boot with a stored network. Signed
          * difference, so the window is correct across the millisecond counter's wrap. */
         atomic_store(&s_join_quiet_until_ms, 0u);
         return;
@@ -265,12 +271,30 @@ esp_err_t wifi_sta_start(void)
     return ESP_OK;
 }
 
+/* The two failure paths inside wifi_sta_join, which leave the radio idle with no request in
+ * flight. Stepped under the lock when it can be had; when it cannot, the lock-free mirror is
+ * still moved so that /status and the panel stop claiming a link that is gone — the same
+ * "a mirror one transition behind beats a lie" trade publish_state_locked makes. */
+static void abort_join_locked_or_not(void)
+{
+    if (lock_take()) {
+        atomic_store(&s_associated, false);
+        wifi_state_step(&s_sm, WIFI_EV_ABORTED);
+        publish_state_locked();
+        lock_give();
+    } else {
+        ESP_LOGE(TAG, "state lock busy — recording the aborted join in the mirror only");
+        atomic_store(&s_associated, false);
+        atomic_store(&s_state_view, WIFI_FAILED);
+    }
+}
+
 esp_err_t wifi_sta_join(const net_cfg_t *cfg)
 {
     /* Armed unconditionally — no lock needed, and none can make this fail to happen. See
      * s_join_quiet_until_ms's own comment for why that is the point, and why this is a
      * deadline rather than a flag somebody has to remember to clear. */
-    uint32_t until = wifi_now_ms() + JOIN_QUIET_MS;
+    uint32_t until = boot_ms() + JOIN_QUIET_MS;
     atomic_store(&s_join_quiet_until_ms, until != 0u ? until : 1u);   /* 0 means "not armed" */
 
     /* Disconnect BEFORE reconfiguring, not after: an idle interface is what keeps
@@ -293,15 +317,18 @@ esp_err_t wifi_sta_join(const net_cfg_t *cfg)
 
     esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &wc);
     if (err != ESP_OK) {
-        /* Leave the state machine untouched: net.state still describes what the RADIO is
-         * doing — the previous attempt, if any — while GET /net already reflects what the
-         * dongle was just TOLD to join. The two legitimately disagree until this is retried
-         * (a corrected POST /net, which restarts the whole budget). The suppression window is
-         * deliberately LEFT armed: the disconnect above was still issued and its event is
-         * still coming, and it is still not a failed join. The window closes on its own. */
-        ESP_LOGE(TAG, "set config failed (%s) — net.state still reflects the previous "
-                      "attempt, not this request; GET /net already shows what was requested",
-                 esp_err_to_name(err));
+        /* The state machine is stepped to FAILED, not left alone. An earlier version left
+         * it, reasoning that net.state "still describes what the radio is doing — the
+         * previous attempt" — but the disconnect four lines up has already torn that attempt
+         * down, and its event will be consumed as ours. Left alone, a station that had been
+         * CONNECTED kept saying so with the radio idle, wifi_sta_connected() made the next
+         * unchanged re-POST a no-op, and both relays went on aiming at a gateway with nothing
+         * behind it. FAILED is what is true: not connected, not trying, until the app
+         * configures again. The suppression window is deliberately LEFT armed: the
+         * disconnect's event is still coming and is still not a failed join. */
+        ESP_LOGE(TAG, "set config failed (%s) — the previous association is already down; "
+                      "net.state is failed until a new POST /net", esp_err_to_name(err));
+        abort_join_locked_or_not();
         return err;
     }
 
@@ -325,7 +352,12 @@ esp_err_t wifi_sta_join(const net_cfg_t *cfg)
 
     esp_err_t cerr = esp_wifi_connect();
     if (cerr != ESP_OK) {
-        ESP_LOGW(TAG, "connect failed: %s", esp_err_to_name(cerr));
+        /* CONFIGURED was stepped above, so the machine says "joining" about a request the
+         * radio just refused to start — nothing is in flight and nothing will retry it. Same
+         * remedy as the set_config path: say failed, which is what it is. */
+        ESP_LOGW(TAG, "connect failed: %s — net.state is failed until a new POST /net",
+                 esp_err_to_name(cerr));
+        abort_join_locked_or_not();
         return cerr;
     }
     /* The attempt is under way, which is all this can honestly claim: whether it succeeds is

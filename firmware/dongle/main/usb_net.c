@@ -20,6 +20,15 @@ static const char *TAG = "usb_net";
 
 static esp_netif_t *s_netif;
 
+/* The USB netif's lwIP name ("en1" or the like), resolved ONCE in usb_net_start. Every
+ * usb_net_bind_socket used to ask esp_netif_get_netif_impl_name for it again, and on this
+ * stack that is not a table lookup: it is an esp_netif_lwip_ipc_call into the tcpip thread
+ * with an unbounded wait — the exact cost display.c documents refusing to pay per pass — and
+ * api_guard_open paid it on the httpd task for every accepted connection. With the tcpip
+ * thread stalled behind a 100 ms tinyusb_net_send_sync, that wait landed on every /status
+ * accept and on POST /ota's. The name cannot change after attach, so it is read there. */
+static struct ifreq s_iface;
+
 /* lwIP has a frame for the host. This runs on lwIP's linkoutput path, synchronously
  * inside whatever context handed lwIP the packet, and tinyusb_net_send_sync blocks
  * that caller until TinyUSB's task drains the frame or this 100 ms timeout fires — a
@@ -151,9 +160,7 @@ esp_err_t usb_net_bind_socket(int fd)
         ESP_LOGE(TAG, "cannot pin fd %d: the USB interface is not up yet", fd);
         return ESP_ERR_INVALID_STATE;
     }
-    struct ifreq iface = { 0 };
-    ESP_RETURN_ON_ERROR(esp_netif_get_netif_impl_name(s_netif, iface.ifr_name), TAG,
-                        "cannot read the USB interface name");
+    struct ifreq iface = s_iface;   /* resolved in usb_net_start; see s_iface */
     /* esp_netif_get_netif_impl_name's IDF 6.0.2 implementation (esp_netif_lwip.c:2770-2775)
      * calls netif_index_to_name() but discards its NULL-on-failure return and always reports
      * ESP_OK back to us, so a lookup failure does not fail the ESP_RETURN_ON_ERROR above — it
@@ -316,6 +323,18 @@ esp_err_t usb_net_start(void)
 
     s_driver.base.post_attach = usb_post_attach;
     ESP_RETURN_ON_ERROR(esp_netif_attach(netif, &s_driver), TAG, "cannot attach");
+
+    /* The interface name, once, for every socket usb_net_bind_socket will ever pin. Read
+     * before s_netif is published so that no caller can bind against an unresolved name;
+     * the empty-name check in usb_net_bind_socket still stands, because the lookup below
+     * reports success even when it found nothing (see the comment there). A failure is
+     * fatal to startup, which is the right place for it: an interface nothing can be pinned
+     * to is an interface the api_guard cannot isolate. */
+    memset(&s_iface, 0, sizeof(s_iface));
+    ESP_RETURN_ON_ERROR(esp_netif_get_netif_impl_name(netif, s_iface.ifr_name), TAG,
+                        "cannot read the USB interface name");
+    ESP_RETURN_ON_FALSE(s_iface.ifr_name[0] != 0, ESP_FAIL, TAG,
+                        "the USB interface has no name — nothing could be pinned to it");
 
     /* Only now: attach succeeded, so usb_post_attach already ran, driver_free_rx_buffer
      * is installed, and the DHCP server is confirmed started. on_usb_frame's

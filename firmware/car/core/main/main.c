@@ -39,19 +39,19 @@ static const char *TAG = "main";
 // native USB stopped enumerating, logs were moved to UART0 through the on-board bridge, and
 // input would otherwise have kept waiting on a peripheral nothing was attached to.
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
-static void console_init(void) {
+static esp_err_t console_init(void) {
     usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&cfg));
+    return usb_serial_jtag_driver_install(&cfg);
 }
 
 static int console_read_byte(uint8_t *c) {
     return usb_serial_jtag_read_bytes(c, 1, portMAX_DELAY);
 }
 #elif CONFIG_ESP_CONSOLE_UART_DEFAULT
-static void console_init(void) {
+static esp_err_t console_init(void) {
     // Driver-level reads, for the same reason USB-Serial-JTAG uses them: fgets through the VFS
     // returns immediately and spins the prompt.
-    ESP_ERROR_CHECK(uart_driver_install(CONFIG_ESP_CONSOLE_UART_NUM, 256, 0, 0, NULL, 0));
+    return uart_driver_install(CONFIG_ESP_CONSOLE_UART_NUM, 256, 0, 0, NULL, 0);
 }
 
 static int console_read_byte(uint8_t *c) {
@@ -167,16 +167,23 @@ void app_main(void) {
        USB cable and tells you nothing. */
     bool motors_ok = pca9685_bus_init(BOARD_I2C_SDA, BOARD_I2C_SCL, BOARD_I2C_HZ) == ESP_OK
                   && pca9685_init(BOARD_PWM_HZ) == ESP_OK;
-    if (motors_ok) {
-        /* Immediately, not later in link_init. pca9685_init ends by writing MODE1 with
-           the RESTART bit, which by design resumes every channel at its pre-sleep duty —
-           so on a reset taken mid-drive the motors come back at full throttle. Everything
-           between here and link_init (an NVS init that may erase flash) would run with
-           them spinning. */
-        pca9685_zero_all();
-    } else {
-        ESP_LOGE(TAG, "motor bus did not come up — the car will not drive, "
-                      "but the network and OTA will. Check I2C wiring and power.");
+    /* Immediately, not later in link_init, and UNCONDITIONALLY. pca9685_init ends by writing
+       MODE1 with the RESTART bit, which by design resumes every channel at its pre-sleep duty
+       — so on a reset taken mid-drive the motors come back at full throttle. Everything
+       between here and link_init (an NVS init that may erase flash) would run with them
+       spinning.
+
+       Unconditionally, because this used to run only on success — and the init walks the
+       boards in order, so a failure on the REAR board's first write had already taken the
+       FRONT board through RESTART. Front wheels at the pre-crash duty for the whole NVS
+       init was exactly the window this call exists to close. zero_all tolerates a board
+       that never came up (a NULL handle is skipped), so there is no case in which it must
+       not run. */
+    pca9685_zero_all();
+    if (!motors_ok) {
+        ESP_LOGE(TAG, "motor bus did not come up — the actuator task will keep trying once "
+                      "a second; until it succeeds the car will not drive, but the network "
+                      "and OTA will. Check I2C wiring and power.");
     }
 
     esp_err_t nvs = nvs_flash_init();
@@ -237,7 +244,16 @@ void app_main(void) {
     if ((err = cfg_api_start()) != ESP_OK)
         ESP_LOGE(TAG, "cfg_api_start failed: %s — config endpoints are down, all five domains", esp_err_to_name(err));
 
-    console_init();
+    /* Not ESP_ERROR_CHECKed — this file's own rule, from the mark-valid comment above: nothing
+       past that line may panic, because a panic there is a boot loop with no rollback and no
+       cable. A console that will not install costs the bench REPL and nothing else, so it is
+       logged and app_main returns: every task that matters is already running, and the REPL
+       loop below would otherwise spin at full speed on a read that fails instantly. */
+    if ((err = console_init()) != ESP_OK) {
+        ESP_LOGE(TAG, "console did not install (%s) — no bench REPL this boot; everything "
+                      "else is up", esp_err_to_name(err));
+        return;
+    }
     ESP_LOGI(TAG, "Ready. Enter 'mix <throttle> <yaw>' (each -1..1), e.g. 'mix 0.5 0.2':");
 
     char line[48];

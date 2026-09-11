@@ -35,8 +35,7 @@ static esp_err_t ota_post(httpd_req_t *req) {
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
     if (part == NULL) {
         link_release_must(LINK_SRC_OTA);
-        api_reply_error(req, "500 Internal Server Error", "", "no ota partition");
-        return ESP_FAIL;
+        return api_reply_error(req, "500 Internal Server Error", "", "no ota partition");
     }
     if ((uint32_t)req->content_len > part->size) {
         link_release_must(LINK_SRC_OTA);
@@ -48,8 +47,14 @@ static esp_err_t ota_post(httpd_req_t *req) {
        per update — and a too-large image now fails here instead of after the erase. */
     if (esp_ota_begin(part, req->content_len, &handle) != ESP_OK) {
         link_release_must(LINK_SRC_OTA);
-        api_reply_error(req, "500 Internal Server Error", "", "ota begin failed");
-        return ESP_FAIL;
+        /* The reply's result and not ESP_FAIL, here and on every failure below. ESP_FAIL
+           makes httpd close the session with the body unread, and TCP answers a close with
+           unread data with RST — so the 500 that was just written never reached the client,
+           which reported a connection error instead of the reason. On ESP_OK httpd purges
+           the rest of the body first (httpd_req_delete), which for an upload rejected at
+           esp_ota_begin means reading and discarding up to the whole image; that is the
+           price of the client learning why. */
+        return api_reply_error(req, "500 Internal Server Error", "", "ota begin failed");
     }
     ESP_LOGI(TAG, "OTA -> %s, %d bytes", part->label, (int)req->content_len);
 
@@ -63,29 +68,25 @@ static esp_err_t ota_post(httpd_req_t *req) {
             if (r == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts <= 6) continue;  // ~6×5s grace, then abort
             esp_ota_abort(handle);
             link_release_must(LINK_SRC_OTA);
-            api_reply_error(req, "400 Bad Request", "", "recv error");
-            return ESP_FAIL;
+            return api_reply_error(req, "400 Bad Request", "", "recv error");
         }
         timeouts = 0;  // progress resets the stall budget
         if (esp_ota_write(handle, buf, r) != ESP_OK) {
             esp_ota_abort(handle);
             link_release_must(LINK_SRC_OTA);
-            api_reply_error(req, "500 Internal Server Error", "", "ota write failed");
-            return ESP_FAIL;
+            return api_reply_error(req, "500 Internal Server Error", "", "ota write failed");
         }
         remaining -= r;
     }
     if (esp_ota_end(handle) != ESP_OK) {
         link_release_must(LINK_SRC_OTA);
-        api_reply_error(req, "400 Bad Request", "", "image invalid");
-        return ESP_FAIL;
+        return api_reply_error(req, "400 Bad Request", "", "image invalid");
     }
     esp_err_t berr = esp_ota_set_boot_partition(part);
     if (berr != ESP_OK) {
         ESP_LOGE(TAG, "set_boot_partition failed: %s (image written+valid but not booted)", esp_err_to_name(berr));
         link_release_must(LINK_SRC_OTA);
-        api_reply_error(req, "500 Internal Server Error", "", "set boot failed");
-        return ESP_FAIL;
+        return api_reply_error(req, "500 Internal Server Error", "", "set boot failed");
     }
     // Reboot regardless of whether the "ok" reaches the client — the image is already committed.
     if (api_reply_ok(req) != ESP_OK) ESP_LOGW(TAG, "resp send failed, rebooting anyway");

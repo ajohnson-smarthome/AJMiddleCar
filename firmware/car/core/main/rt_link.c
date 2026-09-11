@@ -65,6 +65,7 @@ static const rt_effects_t FX = { NULL, fx_stop_safe, fx_release_safe, fx_release
 
 uint32_t rt_link_frames(void)    { return s_frames; }
 uint32_t rt_link_wdt_trips(void) { return s_trips; }
+uint32_t rt_link_owner_ip(void)  { return s_ses.have_owner ? s_owner.sin_addr.s_addr : 0u; }
 
 static uint32_t now_ms(void) {
     return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);

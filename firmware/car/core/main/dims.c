@@ -1,4 +1,5 @@
 #include "dims.h"
+#include <stdint.h>
 #include <stdio.h>
 #include "cJSON.h"
 #include "cfg_json.h"
@@ -35,7 +36,9 @@ void dims_init(void) {
     if (cfg_json_load("dims", buf, sizeof(buf))) {
         cJSON *j = cJSON_Parse(buf);
         int track, base;
-        if (cfg_json_int(j, "track_mm", &track) && cfg_json_int(j, "wheelbase_mm", &base)) {
+        /* Range-checked before narrowing — see wheel_init for why. */
+        if (cfg_json_int(j, "track_mm", &track) && cfg_json_int(j, "wheelbase_mm", &base) &&
+            track >= 0 && track <= UINT16_MAX && base >= 0 && base <= UINT16_MAX) {
             dims_params_t d = { .track_mm = (uint16_t)track, .wheelbase_mm = (uint16_t)base };
             dims_set(&d);   // clamps + applies
         }

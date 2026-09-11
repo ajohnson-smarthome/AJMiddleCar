@@ -1,4 +1,5 @@
 #include "calib_api.h"
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include "cJSON.h"
@@ -85,8 +86,17 @@ static esp_err_t calib_save(httpd_req_t *req) {
             cJSON_Delete(j);
             return api_reply_error(req, "400 Bad Request", "pair", "wheel needs integer {pair,sign}");
         }
-        cfg.wheels[i].channel_pair = (uint8_t)jp->valueint;
-        cfg.wheels[i].sign = (int8_t)js->valueint;
+        /* Range-checked BEFORE narrowing — the write-side twin of calibration_load's check.
+           (uint8_t)256 is 0 and (int8_t)257 is 1, both inside what calibration_valid accepts,
+           so {"pair":256,"sign":257} used to save and answer 200 while the mock's generated
+           validator answered 400 to the same bytes; {"sign":255} silently reversed a wheel. */
+        int pv = jp->valueint, sv = js->valueint;
+        if (pv < 0 || pv > UINT8_MAX || sv < INT8_MIN || sv > INT8_MAX) {
+            cJSON_Delete(j);
+            return api_reply_error(req, "400 Bad Request", "wheels", "pair 0..3, sign -1|1");
+        }
+        cfg.wheels[i].channel_pair = (uint8_t)pv;
+        cfg.wheels[i].sign = (int8_t)sv;
     }
     cJSON_Delete(j);
     esp_err_t e = calibration_save(&cfg);

@@ -184,6 +184,13 @@ uint32_t rt_link_frames(void);
 // increment is the difference between a driver who said goodbye and one who walked out
 // of range, so the app plots it rather than merely logging it.
 uint32_t rt_link_wdt_trips(void);
+
+// The session owner's IPv4 address in network byte order, or 0 while nobody owns the
+// session. For telemetry, which reports the owner's signal and needs to know which of the
+// AP's stations the owner is. Written on the rt_link task, read on the RSSI sampler; a
+// single aligned u32, so it cannot tear, and a reader one adoption behind names a station
+// that was the owner a second ago, which is the worst this can be.
+uint32_t rt_link_owner_ip(void);
 #endif /* RT_LINK_HOST_TEST */
 
 #endif // RT_LINK_H

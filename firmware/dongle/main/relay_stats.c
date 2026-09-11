@@ -29,12 +29,16 @@ void relay_stats_failed(relay_stats_t *s, int err, uint32_t now_ms)
        last_fail_ms, and this ordering is what makes that pair consistent without a lock: a
        reader that sees a nonzero errno is reading a write that came after the stamp, so the
        stamp it then loads is the one that belongs to it.
-       
+
        The other order shipped and was wrong. On the FIRST failure since boot, a reader
        preempted between the two loads took last_errno = 12 with last_fail_ms still 0, and the
        subtraction handed back the device's whole uptime: a dongle up four hours drew
        «errno 12 x1 99ч» on the very frame the fault appeared — reading as ancient — which is
-       the confusion last_fail_ms exists to remove. */
+       the confusion last_fail_ms exists to remove.
+
+       And the order in the SOURCE was not the order on the wire until the fields became
+       _Atomic (relay_stats.h says why): two plain stores to unrelated words are the
+       compiler's to reorder. They are seq_cst now, so this line really does come first. */
     s->last_fail_ms = now_ms;
     if (err == s->last_errno) {
         s->errno_count++;

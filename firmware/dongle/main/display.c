@@ -399,8 +399,8 @@ static void view_build(dongle_view_t *v, net_cfg_t *cfg, const esp_app_desc_t *a
     v->last_errno = r->last_errno;
     v->errno_count = r->errno_count;
     /* The age of the fault, not the stamp: screens.c has no clock, and this task already holds
-     * the one relay_stats is kept on — relay_stats.h puts every ms field in that struct on
-     * esp_timer milliseconds precisely so this subtraction is legitimate. Unsigned throughout,
+     * the one relay_stats is kept on — boot_ms() (dongle_clock.h), which is esp_timer, which
+     * is what now_us is; the subtraction is legitimate by construction. Unsigned throughout,
      * so it is correct across the wrap. Read after last_errno: a stamp older than the errno it
      * is paired with overstates the age, which errs towards "this fault is stale" — the
      * direction that makes a reader look harder rather than relax. */

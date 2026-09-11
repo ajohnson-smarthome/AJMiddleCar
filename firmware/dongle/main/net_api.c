@@ -118,6 +118,18 @@ static esp_err_t net_post(httpd_req_t *req)
         return api_reply_error(req, "400 Bad Request", "", "body missing or too long");
     }
 
+    /* The one control byte a C string cannot carry. cJSON decodes the JSON escape \u0000
+     * into a real NUL inside valuestring, and from there everything downstream — the
+     * validator, the copy into wifi_config_t, GET /net's echo — measures the value with
+     * strlen and silently keeps only what came before it. That is a truncation, and
+     * net_cfg.h's rule for these two fields is "rejected, never clamped": a join aimed at a
+     * name the app never sent, with no visible cause, is the outcome the rule exists to
+     * prevent. cJSON exposes no length for the decoded string, so the escape is caught in the
+     * raw body — and JSON has exactly one spelling for it, so a substring search is exact. */
+    if (strstr(raw, "\\u0000") != NULL) {
+        return api_reply_error(req, "400 Bad Request", "", "a NUL character is not allowed");
+    }
+
     cJSON *root = cJSON_Parse(raw);
     if (root == NULL) {
         return api_reply_error(req, "400 Bad Request", "", "body is not JSON");

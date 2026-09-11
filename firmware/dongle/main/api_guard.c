@@ -1,4 +1,5 @@
 #include "api_guard.h"
+#include "dongle_clock.h"
 
 #include <errno.h>
 #include <stdbool.h>
@@ -24,11 +25,6 @@ static const char *TAG = "api_guard";
  * -> httpd_sess_new -> open_fn, then httpd_sess_delete -> close_fn, with no yield that could
  * let another accept interleave), so this is single-threaded state, not shared state. */
 static int s_rejected_fd = -1;
-
-static uint32_t now_ms(void)
-{
-    return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-}
 
 /* DONGLE_HOST is a compile-time string constant; parsed once and cached rather than on every
  * accepted connection. A parse failure here means the constant itself is malformed, not
@@ -160,11 +156,9 @@ esp_err_t api_guard_open(httpd_handle_t hd, int sockfd)
      *
      * Seeded one interval in the past, not zero: a guard's very first rejections — in the
      * first second after boot — are exactly the interesting ones, and last_log starting at 0
-     * would silently drop whichever of them land before now_ms() first exceeds 1000. */
-    static uint32_t last_log = (uint32_t)-1001;
-    uint32_t t = now_ms();
-    if ((uint32_t)(t - last_log) > 1000) {
-        last_log = t;
+     * would silently drop whichever of them land before boot_ms() first exceeds 1000. */
+    static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
+    if (log_throttle_ok(&s_throttle, boot_ms())) {
         if (!have_want) {
             ESP_LOGW(TAG, "refusing every connection: DONGLE_HOST does not parse");
         } else if (!got_local) {

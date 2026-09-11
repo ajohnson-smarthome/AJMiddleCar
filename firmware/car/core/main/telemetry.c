@@ -4,7 +4,9 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
+#include "esp_netif.h"
 #include "esp_wifi.h"
+#include <string.h>
 #include "calibration.h"
 #include "motors.h"
 #include "rt_link.h"
@@ -28,12 +30,55 @@ static const char *TAG = "telemetry";
    signal level, not a fact. */
 static volatile int s_rssi = 0;
 
+/* WHOSE signal. The AP admits four stations and the dongle joins it exactly as a phone does,
+   so "the AP's station list" can hold two radios at once, and sta[0] — which is what this
+   reported — is whichever one the driver enumerates first. The app plotted the dongle's
+   signal while the phone drove, or the reverse, with nothing to say which.
+
+   The reading is the SESSION OWNER's station when there is one: the MAC list from the
+   radio, the MAC->IP table from this side's DHCP server, and the owner's address from
+   rt_link, joined here. With no owner, or an owner the tables cannot place (a static
+   address, a lease the table has forgotten), the weakest station is reported — the
+   conservative reading, and unlike sta[0] a deterministic one. */
+static esp_netif_t *s_ap_netif;
+
+static int pick_rssi(const wifi_sta_list_t *sta) {
+    if (sta->num <= 0) return 0;
+
+    uint32_t owner = rt_link_owner_ip();
+    if (owner != 0u && s_ap_netif != NULL) {
+        esp_netif_pair_mac_ip_t pairs[ESP_WIFI_MAX_CONN_NUM];
+        int n = sta->num < ESP_WIFI_MAX_CONN_NUM ? sta->num : ESP_WIFI_MAX_CONN_NUM;
+        for (int i = 0; i < n; i++) {
+            memcpy(pairs[i].mac, sta->sta[i].mac, sizeof(pairs[i].mac));
+            pairs[i].ip.addr = 0;
+        }
+        if (esp_netif_dhcps_get_clients_by_mac(s_ap_netif, n, pairs) == ESP_OK) {
+            for (int i = 0; i < n; i++) {
+                if (pairs[i].ip.addr == owner) return sta->sta[i].rssi;
+            }
+        }
+    }
+
+    int worst = sta->sta[0].rssi;
+    for (int i = 1; i < sta->num; i++) {
+        if (sta->sta[i].rssi < worst) worst = sta->sta[i].rssi;
+    }
+    return worst;
+}
+
 static void rssi_task(void *arg) {
     (void)arg;
+    /* Once. esp_netif_get_handle_from_ifkey is an IPC into the tcpip thread on this stack
+       (see the dongle's display.c for the trace), and the AP netif is created before this
+       task exists and never destroyed. */
+    s_ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (s_ap_netif == NULL) {
+        ESP_LOGW(TAG, "no AP netif to place the owner's station — reporting the weakest");
+    }
     for (;;) {
         wifi_sta_list_t sta;
-        s_rssi = (esp_wifi_ap_get_sta_list(&sta) == ESP_OK && sta.num > 0)
-               ? sta.sta[0].rssi : 0;
+        s_rssi = (esp_wifi_ap_get_sta_list(&sta) == ESP_OK) ? pick_rssi(&sta) : 0;
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }

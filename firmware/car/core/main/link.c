@@ -6,16 +6,26 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_task_wdt.h"
+#include "board.h"
 #include "pca9685.h"
 #include "ramp.h"
 
 static const char *TAG = "link";
 
-#define SHADOW_UNKNOWN 0xFFFFu     /* forces a real write on the first tick */
+#define SHADOW_UNKNOWN LINK_SHADOW_UNKNOWN   /* link.h owns the value; the planner needs it too */
 
-/* Releases owed to sources that could not take s_lock twice. One bit per link_src_t; drained
-   by link_task under the lock, so no grant can outlive its owner's attempt to give it up. */
-static _Atomic uint32_t s_release_pending;
+/* Releases owed to sources that could not take s_lock twice, keyed by the SERIAL of the grant
+   they were aimed at (0 = nothing owed). Drained by link_task under the lock it takes every
+   tick, so no grant can outlive its owner's attempt to give it up.
+
+   Keyed on the serial and not just the source, because the first version was, and that let a
+   queued release land on the WRONG grant: source S loses both lock races, its bit is queued,
+   S obtains a fresh grant before the next tick, the drain sees owner == S and releases the new
+   one. For OTA that reopened the actuator to the RT stream for the length of a flash. A grant
+   is now released only if it is still the grant that was there when the release was asked
+   for; a newer one from the same source is that source's own to give up. */
+#define LINK_SRC_COUNT ((int)LINK_SRC_SAFE + 1)
+static _Atomic uint32_t s_release_pending[LINK_SRC_COUNT];
 
 static SemaphoreHandle_t s_lock;   /* guards s_arb and s_target */
 static link_arb_t        s_arb = { .owner = LINK_SRC_NONE, .until_ms = 0, .sticky = false };
@@ -27,6 +37,9 @@ static volatile bool     s_bus_ok = true;
    prints; blocking there also meant a timeout reported "none" while someone was
    actively holding. */
 static volatile link_src_t s_owner_pub = LINK_SRC_NONE;
+/* The serial of the grant s_owner_pub describes, published beside it for link_release_must,
+   which has just failed to take the lock and needs to say WHICH grant it meant. */
+static _Atomic uint32_t    s_serial_pub;
 
 static uint32_t now_ms(void) {
     return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
@@ -51,6 +64,7 @@ bool link_set(link_src_t src, const uint16_t duty[8], uint32_t hold_ms, bool sti
     }
     link_src_t owner = s_arb.owner;
     s_owner_pub = owner;
+    atomic_store(&s_serial_pub, s_arb.serial);
     xSemaphoreGive(s_lock);
 
     if (!granted) {
@@ -82,6 +96,13 @@ bool link_release(link_src_t src) {
 }
 
 bool link_release_must(link_src_t src) {
+    if (src < 0 || src >= LINK_SRC_COUNT) {
+        /* LINK_SRC_NONE, or garbage. No caller passes it today, but link_owner() returns it and
+           link_release_must(link_owner()) is a natural thing to write; indexing the queue with
+           -1 would be undefined behaviour with no diagnostic. Nothing owns "nothing", so there
+           is nothing to release, and true is the honest answer. */
+        return true;
+    }
     if (link_release(src)) return true;
     vTaskDelay(1);   /* the lock is held across a memcpy, never across a wait */
     if (link_release(src)) return true;
@@ -94,7 +115,11 @@ bool link_release_must(link_src_t src) {
        car_drive refused until a power cycle. Thirteen of the fifteen call sites dropped this
        return on the floor, which link.h warned against — the warning was right, and needing it
        was the real defect. A queued release completes within one tick. */
-    atomic_fetch_or(&s_release_pending, 1u << (int)src);
+    /* The serial as last published. If a link_set is granting a NEWER one right now, this
+       release is aimed at the old grant — which is gone — and the drain will correctly do
+       nothing; whoever took the new grant releases it. */
+    uint32_t serial = atomic_load(&s_serial_pub);
+    atomic_store(&s_release_pending[src], serial != 0u ? serial : 1u);
     ESP_LOGW(TAG, "%s could not take the lock to release the actuator — queued for the "
                   "actuator task", link_src_name(src));
     return false;
@@ -119,15 +144,17 @@ static void link_task(void *arg) {
         /* Finish the releases link_release_must could not. Drained before the lapse check
            below, so a grant given up this tick falls to the safe target on this tick rather
            than on the next one. */
-        uint32_t owed = atomic_exchange(&s_release_pending, 0u);
-        while (owed) {
-            int bit = __builtin_ctz(owed);
-            owed &= owed - 1u;
-            if (s_arb.owner == (link_src_t)bit) {
-                link_arb_release(&s_arb, (link_src_t)bit);
+        for (int src = 0; src < LINK_SRC_COUNT; src++) {
+            uint32_t want = atomic_exchange(&s_release_pending[src], 0u);
+            if (want == 0u) continue;
+            if (s_arb.owner == (link_src_t)src && s_arb.serial == want) {
+                link_arb_release(&s_arb, (link_src_t)src);
                 memset(s_target, 0, sizeof(s_target));
                 s_owner_pub = LINK_SRC_NONE;
             }
+            /* Otherwise the grant this was aimed at is already gone — released by its owner
+               on the retry, lapsed, or replaced by a newer one. Nothing to do, and nothing
+               to keep. */
         }
         /* An expired grant means nobody is driving: fall to zero rather than holding
            the last command, which is what "ownership lapses" has to mean physically. */
@@ -138,6 +165,33 @@ static void link_task(void *arg) {
         }
         memcpy(tgt, s_target, sizeof(tgt));
         xSemaphoreGive(s_lock);
+
+        /* Nothing is written while the boards are not up, and bringing them up is retried
+           from here. pca9685_ready() used to be set once per boot: a single NACK inside the
+           init's ten register writes — a marginal bus at power-on — pinned bus_ok false for the
+           whole session, while every later write ACKed and the wheels turned anyway on a warm
+           reset. Two lies at once. Gating the writes makes the protocol's "bus_ok false means
+           the car will not drive" true by construction, and retrying the init makes a
+           transient fault cost a second instead of a power cycle.
+
+           Zeroed first, always. The init ends in RESTART, which resumes every channel at its
+           register contents — so the registers are made zero before it, and the shadows are
+           made zero after it succeeds, and the two agree. zero_all is safe in every state
+           (the LED registers are writable asleep) and is the direction of safety anyway. */
+        if (!pca9685_ready()) {
+            static uint32_t s_init_at;
+            uint32_t inow = now_ms();
+            if (s_init_at == 0u || (int32_t)(inow - s_init_at) >= 0) {
+                s_init_at = inow + 1000u;
+                pca9685_zero_all();
+                if (pca9685_init(BOARD_PWM_HZ) == ESP_OK) {
+                    memset(s_current, 0, sizeof(s_current));
+                    ESP_LOGI(TAG, "PCA9685 boards are up");
+                }
+            }
+            s_bus_ok = false;
+            continue;
+        }
 
         uint16_t up = ramp_max_up_per_tick(ramp_get_ms(), LINK_TICK_MS);
         uint16_t next[8];
@@ -187,9 +241,10 @@ static void link_task(void *arg) {
            wheels could not turn, and bus_ok latched true. That removed the one signal the app
            has, and contradicted the contract CLAUDE.md states: a motor bus that did not come
            up boots with bus_ok false and the motors inert. pca9685_ready() is the question
-           worth asking; whether a write was ACKed is not. */
-        if (failed || !pca9685_ready()) s_bus_ok = false;
-        else if (wrote)                 s_bus_ok = true;
+           worth asking — and it is asked at the top of the tick, where a "no" also skips the
+           writes and retries the init, so this line only ever runs on boards that are up. */
+        if (failed)      s_bus_ok = false;
+        else if (wrote)  s_bus_ok = true;
 
         /* A wedged bus fails eight channels fifty times a second — but each failing
            write BLOCKS for up to two 50 ms I2C timeouts, so a "tick" under the exact

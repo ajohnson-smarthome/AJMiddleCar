@@ -33,6 +33,9 @@ typedef enum {
     WIFI_EV_CONFIGURED,    /* a POST /net arrived with a network to join */
     WIFI_EV_DISCONNECTED,  /* association lost, or an attempt failed */
     WIFI_EV_GOT_IP,        /* DHCP completed — the only event that means "usable" */
+    WIFI_EV_ABORTED,       /* wifi_sta_join could not even ask the radio: the old association
+                              is already torn down and no request is in flight. Nothing will
+                              retry until a new configuration arrives. */
 } wifi_ev_t;
 
 /* Five attempts is a judgement, not a measurement: enough to ride out a car still booting its

@@ -70,27 +70,77 @@ static void test_a_new_configuration_leaves_failed(void)
     check(sm.state == WIFI_JOINING, "a new POST leaves failed");
 }
 
+/* The budget is counted in CONNECT REQUESTS, because that is what a "join attempt" is. From
+ * CONFIGURED the first request is wifi_sta_join's own esp_wifi_connect and the machine issues
+ * four more (four `true`s) before giving up: five. From a drop the machine issues the first
+ * request itself — the drop's DISCONNECTED returns true — so a fresh budget is five `true`s
+ * from the drop onward, and the counter behind them must open at 0, not 1.
+ *
+ * This test used to count DISCONNECTED EVENTS instead, and defended attempts = 1 on the drop
+ * by name. Event-counting made the two entry points look alike while they were not: a
+ * reconnect got four connects to CONFIGURED's five, and the panel — which renders the
+ * ordinal attempts + 1 — opened a reconnect at «Попытка 2 из 5» with nothing having failed
+ * yet. */
 static void test_a_dropped_link_rejoins_with_a_full_budget(void)
 {
     wifi_sm_t sm;
     wifi_state_init(&sm);
     wifi_state_step(&sm, WIFI_EV_CONFIGURED);
     wifi_state_step(&sm, WIFI_EV_GOT_IP);
-    check(wifi_state_step(&sm, WIFI_EV_DISCONNECTED), "a dropped link retries");
+
+    int connects = 0;
+    if (wifi_state_step(&sm, WIFI_EV_DISCONNECTED)) connects++;
     check(sm.state == WIFI_JOINING, "a dropped link goes back to joining");
-    /* A link that worked once gets the whole budget again, not the remainder of an old one:
-       the car powering off and on is the ordinary case, not an escalating failure. */
-    for (int i = 2; i < WIFI_JOIN_ATTEMPTS; i++) {
-        check(wifi_state_step(&sm, WIFI_EV_DISCONNECTED), "the budget restarted");
+    check(sm.attempts == 0, "and opens a fresh budget: none consumed yet");
+
+    while (sm.state == WIFI_JOINING) {
+        if (wifi_state_step(&sm, WIFI_EV_DISCONNECTED)) connects++;
     }
-    check(sm.state == WIFI_JOINING, "still joining at the end of a full budget");
-    /* Five DISCONNECTEDs total since the reconnect (the one above the loop, plus the loop's
-       three, plus this one) is the claim itself: a fresh budget of WIFI_JOIN_ATTEMPTS, not
-       the remainder of the one spent before GOT_IP. A bug that granted attempts = 0 instead
-       of 1 on reconnect would still pass every check above; only running the budget to
-       exhaustion catches it. */
-    check(!wifi_state_step(&sm, WIFI_EV_DISCONNECTED), "the restarted budget still runs out");
     check(sm.state == WIFI_FAILED, "a full fresh budget ends in failed, same as the first one");
+    check(connects == WIFI_JOIN_ATTEMPTS, "five connect requests after a drop, not four");
+}
+
+/* The same count from CONFIGURED, so the two entry points are pinned to the same number: one
+ * connect that wifi_sta_join issues outside the machine, plus every `true` the machine
+ * returns. */
+static void test_a_configured_join_gets_the_same_budget(void)
+{
+    wifi_sm_t sm;
+    wifi_state_init(&sm);
+    int connects = wifi_state_step(&sm, WIFI_EV_CONFIGURED) ? 1 : 0;
+    while (sm.state == WIFI_JOINING) {
+        if (wifi_state_step(&sm, WIFI_EV_DISCONNECTED)) connects++;
+    }
+    check(connects == WIFI_JOIN_ATTEMPTS, "five connect requests from a configuration");
+}
+
+/* wifi_sta_join can fail between tearing the old association down and asking for the new
+ * one — esp_wifi_set_config or esp_wifi_connect refusing. The radio is then idle with no
+ * request in flight and nothing coming to retry it, and the machine has to say so: not
+ * "connected" to a link that was just dropped, not "joining" with nothing joining. FAILED is
+ * the state whose meaning that already is — no further attempts until a new configuration. */
+static void test_an_aborted_join_is_failed_from_anywhere(void)
+{
+    wifi_sm_t sm;
+
+    wifi_state_init(&sm);
+    wifi_state_step(&sm, WIFI_EV_CONFIGURED);
+    wifi_state_step(&sm, WIFI_EV_GOT_IP);
+    check(!wifi_state_step(&sm, WIFI_EV_ABORTED), "an abort asks for no connect");
+    check(sm.state == WIFI_FAILED, "an abort from connected is failed, not connected");
+
+    wifi_state_init(&sm);
+    wifi_state_step(&sm, WIFI_EV_CONFIGURED);
+    check(!wifi_state_step(&sm, WIFI_EV_ABORTED), "an abort asks for no connect");
+    check(sm.state == WIFI_FAILED, "an abort from joining is failed, not joining");
+
+    wifi_state_init(&sm);
+    wifi_state_step(&sm, WIFI_EV_ABORTED);
+    check(sm.state == WIFI_FAILED, "an abort before anything was ever configured is failed");
+
+    /* And a new configuration still leaves it, like every other FAILED. */
+    check(wifi_state_step(&sm, WIFI_EV_CONFIGURED), "a re-POST retries");
+    check(sm.state == WIFI_JOINING && sm.attempts == 0, "with the whole budget");
 }
 
 static void test_a_late_address_leaves_failed(void)
@@ -144,6 +194,8 @@ int main(void)
     test_failed_is_held();
     test_a_new_configuration_leaves_failed();
     test_a_dropped_link_rejoins_with_a_full_budget();
+    test_a_configured_join_gets_the_same_budget();
+    test_an_aborted_join_is_failed_from_anywhere();
     test_a_late_address_leaves_failed();
     test_renewal_does_not_disturb_connected();
     test_names_are_the_contract_s();

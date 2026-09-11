@@ -1,4 +1,5 @@
 #include "wheel.h"
+#include <stdint.h>
 #include <stdio.h>
 #include "cJSON.h"
 #include "cfg_json.h"
@@ -39,8 +40,14 @@ void wheel_init(void) {
     if (cfg_json_load("wheel", buf, sizeof(buf))) {
         cJSON *j = cJSON_Parse(buf);
         int d, ppr, gear, quad;
+        /* Range-checked before narrowing, like ramp_init and car_init and unlike what this
+           did: (uint16_t)65556 is 20, a diameter wheel_set's clamp is happy to accept from a
+           blob that never said 20. Out of range falls back to the default, as a blob that
+           failed to parse would. */
         if (cfg_json_int(j, "diameter_mm", &d) && cfg_json_int(j, "ppr", &ppr) &&
-            cfg_json_int(j, "gear_x100", &gear) && cfg_json_int(j, "quad", &quad)) {
+            cfg_json_int(j, "gear_x100", &gear) && cfg_json_int(j, "quad", &quad) &&
+            d >= 0 && d <= UINT16_MAX && ppr >= 0 && ppr <= UINT16_MAX &&
+            gear >= 0 && gear <= UINT16_MAX && quad >= 0 && quad <= UINT8_MAX) {
             wheel_params_t w = { .diameter_mm = (uint16_t)d, .ppr = (uint16_t)ppr,
                                  .gear_x100 = (uint16_t)gear, .quad = (uint8_t)quad };
             wheel_set(&w);   // clamps + applies

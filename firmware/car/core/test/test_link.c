@@ -114,6 +114,17 @@ int main(void) {
         uint16_t tgt3[8] = { 0 };
         n = link_plan_writes(cur3, tgt3, 4095, next, order);
         assert(n == 2 && order[0] == 0 && order[1] == 1 && next[0] == 0);
+
+        /* An unknown shadow is not a value to ramp FROM. link.c marks a channel unknown when
+           a write fails, and ramp_step(0xFFFF, tgt) is an instant fall to tgt — so a single
+           NACK mid-ramp made the retry land the whole target in one tick, 273 -> 4095 with no
+           slew. The plan ramps from zero instead: the slowest possible rise, which is also the
+           only one that is safe when the chip's real duty is unknown. */
+        uint16_t cur4[8] = { LINK_SHADOW_UNKNOWN, 0, 0, 0, 0, 0, 0, 0 };
+        uint16_t tgt4[8] = { 4095, 0, 0, 0, 0, 0, 0, 0 };
+        n = link_plan_writes(cur4, tgt4, 273, next, order);
+        assert(n == 1 && order[0] == 0);
+        assert(next[0] == 273);   /* not 4095 */
     }
     /* A rise may not land while the pair-mate holds ANY duty on the chip — the
        unknown boot shadow counts as driving. */

@@ -92,12 +92,17 @@ esp_err_t pca9685_init(uint16_t pwm_freq_hz) {
     for (int i = 0; i < PCA_COUNT; i++) {
         ESP_RETURN_ON_ERROR(pca9685_write_reg(i, PCA9685_MODE1, PCA9685_MODE1_SLEEP),
                             TAG, "%s (0x%02x) sleep failed", s_name[i], s_addr[i]);
-        vTaskDelay(pdMS_TO_TICKS(5));
+        /* vTaskDelay(1), not pdMS_TO_TICKS(5): at CONFIG_FREERTOS_HZ=100 that macro is 0 and
+           the "5 ms" here and below never existed. The one below is the one that matters —
+           the datasheet wants 500 us for the oscillator to settle after SLEEP is cleared
+           before RESTART is written, and RESTART used to follow the wake by one register
+           read. A tick is 10 ms; at init, that is cheap. */
+        vTaskDelay(1);
         ESP_RETURN_ON_ERROR(pca9685_write_reg(i, PCA9685_PRESCALE, prescale),
                             TAG, "%s (0x%02x) prescale failed", s_name[i], s_addr[i]);
         ESP_RETURN_ON_ERROR(pca9685_write_reg(i, PCA9685_MODE1, PCA9685_MODE1_AI),
                             TAG, "%s (0x%02x) wake failed", s_name[i], s_addr[i]);
-        vTaskDelay(pdMS_TO_TICKS(5));
+        vTaskDelay(1);   /* the oscillator's 500 us, with room; see above */
 
         uint8_t mode1;
         ESP_RETURN_ON_ERROR(pca9685_read_reg(i, PCA9685_MODE1, &mode1),

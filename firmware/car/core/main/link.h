@@ -38,6 +38,7 @@ typedef struct {
     link_src_t owner;
     uint32_t   until_ms;   /* when a non-sticky grant expires */
     bool       sticky;     /* ownership ends only on release, never on time */
+    uint32_t   serial;     /* bumped on every grant; never 0 once anything was granted */
 } link_arb_t;
 
 /* Pure: is the actuator free at `now`?
@@ -57,6 +58,10 @@ static inline bool link_arb_grant(link_arb_t *a, link_src_t src, uint32_t now,
     a->owner    = src;
     a->until_ms = now + hold_ms;
     a->sticky   = sticky;
+    /* A new identity for every grant, so a release aimed at one grant cannot land on a later
+       one from the same source — link.c's queued releases are keyed on it. Skips 0 on wrap so
+       that 0 can keep meaning "no grant" there. */
+    a->serial = (a->serial + 1u == 0u) ? 1u : a->serial + 1u;
     return true;
 }
 
@@ -99,29 +104,51 @@ _Static_assert(LINK_SRC_SAFE + 2 == CTL_COUNT, "link_src_t and ctl_values disagr
  * scheduling gap; the RT_COMMAND_HZ stream refreshes the grant far inside it. */
 #define LINK_HOLD_RT_MS     ((uint32_t)RT_WATCHDOG_MS + LINK_TICK_MS)
 #define LINK_HOLD_CALIB_MS  600u   /* one identification pulse */
-/* One breadcrumb segment (recovery.h's RECOVER_SEG_MAX_MS = 250) plus a tick of slack, the
- * same shape as LINK_HOLD_RT_MS. Spelled here rather than included from recovery.h: link.h is
- * what recovery.h depends on, not the other way round.
+/* Two breadcrumb segments (recovery.h's RECOVER_SEG_MAX_MS = 250) plus a tick. Spelled here
+ * rather than included from recovery.h: link.h is what recovery.h depends on, not the other
+ * way round.
  *
  * RECOVER used to be sticky with no hold at all, which made the retreat the one streaming
  * source in the system with no time bound — a replay starved between a step and its release,
  * or a release that lost both lock races, left the last REVERSED command standing as the
- * actuator target with nothing to fall it to zero. It self-healed only because every other
- * source outranks RECOVER, i.e. only if somebody came back. RT and CALIB are both bounded by
- * their lapse; this is the retreat's. */
-#define LINK_HOLD_RECOVER_MS 270u
+ * actuator target with nothing to fall it to zero. RT and CALIB are both bounded by their
+ * lapse; this is the retreat's.
+ *
+ * TWO segments and not one-plus-a-tick, which is what this was first set to (270). The
+ * retreat's wait between steps is tick-aligned and wakes at exactly the segment's length, so
+ * the next car_drive(RECOVER) lands at 250 ms + whatever the scheduler adds — and the retreat
+ * task shares priority 5 with link_task's I2C pass and httpd's flash writes. One tick of slack
+ * lapsed the grant on any delay of 20 ms, zeroed the target, and made the next step re-ramp
+ * from nothing: most of the segment's distance lost, on every segment at the cap, which the
+ * first segment of every retreat is. The hold only exists to bound a STARVED replay, so
+ * doubling it costs nothing on a healthy one. */
+#define LINK_HOLD_RECOVER_MS (2u * 250u + LINK_TICK_MS)
+
+/* The shadow's "I do not know what the chip holds" value: at boot, and after a write the
+ * driver reported as failed (which may or may not have landed — see link.c). Nonzero, so
+ * link_rise_safe counts an unknown pair-mate as driving; unequal to every real duty, so a
+ * channel in this state is always planned again. */
+#define LINK_SHADOW_UNKNOWN 0xFFFFu
 
 /* Pure: plan one actuator tick. next[] receives every channel's post-ramp duty;
  * order[] receives the channels that need writing — every falling channel first, then
  * the rises — and the count is returned. Channel pairs are (0,1)(2,3)(4,5)(6,7), one
  * BTS7960 each (motors.h): a single ascending pass wrote a reversal's rise before its
- * pair-mate's fall, driving both bridge inputs for the I2C gap between them. */
+ * pair-mate's fall, driving both bridge inputs for the I2C gap between them.
+ *
+ * An unknown shadow ramps FROM ZERO, not from 0xFFFF. ramp_step treats any step down as
+ * instant, and 0xFFFF is above every target — so ramping from the sentinel handed the retry
+ * after a single failed write the full target in one tick (273 -> 4095 with no slew, verified
+ * in a host model). From zero is the slowest rise the ramp allows, which is also the only
+ * one that is safe when what the chip really holds is not known. The sentinel still counts
+ * as "differs from cur", so the channel is ordered with the falls and always written. */
 static inline uint8_t link_plan_writes(const uint16_t cur[8], const uint16_t tgt[8],
                                        uint16_t max_up, uint16_t next[8],
                                        uint8_t order[8]) {
     uint8_t n = 0;
     for (uint8_t ch = 0; ch < 8; ch++) {
-        next[ch] = ramp_step(cur[ch], tgt[ch], max_up);
+        uint16_t from = (cur[ch] == LINK_SHADOW_UNKNOWN) ? 0 : cur[ch];
+        next[ch] = ramp_step(from, tgt[ch], max_up);
         if (next[ch] < cur[ch]) order[n++] = ch;
     }
     for (uint8_t ch = 0; ch < 8; ch++) {

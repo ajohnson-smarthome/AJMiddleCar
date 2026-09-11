@@ -29,15 +29,30 @@ bool wifi_state_step(wifi_sm_t *sm, wifi_ev_t ev)
         sm->attempts = 0;
         return false;
 
+    case WIFI_EV_ABORTED:
+        /* From anywhere. The caller has already dropped whatever was associated and could not
+           issue the new request, so "connected" would name a link that is gone and "joining"
+           an attempt that does not exist. FAILED already means exactly what is true: not
+           connected, not trying, until the app configures again. The attempt count is left
+           alone — it is meaningless in FAILED and CONFIGURED resets it. */
+        sm->state = WIFI_FAILED;
+        return false;
+
     case WIFI_EV_DISCONNECTED:
         if (sm->state == WIFI_IDLE || sm->state == WIFI_FAILED) {
             return false;  /* nothing configured, or already given up — do not retry */
         }
         if (sm->state == WIFI_CONNECTED) {
             /* A link that worked once and dropped gets a fresh budget: a car switched off and
-               on again is the ordinary case, not an escalating failure. */
+               on again is the ordinary case, not an escalating failure.
+
+               attempts = 0, the same as CONFIGURED, because the budget counts CONNECT
+               REQUESTS and the drop is not one — the `true` returned here is what asks for
+               the first. This was 1, which cost a reconnect one of its five attempts and
+               opened the panel's ordinal at «Попытка 2 из 5» before anything had failed;
+               the test that defended it was counting events, not requests. */
             sm->state = WIFI_JOINING;
-            sm->attempts = 1;
+            sm->attempts = 0;
             return true;
         }
         sm->attempts++;

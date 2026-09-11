@@ -1,6 +1,7 @@
 #ifndef RELAY_STATS_H
 #define RELAY_STATS_H
 
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -25,9 +26,18 @@ typedef struct {
     uint32_t mark_ms;
     uint16_t to_car_x10;        /* packets per second x10, latched at the last sample */
     uint16_t to_phone_x10;
-    int      last_errno;        /* 0 when nothing has failed */
-    uint32_t errno_count;       /* repeats of last_errno, restarted when it changes */
-    uint32_t last_fail_ms;      /* when the last failure happened; 0 when none has */
+    /* _Atomic, the three of them, and that is what makes their ORDER mean anything. Two
+       readers test last_errno and then subtract from last_fail_ms, and relay_stats_failed
+       stores the stamp first so the pair a reader sees is consistent — but as plain ints
+       nothing held that order: the compiler may sink one independent store below another,
+       or hoist a load, and the reader gets errno with a stamp of 0 and reports the device's
+       whole uptime as the fault's age, on the first failure since boot, on the very frame
+       it appears. Sequentially consistent atomics (C11's default for a plain access to an
+       _Atomic object) pin the order on both sides. <stdatomic.h>, so the module stays
+       host-testable with -std=c11. */
+    _Atomic int      last_errno;    /* 0 when nothing has failed */
+    _Atomic uint32_t errno_count;   /* repeats of last_errno, restarted when it changes */
+    _Atomic uint32_t last_fail_ms;  /* when the last failure happened; 0 when none has */
     uint8_t  udp_used;
     uint8_t  tcp_used;
 } relay_stats_t;
@@ -51,7 +61,8 @@ void relay_stats_forwarded(relay_stats_t *s, bool to_car);
  * and the fault page and /status reported both as current. `last_fail_ms` is what separates
  * them: the record is kept AND its age is knowable, where clearing on success would have
  * thrown the record away and clearing on nothing at all kept a lie. The caller passes the
- * clock for the same reason relay_stats_sample does — this module has none of its own. */
+ * clock for the same reason relay_stats_sample does — this module has none of its own; every
+ * caller passes boot_ms() (dongle_clock.h), the one clock this firmware keeps. */
 void relay_stats_failed(relay_stats_t *s, int err, uint32_t now_ms);
 
 /* One per relay, not one taking both: the two run in different tasks, and a single setter

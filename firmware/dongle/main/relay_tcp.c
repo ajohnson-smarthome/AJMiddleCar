@@ -4,13 +4,13 @@
 #include <fcntl.h>
 
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 
 #include "dongle_contract.inc"
+#include "dongle_clock.h"
 #include "relay_stats.h"
 #include "tcp_pending.h"
 #include "usb_net.h"
@@ -108,6 +108,16 @@ typedef struct {
     int phone_sock;
     int car_sock;
     uint32_t connect_started_ms;    /* meaningful only while state == SLOT_CONNECTING */
+    /* Meaningful only while state == SLOT_CONNECTING: the phone's request is already queued
+     * in the socket buffer, so the phone side is no longer offered for reading until the slot
+     * is ACTIVE and pump_read can take it. Without this the slot spun: handle_connecting peeks
+     * with MSG_PEEK and leaves the bytes where they are, lwIP's select() is level-triggered on
+     * exactly those bytes (lwip_selscan: lastdata != NULL), and every pass returned at once
+     * with nothing to do — a priority-5 task at full speed for the whole connect, five seconds
+     * per slot while the car was off and the app kept polling, starving the idle task and the
+     * display. The cost is that a phone hanging up DURING the connect is noticed only when the
+     * connect resolves or its deadline fires, which RELAY_CONNECT_TIMEOUT_MS bounds. */
+    bool phone_queued;
     /* When this slot last moved a byte, in either direction. Set when the slot is created so
      * it is never stale, refreshed on every successful read and every successful write, and
      * read only while state == SLOT_ACTIVE — the same idiom relay_udp uses for its sessions,
@@ -121,22 +131,6 @@ typedef struct {
     uint32_t gateway_be;   /* network byte order, meaningful once the wait loop below returns */
     uint32_t host_be;      /* DONGLE_HOST, parsed once; network byte order */
 } relay_state_t;
-
-static uint32_t now_ms(void)
-{
-    return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-}
-
-/* All the millisecond fields in relay_stats_t are esp_timer milliseconds since boot — the same
- * clock display.c hands relay_stats_sample(). NOT the FreeRTOS tick count both relays use for
- * their own session and slot timers: the tick starts when the scheduler does, so the two differ
- * by the pre-scheduler boot interval, and a reader subtracting one from the other would get an
- * age wrong by that offset for free. One clock in this struct, so any reader with esp_timer can
- * subtract from any field in it. The extra read costs nothing here — this is a failure path. */
-static uint32_t stats_ms(void)
-{
-    return (uint32_t)(esp_timer_get_time() / 1000);
-}
 
 /* Every socket this relay opens is made non-blocking, here, right after it is created —
  * before it is ever added to a select() set. This file's design depends on it directly:
@@ -204,7 +198,7 @@ static void flush_pending(relay_state_t *r, int idx, int dst, tcp_pending_t *p,
     int w = send(dst, p->buf + p->off, (size_t)remaining, 0);
     if (w > 0) {
         tcp_pending_advance(p, w);
-        r->slots[idx].last_active_ms = now_ms();   /* bytes moved: the slot is not idle */
+        r->slots[idx].last_active_ms = boot_ms();   /* bytes moved: the slot is not idle */
         return;
     }
     if (w == 0 || (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
@@ -216,7 +210,7 @@ static void flush_pending(relay_state_t *r, int idx, int dst, tcp_pending_t *p,
          * stays; select() will say so again next pass if dst is still not ready. */
         return;
     }
-    relay_stats_failed(relay_stats_shared(), errno, stats_ms());
+    relay_stats_failed(relay_stats_shared(), errno, boot_ms());
     ESP_LOGW(TAG, "%s forwarding failed on slot %d: errno %d", label, idx, errno);
     close_slot(r, idx, "forwarding failed");
 }
@@ -243,13 +237,13 @@ static void pump_read(relay_state_t *r, int idx, int src, int dst, char *scratch
         /* A successful read is progress on its own, whatever the forward attempt below does:
          * a slot whose phone is talking must not age out because the car is momentarily
          * refusing more bytes. */
-        r->slots[idx].last_active_ms = now_ms();
+        r->slots[idx].last_active_ms = boot_ms();
         int w = send(dst, scratch, (size_t)n, 0);
         if (w == n) {
             return;   /* the common case: forwarded whole, nothing left pending */
         }
         if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-            relay_stats_failed(relay_stats_shared(), errno, stats_ms());
+            relay_stats_failed(relay_stats_shared(), errno, boot_ms());
             ESP_LOGW(TAG, "%s forwarding failed on slot %d: errno %d", label, idx, errno);
             close_slot(r, idx, "forwarding failed");
             return;
@@ -305,10 +299,8 @@ static void handle_accept(relay_state_t *r)
          * for as long as a client keeps retrying, so it is rate-limited like relay_udp.c's
          * per-datagram warnings rather than left to flood the sole UART console. */
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            static uint32_t last_log;
-            uint32_t t = now_ms();
-            if ((uint32_t)(t - last_log) > 1000) {
-                last_log = t;
+            static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
+            if (log_throttle_ok(&s_throttle, boot_ms())) {
                 ESP_LOGW(TAG, "accept: errno %d", errno);
             }
         }
@@ -331,10 +323,8 @@ static void handle_accept(relay_state_t *r)
          * refused connection and retries; a client held open by a relay with no capacity
          * sees a hang instead — worse, and harder to diagnose. Rate-limited: a client
          * retrying against a pool that stays genuinely full hits this every pass. */
-        static uint32_t last_log;
-        uint32_t t = now_ms();
-        if ((uint32_t)(t - last_log) > 1000) {
-            last_log = t;
+        static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
+        if (log_throttle_ok(&s_throttle, boot_ms())) {
             ESP_LOGW(TAG, "REST relay pool full (%d slots) — refusing a connection",
                      RELAY_POOL_SIZE);
         }
@@ -351,10 +341,8 @@ static void handle_accept(relay_state_t *r)
      * down. Refused here rather than survived. Rate-limited: a REST client that retries hits
      * this on every attempt for as long as such a network stays joined. */
     if (r->gateway_be == r->host_be) {
-        static uint32_t last_log;
-        uint32_t t = now_ms();
-        if ((uint32_t)(t - last_log) > 1000) {
-            last_log = t;
+        static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
+        if (log_throttle_ok(&s_throttle, boot_ms())) {
             ESP_LOGE(TAG, "refusing to relay to %s: the joined network names the dongle "
                           "itself as its gateway", DONGLE_HOST);
         }
@@ -367,10 +355,8 @@ static void handle_accept(relay_state_t *r)
         /* Rate-limited for the same reason as the accept() failure above: a genuinely
          * exhausted socket table fails this on every accepted connection a retrying client
          * sends. */
-        static uint32_t last_log;
-        uint32_t t = now_ms();
-        if ((uint32_t)(t - last_log) > 1000) {
-            last_log = t;
+        static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
+        if (log_throttle_ok(&s_throttle, boot_ms())) {
             ESP_LOGW(TAG, "upstream socket: errno %d", errno);
         }
         close(c);
@@ -403,14 +389,13 @@ static void handle_accept(relay_state_t *r)
         r->slots[idx].state = SLOT_ACTIVE;
     } else if (errno == EINPROGRESS) {
         r->slots[idx].state = SLOT_CONNECTING;
-        r->slots[idx].connect_started_ms = now_ms();
+        r->slots[idx].connect_started_ms = boot_ms();
+        r->slots[idx].phone_queued = false;
     } else {
         /* Rate-limited: a car actively refusing the port (ECONNREFUSED comes back fast, no
          * SYN retries involved) fails this on every attempt a retrying client makes. */
-        static uint32_t last_log;
-        uint32_t t = now_ms();
-        if ((uint32_t)(t - last_log) > 1000) {
-            last_log = t;
+        static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
+        if (log_throttle_ok(&s_throttle, boot_ms())) {
             ESP_LOGW(TAG, "upstream connect: errno %d", errno);
         }
         close(car);
@@ -422,7 +407,7 @@ static void handle_accept(relay_state_t *r)
     /* Seeded here rather than only on the SLOT_ACTIVE transition, so the idle deadline is
      * never read against an uninitialised (or a previous occupant's) timestamp — including on
      * the cr == 0 path just above, which goes straight to SLOT_ACTIVE. */
-    r->slots[idx].last_active_ms = now_ms();
+    r->slots[idx].last_active_ms = boot_ms();
 }
 
 /* One SLOT_CONNECTING slot, checked every pass regardless of what select() returned. Three
@@ -448,7 +433,7 @@ static void handle_connecting(relay_state_t *r, int i, bool had_ready, fd_set *r
 {
     tcp_slot_t *s = &r->slots[i];
 
-    if ((uint32_t)(now_ms() - s->connect_started_ms) >= RELAY_CONNECT_TIMEOUT_MS) {
+    if ((uint32_t)(boot_ms() - s->connect_started_ms) >= RELAY_CONNECT_TIMEOUT_MS) {
         /* Same wraparound-safe elapsed-time idiom as udp_sess_expire's: this subtraction
          * elapses correctly even across the millisecond counter's ~49.7-day wrap. */
         ESP_LOGW(TAG, "upstream connect timed out (slot %d)", i);
@@ -472,8 +457,11 @@ static void handle_connecting(relay_state_t *r, int i, bool had_ready, fd_set *r
             return;
         }
         /* n > 0: a real request byte is queued and MSG_PEEK left it untouched in the kernel
-         * buffer for pump_read to read for real once this slot goes ACTIVE. n < 0 with
-         * EAGAIN: a spurious wakeup: nothing to do. Either way, keep waiting on the car. */
+         * buffer for pump_read to read for real once this slot goes ACTIVE — and from now on
+         * the phone side stays out of readfds, or that untouched byte would wake every pass.
+         * n < 0 with EAGAIN: a spurious wakeup: nothing to do. Either way, keep waiting on
+         * the car. */
+        if (n > 0) s->phone_queued = true;
     }
 
     if (had_ready && FD_ISSET(s->car_sock, wfds)) {
@@ -491,7 +479,7 @@ static void handle_connecting(relay_state_t *r, int i, bool had_ready, fd_set *r
              * time spent waiting for the car to answer is already bounded by
              * RELAY_CONNECT_TIMEOUT_MS, and charging it twice would cut a legitimate
              * connection's first quiet period short. */
-            s->last_active_ms = now_ms();
+            s->last_active_ms = boot_ms();
         }
     }
 }
@@ -616,9 +604,13 @@ static void relay_task(void *arg)
                 /* connect() completion is observed as writability, not readability — see
                  * handle_accept's comment. The phone side is watched too, so a hangup mid-
                  * connect is noticed rather than pinning the slot until the connect deadline
-                 * — see handle_connecting. */
-                FD_SET(s->phone_sock, &rfds);
-                if (s->phone_sock > maxfd) maxfd = s->phone_sock;
+                 * — see handle_connecting — but only until its request has arrived: after
+                 * that, offering it would make select() return at once on every pass (see
+                 * phone_queued). */
+                if (!s->phone_queued) {
+                    FD_SET(s->phone_sock, &rfds);
+                    if (s->phone_sock > maxfd) maxfd = s->phone_sock;
+                }
                 FD_SET(s->car_sock, &wfds);
                 if (s->car_sock > maxfd) maxfd = s->car_sock;
             }
@@ -633,10 +625,8 @@ static void relay_task(void *arg)
              * is worse for the device than the fault being reported. Take the pass's wait
              * here instead, and rate-limit the line to the same 1 Hz as every other repeating
              * warning in this file. The deadline checks below still run every pass. */
-            static uint32_t last_log;
-            uint32_t t = now_ms();
-            if ((uint32_t)(t - last_log) > 1000) {
-                last_log = t;
+            static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
+            if (log_throttle_ok(&s_throttle, boot_ms())) {
                 ESP_LOGW(TAG, "select: errno %d", errno);
             }
             vTaskDelay(pdMS_TO_TICKS(RELAY_LOOP_MS));
@@ -666,7 +656,7 @@ static void relay_task(void *arg)
              * nothing, pass after pass, forever: a check gated on activity could never see
              * it. See RELAY_ACTIVE_IDLE_MS for the sizing, and note the same wraparound-safe
              * subtraction udp_sess_expire uses. */
-            if ((uint32_t)(now_ms() - s->last_active_ms) >= RELAY_ACTIVE_IDLE_MS) {
+            if ((uint32_t)(boot_ms() - s->last_active_ms) >= RELAY_ACTIVE_IDLE_MS) {
                 close_slot(&r, i, "idle timeout");
                 continue;
             }

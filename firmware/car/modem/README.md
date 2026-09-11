@@ -6,15 +6,16 @@ WiFi. This directory is that co-processor's home. It contains no source, and tha
 ## What runs on the C6
 
 Espressif's `esp_hosted` co-processor firmware — a network adapter. It knows nothing about this
-car: not the motors, not the protocol, not `/ws`. It carries 802.11 frames between the radio and
+car: not the motors, not the protocol, not the UDP control channel. It carries 802.11 frames between the radio and
 the P4 over SDIO, and that is all. The P4 calls the ordinary `esp_wifi` API; `esp_wifi_remote`
 marshals those calls across.
 
 **We do not author this image.** It is built from the exact `esp_hosted` version the host is
 pinned to in `firmware/car/core/main/idf_component.yml` — currently **3.0.6** — using the project that
 ships inside that component. Host and co-processor versions must match: `/status` reports what
-the C6 actually runs, `board.h` records what this firmware expects, and a mismatch shows up as
-`radio.ok: false` rather than as WiFi behaving strangely for no visible reason.
+the C6 actually runs, the expectation is derived at compile time from the pinned component's own
+version macros (so it cannot drift from `idf_component.yml` — `board.h` says where), and a
+mismatch shows up as `radio.ok: false` rather than as WiFi behaving strangely for no visible reason.
 
 There is no `CMakeLists.txt` here because there is nothing of ours to build. The image comes from
 `firmware/car/core/managed_components/espressif__esp_hosted/examples/wifi/sta/cp`, which arrives with

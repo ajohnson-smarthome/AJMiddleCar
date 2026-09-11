@@ -4,13 +4,13 @@
 #include <fcntl.h>
 
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 
 #include "dongle_contract.inc"
+#include "dongle_clock.h"
 #include "relay_stats.h"
 #include "udp_sess.h"
 #include "usb_net.h"
@@ -55,22 +55,6 @@ typedef struct {
     uint32_t gateway_be;   /* network byte order, meaningful once the wait loop below returns */
     uint32_t host_be;      /* DONGLE_HOST, parsed once; network byte order */
 } relay_state_t;
-
-static uint32_t now_ms(void)
-{
-    return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-}
-
-/* All the millisecond fields in relay_stats_t are esp_timer milliseconds since boot — the same
- * clock display.c hands relay_stats_sample(). NOT the FreeRTOS tick count both relays use for
- * their own session and slot timers: the tick starts when the scheduler does, so the two differ
- * by the pre-scheduler boot interval, and a reader subtracting one from the other would get an
- * age wrong by that offset for free. One clock in this struct, so any reader with esp_timer can
- * subtract from any field in it. The extra read costs nothing here — this is a failure path. */
-static uint32_t stats_ms(void)
-{
-    return (uint32_t)(esp_timer_get_time() / 1000);
-}
 
 /* Every socket this relay opens is made non-blocking, here, right after it is created —
  * before it is ever added to a select() set. Without this, a socket that select() marked
@@ -121,10 +105,8 @@ static int open_car_sock(uint32_t gateway_be, uint32_t host_be)
      * streaming at 10 Hz would otherwise put this on the sole UART console ten times a
      * second for the whole time such a network stays joined. */
     if (gateway_be == host_be) {
-        static uint32_t last_log;
-        uint32_t t = now_ms();
-        if ((uint32_t)(t - last_log) > 1000) {
-            last_log = t;
+        static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
+        if (log_throttle_ok(&s_throttle, boot_ms())) {
             ESP_LOGE(TAG, "refusing to relay to %s: the joined network names the dongle "
                           "itself as its gateway", DONGLE_HOST);
         }
@@ -183,7 +165,7 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
         }
     }
 
-    int idx = udp_sess_touch(&r->sess, addr, port, now_ms());
+    int idx = udp_sess_touch(&r->sess, addr, port, boot_ms());
 
     if (is_new) {
         /* A slot won by eviction can still carry the socket of the peer it displaced. */
@@ -192,17 +174,15 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
     }
 
     if (send(r->car_sock[idx], buf, (size_t)n, 0) < 0) {
-        relay_stats_failed(relay_stats_shared(), errno, stats_ms());
+        relay_stats_failed(relay_stats_shared(), errno, boot_ms());
         /* Rate-limited: a Wi-Fi drop fails every send, and udp_sess_touch (above) refreshes
          * this session's deadline on every phone datagram regardless of whether the send that
          * follows succeeds — so the session cannot age out while the phone keeps streaming,
          * and an unthrottled log here would be one ESP_LOGW per datagram, at 10 Hz, on the
          * dongle's sole UART console, for the whole outage. Same idiom as rt_link.c's
          * last_log. */
-        static uint32_t last_log;
-        uint32_t t = now_ms();
-        if ((uint32_t)(t - last_log) > 1000) {
-            last_log = t;
+        static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
+        if (log_throttle_ok(&s_throttle, boot_ms())) {
             ESP_LOGW(TAG, "phone->car send failed on slot %d: errno %d", idx, errno);
         }
     } else {
@@ -222,12 +202,10 @@ static void handle_car_datagram(relay_state_t *r, int idx, const char *buf, int 
         .sin_port = htons(s->port),
     };
     if (sendto(r->phone_sock, buf, (size_t)n, 0, (struct sockaddr *)&to, sizeof(to)) < 0) {
-        relay_stats_failed(relay_stats_shared(), errno, stats_ms());
+        relay_stats_failed(relay_stats_shared(), errno, boot_ms());
         /* Rate-limited for the same reason as the phone->car send above. */
-        static uint32_t last_log;
-        uint32_t t = now_ms();
-        if ((uint32_t)(t - last_log) > 1000) {
-            last_log = t;
+        static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
+        if (log_throttle_ok(&s_throttle, boot_ms())) {
             ESP_LOGW(TAG, "car->phone send failed on slot %d: errno %d", idx, errno);
         }
     } else {
@@ -237,7 +215,7 @@ static void handle_car_datagram(relay_state_t *r, int idx, const char *buf, int 
 
 static void expire_sessions(relay_state_t *r)
 {
-    uint32_t freed = udp_sess_expire(&r->sess, now_ms(), UDP_SESS_IDLE_MS);
+    uint32_t freed = udp_sess_expire(&r->sess, boot_ms(), UDP_SESS_IDLE_MS);
     for (int i = 0; i < UDP_SESS_MAX; i++) {
         if (freed & (1u << i)) close_car_sock(r, i);
     }
@@ -388,10 +366,8 @@ static void relay_task(void *arg)
              * is worse for the device than the fault being reported. Take the pass's wait
              * here instead, and rate-limit the line to the same 1 Hz as this file's other
              * repeating warnings. expire_sessions below still runs every pass. */
-            static uint32_t last_log;
-            uint32_t t = now_ms();
-            if ((uint32_t)(t - last_log) > 1000) {
-                last_log = t;
+            static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
+            if (log_throttle_ok(&s_throttle, boot_ms())) {
                 ESP_LOGW(TAG, "select: errno %d", errno);
             }
             vTaskDelay(pdMS_TO_TICKS(RELAY_LOOP_MS));
