@@ -450,12 +450,12 @@ static void diag_page_fault(const dongle_view_t *v, screen_t *out)
     if (v->last_errno == 0) {
         /* No fault reads as "none" — "нет" — never as the digit 0, which would read as an
          * errno of zero rather than the absence of one. */
-        put_row_lr(out, 0, "errno", "нет");
+        put_row_lr(out, 0, "Ошибки", "нет");
     } else {
         /* errno_count is a uint32_t that only resets when the errno TYPE changes, never on
          * success, so a fault that never clears counts for as long as the dongle stays up —
-         * roughly 77 to 116 days of continuous failure at 10-15/s before it reaches the
-         * clamp below. errno itself is a small POSIX code in practice, never triple digits
+         * roughly eight to thirteen hours of continuous failure at 10-15/s before it
+         * reaches the clamp below. errno itself is a small POSIX code in practice, never triple digits
          * on this port, but clamped anyway rather than trusted to stay that way. Both are
          * bounded for display, with a trailing '+' marking a clamped count, so the row's
          * width is bounded by construction rather than by how long a fault has been
@@ -463,12 +463,15 @@ static void diag_page_fault(const dongle_view_t *v, screen_t *out)
         int err_disp = v->last_errno;
         if (err_disp < 0) err_disp = 0;
         if (err_disp > 999) err_disp = 999;
+        /* Four digits, not five: «Ошибки» is a glyph longer than the «errno» this row used to
+         * be labelled with, and 999 x99999+ 99ч beside it was one glyph past the budget. Past
+         * 9999 repeats the exact figure has stopped being the interesting thing. */
         uint32_t count = v->errno_count;
         const char *plus = "";
-        if (count > 99999u) { count = 99999u; plus = "+"; }
+        if (count > 9999u) { count = 9999u; plus = "+"; }
 
         /* Three glyphs at most, which is what lets this row hold all three clamped fields:
-         * 999 + x99999+ + 99ч beside a five-glyph label comes to exactly the row's budget.
+         * 999 + x9999+ + 99ч beside a six-glyph label comes to exactly the row's budget.
          * Under a minute reads «<1м» rather than a count of seconds — the question this
          * answers is "is it failing NOW", and any answer inside a minute means yes. Past 99
          * hours it clamps without a marker, unlike the repeat count above: at that age "very
@@ -482,7 +485,7 @@ static void diag_page_fault(const dongle_view_t *v, screen_t *out)
         else                                 snprintf(age, sizeof(age), "99ч");
 
         snprintf(val, sizeof(val), "%d x%u%s %s", err_disp, (unsigned)count, plus, age);
-        put_row_lr(out, 0, "errno", val);
+        put_row_lr(out, 0, "Ошибки", val);
     }
 
     /* uptime_s is a uint32_t seconds counter with the identical shape: unclamped, the hours

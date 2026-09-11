@@ -423,6 +423,7 @@ static void test_a_faulted_relay_names_the_errno_and_the_repeats(void)
     screen_t s;
     screens_diag(&v, 4, &s);
     check(strstr(s.row[0], "12") && strstr(s.row[0], "1483"), "the fault and how often");
+    check(strstr(s.row[0], "Ошибки") != NULL, "labelled in the panel's own language, not the libc's");
 }
 
 /* Every earlier test that measured the fault page left last_errno at zero, so it only ever
@@ -433,13 +434,18 @@ static void test_the_fault_row_stays_in_budget_at_its_widest(void)
 {
     dongle_view_t v = base();
     v.last_errno = 12345;        /* clamps to 999 */
-    v.errno_count = 999999999u;  /* clamps to 99999, marked with a trailing '+' */
+    v.errno_count = 999999999u;  /* clamps to 9999, marked with a trailing '+' */
     v.fault_age_s = 4000u * 3600u;  /* clamps to 99ч — the third clamped field on this row */
     screen_t s;
     screens_diag(&v, 4, &s);
     check(glyphs(s.row[0]) <= 21, "the fault row fits even past both clamps");
     check(strstr(s.row[0], "999") != NULL, "errno clamps to three digits");
-    check(strstr(s.row[0], "99999+") != NULL, "the count clamps and marks that it did");
+    check(strstr(s.row[0], "9999+") != NULL && strstr(s.row[0], "99999") == NULL,
+          "the count clamps at four digits and marks that it did");
+    /* Exactly the budget, not merely inside it: «Ошибки» is six glyphs, the widest value —
+     * 999 x9999+ 99ч — fourteen, and one space between them is what put_row_lr leaves when
+     * the pair fills the row. The count's old clamp at five digits was one glyph too many. */
+    check(glyphs(s.row[0]) == 21, "the widest fault row fills the row to the glyph");
 }
 
 /* Same shape, same reason: uptime_s is unbounded too, and every earlier test left it at zero. */
