@@ -63,11 +63,11 @@ static dongle_view_t base(void)
     return v;
 }
 
-/* Ruling: the five network states alone leave SCREEN_SPLASH, SCREEN_SIGNAL, SCREEN_NO_HOST,
+/* Ruling: the five network states alone leave SCREEN_SPLASH, the signal page, SCREEN_NO_HOST,
  * SCREEN_ROLLED_BACK, SCREEN_UPDATING and SCREEN_DIAG untouched by any glyph assertion — a
  * screen exempted from this check is a screen that will overflow on real glass, where nobody
  * will be watching a test. This extends the check to all eleven, driving screens_for for the
- * splash (an unrecognised state falls back to it) and calling screens_signal directly, since
+ * splash (an unrecognised state falls back to it) and calling screens_diag(…, 0) directly, since
  * neither is reachable through the ordinary state precedence a base() view walks. */
 static void test_every_headline_fits_twelve_characters(void)
 {
@@ -120,7 +120,7 @@ static void test_every_headline_fits_twelve_characters(void)
         check_fits(&s);
     }
 
-    /* SCREEN_SIGNAL — reached only by paging with BOOT, never through screens_for. */
+    /* The signal page — diagnostics page 0, reached only by paging with BOOT, never through screens_for. */
     {
         dongle_view_t v = base();
         screens_history_t h;
@@ -128,8 +128,8 @@ static void test_every_headline_fits_twelve_characters(void)
         screens_history_push(&h, -60);
         v.history = &h;
         screen_t s;
-        screens_signal(&v, &s);
-        check(s.id == SCREEN_SIGNAL, "signal");
+        screens_diag(&v, 0, &s);
+        check(s.id == SCREEN_DIAG && s.page == 0 && s.gauge == GAUGE_HISTORY, "the signal is diagnostics page 0, with the strip");
         check_fits(&s);
     }
 
@@ -268,11 +268,11 @@ static void test_a_dropped_link_reports_no_reading_rather_than_a_perfect_one(voi
     v.channel = 0;
     screen_t s;
 
-    screens_signal(&v, &s);
+    screens_diag(&v, 0, &s);
     check(strstr(s.row[0], "dBm") == NULL, "«Сигнал» prints no level it does not have");
     check(strstr(s.row[0], "нет") != NULL, "it says there is none");
 
-    screens_diag(&v, 1, &s);
+    screens_diag(&v, 2, &s);
     /* The label and the sentinel, not the exact run of spaces between them. Pinning the whole
      * literal pinned the hand-counted padding — which lined these two rows up only because both
      * «нет» rows happen to be the same width, and pulled a real reading apart the moment they
@@ -304,11 +304,11 @@ static void test_an_unfilled_history_reports_no_minimum(void)
     screens_history_init(&h);
     v.history = &h;
     screen_t s;
-    screens_signal(&v, &s);
+    screens_diag(&v, 0, &s);
     check(strstr(s.row[0], "мин нет") != NULL, "no worst yet, rather than a worst of zero");
 
     screens_history_push(&h, -71);
-    screens_signal(&v, &s);
+    screens_diag(&v, 0, &s);
     check(strstr(s.row[0], "мин -71") != NULL, "and the real one once there is one");
 }
 
@@ -321,7 +321,7 @@ static void test_rssi_maps_over_the_range_that_matters(void)
     check(screens_rssi_pct(-120) == 0, "weaker than the range clamps");
 }
 
-static void test_diagnostics_pages_are_four_and_wrap(void)
+static void test_diagnostics_pages_are_five_with_the_signal_first(void)
 {
     dongle_view_t v = base();
     v.ip_msb_first = 0xC0A80402; v.gw_msb_first = 0xC0A80401;   /* 192.168.4.2, 192.168.4.1 */
@@ -331,16 +331,29 @@ static void test_diagnostics_pages_are_four_and_wrap(void)
      * so that is the row the glyph limit below must hold at, not an empty one. */
     v.to_car_x10 = 100;
     v.to_phone_x10 = 50;
-    check(screens_diag_pages() == 4, "four pages");
-    for (uint8_t p = 0; p < 4; p++) {
+    screens_history_t h;
+    screens_history_init(&h);
+    screens_history_push(&h, -60);
+    v.history = &h;
+
+    check(screens_diag_pages() == 5, "five pages");
+    for (uint8_t p = 0; p < 5; p++) {
         dongle_view_t d = v;
         d.state = DONGLE_STATE_CONNECTED;
         screen_t s;
         screens_diag(&d, p, &s);
         check(s.id == SCREEN_DIAG, "diagnostics");
         check(strcmp(s.head, "Диагностика") == 0, "the same headline on every page");
-        check(s.pages == 4 && s.page == p, "the markers say which page");
+        check(s.pages == 5 && s.page == p, "the markers say which page");
         check(glyphs(s.row[0]) <= 21 && glyphs(s.row[1]) <= 21, "rows fit");
+        if (p == 0) {
+            /* The signal page: the history strip under the page markers, and ONE row — the
+             * strip takes the room the second row would have had. */
+            check(s.gauge == GAUGE_HISTORY, "page 0 draws the history strip");
+            check(s.row[0][0] != '\0' && s.row[1][0] == '\0', "page 0 has one row, under the strip");
+        } else {
+            check(s.gauge == GAUGE_NONE, "the reference pages draw no gauge");
+        }
     }
 
     /* The clamp: to_car_x10/to_phone_x10 are each a uint16_t and can reach 6553, far past the
@@ -353,7 +366,7 @@ static void test_diagnostics_pages_are_four_and_wrap(void)
         d.to_car_x10 = 6553;
         d.to_phone_x10 = 1200;
         screen_t s;
-        screens_diag(&d, 2, &s);
+        screens_diag(&d, 3, &s);
         check(glyphs(s.row[0]) <= 21 && glyphs(s.row[1]) <= 21, "rows fit even at the clamp");
         check(strstr(s.row[1], "99.9 / 99.9") != NULL, "both rates clamp at 99.9");
     }
@@ -364,7 +377,7 @@ static void test_a_quiet_relay_reports_no_error(void)
     dongle_view_t v = base();
     v.last_errno = 0;
     screen_t s;
-    screens_diag(&v, 3, &s);
+    screens_diag(&v, 4, &s);
     check(strstr(s.row[0], "нет") != NULL, "no fault reads as none, not as zero");
 }
 
@@ -408,7 +421,7 @@ static void test_a_faulted_relay_names_the_errno_and_the_repeats(void)
     v.last_errno = 12;
     v.errno_count = 1483;
     screen_t s;
-    screens_diag(&v, 3, &s);
+    screens_diag(&v, 4, &s);
     check(strstr(s.row[0], "12") && strstr(s.row[0], "1483"), "the fault and how often");
 }
 
@@ -423,7 +436,7 @@ static void test_the_fault_row_stays_in_budget_at_its_widest(void)
     v.errno_count = 999999999u;  /* clamps to 99999, marked with a trailing '+' */
     v.fault_age_s = 4000u * 3600u;  /* clamps to 99ч — the third clamped field on this row */
     screen_t s;
-    screens_diag(&v, 3, &s);
+    screens_diag(&v, 4, &s);
     check(glyphs(s.row[0]) <= 21, "the fault row fits even past both clamps");
     check(strstr(s.row[0], "999") != NULL, "errno clamps to three digits");
     check(strstr(s.row[0], "99999+") != NULL, "the count clamps and marks that it did");
@@ -435,7 +448,7 @@ static void test_the_uptime_row_stays_in_budget_at_its_clamp(void)
     dongle_view_t v = base();
     v.uptime_s = 0xFFFFFFFFu;  /* far past the ~11.4-year trigger for a 6th hour digit */
     screen_t s;
-    screens_diag(&v, 3, &s);
+    screens_diag(&v, 4, &s);
     check(glyphs(s.row[1]) <= 21, "the uptime row fits even at the clamp");
     check(strstr(s.row[1], "99999:") != NULL, "the hours field clamps");
 }
@@ -468,7 +481,7 @@ static void test_the_address_rows_stay_in_budget_at_their_widest(void)
     v.ip_msb_first = 0xFFFFFFFFu;
     v.gw_msb_first = 0xFFFFFFFFu;
     screen_t s;
-    screens_diag(&v, 0, &s);
+    screens_diag(&v, 1, &s);
     check(glyphs(s.row[0]) <= 21, "the address row fits at its widest");
     check(glyphs(s.row[1]) <= 21, "the gateway row fits at its widest");
 }
@@ -491,7 +504,7 @@ static void test_diagnostic_rows_share_one_width_so_centring_aligns_them(void)
     v.last_errno = 12;
     v.errno_count = 3;
     v.uptime_s = 4567;
-    for (uint8_t p = 0; p < screens_diag_pages(); p++) {
+    for (uint8_t p = 1; p < screens_diag_pages(); p++) {   /* page 0 has one row and the strip */
         screen_t s;
         screens_diag(&v, p, &s);
         check(glyphs(s.row[0]) == glyphs(s.row[1]), "both rows of a page are one width");
@@ -511,21 +524,21 @@ static void test_the_fault_row_says_how_long_ago(void)
     screen_t s;
 
     v.fault_age_s = 5;
-    screens_diag(&v, 3, &s);
+    screens_diag(&v, 4, &s);
     check(strstr(s.row[0], "<1м") != NULL, "a failure seconds old reads as just now");
 
     v.fault_age_s = 7 * 60 + 30;
-    screens_diag(&v, 3, &s);
+    screens_diag(&v, 4, &s);
     check(strstr(s.row[0], "7м") != NULL, "minutes, rounded down");
 
     v.fault_age_s = 3 * 3600 + 100;
-    screens_diag(&v, 3, &s);
+    screens_diag(&v, 4, &s);
     check(strstr(s.row[0], "3ч") != NULL, "hours, rounded down");
 
     /* Past the clamp a fault reads as very old rather than as a wider row: at this age the
      * exact figure has stopped being the interesting thing. */
     v.fault_age_s = 4000u * 3600u;
-    screens_diag(&v, 3, &s);
+    screens_diag(&v, 4, &s);
     check(strstr(s.row[0], "99ч") != NULL, "an ancient fault clamps");
     check(glyphs(s.row[0]) <= 21, "and does not widen the row to say so");
 }
@@ -538,11 +551,11 @@ static void test_the_fault_row_says_how_long_ago(void)
 static void test_the_button_walks_the_pages_and_wraps_home(void)
 {
     int p = SCREENS_PAGE_STATE;
-    p = screens_next_page(p); check(p == 0, "the first press opens the first reference page");
-    p = screens_next_page(p); check(p == 1, "then the second");
-    p = screens_next_page(p); check(p == 2, "then the third");
-    p = screens_next_page(p); check(p == 3, "then the fourth");
-    p = screens_next_page(p); check(p == 4, "then «Сигнал», which is not one of the four");
+    p = screens_next_page(p); check(p == 0, "the first press opens the signal page");
+    p = screens_next_page(p); check(p == 1, "then the address page");
+    p = screens_next_page(p); check(p == 2, "then the radio page");
+    p = screens_next_page(p); check(p == 3, "then the relay page");
+    p = screens_next_page(p); check(p == 4, "then the fault page");
     p = screens_next_page(p); check(p == SCREENS_PAGE_STATE, "and then home");
 }
 
@@ -560,7 +573,7 @@ int main(void)
     test_a_dropped_link_reports_no_reading_rather_than_a_perfect_one();
     test_an_unfilled_history_reports_no_minimum();
     test_rssi_maps_over_the_range_that_matters();
-    test_diagnostics_pages_are_four_and_wrap();
+    test_diagnostics_pages_are_five_with_the_signal_first();
     test_the_button_walks_the_pages_and_wraps_home();
     test_the_address_rows_stay_in_budget_at_their_widest();
     test_diagnostic_rows_share_one_width_so_centring_aligns_them();

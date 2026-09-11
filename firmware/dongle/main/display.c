@@ -44,20 +44,20 @@ static const char *TAG = "display";
  * given fixed baselines: they are CENTRED, as a block, in the zone the band leaves below it —
  * row 33 to the panel's last row, 31 rows. A screen with two rows puts a 26-row block there
  * (baselines 45 and 59, descenders on row 60, three clear of the edge); a screen with one row
- * — the splash, «Обновление», «Сигнал» — puts a 12-row block there, baseline 52, instead of
- * hanging its only row under the rule with twenty empty rows beneath it, which is what fixed
- * baselines did. The zone's top is the band's floor for EVERY screen, not the row the rule
- * actually reached on this one: paging from a plain rule to the history strip must not make
- * the rows jump. See rows_layout().
+ * — the splash, «Обновление» — puts a 12-row block there, baseline 52, instead of hanging its
+ * only row under the rule with twenty empty rows beneath it, which is what fixed baselines
+ * did. The zone's top is the band's floor for EVERY screen, not the row the rule actually
+ * reached on this one: paging from a plain rule to a level gauge must not make the rows jump.
+ * See rows_layout().
  *
- * ONE THING THAT WILL LOOK LIKE A BUG ON THE BENCH and is not: the rule does not sit at the
- * same y on «Сигнал» as everywhere else. The plain rule and the level gauge are single lines
- * and are centred IN the band, at row 27; the history is a strip that needs the whole band, so
- * it hangs from the band's floor at row 32 and grows up to its ceiling at 22. Both are the same
- * object occupying the same band — but a one-row line centred in an eleven-row band and an
- * eleven-row strip filling it cannot share a y, and paging from «Связь» to «Сигнал» therefore
- * drops the line five rows. Making them share a y would mean either a history with half the
- * headroom or a plain rule sitting off-centre on nine screens out of eleven.
+ * The one exception is the signal page — page 0 of «Диагностика». It keeps the page markers
+ * in the rule slot at row 27, exactly where the other four pages have them, so that paging
+ * through the five never moves the markers; the history strip then hangs UNDER the markers,
+ * two rows clear of them, eleven rows tall (31..41, its axis on 41), and the page's single row
+ * is centred in what remains beneath: baseline 57. It used to be its own screen with the
+ * strip in the rule slot, which dropped the rule five rows against every other screen and
+ * put it last in the button's cycle; a person reaching for the button is usually asking "is
+ * the link about to drop", so it is first now, and it looks like its siblings.
  *
  * Horizontally the rule is 92 px, and that width is not a choice made here — screens.h fixes
  * it: SCREEN_HISTORY is 46 samples "at two pixels each", so 92 is the history strip's width
@@ -76,6 +76,11 @@ static const char *TAG = "display";
 #define HIST_BASE  32   /* the history's axis; its bars grow upward from just above it */
 #define HIST_H     (HIST_BASE - HIST_TOP)   /* 10 rows of headroom for a full sample */
 #define MARK_GAP    6   /* between the diagnostics page markers */
+/* The history strip's second home: on the signal page it hangs under the PAGE MARKERS, which
+ * keep the rule slot at RULE_Y so that paging between the five reference pages never moves
+ * them. Two rows clear of the solid marker's bottom edge (RULE_Y + 1), eleven rows tall like
+ * the band version, and the page's single row is centred in what is left beneath it. */
+#define SIG_HIST_BASE (RULE_Y + 1 + 2 + HIST_H)   /* 41: the axis of the strip under the markers */
 #define ROWS_TOP   (HIST_BASE + 1)   /* the zone the rows are centred in: below the band ... */
 #define ROWS_BOTTOM (PANEL_H - 1)    /* ... down to the panel's last row */
 #define ROW_PITCH  14   /* baseline to baseline when there are two rows */
@@ -93,6 +98,8 @@ _Static_assert(HEAD_BASE + HEAD_DESCENT < HIST_TOP, "the headline must clear the
 _Static_assert(ROW_ASCENT + ROW_DESCENT < ROW_PITCH, "the two rows must not touch");
 _Static_assert((SCREEN_ROWS - 1) * ROW_PITCH + ROW_ASCENT + ROW_DESCENT <= ROWS_BOTTOM - ROWS_TOP + 1,
                "two rows must fit the zone under the rule band");
+_Static_assert(ROW_ASCENT + ROW_DESCENT <= ROWS_BOTTOM - (SIG_HIST_BASE + 1) + 1,
+               "the signal page's one row must fit under the strip under the markers");
 
 /* --- the task's own clocks -------------------------------------------------------------- */
 
@@ -197,6 +204,9 @@ static void draw_dithered(int x, int y, int w)
  * Returns how many rows there are; base[] is meaningful for row indices first..last. */
 static int rows_layout(const screen_t *s, int base[SCREEN_ROWS])
 {
+    /* The zone's top is the band's floor for every screen — except the signal page, whose
+       strip hangs under the markers and pushes its one row down beneath it. */
+    int zone_top = (s->pages > 0 && s->gauge == GAUGE_HISTORY) ? SIG_HIST_BASE + 1 : ROWS_TOP;
     int first = -1, last = -1;
     for (int r = 0; r < SCREEN_ROWS; r++) {
         if (s->row[r][0] != '\0') { if (first < 0) first = r; last = r; }
@@ -204,7 +214,7 @@ static int rows_layout(const screen_t *s, int base[SCREEN_ROWS])
     if (first < 0) return 0;
     int n = last - first + 1;
     int box = (n - 1) * ROW_PITCH + ROW_ASCENT + ROW_DESCENT;
-    int top = ROWS_TOP + (ROWS_BOTTOM - ROWS_TOP + 1 - box) / 2;
+    int top = zone_top + (ROWS_BOTTOM - zone_top + 1 - box) / 2;
     for (int r = first; r <= last; r++) base[r] = top + ROW_ASCENT + (r - first) * ROW_PITCH;
     return n;
 }
@@ -253,11 +263,11 @@ static void draw_page_marks(const screen_t *s)
     }
 }
 
-static void draw_history(void)
+static void draw_history(int axis)
 {
     /* The axis is drawn first and unconditionally, so an empty strip is still a rule and not a
      * blank band — a device that has just booted looks like the template, not like a fault. */
-    draw_dithered(RULE_X, HIST_BASE, RULE_W);
+    draw_dithered(RULE_X, axis, RULE_W);
 
     int8_t dbm[SCREEN_HISTORY];
     uint8_t n = screens_history_read(&s_history, dbm);
@@ -267,7 +277,7 @@ static void draw_history(void)
             /* Oldest at the left, two pixels each, sitting on the axis rather than over it.
              * A sample at or below the floor draws nothing at all, which is what makes a
              * dropout legible as a gap. */
-            u8g2_DrawBox(&s_u8g2, RULE_X + i * 2, HIST_BASE - h, 2, h);
+            u8g2_DrawBox(&s_u8g2, RULE_X + i * 2, axis - h, 2, h);
         }
     }
 }
@@ -276,6 +286,9 @@ static void draw_rule(const screen_t *s)
 {
     if (s->pages > 0) {   /* only «Диагностика» sets this */
         draw_page_marks(s);
+        /* The signal page: the strip goes UNDER the markers, not instead of them, so the
+           markers stay put across all five pages and the graph keeps its full height. */
+        if (s->gauge == GAUGE_HISTORY) draw_history(SIG_HIST_BASE);
         return;
     }
 
@@ -288,7 +301,7 @@ static void draw_rule(const screen_t *s)
         break;
     }
     case GAUGE_HISTORY:
-        draw_history();
+        draw_history(HIST_BASE);
         break;
     case GAUGE_NONE:
     default:
@@ -522,10 +535,8 @@ static void display_task(void *arg)
             screens_for(&intro, &s);
         } else if (s_page == SCREENS_PAGE_STATE) {
             screens_for(&v, &s);
-        } else if (s_page < (int)screens_diag_pages()) {
-            screens_diag(&v, (uint8_t)s_page, &s);
         } else {
-            screens_signal(&v, &s);
+            screens_diag(&v, (uint8_t)s_page, &s);   /* 0..4; page 0 is the signal */
         }
 
         /* count and next together, not either alone: next wraps at SCREEN_HISTORY, so a full

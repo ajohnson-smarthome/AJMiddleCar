@@ -338,18 +338,16 @@ void screens_for(const dongle_view_t *v, screen_t *out)
     fill_splash(v, out);
 }
 
-/* --- screens_signal: reached only by paging with BOOT ----------------------------------- */
+/* --- the signal page: diagnostics page 0 ------------------------------------------------ */
 
-void screens_signal(const dongle_view_t *v, screen_t *out)
+/* Page 0. One row, not two: the history strip is drawn where the first row would be (display.c
+ * places it under the page markers), and the single row goes under the strip. Both figures
+ * carry the same sentinel and neither may be printed as a number: the live reading is 0 when
+ * the station is down (fmt_dbm), and screens_history_min answers 0 for a ring nothing has been
+ * pushed into yet — a device thirty seconds out of a reboot, which would otherwise report its
+ * worst-ever signal as the best one it can hold. */
+static void diag_page_signal(const dongle_view_t *v, screen_t *out)
 {
-    memset(out, 0, sizeof(*out));
-    out->id = SCREEN_SIGNAL;
-    put_head(out, "Сигнал");
-
-    /* Both figures carry the same sentinel and neither may be printed as a number: the live
-     * reading is 0 when the station is down (fmt_dbm), and screens_history_min answers 0 for a
-     * ring nothing has been pushed into yet — a device thirty seconds out of a reboot, which
-     * would otherwise report its worst-ever signal as the best one it can hold. */
     char now[16], worst[16];
     fmt_dbm(now, sizeof(now), v->rssi);
     int8_t low = (v->history != NULL) ? screens_history_min(v->history) : 0;
@@ -362,7 +360,12 @@ void screens_signal(const dongle_view_t *v, screen_t *out)
 
 /* --- screens_diag: reached only by paging with BOOT -------------------------------------- */
 
-#define SCREENS_DIAG_PAGES 4
+/* Five: the signal page first, then address, radio, relay, fault. The signal used to be its
+ * own screen past the four, with its own headline; it is page 0 of the same family now — the
+ * same headline, the same page markers — with the history strip drawn under the markers where
+ * the other pages have their first row. First, because it is the page a person reaches for
+ * most: "is the link about to drop" is the question that sends a hand to the button. */
+#define SCREENS_DIAG_PAGES 5
 
 uint8_t screens_diag_pages(void)
 {
@@ -371,7 +374,7 @@ uint8_t screens_diag_pages(void)
 
 int screens_next_page(int page)
 {
-    int last = (int)screens_diag_pages();   /* the reference pages are 0..last-1, «Сигнал» is last */
+    int last = (int)screens_diag_pages() - 1;   /* the pages are 0..last, and after last, home */
     return (page >= last) ? SCREENS_PAGE_STATE : page + 1;
 }
 
@@ -504,9 +507,10 @@ void screens_diag(const dongle_view_t *v, uint8_t page, screen_t *out)
     out->page = page;
 
     switch (page) {
-    case 0: diag_page_address(v, out); break;
-    case 1: diag_page_radio(v, out); break;
-    case 2: diag_page_relay(v, out); break;
+    case 0: diag_page_signal(v, out); break;
+    case 1: diag_page_address(v, out); break;
+    case 2: diag_page_radio(v, out); break;
+    case 3: diag_page_relay(v, out); break;
     default: diag_page_fault(v, out); break;
     }
 }

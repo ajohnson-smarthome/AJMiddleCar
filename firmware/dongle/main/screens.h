@@ -62,8 +62,7 @@ typedef enum {
     SCREEN_NO_NETWORK,     /* DONGLE_STATE_FAILED: the join budget ran out */
     SCREEN_ROLLED_BACK,    /* the bootloader reverted the previous OTA */
     SCREEN_NO_HOST,        /* no USB host attached — nothing to say about a network either */
-    SCREEN_SIGNAL,         /* reached only by paging past the diagnostics with BOOT */
-    SCREEN_DIAG,           /* reached only by pressing BOOT — four pages */
+    SCREEN_DIAG,           /* reached only by pressing BOOT — five pages, the signal first */
 } screen_id_t;
 
 typedef enum {
@@ -156,17 +155,16 @@ typedef struct {
  * unconditionally, ahead of even an update or a rollback. */
 void screens_for(const dongle_view_t *v, screen_t *out);
 
-/* Reached only by paging with BOOT, past the diagnostics pages. */
-void screens_signal(const dongle_view_t *v, screen_t *out);
-
 /* Reached only by paging with BOOT. `page` wraps the caller's responsibility, not this
- * function's — pass anything in range and it renders exactly that page. */
+ * function's — pass anything in range and it renders exactly that page. Page 0 is the signal:
+ * gauge == GAUGE_HISTORY and a single row, which display.c lays out under the strip; the
+ * other pages have two rows and no gauge. */
 void    screens_diag(const dongle_view_t *v, uint8_t page, screen_t *out);
 uint8_t screens_diag_pages(void);
 
 /* Where the BOOT button has paged to. SCREENS_PAGE_STATE means "showing the state screen",
  * which is both the resting place and where the five-second timeout returns to; 0..diag_pages-1
- * are the reference pages and diag_pages itself is «Сигнал», the last stop before the wrap. */
+ * are the reference pages, the signal first. */
 #define SCREENS_PAGE_STATE (-1)
 
 /* The page one press of BOOT moves to from `page`. Here and not in the task that polls the pin:
