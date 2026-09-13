@@ -259,10 +259,9 @@ final class CarLink: ObservableObject {
         // Ordered by the car's own counter: a reordered datagram walks uptime, the trip
         // count and the calibration flag backwards, and the mandatory-calibration sheet
         // keys on that flag.
-        if let seq = t.seq, let last = lastTelemetrySeq, !RTFrame.seqNewer(seq, than: last) {
-            return
-        }
-        if let seq = t.seq { lastTelemetrySeq = seq }
+        let seq = t.seq
+        if let last = lastTelemetrySeq, !RTFrame.seqNewer(seq, than: last) { return }
+        lastTelemetrySeq = seq
         telemetry = t
         if lastTelemetry != t { lastTelemetry = t }
         lastFrame = ContinuousClock.now
@@ -327,6 +326,12 @@ final class CarLink: ObservableObject {
             guard !Task.isCancelled, let self, case .none = self.session else { return }
             if let last = self.lastProbeAt, ContinuousClock.now - last < Self.probeSpacing { return }
             self.lastProbeAt = ContinuousClock.now
+            // Cleared before the ask, not just left to be overwritten: `probedFw` drives
+            // `carProbed(fw:)` through `onChange`, which fires only on a value change. Without
+            // this, a second probe that reads back the SAME fw (a v1 car still there after
+            // `dongleReturned()` dropped the gate back to `.awaitingCar`) would publish nothing
+            // and the forced update would never re-fire.
+            self.probedFw = nil
             guard let data = try? await transport.get(CarContract.statusPath, timeout: 2),
                   let id = LegacyIdentity.parse(data), id.device == CarContract.device,
                   !Task.isCancelled else { return }

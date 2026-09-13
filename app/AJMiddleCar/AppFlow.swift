@@ -411,8 +411,21 @@ final class AppFlow: ObservableObject {
     private func readStatus() async -> DongleReply {
         do {
             let data = try await dongle.statusData()
-            lastStatusFailure = nil
-            return DongleReply.decode(data)
+            let reply = DongleReply.decode(data)
+            // Bytes arrived, so this is not silence — but a body that decodes as neither a v2
+            // document nor a v1 identity is still "answered badly", exactly the fault the
+            // doc comment above says must not be folded back into `nil`/silence. Same
+            // once-per-distinct-failure dedupe as the catch branch below.
+            if case .faulty = reply {
+                let what = "body decoded as neither v2 nor a v1 identity (\(data.count) bytes)"
+                if what != lastStatusFailure {
+                    lastStatusFailure = what
+                    print("dongle \(DongleContract.statusPath): \(what)")
+                }
+            } else {
+                lastStatusFailure = nil
+            }
+            return reply
         } catch {
             // Once per distinct failure, not once per poll: this loop runs at
             // `donglePollInterval` for as long as the cable is out, and a log that repeats the
