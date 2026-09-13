@@ -200,13 +200,18 @@ rejects, none clamp, and an unrecognised `quad` is refused, not defaulted. Every
 persists to NVS immediately, and a POST of unchanged values does not rewrite flash.
 
 <!-- generated:endpoints -->
-| Endpoint | GET returns | POST body | Ranges |
-|---|---|---|---|
-| `/ramp` | `{"ramp_ms":…}` | same | `ramp_ms` 0..2000 |
-| `/trim` | `{"trim_pct":…}` | same | `trim_pct` -30..30 |
-| `/recover` | `{"enabled":…, "window_ms":…}` | same | `enabled` true \| false<br>`window_ms` 1000..10000 |
-| `/wheel` | `{"diameter_mm":…, "ppr":…, "gear_x100":…, "quad":…}` | same | `diameter_mm` 20..150<br>`ppr` 1..1000<br>`gear_x100` 100..30000<br>`quad` 1 \| 2 \| 4 |
-| `/dims` | `{"track_mm":…, "wheelbase_mm":…}` | same | `track_mm` 60..300<br>`wheelbase_mm` 90..360 |
+| Domain | Field | Type | Range | Default | Meaning |
+|---|---|---|---|---|---|
+| `ramp` | `rise_ms` | int | 0..2000 | 300 | time from zero to full scale in ms; 0 disables the ramp |
+| `trim` | `balance_pct` | int | -30..30 | 0 | percentage by which the faster side is slowed |
+| `recovery` | `enabled` | bool | true \| false | true | retrace on unexpected silence; when false the car stops instead |
+| `recovery` | `window_ms` | int | 1000..10000 | 5000 | how far back the breadcrumb history reaches |
+| `wheel` | `diameter_mm` | int | 20..150 | 65 | wheel diameter in mm |
+| `wheel` | `encoder_ppr` | int | 1..1000 | 11 | encoder pulses per motor-shaft revolution, one channel |
+| `wheel` | `gear_ratio` | decimal | 1..300 | 9.0 | gear ratio as a decimal; 1:9 is 9.0 (held as ratio x100 inside) |
+| `wheel` | `quadrature` | enum | 1 \| 2 \| 4 | 4 | quadrature edge multiplier |
+| `chassis` | `track_mm` | int | 60..300 | 130 | lateral distance between left and right wheel centres |
+| `chassis` | `wheelbase_mm` | int | 90..360 | 210 | longitudinal distance between front and rear wheel centres |
 <!-- /generated:endpoints -->
 
 Calibration is not a config domain and is not generated — each of its endpoints has its
