@@ -301,6 +301,20 @@ class RTConformance:
         self.check(len(frames) >= 3,
                    f"telemetry: {len(frames)} frames in 1.5 s of streaming, want >= 3")
         if frames:
+            seqs = [fr.get(K["seq"]) for fr in frames]
+            self.check(all(isinstance(sq, int) and not isinstance(sq, bool) for sq in seqs),
+                       f"telemetry seqs {seqs}, want every one an int")
+            # The client's whole loss-detection story is "a gap in seq means a drop" —
+            # a repeat or a rewind must never happen, on any network.
+            self.check(all(b > a for a, b in zip(seqs, seqs[1:])),
+                       f"telemetry seq is not strictly increasing: {seqs}")
+            # Consecutive (no gaps at all) only makes sense where nothing between this
+            # tool and the target can drop a datagram — loopback against the mock. Over
+            # real WiFi a lost push is not a defect, so this half is skipped there.
+            if self.addr[0] in ("127.0.0.1", "::1", "localhost"):
+                self.check(seqs == list(range(seqs[0], seqs[0] + len(seqs))),
+                           f"telemetry seq has gaps on loopback: {seqs}, want consecutive "
+                           f"integers from {seqs[0]}")
             f = frames[-1]
             self.check(isinstance(f.get(K["seq"]), int) and not isinstance(f.get(K["seq"]), bool),
                        f"telemetry seq is {f.get(K['seq'])!r}, want an int")

@@ -752,6 +752,8 @@ class TestCalibration(unittest.TestCase):
             [{"corner": "front_left", "pair": 0.5, "inverted": False}] + rest,   # fractional pair
             [{"corner": "front_left", "pair": 0, "inverted": "no"}] + rest,      # non-bool inverted
             [{"corner": 1, "pair": 0, "inverted": False}] + rest,               # non-string corner
+            [{"corner": "front_left", "pair": 10**400, "inverted": False}] + rest,     # huge integer
+            [{"corner": "front_left", "pair": float("inf"), "inverted": False}] + rest,  # non-finite
         ):
             ok, err = car.save_calibration(wheels)
             self.assertFalse(ok, wheels)

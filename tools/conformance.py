@@ -3,6 +3,7 @@
 
     python3 tools/conformance.py http://127.0.0.1:8080
     python3 tools/conformance.py http://192.168.7.1      # the car, through the dongle's relay
+    python3 tools/conformance.py --write-calibration http://127.0.0.1:8080
 
 Every expectation comes from contract/car-api.json: the field sets, both ends of every
 range, the value one past each end, the members of every enum. Nothing here is written
@@ -24,9 +25,16 @@ assuming.
 
 It restores every config value it found. Three things it does anyway, unavoidably:
 it POSTs each domain about ten times, and on a real car every accepted POST is an NVS
-write; it spins a wheel once (`/calibration/spin`), so put the car on a stand; and it
-never POSTs a valid `/calibration`, because a calibration cannot be put back — and the
+write; it spins a wheel once (`/calibration/spin`), so put the car on a stand; and the
 two rejected `/ota` bodies stop the motors and briefly take the actuator on a real car.
+
+The one check it does NOT run by default is POSTing a valid `/calibration` table: a
+calibration is not a range that can be dialled back to what it was, so overwriting a
+car's saved one on every conformance run would be a surprise, not a convenience. That
+check is skipped and a `skipped: ...` line is printed instead. Pass `--write-calibration`
+to run it anyway; when passed, the table `GET /calibration` reported before the run is
+POSTed back afterwards, in a `finally`, but only if the car was already `calibrated: true`
+— there is nothing to restore a car that had none.
 
 Stdlib only — no venv needed to run it against a car.
 """
@@ -51,9 +59,10 @@ class Unreachable(Exception):
 
 
 class Conformance:
-    def __init__(self, base, verbose=False):
+    def __init__(self, base, verbose=False, write_calibration=False):
         self.base = base.rstrip("/")
         self.verbose = verbose
+        self.write_calibration = write_calibration
         self.failures = []
 
     # ---- transport -------------------------------------------------------------
@@ -298,6 +307,12 @@ class Conformance:
                                      CONFIG_PATH, {key: body(under)}, "out_of_range", where)
                 self.expect_domain_get(f"GET {CONFIG_PATH} after a rejected {where}={under}",
                                       key, edge)
+                # A JSON boolean is not a JSON number; cJSON_IsNumber refuses it outright,
+                # before the field's own type (fixed vs. plain int) is even consulted.
+                self.expect_rejected(f"POST {CONFIG_PATH} {where}=true (a bool)",
+                                     CONFIG_PATH, {key: body(True)}, "wrong_type", where)
+                self.expect_domain_get(f"GET {CONFIG_PATH} after {where}=true (a bool)",
+                                      key, edge)
                 # A fraction between two internal integers still rounds and is accepted —
                 # the mock and the car must agree which way (lround: half away from zero).
                 # The POST answers with the ROUNDED value, not the one that was sent.
@@ -322,6 +337,16 @@ class Conformance:
                                           key, edge)
                 self.expect_rejected(f"POST {CONFIG_PATH} {where}=\"{f['max']}\" (a string)",
                                      CONFIG_PATH, {key: body(str(f["max"]))}, "wrong_type", where)
+                # A JSON boolean is not a JSON number; cJSON_IsNumber refuses it outright.
+                self.expect_rejected(f"POST {CONFIG_PATH} {where}=true (a bool)",
+                                     CONFIG_PATH, {key: body(True)}, "wrong_type", where)
+                self.expect_domain_get(f"GET {CONFIG_PATH} after {where}=true (a bool)",
+                                      key, edge)
+                # Rule 7: both sides reject a fraction where an integer is expected.
+                self.expect_rejected(f"POST {CONFIG_PATH} {where}={f['min']}.5 (a fraction)",
+                                     CONFIG_PATH, {key: body(f["min"] + 0.5)}, "wrong_type", where)
+                self.expect_domain_get(f"GET {CONFIG_PATH} after {where}={f['min']}.5 (a fraction)",
+                                      key, edge)
 
     def field_shapes(self, key, fields, original):
         self.expect_domain_ok(f"POST {CONFIG_PATH} {key} (whole record)", key, original)
@@ -369,9 +394,9 @@ class Conformance:
     def calibration(self):
         print(ENDPOINTS["calibration"])
         k = CALIBRATION["keys"]
-        status, ctype, parsed, _ = self.call("GET", ENDPOINTS["calibration"])
-        if self.expect_json("GET /calibration", status, ctype, parsed, 200):
-            calibrated, wheels = parsed.get(k["calibrated"]), parsed.get(k["wheels"])
+        status, ctype, before, _ = self.call("GET", ENDPOINTS["calibration"])
+        if self.expect_json("GET /calibration", status, ctype, before, 200):
+            calibrated, wheels = before.get(k["calibrated"]), before.get(k["wheels"])
             self.check(isinstance(calibrated, bool),
                        f"GET /calibration: {k['calibrated']} is {calibrated!r}, want a bool")
             self.check(isinstance(wheels, list),
@@ -380,6 +405,8 @@ class Conformance:
                 corners = [w.get(k["corner"]) for w in wheels]
                 self.check(corners == CALIBRATION["corners"],
                            f"GET /calibration: corners {corners}, want {CALIBRATION['corners']}")
+        else:
+            before = None
 
         self.expect_rejected("POST /calibration/spin pair=9", ENDPOINTS["spin"],
                              {k["pair"]: 9, k["direction"]: "forward"},
@@ -426,18 +453,31 @@ class Conformance:
         self.expect_rejected("POST /calibration (no wheels)", ENDPOINTS["calibration"],
                              {}, "missing_field", k["wheels"])
 
-        # Only one call that saves: a valid table cannot be un-saved.
-        good = self._wheels()
-        status, ctype, parsed, _ = self.call("POST", ENDPOINTS["calibration"], {k["wheels"]: good})
-        if self.expect_json("POST /calibration (good table)", status, ctype, parsed, 200):
-            self.check(parsed.get(k["calibrated"]) is True,
-                       f"POST /calibration: {k['calibrated']} {parsed.get(k['calibrated'])!r}, want True")
-            self.check(parsed.get(k["wheels"]) == good,
-                       f"POST /calibration: {k['wheels']} {parsed.get(k['wheels'])}, want {good}")
-        status, ctype, parsed, _ = self.call("GET", ENDPOINTS["calibration"])
-        if self.expect_json("GET /calibration (after save)", status, ctype, parsed, 200):
-            self.check(parsed.get(k["wheels"]) == good,
-                       f"GET /calibration: {k['wheels']} {parsed.get(k['wheels'])}, want {good}")
+        # The one call that saves, and a saved calibration cannot be un-saved — so this
+        # is opt-in (see the module docstring), and restores whatever was there before.
+        if not self.write_calibration:
+            print("  skipped: POST /calibration (a good table) — pass --write-calibration "
+                  "to run it; it overwrites the car's saved calibration")
+            return
+        try:
+            good = self._wheels()
+            status, ctype, parsed, _ = self.call("POST", ENDPOINTS["calibration"],
+                                                 {k["wheels"]: good})
+            if self.expect_json("POST /calibration (good table)", status, ctype, parsed, 200):
+                self.check(parsed.get(k["calibrated"]) is True,
+                           f"POST /calibration: {k['calibrated']} {parsed.get(k['calibrated'])!r}, want True")
+                self.check(parsed.get(k["wheels"]) == good,
+                           f"POST /calibration: {k['wheels']} {parsed.get(k['wheels'])}, want {good}")
+            status, ctype, parsed, _ = self.call("GET", ENDPOINTS["calibration"])
+            if self.expect_json("GET /calibration (after save)", status, ctype, parsed, 200):
+                self.check(parsed.get(k["wheels"]) == good,
+                           f"GET /calibration: {k['wheels']} {parsed.get(k['wheels'])}, want {good}")
+        finally:
+            if isinstance(before, dict) and before.get(k["calibrated"]) \
+                    and isinstance(before.get(k["wheels"]), list):
+                self.call("POST", ENDPOINTS["calibration"], {k["wheels"]: before[k["wheels"]]})
+                print(f"  restored the calibration table {ENDPOINTS['calibration']} reported "
+                      f"before this run")
 
     def ota(self):
         print(ENDPOINTS["ota"])
@@ -466,9 +506,13 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("base_url", help="e.g. http://127.0.0.1:8080 (the mock) or http://192.168.7.1 (the car, through the dongle)")
     p.add_argument("-v", "--verbose", action="store_true", help="log every request")
+    p.add_argument("--write-calibration", action="store_true",
+                   help="also POST a valid /calibration table; skipped by default because a "
+                        "calibration cannot be un-set. Restores whatever GET /calibration "
+                        "reported before the run, if the car was already calibrated")
     args = p.parse_args()
 
-    suite = Conformance(args.base_url, args.verbose)
+    suite = Conformance(args.base_url, args.verbose, write_calibration=args.write_calibration)
     print(f"conformance against {suite.base}")
     try:
         failures = suite.run()

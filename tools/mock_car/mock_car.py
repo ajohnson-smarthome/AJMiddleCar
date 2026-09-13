@@ -26,6 +26,7 @@ so it is repeatable only for a run driven the same way from the same moment.
 """
 import argparse
 import asyncio
+import math
 import os
 import socket
 import sys
@@ -165,7 +166,17 @@ async def calib_spin(request):
         if key not in body:
             return json_error(400, "missing_field", "required", key)
     pair, direction = body[k["pair"]], body[k["direction"]]
-    if isinstance(pair, bool) or not isinstance(pair, (int, float)) or float(pair) != int(pair):
+    if isinstance(pair, bool) or not isinstance(pair, (int, float)):
+        return json_error(400, "wrong_type", "expected an integer", k["pair"])
+    # request.json() accepts Infinity, NaN and integers of any size; int(pair) raises
+    # OverflowError on an infinity or an oversized Python int and ValueError on NaN, and
+    # math.isfinite raises that same OverflowError on the oversized int too. A 400 is the
+    # answer either way, not a 500 from an uncaught exception.
+    try:
+        whole = math.isfinite(pair) and float(pair) == int(pair)
+    except (OverflowError, ValueError):
+        whole = False
+    if not whole:
         return json_error(400, "wrong_type", "expected an integer", k["pair"])
     if not isinstance(direction, str):
         return json_error(400, "wrong_type", "expected a word", k["direction"])

@@ -589,7 +589,19 @@ class CarState:
                     return False, ("unknown_field", where, "no such field")
             corner, pair, inverted = w.get(keys["corner"]), w.get(keys["pair"]), w.get(keys["inverted"])
             if not isinstance(corner, str) or not isinstance(inverted, bool) \
-                    or isinstance(pair, bool) or not isinstance(pair, (int, float)) or float(pair) != int(pair):
+                    or isinstance(pair, bool) or not isinstance(pair, (int, float)):
+                return False, ("wrong_type", where, "wheel needs {corner,pair,inverted}")
+            # aiohttp's request.json() accepts Infinity, NaN and integers of any size —
+            # none of which cJSON_IsNumber's C side would ever hand the firmware a whole
+            # number for. int(pair) raises OverflowError on an infinity or a Python int
+            # too large for a float, and ValueError on NaN; math.isfinite raises the same
+            # OverflowError on that oversized int before it even reaches float(). A
+            # rejection is the answer either way, not a 500 from an uncaught exception.
+            try:
+                whole = math.isfinite(pair) and float(pair) == int(pair)
+            except (OverflowError, ValueError):
+                whole = False
+            if not whole:
                 return False, ("wrong_type", where, "wheel needs {corner,pair,inverted}")
             if corner not in corners:
                 return False, ("not_allowed", where, "unknown corner")
