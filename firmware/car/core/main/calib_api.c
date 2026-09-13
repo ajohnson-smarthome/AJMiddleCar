@@ -89,7 +89,10 @@ static esp_err_t calib_spin(httpd_req_t *req) {
 
 // POST /calibration  {"wheels":[{"corner","pair","inverted"} x4]} — any order, each corner once.
 static esp_err_t calib_save(httpd_req_t *req) {
-    char b[320];
+    // A pretty-printed four-wheel body is 350-460 bytes depending on the indent (212
+    // compact); 320 rejected it as "too long". The httpd task's stack is 8 KB now
+    // (http_server.c), so 512 here is nothing.
+    char b[512];
     if (api_read_body(req, b, sizeof(b)) < 0) {
         return api_reply_error(req, "400 Bad Request", ERR_BAD_JSON, "", "body missing or too long");
     }

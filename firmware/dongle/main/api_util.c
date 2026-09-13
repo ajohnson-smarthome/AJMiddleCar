@@ -6,10 +6,13 @@ esp_err_t api_reply_error(httpd_req_t *req, const char *status, const char *code
                           const char *field, const char *msg) {
     char buf[224];
     int n;
+    /* `field` can be the client's own key echoed back (unknown_field), so it is cut at 48
+       chars: an over-long one would push the envelope past the buffer and lose the reply.
+       Not escaped — a quote inside a key is the client's problem, as before. */
     if (field && field[0]) {
         n = snprintf(buf, sizeof(buf),
                      "{\"" DONGLE_KEY_PROTO "\":%d,\"" DONGLE_KEY_ERROR "\":{\"" DONGLE_KEY_ERROR_CODE "\":\"%s\","
-                     "\"" DONGLE_KEY_ERROR_MESSAGE "\":\"%s\",\"" DONGLE_KEY_ERROR_FIELD "\":\"%s\"}}",
+                     "\"" DONGLE_KEY_ERROR_MESSAGE "\":\"%s\",\"" DONGLE_KEY_ERROR_FIELD "\":\"%.48s\"}}",
                      DONGLE_PROTO, code, msg, field);
     } else {
         n = snprintf(buf, sizeof(buf),

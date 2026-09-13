@@ -110,6 +110,11 @@ esp_err_t status_api_start(void)
      * URI handlers at all, being raw sockets on their own ports, and the API guard is an
      * open_fn rather than a handler. Nothing further is pending against this number. */
     cfg.max_uri_handlers = 6;
+    /* The v2 /status frame carries ~1 KB of locals — the view, the 640-byte body, the
+     * renderer's scratch — on top of esp_http_server's own frames, which IDF's default
+     * 4096-byte task stack never proved margin for. This server is also the dongle's only
+     * OTA path, so headroom here is bought rather than measured. */
+    cfg.stack_size = 8192;
     /* Lowered from esp_http_server's default of 7: this device's whole lwIP socket table
      * (CONFIG_LWIP_MAX_SOCKETS, sdkconfig.defaults) is shared with relay_udp.c and
      * relay_tcp.c, which is where the full budget arithmetic lives — the comment there is

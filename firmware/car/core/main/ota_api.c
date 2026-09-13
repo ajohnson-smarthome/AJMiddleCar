@@ -69,7 +69,9 @@ static esp_err_t ota_post(httpd_req_t *req) {
             if (r == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts <= 6) continue;  // ~6×5s grace, then abort
             esp_ota_abort(handle);
             link_release_must(LINK_SRC_OTA);
-            return api_reply_error(req, "400 Bad Request", ERR_INTERNAL, "", "upload stalled");
+            // `internal` is a 500 by contract (docs/protocol.md): the client's bytes stopped
+            // arriving, which is not a malformed request to be corrected and resent.
+            return api_reply_error(req, "500 Internal Server Error", ERR_INTERNAL, "", "upload stalled");
         }
         timeouts = 0;  // progress resets the stall budget
         if (esp_ota_write(handle, buf, r) != ESP_OK) {

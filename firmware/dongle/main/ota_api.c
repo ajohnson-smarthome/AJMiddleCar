@@ -102,7 +102,9 @@ static esp_err_t ota_post(httpd_req_t *req)
                      (int)req->content_len - remaining, (int)req->content_len, r);
             esp_ota_abort(handle);
             ota_progress_clear();
-            api_reply_error(req, "400 Bad Request", DONGLE_ERR_INTERNAL, "", "upload stalled");
+            /* `internal` is a 500 by contract: the client's bytes stopped arriving, which is
+               not a malformed request to be corrected and resent. */
+            api_reply_error(req, "500 Internal Server Error", DONGLE_ERR_INTERNAL, "", "upload stalled");
             return ESP_FAIL;
         }
         timeouts = 0;  /* progress resets the stall budget */
