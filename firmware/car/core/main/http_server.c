@@ -32,6 +32,12 @@ esp_err_t http_server_start(void) {
     // 8; without the bump registration aborts with HANDLERS_FULL and the car comes up
     // with no softAP.
     config.max_uri_handlers = 12;
+    // The v2 handlers hold more locals than IDF's default 4096-byte task stack ever
+    // proved margin for: status_get builds the identity, the three telemetry groups
+    // and the 640-byte envelope buffer (~2.4 KB of locals) on top of esp_http_server's
+    // own frames and cJSON's recursion in cfg_get/cfg_post. The P4 has RAM to spare, so
+    // this buys headroom instead of chasing the exact high-water mark.
+    config.stack_size = 8192;
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &config), TAG, "httpd start");
 
     httpd_uri_t root = {
