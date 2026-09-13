@@ -12,18 +12,18 @@ cross-implementation check at all: the mock tested itself, the firmware tested
 itself, and only REST was compared. This is the comparison.
 
 The dropped-frames check does not just look for aliveness (some push arriving):
-a mock that quietly accepts one of the seven bad datagrams still looks "alive" to
-a check that only wants any push at all. It reads the car's own rx_fps instead —
-0 means nothing landed, non-zero means one was silently accepted — the same
-signal a real fleet's telemetry would surface. And the seven rule-6 shapes are
+a mock that quietly accepts one of the bad datagrams still looks "alive" to a
+check that only wants any push at all. It reads the car's own `link.rx_hz`
+instead — 0 means nothing landed, non-zero means one was silently accepted — the
+same signal a real fleet's telemetry would surface. The rule-6 shapes are
 numbered fresh against the live seq counter, not with small fixed literals: a
 literal that is already stale gets dropped by the (both-implementations-shared)
 replay gate regardless of whether the shape itself would have been rejected, so
 a lax parser's real defect never gets exercised — see rule6_seq_frames below.
 
-Stdlib only — no venv needed against a car. The dropped frames come from the
-rule-6 table in docs/superpowers/specs/2026-08-22-audit-fix-decisions.md, the
-same table test_state.py and the firmware host tests pin.
+Stdlib only — no venv needed against a car. The dropped frames mirror the rule-6
+table `test_state.py::TestWireShapes.test_the_shared_pinned_frames` and the
+firmware's `test_control_proto.c` pin, in v2 spelling.
 """
 import argparse
 import json
@@ -34,54 +34,51 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "mock_car"))
-from generated import CTL_VALUES, DEVICE, PROTO, RT, TELEMETRY_FIELDS   # noqa: E402
+from generated import DEVICE, GROUPS, PROTO, RT, TELEMETRY_GROUPS   # noqa: E402
 
-JSON_TYPES = {"int": int, "bool": bool, "str": str}
+K = RT["keys"]
+TYPES = RT["types"]
+OWNER_VALUES = GROUPS["motors"]["fields"][2]["values"]
 
-# Two literals worth naming once: the contract has no field-name constant for
-# either (RT has no "ctl" key, and "abcd1234" is just this tool's own probe
-# sid), but each is used from more than one place below and a typo in one
-# copy silently un-tests the thing it was checking.
-CTL_KEY = "ctl"                      # TELEMETRY_FIELDS' name for the actuator's owner
-BAD_HELLO_SID = "abcd1234"           # the sid the malformed hello below carries
+# A literal worth naming once: the contract has no field-name constant for a
+# malformed-hello probe's own sid — it is just this tool's own probe value, used
+# from more than one place below, and a typo in one copy would silently un-test
+# the thing it was checking.
+BAD_HELLO_SID = "abcd1234"
 
-# rule 6: both sides drop these whole. Neither carries a seq, so the staleness
-# problem rule6_seq_frames exists to dodge does not apply to these two — a
-# hello is never subject to the owned-traffic seq gate at all, and a bye
-# missing its seq entirely is exactly the shape under test.
+# rule 6: both sides drop these whole, and neither carries a usable seq — a hello
+# is never subject to the owned-traffic seq gate at all, and a bye missing its
+# seq entirely is exactly the shape under test.
 DROPPED_FRAMES = [
-    ('{"proto":1.5,"hello":"%s"}' % BAD_HELLO_SID).encode(),
-    b'{"bye":1}',                        # a goodbye without a seq is dropped too
+    ('{"proto":1.5,"type":"hello","session":"%s"}' % BAD_HELLO_SID).encode(),
+    ('{"proto":%d,"type":"bye"}' % PROTO).encode(),          # a goodbye without a seq
 ]
 
 
 def rule6_seq_frames(fresh_seqs):
-    """The four rule-6 malformed shapes that carry a seq — numbered fresh, not
-    with the small fixed literals (5, 7, 8, 9) an earlier version of this tool
-    used.
+    """The rule-6 malformed `drive` shapes that carry a seq — numbered fresh, not
+    with small fixed literals.
 
-    Those literals are always stale by the time the batch is sent (the
-    telemetry loop above has already pushed the live counter well past single
-    digits), so on a mock whose actual defect is a lax *parser*, the frame
-    still gets dropped — just at the seq gate, for the wrong reason, before
-    the parser is ever exercised. The defect is invisible either way the
-    frame ends up rejected, which is exactly the failure mode a review caught
-    empirically: a lax mock that accepted every one of these malformed shapes
-    still reported "all checks passed", because the seq gate was silently
-    doing the rejecting instead of the parser being tested.
-
-    Freshly numbered, a frame a lax parser wrongly accepts also clears the
-    (unrelated, correctly-functioning) replay gate, reaches note_command, and
-    shows up in rx_fps — which is what the caller below is checking. Only the
-    seq digits differ from the original literals; the malformed shapes
-    themselves are unchanged.
+    A literal is always stale by the time the batch is sent (the telemetry loop
+    above has already pushed the live counter well past single digits), so on a
+    mock whose actual defect is a lax *parser*, the frame still gets dropped —
+    just at the seq gate, for the wrong reason, before the parser is ever
+    exercised. Freshly numbered, a frame a lax parser wrongly accepts also clears
+    the (unrelated, correctly functioning) replay gate, reaches note_command, and
+    shows up in rx_hz — which is what the caller below is checking.
     """
     a, b, c, d = fresh_seqs
     return [
-        ('{"seq":%d,"junk":{"t":0.9},"y":0.5}' % a).encode(),
-        ('{"seq":%d,"t":.5,"y":0}' % b).encode(),
-        ('{"seq":%d,"t":+1,"y":0}' % c).encode(),
-        ('{"seq":%d,"t":0.5,"y":0,"t":0.9}' % d).encode(),
+        # has "turn" but not the top-level "throttle" the axis pair requires —
+        # the nested one must not be read as the datagram's own.
+        ('{"proto":%d,"type":"drive","seq":%d,"junk":{"throttle":0.9},"turn":0.5}'
+         % (PROTO, a)).encode(),
+        ('{"proto":%d,"type":"drive","seq":%d,"throttle":.5,"turn":0}'
+         % (PROTO, b)).encode(),                              # bare mantissa
+        ('{"proto":%d,"type":"drive","seq":%d,"throttle":+1,"turn":0}'
+         % (PROTO, c)).encode(),                               # leading plus
+        ('{"proto":%d,"type":"drive","seq":%d,"throttle":0.5,"turn":0,"throttle":0.9}'
+         % (PROTO, d)).encode(),                                # duplicate key
     ]
 
 
@@ -93,16 +90,28 @@ def enc(obj):
     return json.dumps(obj, separators=(",", ":")).encode()
 
 
+def is_telemetry(f):
+    return isinstance(f, dict) and f.get(K["type"]) == TYPES["telemetry"]
+
+
+def owner_of(f):
+    return (f.get("motors") or {}).get("owner")
+
+
+def rx_hz_of(f):
+    return (f.get("link") or {}).get("rx_hz")
+
+
 def padded_frame(seq_value, total_len):
-    """A valid seq/t/y frame, padded via an ignored "p" key to exactly
-    total_len bytes.
+    """A valid drive frame, padded via an ignored "p" key to exactly total_len bytes.
 
     Not a fixed byte template: seq_value's digit count depends on how far the
     live counter has moved by the time this is called, so the padding has to
     be sized against the actual encoded prefix rather than a guess baked in
     at import time.
     """
-    obj = {RT["seq_field"]: seq_value, RT["throttle_field"]: 0, RT["yaw_field"]: 0, "p": ""}
+    obj = {K["proto"]: PROTO, K["type"]: TYPES["drive"], K["seq"]: seq_value,
+           K["throttle"]: 0, K["turn"]: 0, "p": ""}
     fill = total_len - len(enc(obj))
     assert fill >= 0, f"{total_len} bytes is too small to hold seq {seq_value}"
     obj["p"] = "x" * fill
@@ -120,6 +129,20 @@ class RTConformance:
             self.failures.append(what)
             print(f"  FAIL  {what}")
         return ok
+
+    def field_type_ok(self, value, f):
+        if f.get("nullable") and value is None:
+            return True
+        t = f["type"]
+        if t == "int":
+            return isinstance(value, int) and not isinstance(value, bool)
+        if t == "bool":
+            return isinstance(value, bool)
+        if t == "str":
+            return isinstance(value, str)
+        if t == "state":
+            return value in f["values"]
+        return False
 
     def sock(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -162,8 +185,8 @@ class RTConformance:
         recv_matching (and drain) throw away whatever does not match as they
         search — fine for a single question, but two independent questions asked
         as separate blind searches over overlapping time can each eat the one
-        frame the other needed. Telemetry keeps pushing on its own ~200 ms
-        cadence throughout, so a "search for A, then search for B" over the same
+        frame the other needed. Telemetry keeps pushing on its own cadence
+        throughout, so a "search for A, then search for B" over the same
         stretch of wire risks A's search discarding the specific push B's
         search was counting on. One shared scan avoids the race.
         """
@@ -187,10 +210,10 @@ class RTConformance:
 
     def handshake(self, s, sid, proto=PROTO):
         """Send hello at the app's retry cadence until answered."""
-        frame = {RT["proto_field"]: proto, RT["hello_field"]: sid}
+        frame = {K["proto"]: proto, K["type"]: TYPES["hello"], K["session"]: sid}
         for _ in range(15):                                 # ~3 s at 5 Hz
             s.sendto(enc(frame), self.addr)
-            reply = self.recv_matching(s, lambda f: RT["hello_field"] in f, 0.2)
+            reply = self.recv_matching(s, lambda f: f.get(K["type"]) == TYPES["hello_ack"], 0.2)
             if reply is not None:
                 return reply
         raise Unreachable(f"no hello reply from {self.addr[0]}:{self.addr[1]}")
@@ -201,18 +224,23 @@ class RTConformance:
 
         print("hello")
         reply = self.handshake(s, sid)
-        self.check(reply.get(RT["proto_field"]) == PROTO,
-                   f"hello reply proto {reply.get(RT['proto_field'])!r}, want {PROTO}")
-        self.check(reply.get(RT["hello_field"]) == sid,
-                   f"hello reply echoes {reply.get(RT['hello_field'])!r}, want {sid!r}")
-        for key in (RT["device_field"], RT["fw_field"]):
-            self.check(isinstance(reply.get(key), str) and reply[key],
-                       f"hello reply {key} is {reply.get(key)!r}, want a nonempty string")
-        self.check(reply.get(RT["device_field"]) == DEVICE,
-                   f"hello reply device is {reply.get(RT['device_field'])!r}, "
-                   f"want {DEVICE!r}")
+        self.check(reply.get(K["proto"]) == PROTO,
+                   f"hello reply proto {reply.get(K['proto'])!r}, want {PROTO}")
+        self.check(reply.get(K["session"]) == sid,
+                   f"hello reply echoes session {reply.get(K['session'])!r}, want {sid!r}")
+        device = reply.get("device")
+        if self.check(isinstance(device, dict), f"hello reply device is {device!r}, want an object"):
+            names = [f["name"] for f in GROUPS["device"]["fields"]]
+            self.check(sorted(device) == sorted(names),
+                       f"hello reply device keys {sorted(device)}, want {sorted(names)}")
+            for f in GROUPS["device"]["fields"]:
+                v = device.get(f["name"])
+                self.check(self.field_type_ok(v, f),
+                           f"hello reply device.{f['name']} is {v!r}, want {f['type']}")
+            self.check(device.get("id") == DEVICE,
+                       f"hello reply device.id {device.get('id')!r}, want {DEVICE!r}")
         again = self.handshake(s, sid)
-        self.check(again.get(RT["hello_field"]) == sid,
+        self.check(again.get(K["session"]) == sid,
                    "a repeated hello is answered (a lost reply must be recoverable)")
 
         print("wrong proto")
@@ -227,9 +255,33 @@ class RTConformance:
             self.check(False, "a foreign-proto hello gets no reply at all (it "
                                "must be answered by name, just not adopted)")
         else:
-            self.check(foreign.get(RT["proto_field"]) == PROTO,
+            self.check(foreign.get(K["proto"]) == PROTO,
                        "a foreign proto is answered by name, so a client can stop searching")
+            # Not adopted: a session that was never opened must never be pushed to.
+            s2.sendto(enc({K["proto"]: PROTO, K["type"]: TYPES["drive"], K["seq"]: 1,
+                          K["throttle"]: 0.9, K["turn"]: 0.0}), self.addr)
+            never = self.recv_matching(s2, is_telemetry, 0.7)
+            self.check(never is None, "a foreign-proto hello must not have opened a session")
         s2.close()
+
+        print("drive requires our own proto")
+        # New in v2: proto is carried but not judged by the parser — only the link
+        # judges it, and it must reject a drive missing it or speaking a foreign one,
+        # even from the adopted owner's own socket. Measured via link.rx_hz, not just
+        # aliveness, so a lax car that quietly accepts one cannot pass by accident.
+        primed = self.recv_matching(s, is_telemetry, 1.0)
+        self.check(primed is not None, "a push arrives before the no-proto probe")
+        no_proto = enc({K["type"]: TYPES["drive"], K["seq"]: 900001,
+                        K["throttle"]: 0.9, K["turn"]: 0.0})
+        foreign_proto = enc({K["proto"]: 1, K["type"]: TYPES["drive"], K["seq"]: 900002,
+                            K["throttle"]: 0.9, K["turn"]: 0.0})
+        s.sendto(no_proto, self.addr)
+        s.sendto(foreign_proto, self.addr)
+        seen = [f for f in self.scan_window(s, 1.0) if is_telemetry(f)]
+        self.check(bool(seen), "telemetry keeps flowing after the no-/foreign-proto probes")
+        bad_rx = [rx_hz_of(f) for f in seen if rx_hz_of(f)]
+        self.check(not bad_rx, f"link.rx_hz after a no-/foreign-proto drive was "
+                               f"{bad_rx or [0]}, want all 0 — the car accepted one")
 
         print("telemetry")
         seq = 0
@@ -240,53 +292,54 @@ class RTConformance:
             now = time.monotonic()
             if now >= next_send:
                 seq += 1
-                s.sendto(enc({RT["seq_field"]: seq, RT["throttle_field"]: 0.0,
-                              RT["yaw_field"]: 0.0}), self.addr)
+                s.sendto(enc({K["proto"]: PROTO, K["type"]: TYPES["drive"], K["seq"]: seq,
+                              K["throttle"]: 0.0, K["turn"]: 0.0}), self.addr)
                 next_send = now + 1.0 / RT["command_hz"]
             f = self.recv_frame(s, 0.05)
-            if f is not None and CTL_KEY in f:
+            if f is not None and is_telemetry(f):
                 frames.append(f)
         self.check(len(frames) >= 3,
                    f"telemetry: {len(frames)} frames in 1.5 s of streaming, want >= 3")
         if frames:
             f = frames[-1]
-            names = [t["name"] for t in TELEMETRY_FIELDS]
-            self.check(sorted(f) == sorted(names),
-                       f"telemetry keys {sorted(f)}, want {sorted(names)}")
-            for t in TELEMETRY_FIELDS:
-                want = JSON_TYPES.get(t["type"])
-                if want is None:
-                    self.check(False, f"telemetry field {t['name']} has type "
-                                       f"{t['type']!r}, which this tool has no check for")
+            self.check(isinstance(f.get(K["seq"]), int) and not isinstance(f.get(K["seq"]), bool),
+                       f"telemetry seq is {f.get(K['seq'])!r}, want an int")
+            for g in TELEMETRY_GROUPS:
+                group = f.get(g)
+                if not self.check(isinstance(group, dict), f"telemetry.{g} is {group!r}, want an object"):
                     continue
-                got = f.get(t["name"])
-                self.check(isinstance(got, want)
-                           and not (want is int and isinstance(got, bool)),
-                           f"telemetry {t['name']} is {got!r}, want {t['type']}")
-            self.check(f.get(CTL_KEY) in CTL_VALUES,
-                       f"telemetry {CTL_KEY} {f.get(CTL_KEY)!r} not in {CTL_VALUES}")
+                fields = GROUPS[g]["fields"]
+                names = [gf["name"] for gf in fields]
+                self.check(sorted(group) == sorted(names),
+                           f"telemetry.{g} keys {sorted(group)}, want {sorted(names)}")
+                for gf in fields:
+                    v = group.get(gf["name"])
+                    self.check(self.field_type_ok(v, gf),
+                               f"telemetry.{g}.{gf['name']} is {v!r}, want {gf['type']}")
+            self.check(owner_of(f) in OWNER_VALUES,
+                       f"telemetry motors.owner {owner_of(f)!r} not in {OWNER_VALUES}")
 
-        print("dropped datagrams (rejection is measured via rx_fps, not just aliveness)")
+        print("dropped datagrams (rejection is measured via link.rx_hz, not just aliveness)")
         # Quiesce: the telemetry loop above already stopped sending. Read one
         # push before doing anything else, so the backlog left by the streaming
         # tail is flushed and the pushes we inspect below are ones generated
         # after this point, not stale carryover from the loop.
-        flushed = self.recv_matching(s, lambda f: CTL_KEY in f, 1.0)
+        flushed = self.recv_matching(s, is_telemetry, 1.0)
         self.check(flushed is not None, "a push still arrives once streaming stops")
 
-        # The seven rule-6 shapes, numbered fresh against the live counter (see
-        # rule6_seq_frames' docstring) — only the four that carry a seq need it;
+        # The rule-6 shapes, numbered fresh against the live counter (see
+        # rule6_seq_frames' docstring) — only those that carry a seq need it;
         # the malformed hello and the seq-less bye are unaffected either way.
         seq_frames = rule6_seq_frames([seq + 10, seq + 11, seq + 12, seq + 13])
         oversized = padded_frame(seq + 14, RT["max_command"] + 1)
         # The stale/replayed seq is the one frame that is *supposed* to be low —
         # this is what a network-delayed duplicate of the telemetry loop's own
         # traffic looks like, and it is the replay gate specifically under test
-        # here, not the parser. t is zeroed: on a car with broken replay
+        # here, not the parser. throttle is zeroed: on a car with broken replay
         # protection this would otherwise be a live 90% throttle command issued
         # by a conformance tool.
-        stale_frame = enc({RT["seq_field"]: 1, RT["throttle_field"]: 0.0,
-                            RT["yaw_field"]: 0.0})
+        stale_frame = enc({K["proto"]: PROTO, K["type"]: TYPES["drive"], K["seq"]: 1,
+                            K["throttle"]: 0.0, K["turn"]: 0.0})
         bad_batch = DROPPED_FRAMES + seq_frames + [oversized, stale_frame]
         for bad in bad_batch:
             s.sendto(bad, self.addr)
@@ -295,31 +348,32 @@ class RTConformance:
         # separate blind searches (recv_matching, then drain, then another
         # recv_matching) would have each one discard frames the other needed:
         # a search for the stray hello-reply throws away every push it passes
-        # over, including the one whose rx_fps would prove a bad frame got in.
+        # over, including the one whose rx_hz would prove a bad frame got in.
         # 1.0 s (not the tighter 0.6 s used elsewhere below) because this scan
         # also carries the "does the session even survive" check — on real
         # WiFi a lost push or two must not read as a dead session.
         seen = self.scan_window(s, 1.0)
-        stray = next((f for f in seen if f.get(RT["hello_field"]) == BAD_HELLO_SID), None)
+        stray = next((f for f in seen if f.get(K["type"]) == TYPES["hello_ack"]
+                     and f.get(K["session"]) == BAD_HELLO_SID), None)
         self.check(stray is None, "a malformed hello (proto:1.5) must not be answered")
-        pushes = [f for f in seen if CTL_KEY in f]
+        pushes = [f for f in seen if is_telemetry(f)]
         self.check(bool(pushes),
                    "the session survives the dropped datagrams and still pushes")
-        bad_fps = []
+        bad_rx = []
         for f in pushes:
-            fps = f.get("rx_fps")
-            if fps is None:
-                # A push missing rx_fps entirely must not read the same as a
+            rx = rx_hz_of(f)
+            if rx is None:
+                # A push missing link.rx_hz entirely must not read the same as a
                 # push reporting 0 — an omitting car would otherwise pass this
                 # check by accident rather than by actually rejecting the batch.
-                self.check(False, f"a push after the bad batch is missing rx_fps: "
+                self.check(False, f"a push after the bad batch is missing link.rx_hz: "
                                    f"{sorted(f)}")
                 continue
-            if fps:
-                bad_fps.append(fps)
-        self.check(not bad_fps,
-                   f"rx_fps after the {len(bad_batch)} bad datagrams was "
-                   f"{bad_fps or [0]}, want all 0 — a lax car accepted one or more "
+            if rx:
+                bad_rx.append(rx)
+        self.check(not bad_rx,
+                   f"link.rx_hz after the {len(bad_batch)} bad datagrams was "
+                   f"{bad_rx or [0]}, want all 0 — a lax car accepted one or more "
                    f"of them")
 
         print("accepted at the cap")
@@ -341,19 +395,19 @@ class RTConformance:
         for _ in range(3):
             s.sendto(valid_padded, self.addr)
         # A single recv_matching for "the next push" is not safe here: the
-        # server's push tick is on its own 200 ms clock, so the datagrams we
-        # just sent can land either side of the next tick's window depending on
-        # timing alone, with no defect involved. Scan a few ticks' worth and
-        # require the bump to show up on any one of them, the same tolerance
-        # the bad-batch check above needs for the opposite reason.
-        after_pushes = [f for f in self.scan_window(s, 0.6) if CTL_KEY in f]
+        # server's push tick is on its own clock, so the datagrams we just sent
+        # can land either side of the next tick's window depending on timing
+        # alone, with no defect involved. Scan a few ticks' worth and require
+        # the bump to show up on any one of them, the same tolerance the
+        # bad-batch check above needs for the opposite reason.
+        after_pushes = [f for f in self.scan_window(s, 0.6) if is_telemetry(f)]
         self.check(bool(after_pushes),
                    "telemetry keeps flowing after a max-size valid command")
         if after_pushes:
-            seen_fps = [f.get("rx_fps") for f in after_pushes]
-            self.check(any(seen_fps),
-                       f"rx_fps after a valid {RT['max_command']}-byte command was "
-                       f"{seen_fps}, want at least one > 0 — the cap must admit "
+            seen_rx = [rx_hz_of(f) for f in after_pushes]
+            self.check(any(seen_rx),
+                       f"link.rx_hz after a valid {RT['max_command']}-byte command was "
+                       f"{seen_rx}, want at least one > 0 — the cap must admit "
                        f"exactly max_command bytes, not reject it too")
 
         print("eviction")
@@ -368,18 +422,18 @@ class RTConformance:
                                "(eviction and bye cannot be exercised without it)")
         else:
             self.drain(s, 0.5)
-            displaced = self.recv_matching(s, lambda f: CTL_KEY in f, 0.7)
+            displaced = self.recv_matching(s, is_telemetry, 0.7)
             self.check(displaced is None,
                        "after an eviction the displaced socket hears nothing")
-            moved = self.recv_matching(s3, lambda f: CTL_KEY in f, 1.0)
+            moved = self.recv_matching(s3, is_telemetry, 1.0)
             self.check(moved is not None, "telemetry follows the new owner")
 
             print("bye")
-            s3.sendto(enc({RT["seq_field"]: 1, RT["throttle_field"]: 0,
-                           RT["yaw_field"]: 0, RT["bye_field"]: 1}), self.addr)
+            s3.sendto(enc({K["proto"]: PROTO, K["type"]: TYPES["bye"], K["seq"]: 1}),
+                      self.addr)
             time.sleep(0.3)
             self.drain(s3, 0.5)
-            after = self.recv_matching(s3, lambda f: CTL_KEY in f, 1.0)
+            after = self.recv_matching(s3, is_telemetry, 1.0)
             self.check(after is None, "telemetry stops after a goodbye")
         s.close()
         s3.close()

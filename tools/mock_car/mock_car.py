@@ -4,10 +4,9 @@
 Two servers over one `CarState` (state.py, where all the behaviour is and where it is
 tested):
 
-  * a UDP endpoint on the contract's real-time port, speaking hello / seq / bye and
+  * a UDP endpoint on the contract's real-time port, speaking hello / drive / bye and
     pushing telemetry to whoever owns the session;
-  * the aiohttp REST server, whose five config domains are one handler pair registered
-    in a loop over the schema.
+  * the aiohttp REST server: /status, /config, /calibration*, /ota.
 
 It binds `0.0.0.0` by default, not loopback, so that a simulator on this Mac can be pointed
 at the Mac's LAN address (`-carHost`) and the conformance tools can be run from another
@@ -33,9 +32,10 @@ import sys
 
 from aiohttp import web
 
-from generated import DEVICE, DOMAINS, PROTO, RT
+from generated import (CALIBRATION, CONFIG_PATH, DEVICE, DOMAINS, ENDPOINTS, ENVELOPE,
+                       GROUPS, PROTO, RT)
 from rt_link import Impairment, RTLink, service_loop
-from state import CarState, parse_image_version
+from state import CarState, build_number, parse_image_version
 
 # A flash is the one REST call that takes real time; the mock spends it so a client's
 # progress UI has something to show.
@@ -84,9 +84,17 @@ def lan_address():
 
 # ---- REST ----------------------------------------------------------------------
 
-def json_error(status, message, field=""):
-    """The car's rejection shape: a 4xx carrying which key was at fault."""
-    return web.json_response({"error": message, "field": field}, status=status)
+def reply(members, status=200):
+    """Every JSON the car emits starts with proto."""
+    return web.json_response({ENVELOPE["proto"]: PROTO, **members}, status=status)
+
+
+def json_error(status, code, message, field=""):
+    """The car's rejection envelope. `field` is omitted when the body as a whole is at fault."""
+    err = {ENVELOPE["code"]: code, ENVELOPE["message"]: message}
+    if field:
+        err[ENVELOPE["field"]] = field
+    return web.json_response({ENVELOPE["proto"]: PROTO, ENVELOPE["error"]: err}, status=status)
 
 
 @web.middleware
@@ -100,8 +108,7 @@ async def one_at_a_time(request, handler):
 
 
 async def cfg_get(request):
-    car = request.app["car"]
-    return web.json_response(car.config[request.path])
+    return reply(request.app["car"].config_wire())
 
 
 async def cfg_post(request):
@@ -109,77 +116,96 @@ async def cfg_post(request):
     try:
         body = await request.json()
     except ValueError:
-        return json_error(400, "malformed JSON")
-    if not isinstance(body, dict):
-        return json_error(400, "expected a JSON object")
-    ok, err = car.apply_config(request.path, body)
+        return json_error(400, "bad_json", "malformed JSON")
+    ok, err = car.apply_config(body)
     if not ok:
-        return json_error(400, err, car.field_of(request.path, err))
-    print(f"{request.path}: {car.config[request.path]}")
-    return web.json_response({"ok": True})
+        code, field, message = err
+        return json_error(400, code, message, field)
+    print(f"{CONFIG_PATH}: {car.config_wire()}")
+    return reply(car.config_wire())
 
 
 async def status(request):
     car, link = request.app["car"], request.app["link"]
     now = asyncio.get_running_loop().time()
-    return web.json_response({
-        RT["device_field"]: car.device,
-        RT["fw_field"]: car.fw,
-        # The version gate: a client that cannot read this must refuse the car by name
-        # rather than mis-parse it.
-        RT["proto_field"]: PROTO,
-        # A poll is not a push: `bump=False` keeps the real-time stream's `seq`
-        # continuous however often something reads /status.
-        **car.telemetry(link.rx_fps(now, "status"), bump=False),
-        # `radio` is a /status-only object the schema does not describe, but the
-        # version inside it is spelled with the contract's key, as status_api.c
-        # spells it (`RT_KEY_FW`).
-        "radio": {RT["fw_field"]: "mock", "expected": "mock", "ok": True},
-        # Like `radio`: /status-only diagnostics outside the generated contract.
-        "rollback": car.rollback,
-        "nvs_wiped": car.nvs_wiped,
+    dev = [f["name"] for f in GROUPS["device"]["fields"]]
+    # Schema order (STATUS_GROUPS): device, link, motors, radio, storage, system —
+    # `radio` and `storage` are /status-only diagnostics the schema does not describe,
+    # inserted between the two groups `status_groups` already returns in order.
+    groups = car.status_groups(link.rx_fps(now, "status"))
+    return reply({
+        "device": dict(zip(dev, [car.device, car.fw, build_number(car.fw), car.rollback])),
+        "link": groups["link"],
+        "motors": groups["motors"],
+        "radio": {"fw": "mock", "expected": "mock", "state": "ok"},
+        "storage": {"reset_at_boot": car.nvs_wiped},
+        "system": groups["system"],
     })
 
 
 async def calib_get(request):
-    return web.json_response({"calibrated": request.app["car"].calibrated})
+    car = request.app["car"]
+    k = CALIBRATION["keys"]
+    return reply({k["calibrated"]: car.calibrated, k["wheels"]: car.calibration_table()})
 
 
 async def calib_spin(request):
     car = request.app["car"]
+    k = CALIBRATION["keys"]
     try:
         body = await request.json()
-        pair, direction = body["pair"], body["dir"]
-    except (ValueError, KeyError, TypeError):
-        return json_error(400, "need {pair,dir}")
-    if not isinstance(pair, int) or isinstance(pair, bool) or not 0 <= pair <= 3:
-        return json_error(400, "pair must be 0..3", "pair")
-    if direction not in (0, 1) or isinstance(direction, bool):
-        return json_error(400, "dir must be 0 or 1", "dir")
+    except ValueError:
+        return json_error(400, "bad_json", "malformed JSON")
+    if not isinstance(body, dict):
+        return json_error(400, "bad_json", "expected a JSON object")
+    for key in body:
+        if key not in (k["pair"], k["direction"]):
+            return json_error(400, "unknown_field", "no such field", key)
+    for key in (k["pair"], k["direction"]):
+        if key not in body:
+            return json_error(400, "missing_field", "required", key)
+    pair, direction = body[k["pair"]], body[k["direction"]]
+    if isinstance(pair, bool) or not isinstance(pair, (int, float)) or float(pair) != int(pair):
+        return json_error(400, "wrong_type", "expected an integer", k["pair"])
+    if not isinstance(direction, str):
+        return json_error(400, "wrong_type", "expected a word", k["direction"])
+    if not 0 <= int(pair) < CALIBRATION["pairs"]:
+        return json_error(400, "out_of_range", "pair 0..3", k["pair"])
+    if direction not in CALIBRATION["directions"]:
+        return json_error(400, "not_allowed", "forward or reverse", k["direction"])
+    forward = direction == CALIBRATION["directions"][0]
     now = asyncio.get_running_loop().time()
-    if not car.begin_spin(now, pair, direction):
+    if not car.begin_spin(now, int(pair), 1 if forward else 0):
         # The request is fine; the actuator is taken. The wizard must not advance — the
         # wheel did not turn, and four blind taps produce a table nothing can reject.
-        return json_error(409, "actuator busy")
-    print(f"calib: spin pair={pair} {'fwd' if direction else 'rev'}")
+        return json_error(409, "busy", "actuator busy")
+    print(f"calib: spin pair={int(pair)} {direction}")
     # The firmware's order (calib_api.c): sleep the pulse out, release, then answer.
     # The reply lands after the wheel has stopped — the wizard's next step assumes
     # it — and the app lock is held throughout, as the single httpd task is.
     await asyncio.sleep(CarState.CALIB_HOLD_MS / 1000.0)
     car.end_spin()
-    return web.json_response({"ok": True})
+    return reply({ENVELOPE["ok"]: True})
 
 
 async def calib_save(request):
     car = request.app["car"]
+    k = CALIBRATION["keys"]
     try:
-        wheels = (await request.json())["wheels"]
-    except (ValueError, KeyError, TypeError):
-        return json_error(400, "need {wheels:[4x{pair,sign}]}", "wheels")
-    if not car.save_calibration(wheels):
-        return json_error(400, "need 4 unique pairs 0..3 with signs ±1", "wheels")
-    print(f"calib: saved {wheels}")
-    return web.json_response({"ok": True})
+        body = await request.json()
+    except ValueError:
+        return json_error(400, "bad_json", "malformed JSON")
+    if not isinstance(body, dict) or k["wheels"] not in body:
+        return json_error(400, "missing_field", "required", k["wheels"])
+    for key in body:
+        if key != k["wheels"]:
+            return json_error(400, "unknown_field", "no such field", key)
+    ok, err = car.save_calibration(body[k["wheels"]])
+    if not ok:
+        code, field, message = err
+        return json_error(400, code, message, field)
+    print(f"calib: saved {car.calibration_table()}")
+    return reply({k["calibrated"]: car.calibrated, k["wheels"]: car.calibration_table()})
 
 
 async def ota(request):
@@ -187,28 +213,28 @@ async def ota(request):
     now = asyncio.get_running_loop().time()
     # The car stops the motors and takes the sticky grant before reading a single
     # body byte (car_stop(LINK_SRC_OTA) is ota_api.c's first statement), and
-    # answers 500 when something outranks the flash.
+    # answers 409 when something outranks the flash.
     if not car.begin_ota(now):
-        return json_error(500, "actuator busy")
+        return json_error(409, "busy", "actuator busy")
     try:
         data = await request.read()
     except Exception:
         # A client that aborts mid-upload (aiohttp sets the payload exception on
-        # connection loss) must not leave CTL_OTA held forever — ota_api.c's own
-        # recv-error path is esp_ota_abort + link_release_must + 400 "recv error".
+        # connection loss) must not leave OWNER_UPDATE held forever — ota_api.c's own
+        # recv-error path is esp_ota_abort + link_release_must + a rejection.
         # hold_s is None (sticky), so nothing else times this grant out.
         car.end_ota(flashed=False)
         raise
     if len(data) < OTA_MIN_BYTES:
         car.end_ota(flashed=False)
-        return json_error(400, "image too small")
+        return json_error(400, "too_small", "image too small")
     if data[0] != 0xE9:
         # esp_ota_write validates the ESP image magic on the first write, and
-        # ota_api.c answers 500 "ota write failed". Any 4 KB blob used to flash
-        # here and bump fw — the exact wrong-release-asset path the app could
-        # never rehearse.
+        # ota_api.c answers "not an ESP image". Any 4 KB blob used to flash here
+        # and bump fw — the exact wrong-release-asset path the app could never
+        # rehearse.
         car.end_ota(flashed=False)
-        return json_error(500, "ota write failed")
+        return json_error(400, "not_firmware", "not an ESP image")
     prev_fw = car.fw
     print(f"ota: {len(data)} bytes — motors stopped, flashing")
     await asyncio.sleep(OTA_SECONDS)
@@ -223,7 +249,7 @@ async def ota(request):
     else:
         print(f"ota: done, now running {car.fw} — 'rebooting'")
     link.simulate_reboot(asyncio.get_running_loop().time())
-    return web.json_response({"ok": True})
+    return reply({ENVELOPE["ok"]: True})
 
 
 async def root(request):
@@ -242,14 +268,16 @@ def build_app(car, link, rollback_mode=False):
     app["link"] = link
     app["lock"] = asyncio.Lock()
     app["rollback_mode"] = rollback_mode
-    routes = [web.get("/", root), web.get("/status", status),
-              web.get("/calib", calib_get), web.post("/calib/spin", calib_spin),
-              web.post("/calib/save", calib_save), web.post("/ota", ota)]
-    # One handler pair for every config domain: the mock cannot disagree with the car
-    # about a range, because neither of them has one written down.
-    for path in DOMAINS:
-        routes += [web.get(path, cfg_get), web.post(path, cfg_post)]
-    app.add_routes(routes)
+    app.add_routes([
+        web.get(ENDPOINTS["root"], root),
+        web.get(ENDPOINTS["status"], status),
+        web.get(ENDPOINTS["calibration"], calib_get),
+        web.post(ENDPOINTS["calibration"], calib_save),
+        web.post(ENDPOINTS["spin"], calib_spin),
+        web.post(ENDPOINTS["ota"], ota),
+        web.get(CONFIG_PATH, cfg_get),
+        web.post(CONFIG_PATH, cfg_post),
+    ])
     return app
 
 
@@ -267,12 +295,12 @@ async def serve(args):
 
     where = lan_address() if args.host == "0.0.0.0" else args.host
     print(f"mock {car.device} {car.fw} (proto {PROTO})")
-    print(f"  REST      http://{where}:{args.port}   /status /calib* /ota "
-          + " ".join(DOMAINS))
-    print(f"  real-time udp://{where}:{args.rt_port}   hello/seq/bye, "
+    print(f"  REST      http://{where}:{args.port}   /status /calibration* /ota "
+          f"{CONFIG_PATH} ({', '.join(DOMAINS)})")
+    print(f"  real-time udp://{where}:{args.rt_port}   hello/drive/bye, "
           f"{RT['telemetry_hz']} Hz telemetry")
     print(f"  link      {impair.describe()}; watchdog {RT['watchdog_ms']} ms, "
-          f"auto-return {car.config['/recover']['window_ms']} ms")
+          f"auto-return {car.config['recovery']['window_ms']} ms")
 
     await service_loop(link)
 
