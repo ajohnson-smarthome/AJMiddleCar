@@ -1,6 +1,7 @@
 {
+  "proto": 1,
   "device": "ajdongle",
-  "doc": "The vocabulary the app and the dongle must spell identically. Rules live in firmware/dongle/main/net_cfg.{c,h}, which is host-tested; this file carries only names, numbers and paths.",
+  "doc": "The vocabulary the app and the dongle must spell identically. Rules live in firmware/dongle/main/net_cfg.{c,h}, which is host-tested; this file carries names, numbers, paths and shapes.",
   "network": {
     "host": "192.168.7.1",
     "port": 8080,
@@ -9,41 +10,92 @@
   "relay": {
     "http_port": 80,
     "rt_port": 4210,
-    "doc": "The ports the dongle listens on for the car's traffic, on its own address. The car keeps its native numbers so contract/car-api.json and CarHost.port do not move; only CarHost.host does. What speaks on them is not the dongle's business."
+    "doc": "The ports the dongle listens on for the car's traffic, on its own address. What speaks on them is not the dongle's business."
   },
   "endpoints": {
     "status": "/status",
-    "net": "/net",
+    "wifi": "/wifi",
     "ota": "/ota"
   },
-  "status_fields": {
-    "device": "device",
-    "fw": "fw",
-    "idf": "idf",
-    "usb": "usb",
-    "rollback": "rollback",
-    "net": "net",
-    "net_ssid": "ssid",
-    "net_state": "state",
-    "net_rssi": "rssi",
-    "uptime": "uptime",
-    "heap": "heap",
-    "attempts": "attempts",
-    "attempts_max": "attempts_max",
-    "channel": "channel",
-    "relay": "relay",
-    "relay_to_car": "to_car_x10",
-    "relay_to_phone": "to_phone_x10",
-    "relay_slots_udp": "slots_udp",
-    "relay_slots_tcp": "slots_tcp",
-    "relay_errno": "errno",
-    "relay_errno_count": "errno_count",
-    "relay_errno_age": "errno_age"
+  "envelope": {
+    "proto": "proto",
+    "ok": "ok",
+    "error": "error",
+    "code": "code",
+    "message": "message",
+    "field": "field"
   },
-  "net_fields": {
+  "groups": {
+    "device": {
+      "swift": "DongleDevice",
+      "doc": "Who is answering.",
+      "fields": [
+        {"name": "id", "type": "str", "doc": "the device name; ajdongle for this adapter"},
+        {"name": "fw", "type": "str", "doc": "firmware version, v<semver>+<build>"},
+        {"name": "build", "type": "int", "doc": "the number after + in fw, as an integer"},
+        {"name": "rolled_back", "type": "bool", "doc": "the bootloader reverted the last update"},
+        {"name": "idf", "type": "str", "doc": "the ESP-IDF version this image was built with"}
+      ]
+    },
+    "usb": {
+      "swift": "DongleUsb",
+      "doc": "The wire to the phone.",
+      "fields": [
+        {"name": "state", "type": "state", "swift": "DongleUsbState", "values": ["up", "down"], "doc": "whether a host is attached"}
+      ]
+    },
+    "wifi": {
+      "swift": "DongleWifi",
+      "doc": "The station: which network it was told, and how the join is going.",
+      "fields": [
+        {"name": "ssid", "type": "str", "doc": "the network held since boot; empty when none was sent"},
+        {"name": "configured", "type": "bool", "doc": "a network has been sent since boot"},
+        {"name": "state", "type": "state", "swift": "DongleWifiState", "values": ["idle", "searching", "joining", "connected", "failed"], "doc": "idle: no network; searching: not seen on the air; joining: seen, getting an address; connected; failed: the attempt budget ran out"},
+        {"name": "rssi_dbm", "type": "int", "nullable": true, "doc": "the car's signal at the dongle, null unless connected"},
+        {"name": "channel", "type": "int", "nullable": true, "doc": "Wi-Fi channel, null unless connected"},
+        {"name": "attempts", "type": "object", "swift": "DongleWifiAttempts", "doc": "the join budget", "fields": [
+          {"name": "used", "type": "int", "doc": "attempts spent on the current network"},
+          {"name": "max", "type": "int", "doc": "the budget"}
+        ]}
+      ]
+    },
+    "relay": {
+      "swift": "DongleRelay",
+      "doc": "What is being forwarded, and the last time forwarding failed.",
+      "fields": [
+        {"name": "to_car_hz", "type": "number", "doc": "control datagrams per second toward the car"},
+        {"name": "to_phone_hz", "type": "number", "doc": "datagrams per second toward the phone"},
+        {"name": "udp_sessions", "type": "int", "doc": "real-time sessions in use, of 4"},
+        {"name": "tcp_connections", "type": "int", "doc": "HTTP connections in use, of 4"},
+        {"name": "last_error", "type": "object", "swift": "DongleRelayError", "nullable": true, "doc": "the most recent forwarding failure, null when none since boot", "fields": [
+          {"name": "errno", "type": "int", "doc": "the POSIX errno"},
+          {"name": "message", "type": "str", "doc": "strerror of it"},
+          {"name": "count", "type": "int", "doc": "how many times in a row this errno repeated"},
+          {"name": "age_s", "type": "int", "doc": "seconds since it last happened"}
+        ]}
+      ]
+    },
+    "system": {
+      "swift": "DongleSystem",
+      "doc": "Uptime and memory.",
+      "fields": [
+        {"name": "uptime_s", "type": "int", "doc": "seconds since boot"},
+        {"name": "free_heap", "type": "int", "doc": "free heap in bytes"}
+      ]
+    }
+  },
+  "status": {
+    "swift": "DongleStatus",
+    "groups": ["device", "usb", "wifi", "relay", "system"],
+    "doc": "GET /status: proto, then these groups."
+  },
+  "wifi_request": {
     "ssid": "ssid",
-    "password": "password",
-    "configured": "configured"
+    "password": "password"
+  },
+  "wifi_reply": {
+    "swift": "DongleWifiReply",
+    "fields": ["ssid", "state"]
   },
   "bounds": {
     "ssid_min": 1,
@@ -52,15 +104,5 @@
     "pass_max": 63,
     "doc": "WPA2's limits, not ours. A password is empty or pass_min..pass_max; net_cfg enforces that, and the character-class rule it also enforces has no expression here."
   },
-  "net_states": [
-    "idle",
-    "searching",
-    "joining",
-    "connected",
-    "failed"
-  ],
-  "usb_states": [
-    "up",
-    "down"
-  ]
+  "errors": ["bad_json", "missing_field", "unknown_field", "wrong_type", "bad_length", "bad_chars", "radio_refused", "too_small", "not_firmware", "write_failed", "busy", "internal"]
 }

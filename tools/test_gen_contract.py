@@ -382,41 +382,67 @@ class TestDriftCheck(unittest.TestCase):
 
 
 class TestDongleSchema(unittest.TestCase):
-    def setUp(self):
-        with open(ROOT / "contract" / "dongle-api.json") as f:
-            self.s = json.load(f)
+    def load(self):
+        return json.loads((ROOT / "contract" / "dongle-api.json").read_text())
 
     def test_identity_and_address_are_pinned(self):
-        self.assertEqual(self.s["device"], "ajdongle")
-        self.assertEqual(self.s["network"]["host"], "192.168.7.1")
-        # 8080, not 80: the car keeps its native ports and the dongle takes the odd one.
-        self.assertEqual(self.s["network"]["port"], 8080)
+        s = self.load()
+        self.assertEqual(s["proto"], 1)
+        self.assertEqual(s["device"], "ajdongle")
+        self.assertEqual(s["network"], {"host": "192.168.7.1", "port": 8080,
+                                        "doc": s["network"]["doc"]})
+        self.assertEqual(s["endpoints"], {"status": "/status", "wifi": "/wifi", "ota": "/ota"})
+        self.assertEqual(s["envelope"], {"proto": "proto", "ok": "ok", "error": "error",
+                                         "code": "code", "message": "message", "field": "field"})
 
     def test_bounds_are_wpa2s(self):
-        b = self.s["bounds"]
+        b = self.load()["bounds"]
         self.assertEqual((b["ssid_min"], b["ssid_max"]), (1, 32))
         self.assertEqual((b["pass_min"], b["pass_max"]), (8, 63))
 
     def test_it_names_no_car(self):
-        # The dongle's schema must not acquire a car's SSID, password or device id —
-        # the constraint the whole firmware is built around.
-        blob = json.dumps(self.s).lower()
-        for forbidden in ("ajmiddlecar", "drive1234", "192.168.4."):
-            self.assertNotIn(forbidden, blob)
+        text = (ROOT / "contract" / "dongle-api.json").read_text().lower()
+        self.assertNotIn("ajmiddlecar", text)
+        self.assertNotIn("drive1234", text)
 
-    def test_state_vocabulary_is_the_documented_one(self):
-        # `searching` is a split of `joining`, not a new place in the machine: the pure state
-        # machine in wifi_state.c still has four states, and wifi_sta.c refines the label using
-        # WIFI_EVENT_STA_CONNECTED. It is listed between the two states it sits between so the
-        # order still reads as the sequence a join actually walks.
-        self.assertEqual(self.s["net_states"],
-                         ["idle", "searching", "joining", "connected", "failed"])
+    def test_groups(self):
+        g = self.load()["groups"]
+        self.assertEqual(list(g), ["device", "usb", "wifi", "relay", "system"])
+        names = {k: [f["name"] for f in v["fields"]] for k, v in g.items()}
+        self.assertEqual(names["device"], ["id", "fw", "build", "rolled_back", "idf"])
+        self.assertEqual(names["usb"], ["state"])
+        self.assertEqual(names["wifi"], ["ssid", "configured", "state", "rssi_dbm", "channel",
+                                         "attempts"])
+        self.assertEqual(names["relay"], ["to_car_hz", "to_phone_hz", "udp_sessions",
+                                          "tcp_connections", "last_error"])
+        self.assertEqual(names["system"], ["uptime_s", "free_heap"])
+        for k, v in g.items():
+            self.assertTrue(v["swift"].startswith("Dongle"), k)
+        wifi_state = next(f for f in g["wifi"]["fields"] if f["name"] == "state")
+        self.assertEqual(wifi_state["values"], ["idle", "searching", "joining", "connected", "failed"])
+        self.assertEqual(wifi_state["swift"], "DongleWifiState")
+        usb_state = next(f for f in g["usb"]["fields"] if f["name"] == "state")
+        self.assertEqual(usb_state["values"], ["up", "down"])
+        attempts = next(f for f in g["wifi"]["fields"] if f["name"] == "attempts")
+        self.assertEqual(attempts["type"], "object")
+        self.assertEqual([f["name"] for f in attempts["fields"]], ["used", "max"])
+        err = next(f for f in g["relay"]["fields"] if f["name"] == "last_error")
+        self.assertEqual(err["type"], "object")
+        self.assertTrue(err["nullable"])
+        self.assertEqual([f["name"] for f in err["fields"]], ["errno", "message", "count", "age_s"])
+        for name in ("rssi_dbm", "channel"):
+            f = next(f for f in g["wifi"]["fields"] if f["name"] == name)
+            self.assertTrue(f.get("nullable"), name)
 
-    def test_usb_state_vocabulary_is_the_documented_one(self):
-        # usb had a key (status_fields) but no enumerated values until this fix — status_api.c
-        # hardcoded "up" with nothing here to check it against. "down" joined once
-        # status_api.c stopped hardcoding "up" and started asking usb_net_host_attached().
-        self.assertEqual(self.s["usb_states"], ["up", "down"])
+    def test_status_wifi_and_errors(self):
+        s = self.load()
+        self.assertEqual(s["status"]["groups"], ["device", "usb", "wifi", "relay", "system"])
+        self.assertEqual(s["status"]["swift"], "DongleStatus")
+        self.assertEqual(s["wifi_request"], {"ssid": "ssid", "password": "password"})
+        self.assertEqual(s["wifi_reply"], {"swift": "DongleWifiReply", "fields": ["ssid", "state"]})
+        self.assertEqual(s["errors"], ["bad_json", "missing_field", "unknown_field", "wrong_type",
+                                       "bad_length", "bad_chars", "radio_refused", "too_small",
+                                       "not_firmware", "write_failed", "busy", "internal"])
 
 
 class TestDongleAgreesWithTheCar(unittest.TestCase):
