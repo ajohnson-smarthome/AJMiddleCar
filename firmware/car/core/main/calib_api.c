@@ -40,6 +40,10 @@ static esp_err_t calib_spin(httpd_req_t *req) {
     }
     cJSON *j = cJSON_Parse(b);
     if (!j) return api_reply_error(req, "400 Bad Request", ERR_BAD_JSON, "", "malformed JSON");
+    if (!cJSON_IsObject(j)) {
+        cJSON_Delete(j);
+        return api_reply_error(req, "400 Bad Request", ERR_BAD_JSON, "", "expected a JSON object");
+    }
     /* Unknown keys are refused: this is a two-party API where a typo is a bug. */
     for (const cJSON *it = j->child; it; it = it->next) {
         if (strcmp(it->string, KEY_CALIB_PAIR) != 0 && strcmp(it->string, KEY_CALIB_DIRECTION) != 0) {
@@ -71,8 +75,13 @@ static esp_err_t calib_spin(httpd_req_t *req) {
     }
     ESP_LOGI(TAG, "spin pair %d %s", pair, fwd ? "fwd" : "rev");
     if (!car_spin_pair((uint8_t)pair, fwd != 0)) {
+        /* 409 is the honest code — the request is fine, the actuator is taken. IDF's
+           httpd_err_code_t has no 409, so the status line is set directly. */
         return api_reply_error(req, "409 Conflict", ERR_BUSY, "", "actuator busy");
     }
+    /* The grant lapses on its own after LINK_HOLD_CALIB_MS, so the pulse ends whether
+       or not this handler is still here. The delay is only so the reply lands after
+       the wheel has stopped, which is what the wizard's next step assumes. */
     vTaskDelay(pdMS_TO_TICKS(LINK_HOLD_CALIB_MS));
     link_release_must(LINK_SRC_CALIB);
     return api_reply_ok(req);
@@ -86,6 +95,10 @@ static esp_err_t calib_save(httpd_req_t *req) {
     }
     cJSON *j = cJSON_Parse(b);
     if (!j) return api_reply_error(req, "400 Bad Request", ERR_BAD_JSON, "", "malformed JSON");
+    if (!cJSON_IsObject(j)) {
+        cJSON_Delete(j);
+        return api_reply_error(req, "400 Bad Request", ERR_BAD_JSON, "", "expected a JSON object");
+    }
     for (const cJSON *it = j->child; it; it = it->next) {
         if (strcmp(it->string, KEY_CALIB_WHEELS) != 0) {
             esp_err_t e = api_reply_error(req, "400 Bad Request", ERR_UNKNOWN_FIELD, it->string, "no such field");
@@ -143,7 +156,12 @@ static esp_err_t calib_save(httpd_req_t *req) {
     esp_err_t e = calibration_save(&cfg);   /* validates: pairs 0..3 each once */
     if (e != ESP_OK) {
         ESP_LOGW(TAG, "save rejected: %s", esp_err_to_name(e));
-        return api_reply_error(req, "400 Bad Request", ERR_NOT_ALLOWED, KEY_CALIB_WHEELS, "pairs must be 0..3, each once");
+        /* ESP_ERR_INVALID_ARG is the validator's own answer — the client's fault. Any
+           other code is a flash/NVS failure: the request was fine, persisting it was not. */
+        if (e == ESP_ERR_INVALID_ARG) {
+            return api_reply_error(req, "400 Bad Request", ERR_NOT_ALLOWED, KEY_CALIB_WHEELS, "pairs must be 0..3, each once");
+        }
+        return api_reply_error(req, "500 Internal Server Error", ERR_WRITE_FAILED, KEY_CALIB_WHEELS, "could not persist");
     }
     car_set_calibration(&cfg);
     calibration_set_valid(true);
