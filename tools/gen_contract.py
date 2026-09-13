@@ -51,13 +51,14 @@ def field_range(f):
 
 def emit_doc(schema):
     lines = [
-        "| Endpoint | GET returns | POST body | Ranges |",
-        "|---|---|---|---|",
+        "| Domain | Field | Type | Range | Default | Meaning |",
+        "|---|---|---|---|---|---|",
     ]
-    for d in schema["domains"]:
-        shape = ", ".join(f'"{f["name"]}":…' for f in d["fields"])
-        ranges = "<br>".join(f"`{f['name']}` {field_range(f)}" for f in d["fields"])
-        lines.append(f"| `{d['path']}` | `{{{shape}}}` | same | {ranges} |")
+    for d in schema["config"]["domains"]:
+        for f in d["fields"]:
+            kind = {"int": "int", "bool": "bool", "enum": "enum", "fixed": "decimal"}[f["type"]]
+            default = _swift_literal(f)
+            lines.append(f"| `{d['key']}` | `{f['name']}` | {kind} | {field_range(f)} | {default} | {f['doc']} |")
     return "\n".join(lines)
 
 
@@ -255,59 +256,103 @@ def emit_swift(schema):
 
 VALIDATE_SRC = '''
 
-def validate(path, body):
-    """Return (True, "") or (False, reason). Mirrors the firmware exactly."""
-    domain = DOMAINS.get(path)
-    if domain is None:
-        return False, f"unknown endpoint {path}"
-    for f in domain["fields"]:
-        name = f["name"]
-        if name not in body:
-            return False, f"missing {name}"
-        v = body[name]
-        if f["type"] == "bool":
-            if not isinstance(v, bool):
-                return False, f"{name} must be a boolean"
+def lround(x):
+    """C's lround: half away from zero, so 9.005 x 100 is 901 here and on the car."""
+    return int(math.copysign(math.floor(abs(x) + 0.5), x))
+
+
+def to_wire(key, values):
+    """A domain's internal integers -> the JSON the car answers: fixed fields as decimals."""
+    out = {}
+    for f in DOMAINS[key]["fields"]:
+        v = values[f["name"]]
+        out[f["name"]] = v / f["scale"] if f["type"] == "fixed" else v
+    return out
+
+
+def from_wire(key, obj):
+    """A validated domain object -> internal integers: fixed fields x scale, rounded."""
+    out = {}
+    for f in DOMAINS[key]["fields"]:
+        v = obj[f["name"]]
+        out[f["name"]] = lround(v * f["scale"]) if f["type"] == "fixed" else v
+    return out
+
+
+def validate_config(body):
+    """Return (True, None) or (False, (code, field, message)). Mirrors cfg_api.c exactly:
+    the body is an object of domain objects, each present domain complete, unknown keys
+    refused at both levels, numbers typed the way cJSON types them (a JSON boolean is not
+    a number; a fraction is not an integer)."""
+    if not isinstance(body, dict):
+        return False, ("bad_json", "", "expected a JSON object")
+    if not body:
+        return False, ("missing_field", "", "no configuration domain in the body")
+    for key in body:
+        if key not in DOMAINS:
+            return False, ("unknown_field", key, f"{key} is not a configuration domain")
+    for key, domain in DOMAINS.items():
+        if key not in body:
             continue
-        # bool is a subclass of int in Python, so {"ramp_ms": true} would sneak
-        # past a plain isinstance check. The firmware's cJSON_IsNumber does not
-        # accept a JSON boolean, so neither does this.
-        if isinstance(v, bool) or not isinstance(v, int):
-            return False, f"{name} must be an integer"
-        if f["type"] == "enum":
-            if v not in f["values"]:
-                return False, f"{name} must be one of {f['values']}"
-        elif not (f["min"] <= v <= f["max"]):
-            return False, f"{name} must be {f['min']}..{f['max']}"
-    return True, ""
+        obj = body[key]
+        if not isinstance(obj, dict):
+            return False, ("wrong_type", key, f"{key} must be an object")
+        names = {f["name"] for f in domain["fields"]}
+        for k in obj:
+            if k not in names:
+                return False, ("unknown_field", f"{key}.{k}", f"{key} has no field {k}")
+        for f in domain["fields"]:
+            name = f["name"]
+            where = f"{key}.{name}"
+            if name not in obj:
+                return False, ("missing_field", where, f"{where} is required")
+            v = obj[name]
+            if f["type"] == "bool":
+                if not isinstance(v, bool):
+                    return False, ("wrong_type", where, f"{where} must be a boolean")
+                continue
+            # bool is a subclass of int in Python, so True would sneak past a plain
+            # isinstance check. cJSON_IsNumber does not accept a JSON boolean either.
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                return False, ("wrong_type", where, f"{where} must be a number")
+            if f["type"] == "fixed":
+                scaled = lround(v * f["scale"])
+                if not (f["min"] <= scaled <= f["max"]):
+                    lo, hi = f["min"] / f["scale"], f["max"] / f["scale"]
+                    return False, ("out_of_range", where, f"{where} must be {lo:g}..{hi:g}")
+                continue
+            if v != int(v):
+                return False, ("wrong_type", where, f"{where} must be an integer")
+            v = int(v)
+            if f["type"] == "enum":
+                if v not in f["values"]:
+                    return False, ("not_allowed", where, f"{where} must be one of {f['values']}")
+            elif not (f["min"] <= v <= f["max"]):
+                return False, ("out_of_range", where, f"{where} must be {f['min']}..{f['max']}")
+    return True, None
 '''
 
 
 def emit_python(schema):
+    cfg = schema["config"]
     body = {
-        d["path"]: {
-            "key": d["nvs_key"],
+        d["key"]: {
+            "nvs_key": d["nvs_key"],
             "defaults": {f["name"]: f["default"] for f in d["fields"]},
-            "fields": d["fields"],
+            "fields": [{**f, "scale": f.get("scale", 1)} for f in d["fields"]],
         }
-        for d in schema["domains"]
+        for d in cfg["domains"]
     }
     return "\n".join([
         f"# {BANNER}",
+        "import math",
         "",
-        f"PROTO = {schema['proto']}",
-        f"DEVICE = {schema['device']!r}",
+        *py_common(schema),
         f"NETWORK = {schema['network']!r}",
         f"RT = {schema['rt']!r}",
-        f"TELEMETRY_FIELDS = {schema['telemetry']['fields']!r}",
-        f"CTL_VALUES = {schema['ctl_values']!r}",
-        "",
-        "# Name-keyed, like C's CTL_RT and Swift's CtlOwner.rt. Position in",
-        "# CTL_VALUES is still rank; these names free callers from the unpack.",
-        *[f"CTL_{v.upper()} = {v!r}" for v in schema["ctl_values"]],
-        "",
-        # pformat, not json.dumps: this file is a Python module, and JSON writes
-        # `true` where Python needs `True`. sort_dicts=False keeps it deterministic.
+        f"TELEMETRY_GROUPS = {schema['telemetry']['groups']!r}",
+        f"CALIBRATION = {schema['calibration']!r}",
+        f"CONFIG_PATH = {cfg['path']!r}",
         f"DOMAINS = {pprint.pformat(body, indent=4, sort_dicts=False, width=96)}",
         VALIDATE_SRC.rstrip("\n"),
         "",

@@ -185,30 +185,25 @@ class TestArtifactListing(unittest.TestCase):
 
 
 class TestDocEmitter(unittest.TestCase):
-    def test_table_has_a_row_per_domain_with_ranges(self):
+    def test_table_has_a_row_per_field_grouped_by_domain(self):
         import gen_contract
         out = gen_contract.emit_doc(load())
-        self.assertIn("| `/wheel` |", out)
-        self.assertIn("`diameter_mm` 20..150", out)
-        self.assertIn("`quad` 1 \\| 2 \\| 4", out)
-        self.assertIn("`enabled` true \\| false", out)
-        for path in ("/ramp", "/trim", "/recover", "/wheel", "/dims"):
-            self.assertIn(f"| `{path}` |", out)
+        self.assertIn("| Domain | Field | Type | Range | Default | Meaning |", out)
+        self.assertIn("| `wheel` | `gear_ratio` | decimal | 1..300 | 9.0 |", out)
+        self.assertIn("| `ramp` | `rise_ms` | int | 0..2000 | 300 |", out)
+        self.assertIn("| `recovery` | `enabled` | bool | true \\| false | true |", out)
+        self.assertEqual(out.count("| `wheel` |"), 4)
 
     def test_splice_replaces_only_the_marked_region(self):
         import gen_contract
-        doc = ("keep me\n" + gen_contract.MARK_BEGIN + "\nstale\n"
-               + gen_contract.MARK_END + "\nkeep me too\n")
-        out = gen_contract.splice(doc, "fresh")
-        self.assertIn("keep me", out)
-        self.assertIn("keep me too", out)
-        self.assertIn("fresh", out)
-        self.assertNotIn("stale", out)
+        doc = "before\n" + gen_contract.MARK_BEGIN + "\nold\n" + gen_contract.MARK_END + "\nafter\n"
+        self.assertEqual(gen_contract.splice(doc, "new"),
+                         "before\n" + gen_contract.MARK_BEGIN + "\nnew\n" + gen_contract.MARK_END + "\nafter\n")
 
     def test_splice_refuses_a_document_without_markers(self):
         import gen_contract
         with self.assertRaises(ValueError):
-            gen_contract.splice("no markers here", "fresh")
+            gen_contract.splice("no markers here", "x")
 
 
 class TestDeterminism(unittest.TestCase):
@@ -418,81 +413,55 @@ class TestSwiftEmitter(unittest.TestCase):
 
 class TestPythonEmitter(unittest.TestCase):
     def setUp(self):
-        import gen_contract
-        ns = {}
-        exec(gen_contract.emit_python(load()), ns)
-        self.ns = ns
+        import gen_contract, types
+        self.src = gen_contract.emit_python(load())
+        self.m = types.ModuleType("generated_under_test")
+        exec(self.src, self.m.__dict__)
 
-    def test_telemetry_fields_reach_python(self):
-        names = [f["name"] for f in self.ns["TELEMETRY_FIELDS"]]
-        self.assertEqual(names[0], "seq")
-        self.assertIn("rx_fps", names)
-        self.assertIn("ctl", names)
-        self.assertIn("bus_ok", names)
+    def test_tables(self):
+        m = self.m
+        self.assertEqual(m.PROTO, 2)
+        self.assertEqual(m.RT["keys"]["turn"], "turn")
+        self.assertEqual(m.RT["types"]["hello_ack"], "hello_ack")
+        self.assertEqual(m.CONFIG_PATH, "/config")
+        self.assertEqual(list(m.DOMAINS), ["ramp", "trim", "recovery", "wheel", "chassis"])
+        self.assertEqual(m.DOMAINS["wheel"]["defaults"]["gear_ratio"], 900)
+        self.assertEqual(m.TELEMETRY_GROUPS, ["link", "motors", "system"])
+        self.assertEqual(m.GROUPS["motors"]["fields"][2]["values"][3], "remote")
+        self.assertEqual(m.CALIBRATION["corners"][0], "front_left")
+        self.assertIn("busy", m.ERRORS)
 
-    def test_table(self):
-        self.assertEqual(self.ns["PROTO"], 1)
-        self.assertEqual(self.ns["DEVICE"], "ajmiddlecar")
-        self.assertEqual(self.ns["RT"]["port"], 4210)
-        self.assertEqual(self.ns["RT"]["session_idle_ms"], 10000)
-        self.assertEqual(set(self.ns["DOMAINS"]),
-                         {"/ramp", "/trim", "/recover", "/wheel", "/dims"})
-        self.assertEqual(self.ns["DOMAINS"]["/recover"]["defaults"],
-                         {"enabled": True, "window_ms": 5000})
+    def test_validate_accepts_the_defaults_on_the_wire(self):
+        m = self.m
+        body = {k: m.to_wire(k, d["defaults"]) for k, d in m.DOMAINS.items()}
+        self.assertEqual(body["wheel"]["gear_ratio"], 9.0)
+        self.assertEqual(m.validate_config(body), (True, None))
+        self.assertEqual(m.validate_config({"ramp": {"rise_ms": 300}}), (True, None))
 
-    def test_validate_accepts_the_defaults(self):
-        v = self.ns["validate"]
-        for path, d in self.ns["DOMAINS"].items():
-            ok, why = v(path, dict(d["defaults"]))
-            self.assertTrue(ok, f"{path}: {why}")
+    def test_validate_rejects_and_names_the_field(self):
+        m = self.m
+        self.assertEqual(m.validate_config({"ramp": {"rise_ms": 2001}})[1][:2], ("out_of_range", "ramp.rise_ms"))
+        self.assertEqual(m.validate_config({"ramp": {}})[1][:2], ("missing_field", "ramp.rise_ms"))
+        self.assertEqual(m.validate_config({"ramp": {"rise_ms": 300, "x": 1}})[1][:2], ("unknown_field", "ramp.x"))
+        self.assertEqual(m.validate_config({"nope": {}})[1][:2], ("unknown_field", "nope"))
+        self.assertEqual(m.validate_config({"ramp": 5})[1][:2], ("wrong_type", "ramp"))
+        self.assertEqual(m.validate_config({"ramp": {"rise_ms": True}})[1][:2], ("wrong_type", "ramp.rise_ms"))
+        self.assertEqual(m.validate_config({"ramp": {"rise_ms": 25.7}})[1][:2], ("wrong_type", "ramp.rise_ms"))
+        self.assertEqual(m.validate_config({"wheel": {**m.to_wire("wheel", m.DOMAINS["wheel"]["defaults"]),
+                                                      "quadrature": 3}})[1][:2], ("not_allowed", "wheel.quadrature"))
+        self.assertEqual(m.validate_config({})[1][:2], ("missing_field", ""))
+        self.assertEqual(m.validate_config([])[1][:2], ("bad_json", ""))
 
-    def test_validate_accepts_the_range_edges(self):
-        v = self.ns["validate"]
-        ok, why = v("/wheel", {"diameter_mm": 20, "ppr": 1000, "gear_x100": 100, "quad": 1})
-        self.assertTrue(ok, why)
-        ok, why = v("/trim", {"trim_pct": -30})
-        self.assertTrue(ok, why)
-
-    def test_validate_rejects_out_of_range(self):
-        v = self.ns["validate"]
-        ok, why = v("/wheel", {"diameter_mm": 200, "ppr": 11, "gear_x100": 2100, "quad": 4})
-        self.assertFalse(ok)
-        self.assertIn("diameter_mm", why)
-
-    def test_validate_rejects_a_missing_field(self):
-        v = self.ns["validate"]
-        ok, why = v("/dims", {"track_mm": 130})
-        self.assertFalse(ok)
-        self.assertIn("wheelbase_mm", why)
-
-    def test_validate_rejects_a_bad_enum_and_a_bad_type(self):
-        v = self.ns["validate"]
-        ok, why = v("/wheel", {"diameter_mm": 65, "ppr": 11, "gear_x100": 2100, "quad": 3})
-        self.assertFalse(ok)
-        self.assertIn("quad", why)
-        ok, why = v("/recover", {"enabled": "yes", "window_ms": 5000})
-        self.assertFalse(ok)
-        self.assertIn("enabled", why)
-
-    def test_validate_rejects_an_unknown_path(self):
-        ok, why = self.ns["validate"]("/nope", {})
-        self.assertFalse(ok)
-        self.assertIn("/nope", why)
-
-    def test_bool_is_not_accepted_as_an_int(self):
-        """In Python True == 1, so a bool sneaks past a naive isinstance check."""
-        v = self.ns["validate"]
-        ok, why = v("/ramp", {"ramp_ms": True})
-        self.assertFalse(ok)
-        self.assertIn("ramp_ms", why)
-
-    def test_ctl_symbols_are_name_keyed(self):
-        """Reordering ctl_values in the schema must not silently re-rank the
-        mock's arbiter against the car's hand-written link_src_t (whose build
-        guard checks only the count). Name-keyed symbols make state.py immune
-        to position, as C's CTL_RT and Swift's CtlOwner.rt already are."""
-        for v in load()["ctl_values"]:
-            self.assertEqual(self.ns[f"CTL_{v.upper()}"], v)
+    def test_fixed_rounds_half_away_from_zero(self):
+        m = self.m
+        w = m.to_wire("wheel", m.DOMAINS["wheel"]["defaults"])
+        # 9.125 x 100 is exactly 912.5: half away from zero says 913, and Python's own
+        # round() would say 912 — this is the one place the two differ.
+        self.assertEqual(m.validate_config({"wheel": {**w, "gear_ratio": 9.125}}), (True, None))
+        self.assertEqual(m.from_wire("wheel", {**w, "gear_ratio": 9.125})["gear_ratio"], 913)
+        self.assertEqual(m.from_wire("wheel", {**w, "gear_ratio": 300.004})["gear_ratio"], 30000)
+        self.assertEqual(m.validate_config({"wheel": {**w, "gear_ratio": 300.0051}})[1][:2],
+                         ("out_of_range", "wheel.gear_ratio"))
 
 
 class TestDriftCheck(unittest.TestCase):
@@ -644,117 +613,62 @@ class TestDongleAgreesWithTheCar(unittest.TestCase):
 
 class TestDongleEmitters(unittest.TestCase):
     def setUp(self):
-        # No sys.path insertion here: the file already does it at module level, beside
-        # its other mid-file imports, and a second one would be a second thing to keep true.
         import gen_dongle
         self.g = gen_dongle
         with open(ROOT / "contract" / "dongle-api.json") as f:
             self.s = json.load(f)
+        self.c = self.g.emit_dongle_c(self.s)
+        self.sw = self.g.emit_dongle_swift(self.s)
 
     def assertEmitsLine(self, line, out):
-        """Assert `line` is one whole emitted line, not merely a substring of one.
-
-        assertIn against the raw text is prefix matching, and every port assertion below has
-        a longer sibling it is a prefix of: "…DONGLE_RELAY_HTTP_PORT 80" sits inside
-        "…DONGLE_RELAY_HTTP_PORT 8080", and "…UInt16 = 80" inside "…UInt16 = 8080". That is
-        not hypothetical — an emitter edited to put the dongle's own port (8080) in the
-        relay's field still passed the test written to catch exactly that. Matching whole
-        lines is what makes these assertions mean what they say.
-        """
-        self.assertIn(line, out.splitlines(),
-                      f"no emitted line is exactly {line!r}")
+        self.assertIn(line, out.splitlines(), f"no emitted line is exactly {line!r}")
 
     def test_c_header_is_pure_defines(self):
-        out = self.g.emit_dongle_c(self.s)
-        self.assertIn('#define DONGLE_DEVICE "ajdongle"', out)
-        self.assertIn('#define DONGLE_HOST "192.168.7.1"', out)
-        self.assertEmitsLine("#define DONGLE_PORT 8080", out)
-        self.assertEmitsLine("#define DONGLE_RELAY_HTTP_PORT 80", out)
-        self.assertEmitsLine("#define DONGLE_RELAY_RT_PORT 4210", out)
-        self.assertIn("#define DONGLE_SSID_MAX 32", out)
-        self.assertIn("#define DONGLE_PASS_MIN 8", out)
-        # Pure means includable from net_cfg.h, which compiles with plain cc: no ESP-IDF,
-        # no types, nothing but preprocessor text.
+        for line in ("#define DONGLE_PROTO 1", '#define DONGLE_DEVICE "ajdongle"',
+                     '#define DONGLE_HOST "192.168.7.1"', "#define DONGLE_PORT 8080",
+                     "#define DONGLE_RELAY_HTTP_PORT 80", "#define DONGLE_RELAY_RT_PORT 4210",
+                     "#define DONGLE_SSID_MAX 32", "#define DONGLE_PASS_MIN 8",
+                     '#define DONGLE_PATH_WIFI "/wifi"', '#define DONGLE_KEY_PROTO "proto"',
+                     '#define DONGLE_KEY_ERROR_CODE "code"', '#define DONGLE_KEY_GROUP_WIFI "wifi"',
+                     '#define DONGLE_KEY_WIFI_ATTEMPTS_MAX "max"', '#define DONGLE_KEY_RELAY_LAST_ERROR "last_error"',
+                     '#define DONGLE_WIFI_STATE_IDLE "idle"', '#define DONGLE_USB_STATE_UP "up"',
+                     '#define DONGLE_WIFI_REQ_PASSWORD "password"', '#define DONGLE_ERR_BAD_LENGTH "bad_length"',
+                     '#define DONGLE_KEY_DEVICE_ID "id"'):
+            self.assertEmitsLine(line, self.c)
         for banned in ("#include", "esp_err_t", "typedef", "struct "):
-            self.assertNotIn(banned, out)
-
-    def test_c_header_carries_the_state_vocabulary(self):
-        out = self.g.emit_dongle_c(self.s)
-        self.assertIn('#define DONGLE_STATE_IDLE "idle"', out)
-        self.assertIn('#define DONGLE_STATE_CONNECTED "connected"', out)
-
-    def test_c_header_carries_the_usb_state_vocabulary(self):
-        out = self.g.emit_dongle_c(self.s)
-        self.assertIn('#define DONGLE_USB_STATE_UP "up"', out)
-        self.assertIn('#define DONGLE_USB_STATE_DOWN "down"', out)
-
-    def test_c_header_carries_the_paths(self):
-        out = self.g.emit_dongle_c(self.s)
-        self.assertIn('#define DONGLE_PATH_STATUS "/status"', out)
-        self.assertIn('#define DONGLE_PATH_NET "/net"', out)
-        self.assertIn('#define DONGLE_PATH_OTA "/ota"', out)
-
-    def test_c_header_carries_the_status_and_net_keys(self):
-        # DONGLE_KEY_IDF is the fix's regression test: status_fields gained "idf" because
-        # status_api.c already puts "idf" in the /status body and had no macro for it.
-        # DONGLE_KEY_DEVICE and DONGLE_NETKEY_SSID/PASSWORD are "at least one member of
-        # each key group" — the drift check catches a whole-file regression here, but
-        # nothing before this asserted an individual DONGLE_KEY_*/DONGLE_NETKEY_* name.
-        out = self.g.emit_dongle_c(self.s)
-        self.assertIn('#define DONGLE_KEY_DEVICE "device"', out)
-        self.assertIn('#define DONGLE_KEY_IDF "idf"', out)
-        self.assertIn('#define DONGLE_KEY_ROLLBACK "rollback"', out)
-        self.assertIn('#define DONGLE_KEY_NET_SSID "ssid"', out)
-        self.assertIn('#define DONGLE_NETKEY_SSID "ssid"', out)
-        self.assertIn('#define DONGLE_NETKEY_PASSWORD "password"', out)
+            self.assertNotIn(banned, self.c)
+        self.assertNotIn("DONGLE_PATH_NET", self.c)
+        self.assertNotIn("DONGLE_NETKEY", self.c)
 
     def test_swift_exposes_the_same_vocabulary(self):
-        out = self.g.emit_dongle_swift(self.s)
-        self.assertIn('public static let device = "ajdongle"', out)
-        self.assertIn('public static let host = "192.168.7.1"', out)
-        self.assertEmitsLine("    public static let port: UInt16 = 8080", out)
-        self.assertEmitsLine("    public static let relayHttpPort: UInt16 = 80", out)
-        self.assertEmitsLine("    public static let relayRtPort: UInt16 = 4210", out)
-        self.assertIn('public static let statusPath = "/status"', out)
-        self.assertIn('public static let netPath = "/net"', out)
-        self.assertIn('public static let otaPath = "/ota"', out)
-        self.assertIn("public static let ssidMax = 32", out)
-        self.assertIn(
-            'public static let all = ["idle", "searching", "joining", "connected", "failed"]', out)
-
-    def test_swift_exposes_the_usb_state(self):
-        out = self.g.emit_dongle_swift(self.s)
-        self.assertIn("public enum DongleUsbState {", out)
-        self.assertIn('public static let up = "up"', out)
-        self.assertIn('public static let down = "down"', out)
-        self.assertIn('public static let all = ["up", "down"]', out)
-
-    def test_swift_exposes_the_net_fields(self):
-        out = self.g.emit_dongle_swift(self.s)
-        self.assertIn('public static let ssidField = "ssid"', out)
-        self.assertIn('public static let passwordField = "password"', out)
-        self.assertIn('public static let configuredField = "configured"', out)
-
-    def test_swift_exposes_the_status_keys(self):
-        # Regression test: emit_dongle_swift once destructured net_fields and never
-        # touched status_fields at all, so the C and Swift sides did not carry the same
-        # vocabulary — the one property this task exists to establish. Every key
-        # status_fields names must appear on the Swift side too, device through idf.
-        out = self.g.emit_dongle_swift(self.s)
-        self.assertIn("public enum DongleStatusKey {", out)
-        self.assertIn('public static let device = "device"', out)
-        self.assertIn('public static let fw = "fw"', out)
-        self.assertIn('public static let idf = "idf"', out)
-        self.assertIn('public static let usb = "usb"', out)
-        self.assertIn('public static let rollback = "rollback"', out)
-        self.assertIn('public static let net = "net"', out)
-        self.assertIn('public static let netSsid = "ssid"', out)
-        self.assertIn('public static let netState = "state"', out)
-        self.assertIn('public static let netRssi = "rssi"', out)
+        for line in ("    public static let proto = 1", '    public static let device = "ajdongle"',
+                     "    public static let port: UInt16 = 8080", "    public static let relayHttpPort: UInt16 = 80",
+                     "    public static let relayRtPort: UInt16 = 4210", '    public static let wifiPath = "/wifi"',
+                     "    public static let ssidMax = 32", '    public static let ssidField = "ssid"',
+                     '    public static let passwordField = "password"'):
+            self.assertEmitsLine(line, self.sw)
+        self.assertIn("public enum DongleWifiState: Equatable, Sendable, Codable {", self.sw)
+        self.assertIn("    case searching", self.sw.splitlines())
+        self.assertIn("public enum DongleUsbState: Equatable, Sendable, Codable {", self.sw)
+        self.assertIn("public struct DongleWifiAttempts: Codable, Equatable, Sendable {", self.sw)
+        self.assertIn("    public var last_error: DongleRelayError?", self.sw.splitlines())
+        self.assertIn("    public var channel: Int?", self.sw.splitlines())
+        self.assertIn("public struct DongleStatus: Codable, Equatable, Sendable {", self.sw)
+        self.assertIn("    public init(proto: Int, device: DongleDevice, usb: DongleUsb, wifi: DongleWifi, "
+                      "relay: DongleRelay, system: DongleSystem) { self.proto = proto; self.device = device; "
+                      "self.usb = usb; self.wifi = wifi; self.relay = relay; self.system = system }",
+                      self.sw.splitlines())
+        self.assertIn("public struct DongleWifiReply: Codable, Equatable, Sendable {", self.sw)
+        self.assertIn("    public init(proto: Int, ssid: String, state: DongleWifiState) { self.proto = proto; "
+                      "self.ssid = ssid; self.state = state }", self.sw.splitlines())
+        self.assertIn("public enum DongleErrorCode: Equatable, Sendable, Codable {", self.sw)
+        self.assertIn("public struct DongleAPIError: Codable, Equatable, Sendable {", self.sw)
+        self.assertNotIn("netPath", self.sw)
+        self.assertNotIn("DongleStatusKey", self.sw)
 
     def test_both_emitters_are_deterministic(self):
-        self.assertEqual(self.g.emit_dongle_c(self.s), self.g.emit_dongle_c(self.s))
-        self.assertEqual(self.g.emit_dongle_swift(self.s), self.g.emit_dongle_swift(self.s))
+        self.assertEqual(self.c, self.g.emit_dongle_c(self.s))
+        self.assertEqual(self.sw, self.g.emit_dongle_swift(self.s))
 
 
 if __name__ == "__main__":
