@@ -439,7 +439,8 @@ class TestDongleSchema(unittest.TestCase):
         self.assertEqual(s["status"]["groups"], ["device", "usb", "wifi", "relay", "system"])
         self.assertEqual(s["status"]["swift"], "DongleStatus")
         self.assertEqual(s["wifi_request"], {"ssid": "ssid", "password": "password"})
-        self.assertEqual(s["wifi_reply"], {"swift": "DongleWifiReply", "fields": ["ssid", "state"]})
+        self.assertEqual(s["wifi_reply"]["swift"], "DongleWifiReply")
+        self.assertEqual(s["wifi_reply"]["fields"], ["ssid", "state"])
         self.assertEqual(s["errors"], ["bad_json", "missing_field", "unknown_field", "wrong_type",
                                        "bad_length", "bad_chars", "radio_refused", "too_small",
                                        "not_firmware", "write_failed", "busy", "internal"])

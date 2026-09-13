@@ -95,7 +95,8 @@
   },
   "wifi_reply": {
     "swift": "DongleWifiReply",
-    "fields": ["ssid", "state"]
+    "fields": ["ssid", "state"],
+    "doc": "POST /wifi answers with proto and these two fields of the wifi group, as now held."
   },
   "bounds": {
     "ssid_min": 1,
