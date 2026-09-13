@@ -4,7 +4,7 @@ LDLIBS = -lm
 # The schema itself, for the two wire values the C generator emits no symbol for.
 CONTRACT = $(abspath ../../../../contract/car-api.json)
 
-all: test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel test_cfg_table test_link test_rt_session test_rt_glue test_contract_wire test_radio_ota test_device_json
+all: test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel test_cfg_table test_cfg_value test_link test_rt_session test_rt_glue test_contract_wire test_radio_ota test_device_json
 
 test_mixer: test_mixer.c ../main/mixer.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
@@ -42,6 +42,9 @@ test_wheel: test_wheel.c
 test_cfg_table: test_cfg_table.c ../main/cfg_table.inc ../main/cfg_contract.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
 
+test_cfg_value: test_cfg_value.c ../main/cfg_value.h ../main/cfg_table.inc ../main/cfg_contract.h
+	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
+
 test_link: test_link.c ../main/link.h ../main/cfg_table.inc
 	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
 
@@ -62,7 +65,7 @@ test_rt_glue: test_rt_glue.c ../main/rt_glue.h ../main/rt_link.h ../main/link.h
 	$(CC) $(CFLAGS) -o $@ test_rt_glue.c $(LDLIBS)
 
 run: all
-	./test_mixer && ./test_motors && ./test_control_proto && ./test_watchdog && ./test_calibration && ./test_ramp && ./test_trim && ./test_radio_ota && ./test_telemetry && ./test_recovery && ./test_wheel && ./test_cfg_table && ./test_link && ./test_rt_session && ./test_rt_glue && ./test_contract_wire && ./test_device_json
+	./test_mixer && ./test_motors && ./test_control_proto && ./test_watchdog && ./test_calibration && ./test_ramp && ./test_trim && ./test_radio_ota && ./test_telemetry && ./test_recovery && ./test_wheel && ./test_cfg_table && ./test_cfg_value && ./test_link && ./test_rt_session && ./test_rt_glue && ./test_contract_wire && ./test_device_json
 
 clean:
-	rm -f test_contract_wire test_rt_session test_rt_glue test_link test_cfg_table test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_radio_ota test_telemetry test_recovery test_wheel test_device_json
+	rm -f test_contract_wire test_rt_session test_rt_glue test_link test_cfg_table test_cfg_value test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_radio_ota test_telemetry test_recovery test_wheel test_device_json
