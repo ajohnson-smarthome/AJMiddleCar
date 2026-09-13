@@ -346,35 +346,74 @@ class TestCEmitter(unittest.TestCase):
 
 
 class TestSwiftEmitter(unittest.TestCase):
-    def test_structs_and_constants(self):
+    def setUp(self):
         import gen_contract
-        out = gen_contract.emit_swift(load())
-        self.assertIn(gen_contract.BANNER, out)
-        self.assertIn("public struct Wheel: Codable, Equatable, Sendable {", out)
-        self.assertIn("public var diameter_mm: Int", out)
-        self.assertIn("public var enabled: Bool", out)
-        # Inside a `public extension` the members are already public; an explicit
-        # `public` there is a redundant modifier, so the emitter omits it.
-        self.assertIn("    static let diameter_mmRange: ClosedRange<Int> = 20...150", out)
-        self.assertIn("    static let quadAllowed: [Int] = [1, 2, 4]", out)
-        self.assertIn('    static let path = "/wheel"', out)
-        self.assertIn("public static let rtPort: UInt16 = 4210", out)
-        self.assertIn("public static let proto = 1", out)
-        self.assertIn('public static let seqField = "seq"', out)
-        self.assertIn('public static let byeField = "bye"', out)
-        self.assertIn("public static let sessionIdleMs = 10000", out)
-        self.assertIn("public enum TelemetryKey {", out)
-        self.assertIn('public static let rxFps = "rx_fps"', out)
-        self.assertIn('public static let busOk = "bus_ok"', out)
-        self.assertIn("public enum CtlOwner {", out)
-        self.assertIn('public static let recover = "recover"', out)
-        self.assertIn('public static let throttleField = "t"', out)
+        self.out = gen_contract.emit_swift(load())
+
+    def lines(self):
+        return self.out.splitlines()
+
+    def test_contract_constants(self):
+        for line in ("    public static let proto = 2", '    public static let device = "ajmiddlecar"',
+                     "    public static let rtPort: UInt16 = 4210", "    public static let maxCommand = 96",
+                     '    public static let typeField = "type"', '    public static let sessionField = "session"',
+                     '    public static let turnField = "turn"', '    public static let configPath = "/config"',
+                     '    public static let spinPath = "/calibration/spin"',
+                     '    public static let okField = "ok"', '    public static let errorField = "error"'):
+            self.assertIn(line, self.lines(), line)
+        self.assertNotIn("helloField", self.out)
+        self.assertNotIn("yawField", self.out)
+        self.assertIn('    public static let helloAck = "hello_ack"', self.lines())
+        self.assertIn("public enum RTType {", self.out)
+
+    def test_groups_and_documents(self):
+        self.assertIn("public enum MotorsOwner: Equatable, Sendable, Codable {", self.out)
+        self.assertIn("    case safe_stop", self.lines())
+        self.assertIn("public struct LinkInfo: Codable, Equatable, Sendable {", self.out)
+        self.assertIn("    public var rssi_dbm: Int?", self.lines())
+        self.assertIn("public struct Telemetry: Codable, Equatable, Sendable {", self.out)
+        self.assertIn("    public init(proto: Int, seq: Int, link: LinkInfo, motors: MotorsInfo, "
+                      "system: SystemInfo) { self.proto = proto; self.seq = seq; self.link = link; "
+                      "self.motors = motors; self.system = system }", self.lines())
+        self.assertIn("public struct CarStatus: Codable, Equatable, Sendable {", self.out)
+        self.assertIn("    public var radio: RadioInfo", self.lines())
+        self.assertIn("    public var fw: String?", self.lines())   # RadioInfo.fw is nullable
+
+    def test_config_structs(self):
+        self.assertIn("public struct Wheel: Codable, Equatable, Sendable {", self.out)
+        self.assertIn("    public var gear_ratio: Double", self.lines())
+        self.assertIn("    public var quadrature: Int", self.lines())
+        self.assertIn('    static let key = "wheel"', self.lines())
+        self.assertIn("    static let `default` = Wheel(diameter_mm: 65, encoder_ppr: 11, gear_ratio: 9.0, "
+                      "quadrature: 4)", self.lines())
+        self.assertIn("    static let gear_ratioRange: ClosedRange<Double> = 1.0...300.0", self.lines())
+        self.assertIn("    static let diameter_mmRange: ClosedRange<Int> = 20...150", self.lines())
+        self.assertIn("    static let quadratureAllowed: [Int] = [1, 2, 4]", self.lines())
+        self.assertIn("    static func pick(from c: CarConfig) -> Wheel? { c.wheel }", self.lines())
+        self.assertIn("    static func wrap(_ v: Wheel) -> CarConfig { CarConfig(wheel: v) }", self.lines())
+        self.assertIn("public struct CarConfig: Codable, Equatable, Sendable {", self.out)
+        self.assertIn("    public var recovery: Recovery?", self.lines())
+        self.assertIn("    public init(proto: Int? = nil, ramp: Ramp? = nil, trim: Trim? = nil, "
+                      "recovery: Recovery? = nil, wheel: Wheel? = nil, chassis: Chassis? = nil) { "
+                      "self.proto = proto; self.ramp = ramp; self.trim = trim; self.recovery = recovery; "
+                      "self.wheel = wheel; self.chassis = chassis }", self.lines())
+        self.assertNotIn("static let path", self.out)
+
+    def test_calibration_and_errors(self):
+        self.assertIn("public enum CalibCorner: Equatable, Sendable, Codable {", self.out)
+        self.assertIn("    case front_left", self.lines())
+        self.assertIn("public enum CalibDirection: Equatable, Sendable, Codable {", self.out)
+        self.assertIn("public struct CalibWheel: Codable, Equatable, Sendable {", self.out)
+        self.assertIn("    public var inverted: Bool", self.lines())
+        self.assertIn("public struct Calibration: Codable, Equatable, Sendable {", self.out)
+        self.assertIn("    public var wheels: [CalibWheel]", self.lines())
+        self.assertIn("public enum CarErrorCode: Equatable, Sendable, Codable {", self.out)
+        self.assertIn("    case out_of_range", self.lines())
+        self.assertIn("public struct CarAPIError: Codable, Equatable, Sendable {", self.out)
+        self.assertIn("        public var code: CarErrorCode", self.lines())
 
     def test_default_uses_the_schema_values(self):
-        import gen_contract
-        out = gen_contract.emit_swift(load())
-        self.assertIn("Wheel(diameter_mm: 65, ppr: 11, gear_x100: 900, quad: 4)", out)
-        self.assertIn("Recover(enabled: true, window_ms: 5000)", out)
+        self.assertIn("    static let `default` = Recovery(enabled: true, window_ms: 5000)", self.lines())
 
 
 class TestPythonEmitter(unittest.TestCase):

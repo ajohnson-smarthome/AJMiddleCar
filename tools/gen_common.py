@@ -15,6 +15,24 @@ def upper(name):
     return name.upper()
 
 
+# Swift keywords that collide with a wire value used as an enum case (e.g. the error
+# code "internal"). Escaped with backticks at every use site — declaration, dot syntax,
+# and the case-name reference in a switch — so a generated enum compiles as itself.
+_SWIFT_KEYWORDS = {
+    "associatedtype", "class", "deinit", "enum", "extension", "fileprivate", "func",
+    "import", "init", "inout", "internal", "let", "open", "operator", "private",
+    "protocol", "public", "rethrows", "static", "struct", "subscript", "typealias",
+    "var", "break", "case", "continue", "default", "defer", "do", "else",
+    "fallthrough", "for", "guard", "if", "in", "repeat", "return", "switch", "where",
+    "while", "as", "Any", "catch", "false", "is", "nil", "self", "Self", "throw",
+    "throws", "true", "try",
+}
+
+
+def _swift_ident(name):
+    return f"`{name}`" if name in _SWIFT_KEYWORDS else name
+
+
 def lround(x):
     """C's lround: half away from zero. Python's round() is half-to-even, and a
     validator that disagrees with cfg_api.c about 9.005 is exactly the drift the
@@ -81,15 +99,15 @@ def swift_type(f):
 def swift_state_enum(name, values, doc):
     """An enum with the contract's cases plus unknown(String): a firmware that grows a
     word must not make the app fail to decode a document it otherwise understands."""
-    cases = ", ".join("." + v for v in values)
+    cases = ", ".join("." + _swift_ident(v) for v in values)
     lines = [f"/// {doc}", f"public enum {name}: Equatable, Sendable, Codable {{"]
-    lines += [f"    case {v}" for v in values]
+    lines += [f"    case {_swift_ident(v)}" for v in values]
     lines += [
         "    case unknown(String)",
         "    public var rawValue: String {",
         "        switch self {",
     ]
-    lines += [f'        case .{v}: return "{v}"' for v in values]
+    lines += [f'        case .{_swift_ident(v)}: return "{v}"' for v in values]
     lines += [
         "        case .unknown(let raw): return raw",
         "        }",
@@ -97,7 +115,7 @@ def swift_state_enum(name, values, doc):
         "    public init(rawValue: String) {",
         "        switch rawValue {",
     ]
-    lines += [f'        case "{v}": self = .{v}' for v in values]
+    lines += [f'        case "{v}": self = .{_swift_ident(v)}' for v in values]
     lines += [
         "        default: self = .unknown(rawValue)",
         "        }",

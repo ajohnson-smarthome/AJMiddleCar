@@ -147,16 +147,22 @@ def emit_c(schema):
     return "\n".join(out)
 
 
-def _swift_type(f):
-    return "Bool" if f["type"] == "bool" else "Int"
-
-
 def _swift_literal(f):
-    return ("true" if f["default"] else "false") if f["type"] == "bool" else str(f["default"])
+    if f["type"] == "bool":
+        return "true" if f["default"] else "false"
+    if f["type"] == "fixed":
+        return f"{f['default'] / f['scale']:.1f}" if (f["default"] % f["scale"]) == 0 \
+            else repr(f["default"] / f["scale"])
+    return str(f["default"])
+
+
+def _camel(name):
+    return name.split("_")[0] + "".join(w.title() for w in name.split("_")[1:])
 
 
 def emit_swift(schema):
-    rt, net = schema["rt"], schema["network"]
+    rt, net, env, ep = schema["rt"], schema["network"], schema["envelope"], schema["endpoints"]
+    cfg, cal = schema["config"], schema["calibration"]
     out = [f"// {BANNER}", "", "import Foundation", "",
            "public enum CarContract {",
            f"    public static let proto = {schema['proto']}",
@@ -166,58 +172,84 @@ def emit_swift(schema):
            f"    public static let rtPort: UInt16 = {rt['port']}",
            f"    public static let maxDatagram = {rt['max_datagram']}",
            f"    public static let maxCommand = {rt['max_command']}",
-           f'    public static let protoField = "{rt["proto_field"]}"',
-           f'    public static let deviceField = "{rt["device_field"]}"',
-           f'    public static let fwField = "{rt["fw_field"]}"',
-           f'    public static let throttleField = "{rt["throttle_field"]}"',
-           f'    public static let yawField = "{rt["yaw_field"]}"',
            f"    public static let commandHz = {rt['command_hz']}",
            f"    public static let telemetryHz = {rt['telemetry_hz']}",
            f"    public static let watchdogMs = {rt['watchdog_ms']}",
-           f"    public static let sessionIdleMs = {rt['session_idle_ms']}",
-           f'    public static let helloField = "{rt["hello_field"]}"',
-           f'    public static let seqField = "{rt["seq_field"]}"',
-           f'    public static let byeField = "{rt["bye_field"]}"',
-           "}", "",
-           "/// The fields the car sends in every telemetry datagram.",
-           "public enum TelemetryKey {"]
-    for f in schema["telemetry"]["fields"]:
-        camel = f["name"].split("_")[0] + "".join(w.title() for w in f["name"].split("_")[1:])
-        out.append(f'    /// {f["doc"]}')
-        out.append(f'    public static let {camel} = "{f["name"]}"')
+           f"    public static let sessionIdleMs = {rt['session_idle_ms']}"]
+    for k, v in rt["keys"].items():
+        out.append(f'    public static let {k}Field = "{v}"')
+    for k in ("ok", "error"):
+        out.append(f'    public static let {k}Field = "{env[k]}"')
+    for k, v in ep.items():
+        out.append(f'    public static let {k}Path = "{v}"')
+    out += ["}", "",
+            "/// The `type` word on every real-time datagram.",
+            "public enum RTType {"]
+    for k, v in rt["types"].items():
+        out.append(f'    public static let {_camel(k)} = "{v}"')
     out += ["}", ""]
-    out.append("/// The values the car reports in telemetry's `ctl` field.")
-    out.append("public enum CtlOwner {")
-    for v in schema["ctl_values"]:
-        out.append(f'    public static let {v} = "{v}"')
-    joined = ", ".join(f'"{v}"' for v in schema["ctl_values"])
-    out.append(f"    public static let all = [{joined}]")
-    out += ["}", ""]
-    for d in schema["domains"]:
+    out += swift_groups(schema)
+    out += swift_document(schema["telemetry"]["swift"], schema, schema["telemetry"]["groups"],
+                          schema["telemetry"]["doc"],
+                          extra_fields=[{"name": rt["keys"]["seq"], "type": "int",
+                                         "doc": "the car's own push counter"}])
+    out += swift_document(schema["status"]["swift"], schema, schema["status"]["groups"],
+                          schema["status"]["doc"])
+    for d in cfg["domains"]:
         n = d["swift"]
         out.append(f"/// {d['doc']}")
         out.append(f"public struct {n}: Codable, Equatable, Sendable {{")
         for f in d["fields"]:
             out.append(f"    /// {f['doc']}")
-            out.append(f"    public var {f['name']}: {_swift_type(f)}")
-        args = ", ".join(f"{f['name']}: {_swift_type(f)}" for f in d["fields"])
+            out.append(f"    public var {f['name']}: {swift_type(f)}")
+        args = ", ".join(f"{f['name']}: {swift_type(f)}" for f in d["fields"])
         assigns = "; ".join(f"self.{f['name']} = {f['name']}" for f in d["fields"])
         out.append(f"    public init({args}) {{ {assigns} }}")
-        out.append("}")
-        out.append("")
+        out += ["}", ""]
         out.append(f"public extension {n} {{")
-        out.append(f'    static let path = "{d["path"]}"')
+        out.append(f'    static let key = "{d["key"]}"')
         lit = ", ".join(f"{f['name']}: {_swift_literal(f)}" for f in d["fields"])
         out.append(f"    static let `default` = {n}({lit})")
         for f in d["fields"]:
             if f["type"] == "int":
-                out.append(f"    static let {f['name']}Range: ClosedRange<Int> "
-                           f"= {f['min']}...{f['max']}")
+                out.append(f"    static let {f['name']}Range: ClosedRange<Int> = {f['min']}...{f['max']}")
+            elif f["type"] == "fixed":
+                s = f["scale"]
+                out.append(f"    static let {f['name']}Range: ClosedRange<Double> = "
+                           f"{f['min'] / s:.1f}...{f['max'] / s:.1f}")
             elif f["type"] == "enum":
                 vals = ", ".join(str(v) for v in f["values"])
                 out.append(f"    static let {f['name']}Allowed: [Int] = [{vals}]")
-        out.append("}")
-        out.append("")
+        out.append(f"    static func pick(from c: {cfg['swift']}) -> {n}? {{ c.{d['key']} }}")
+        out.append(f"    static func wrap(_ v: {n}) -> {cfg['swift']} {{ {cfg['swift']}({d['key']}: v) }}")
+        out += ["}", ""]
+    out.append(f"/// {cfg['doc']}")
+    out.append(f"public struct {cfg['swift']}: Codable, Equatable, Sendable {{")
+    out.append(f"    public var {env['proto']}: Int?")
+    for d in cfg["domains"]:
+        out.append(f"    public var {d['key']}: {d['swift']}?")
+    args = ", ".join([f"{env['proto']}: Int? = nil"] +
+                     [f"{d['key']}: {d['swift']}? = nil" for d in cfg["domains"]])
+    assigns = "; ".join([f"self.{env['proto']} = {env['proto']}"] +
+                        [f"self.{d['key']} = {d['key']}" for d in cfg["domains"]])
+    out.append(f"    public init({args}) {{ {assigns} }}")
+    out += ["}", ""]
+    out += swift_state_enum("CalibCorner", cal["corners"], "A wheel's corner, by name.")
+    out += swift_state_enum("CalibDirection", cal["directions"], "Which way to spin a pair.")
+    k = cal["keys"]
+    out += swift_struct(cal["wheel_swift"], [
+        {"name": k["corner"], "type": "state", "swift": "CalibCorner", "doc": "which corner this row describes"},
+        {"name": k["pair"], "type": "int", "doc": "the channel pair driving it, 0..3"},
+        {"name": k["inverted"], "type": "bool", "doc": "true when the pair's A channel drives it backwards"},
+    ], "One wheel of the calibration table.")
+    out += swift_struct(cal["swift"], [
+        {"name": env["proto"], "type": "int", "doc": "the protocol version the device speaks"},
+        {"name": k["calibrated"], "type": "bool", "doc": "a valid table is loaded"},
+        {"name": k["wheels"], "type": "array", "swift": f"[{cal['wheel_swift']}]",
+         "doc": "the table, empty when not calibrated"},
+    ], cal["doc"])
+    out += swift_state_enum("CarErrorCode", schema["errors"], "The code inside an error envelope.")
+    out += swift_error_envelope("CarAPIError", "CarErrorCode", schema)
     return "\n".join(out)
 
 
