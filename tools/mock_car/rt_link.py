@@ -15,8 +15,8 @@ import json
 import random
 from collections import deque
 
-from generated import PROTO, RT
-from state import parse_frame, seq_is_newer
+from generated import ENVELOPE, GROUPS, PROTO, RT
+from state import build_number, parse_frame, seq_is_newer
 
 # The service tick. firmware/car/core/main/rt_link.c uses a 20 ms SO_RCVTIMEO as its clock
 # (TICK_MS there), so the watchdog is checked at the same granularity here and telemetry
@@ -131,9 +131,17 @@ class RTLink(asyncio.DatagramProtocol):
             self._drop(now, f"unparseable, or over the {RT['max_command']}-byte "
                             f"command cap ({len(data)} bytes)")
             return
+        K, T = RT["keys"], RT["types"]
 
-        if RT["hello_field"] in frame:
+        if frame[K["type"]] == T["hello"]:
             self._adopt(frame, addr, now)
+            return
+
+        # A non-hello datagram speaking a proto this car does not is dropped whole,
+        # judged here rather than by `parse_frame` — only the link knows which proto is
+        # ours. A hello's foreign proto is judged inside `_adopt`, which still answers.
+        if frame.get(K["proto"]) != PROTO:
+            self._drop(now, f"proto {frame.get(K['proto'])!r}, this car speaks {PROTO}")
             return
 
         # Everything else is owned traffic. A datagram from anyone else is dropped
@@ -142,10 +150,8 @@ class RTLink(asyncio.DatagramProtocol):
             self._drop(now, f"not the owner ({addr[0]}:{addr[1]})")
             return
 
-        seq = frame.get(RT["seq_field"])
-        if seq is None:
-            self._drop(now, "no seq")
-            return
+        # parse_frame guarantees seq is present on both drive and bye.
+        seq = frame[K["seq"]]
         # Replay protection is what leaving TCP buys: a reordered or duplicated command
         # costs one dropped datagram instead of blocking the queue behind a retransmit.
         if self.last_seq is not None and not seq_is_newer(seq, self.last_seq):
@@ -153,10 +159,10 @@ class RTLink(asyncio.DatagramProtocol):
             return
         self.last_seq = seq
 
-        if frame.get(RT["bye_field"]):
-            # A goodbye needs no axes: `{"seq":n,"bye":1}` is a complete instruction, and
-            # the car acts on one. The seq gate above still applies — every app->car
-            # datagram except `hello` carries `seq`, or it is dropped.
+        if frame[K["type"]] == T["bye"]:
+            # A goodbye needs no axes: `{"proto":2,"type":"bye","seq":n}` is a complete
+            # instruction, and the car acts on one. The seq gate above still applies —
+            # every app->car datagram except `hello` carries `seq`, or it is dropped.
             if self.car.note_bye(now):
                 print(f"rt: bye from session {self.session} — stopped, history cleared")
             else:
@@ -170,21 +176,26 @@ class RTLink(asyncio.DatagramProtocol):
             self.owner, self.session, self.last_seq = None, None, None
             return
 
-        if self.car.note_command(frame[RT["throttle_field"]], frame[RT["yaw_field"]], now):
+        if self.car.note_command(frame[K["throttle"]], frame[K["turn"]], now):
             self._last_activity = now
             self._frames += 1
             self._rx.append(now)
             self._log_command(now, seq)
 
     def _adopt(self, frame, addr, now):
-        sid = frame[RT["hello_field"]]
-        reply = {RT["proto_field"]: PROTO, RT["hello_field"]: sid,
-                 RT["device_field"]: self.car.device, RT["fw_field"]: self.car.fw}
-        if frame.get(RT["proto_field"]) != PROTO:
+        K, T = RT["keys"], RT["types"]
+        sid = frame[K["session"]]
+        # The device group's own field names, not literals — a rename in the schema
+        # must move this reply with it, the same way it moves /status.
+        dev = [f["name"] for f in GROUPS["device"]["fields"]]
+        reply = {ENVELOPE["proto"]: PROTO, K["type"]: T["hello_ack"], K["session"]: sid,
+                 "device": dict(zip(dev, [self.car.device, self.car.fw,
+                                         build_number(self.car.fw), self.car.rollback]))}
+        if frame.get(K["proto"]) != PROTO:
             # Answer anyway — the reply names our version, so a client can say "this car
             # speaks a protocol I do not" instead of searching forever — but do not
             # adopt. A session neither side can parse is worse than no session.
-            print(f"rt: hello with proto {frame.get(RT['proto_field'])!r}, "
+            print(f"rt: hello with proto {frame.get(K['proto'])!r}, "
                   f"this car speaks {PROTO}")
             self._send(reply, addr)
             return

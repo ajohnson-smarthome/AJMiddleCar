@@ -12,12 +12,14 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from generated import CTL_VALUES, DOMAINS, RT, TELEMETRY_FIELDS   # noqa: E402
-from state import (CTL_CALIB, CTL_NONE, CTL_OTA, CTL_RECOVER,     # noqa: E402
-                   CTL_RT, CTL_SAFE, CarState, clamp_axis, number, parse_frame,
-                   parse_image_version, seq_is_newer, valid_seq, valid_sid)
+from generated import CALIBRATION, DOMAINS, GROUPS, PROTO, RT, TELEMETRY_GROUPS   # noqa: E402
+from state import (OWNER_CALIBRATION, OWNER_CONSOLE, OWNER_IDLE, OWNER_RECOVERING,   # noqa: E402
+                   OWNER_REMOTE, OWNER_SAFE_STOP, OWNER_UPDATE, CarState, build_number,
+                   clamp_axis, number, parse_frame, parse_image_version, seq_is_newer,
+                   valid_seq, valid_sid)
 
 DEADLINE_S = RT["watchdog_ms"] / 1000.0
+K, T = RT["keys"], RT["types"]
 
 
 def stream(car, t, y, start, count, hz=None):
@@ -69,140 +71,182 @@ class TestWireShapes(unittest.TestCase):
             self.assertFalse(valid_sid(bad), bad)
 
     def test_a_hello_the_car_would_reject_is_not_a_session(self):
-        for bad in (b'{"proto":1,"hello":{"a":1}}', b'{"proto":1,"hello":1}',
-                    b'{"proto":1,"hello":""}', b'{"proto":1,"hello":"' + b"x" * 70 + b'"}'):
+        for bad in (b'{"proto":2,"type":"hello","session":{"a":1}}',
+                    b'{"proto":2,"type":"hello","session":1234}',
+                    b'{"proto":2,"type":"hello","session":""}',
+                    b'{"proto":2,"type":"hello","session":"' + b"x" * 70 + b'"}',
+                    b'{"proto":2,"type":"hello"}',                        # no session
+                    b'{"proto":2,"type":"hello","hello":"7f3a91c2"}'):    # the v1 key
             self.assertIsNone(parse_frame(bad), bad)
-        good = parse_frame(b'{"proto":1,"hello":"7f3a91c2"}')
-        self.assertEqual(good, {"proto": 1, "hello": "7f3a91c2"})
+        good = parse_frame(b'{"proto":2,"type":"hello","session":"7f3a91c2"}')
+        self.assertEqual(good, {"type": "hello", "proto": 2, "session": "7f3a91c2"})
 
     def test_a_command_needs_both_axes_and_real_numbers(self):
-        self.assertEqual(parse_frame(b'{"seq":3,"t":0.5,"y":-0.25}'),
-                         {"seq": 3, "t": 0.5, "y": -0.25})
-        for bad in (b'{"seq":3,"t":0.5}', b'{"seq":3,"y":0.5}',
-                    b'{"seq":3,"t":true,"y":false}', b'{"seq":3,"t":"0.5","y":"0"}',
-                    b'{"seq":3,"t":0.5,"y":null}'):
+        self.assertEqual(
+            parse_frame(b'{"proto":2,"type":"drive","seq":3,"throttle":0.5,"turn":-0.25}'),
+            {"type": "drive", "proto": 2, "seq": 3, "throttle": 0.5, "turn": -0.25})
+        for bad in (b'{"proto":2,"type":"drive","seq":3,"throttle":0.5}',
+                    b'{"proto":2,"type":"drive","seq":3,"turn":0.5}',
+                    b'{"proto":2,"type":"drive","seq":3,"throttle":true,"turn":false}',
+                    b'{"proto":2,"type":"drive","seq":3,"throttle":"0.5","turn":"0"}',
+                    b'{"proto":2,"type":"drive","seq":3,"throttle":0.5,"turn":null}'):
             self.assertIsNone(parse_frame(bad), bad)
 
     def test_a_broken_key_drops_the_whole_datagram(self):
-        for bad in (b'{"seq":-1,"t":0,"y":0}', b'{"seq":1.5,"t":0,"y":0}',
-                    b'{"seq":true,"t":0,"y":0}', b'{"proto":"1","hello":"abc"}',
-                    b'{"seq":1,"t":0,"y":0,"bye":"yes"}'):
+        for bad in (b'{"proto":2,"type":"drive","seq":-1,"throttle":0,"turn":0}',
+                    b'{"proto":2,"type":"drive","seq":1.5,"throttle":0,"turn":0}',
+                    b'{"proto":2,"type":"drive","seq":true,"throttle":0,"turn":0}',
+                    b'{"proto":"2","type":"hello","session":"abc"}',
+                    b'{"proto":1.5,"type":"drive","seq":1,"throttle":0,"turn":0}'):
             self.assertIsNone(parse_frame(bad), bad)
 
-    def test_nothing_to_act_on_is_dropped(self):
-        # No hello, no axes, no goodbye. `{"bye":0}` says nothing and carries nothing
-        # else, so it is in this list rather than in the one below.
-        for bad in (b'{"seq":1}', b'{"seq":1,"bye":0}', b'{"seq":1,"bye":false}',
-                    b'{}', b'[]', b'not json', b'"a string"', b''):
+    def test_nothing_to_execute_is_dropped(self):
+        """No type, an unknown type, or a type missing the keys it requires."""
+        no_type = (b'{"proto":2,"seq":1,"throttle":0,"turn":0}', b'{}', b'[]',
+                   b'not json', b'"a string"', b'')
+        unknown_type = (b'{"proto":2,"type":"telemetry","seq":1}',                # car->app only
+                        b'{"proto":2,"type":"hello_ack","session":"a"}',          # car->app only
+                        b'{"proto":2,"type":"drove","seq":1,"throttle":0,"turn":0}')
+        missing_keys = (b'{"proto":2,"type":"hello"}',
+                        b'{"proto":2,"type":"drive"}',
+                        b'{"proto":2,"type":"drive","seq":1}',
+                        b'{"proto":2,"type":"bye"}')
+        for bad in no_type + unknown_type + missing_keys:
             self.assertIsNone(parse_frame(bad), bad)
 
     def test_a_bare_goodbye_is_a_goodbye(self):
-        """`{"seq":n,"bye":1}` is a complete instruction, and the car acts on one.
-
-        control_proto.c: `if (!f.has_hello && !f.has_ty && !f.bye) return -1;` — the
-        goodbye counts on its own. The app happens to send `t`/`y` with its `bye`, but
-        the mock's job is to answer what the car answers for the same bytes, not what
-        today's client happens to send.
-        """
-        frame = parse_frame(b'{"seq":1,"bye":1}')
-        self.assertIsNotNone(frame)
-        self.assertIs(frame["bye"], True)
-        self.assertNotIn("t", frame)
-
-    def test_bye_is_a_goodbye_however_json_spells_yes(self):
-        self.assertIs(parse_frame(b'{"seq":1,"t":0,"y":0,"bye":1}')["bye"], True)
-        self.assertIs(parse_frame(b'{"seq":1,"t":0,"y":0,"bye":true}')["bye"], True)
-        self.assertIs(parse_frame(b'{"seq":1,"t":0,"y":0,"bye":0}')["bye"], False)
-        self.assertIs(parse_frame(b'{"seq":1,"t":0,"y":0,"bye":false}')["bye"], False)
+        """`{"proto":2,"type":"bye","seq":n}` is a complete instruction on its own.
+        Axes are tolerated (the app sends them alongside `bye`) but never required."""
+        frame = parse_frame(b'{"proto":2,"type":"bye","seq":1}')
+        self.assertEqual(frame, {"type": "bye", "proto": 2, "seq": 1})
+        with_axes = parse_frame(b'{"proto":2,"type":"bye","seq":2,"throttle":0,"turn":0}')
+        self.assertEqual(with_axes,
+                         {"type": "bye", "proto": 2, "seq": 2, "throttle": 0.0, "turn": 0.0})
 
     def test_the_command_cap_is_what_bounds_an_inbound_datagram(self):
         # max_datagram sizes a receive buffer; max_command is what the car agrees to
         # act on, and telemetry needs the difference on the way out.
         self.assertLess(RT["max_command"], RT["max_datagram"])
-        pad = RT["max_command"] - len('{"seq":1,"t":0,"y":0,"z":""}')
-        self.assertIsNotNone(parse_frame(b'{"seq":1,"t":0,"y":0,"z":"%s"}' % (b"x" * pad)))
-        self.assertIsNone(parse_frame(b'{"seq":1,"t":0,"y":0,"z":"%s"}' % (b"x" * (pad + 1))))
+        base = b'{"proto":2,"type":"drive","seq":1,"throttle":0,"turn":0,"z":""}'
+        pad = RT["max_command"] - len(base)
+        ok = b'{"proto":2,"type":"drive","seq":1,"throttle":0,"turn":0,"z":"%s"}' % (b"x" * pad)
+        over = (b'{"proto":2,"type":"drive","seq":1,"throttle":0,"turn":0,"z":"%s"}'
+                % (b"x" * (pad + 1)))
+        self.assertEqual(len(ok), RT["max_command"])
+        self.assertIsNotNone(parse_frame(ok))
+        self.assertIsNone(parse_frame(over))
 
     def test_a_duplicate_key_drops_the_whole_datagram(self):
         """Rule 5: the car takes the first duplicate, json.loads keeps the last —
         the only shared answer is to drop the frame on both sides."""
-        self.assertIsNone(parse_frame(b'{"seq":9,"t":0.5,"y":0,"t":0.9}'))
-        self.assertIsNone(parse_frame(b'{"proto":1,"hello":"ab","proto":1}'))
+        self.assertIsNone(parse_frame(
+            b'{"proto":2,"type":"drive","seq":9,"throttle":0.5,"turn":0,"throttle":0.9}'))
+        self.assertIsNone(parse_frame(
+            b'{"proto":2,"type":"hello","session":"ab","proto":2}'))
 
     def test_the_shared_pinned_frames(self):
-        """The spec's rule-6 table, verbatim. The firmware host tests pin the same
-        eight bytes with the same outcomes; a change here without a change there
-        is wire drift."""
+        """The spec's rule-6 table, in v2 spelling. The firmware host tests
+        (test_control_proto.c) pin these same bytes with these same outcomes; a
+        change here without a change there is wire drift."""
         dropped = [
-            b'{"seq":5,"junk":{"t":0.9},"y":0.5}',   # no top-level t
-            b'{"seq":7,"t":.5,"y":0}',               # bare . mantissa
-            b'{"seq":8,"t":+1,"y":0}',               # leading +
-            b'{"seq":9,"t":0.5,"y":0,"t":0.9}',      # duplicate key
-            b'{"proto":1.5,"hello":"abcd1234"}',     # fractional proto
+            b'{"proto":2,"type":"drive","seq":7,"throttle":.5,"turn":0}',      # bare mantissa
+            b'{"proto":2,"type":"drive","seq":8,"throttle":+1,"turn":0}',      # leading plus
+            b'{"proto":2,"type":"drive","seq":01,"throttle":0,"turn":0}',      # leading zero
+            b'{"proto":2,"type":"drive","seq":12,"throttle":0.5x,"turn":0}',   # trailing junk
+            (b'{"proto":2,"type":"drive","seq":9,"throttle":0.5,"turn":0,'     # duplicate key
+             b'"throttle":0.9}'),
+            b'{"proto":1.5,"type":"drive","seq":1,"throttle":0,"turn":0}',     # fractional proto
         ]
         for frame in dropped:
             self.assertIsNone(parse_frame(frame), frame)
-        self.assertEqual(parse_frame(b'{"seq":10,"t":0.50,"y":-0.25}'),
-                         {"seq": 10, "t": 0.50, "y": -0.25})
-        self.assertEqual(parse_frame(b'{"proto":1,"hello":"7f3a91c2"}'),
-                         {"proto": 1, "hello": "7f3a91c2"})
-        self.assertEqual(parse_frame(b'{"proto":2,"hello":"7f3a91c2"}'),
-                         {"proto": 2, "hello": "7f3a91c2"})
+        # A nested "seq" inside a sub-object must not be read as the datagram's own.
+        nested = parse_frame(
+            b'{"proto":2,"type":"drive","seq":1,"throttle":0.1,"turn":0.2,"extra":{"seq":9}}')
+        self.assertEqual(nested,
+                         {"type": "drive", "proto": 2, "seq": 1, "throttle": 0.1, "turn": 0.2})
+        self.assertEqual(parse_frame(b'{"proto":1,"type":"hello","session":"7f3a91c2"}'),
+                         {"type": "hello", "proto": 1, "session": "7f3a91c2"})
+        self.assertEqual(parse_frame(b'{"proto":2,"type":"hello","session":"7f3a91c2"}'),
+                         {"type": "hello", "proto": 2, "session": "7f3a91c2"})
+
+
+class TestBuildNumber(unittest.TestCase):
+    def test_the_number_after_plus(self):
+        self.assertEqual(build_number("v1.0+9001"), 9001)
+        self.assertEqual(build_number("v2.3+42"), 42)
+
+    def test_no_usable_number_is_minus_one(self):
+        self.assertEqual(build_number("v1.0"), -1)
+        self.assertEqual(build_number("v1.0+dirty"), -1)
+        self.assertEqual(build_number(""), -1)
 
 
 class TestConfig(unittest.TestCase):
     def test_defaults_come_from_the_schema(self):
         car = CarState()
-        for path, domain in DOMAINS.items():
-            self.assertEqual(car.config[path], domain["defaults"], path)
+        for key, domain in DOMAINS.items():
+            self.assertEqual(car.config[key], domain["defaults"], key)
 
     def test_recover_defaults_match_the_firmware(self):
         """The drift this mock existed with for months: off/3000 against the car's on/5000."""
-        self.assertEqual(CarState().config["/recover"], {"enabled": True, "window_ms": 5000})
+        self.assertEqual(CarState().config["recovery"], {"enabled": True, "window_ms": 5000})
 
     def test_a_good_body_applies(self):
         car = CarState()
-        ok, err = car.apply_config("/ramp", {"ramp_ms": 1200})
+        ok, err = car.apply_config({"ramp": {"rise_ms": 400}})
         self.assertTrue(ok)
-        self.assertEqual(err, "")
-        self.assertEqual(car.config["/ramp"], {"ramp_ms": 1200})
+        self.assertIsNone(err)
+        self.assertEqual(car.config["ramp"], {"rise_ms": 400})
 
-    def test_a_rejected_body_applies_nothing(self):
+    def test_a_rejected_body_names_the_field_and_changes_nothing(self):
         car = CarState()
-        before = dict(car.config["/wheel"])
-        # Three good fields and one out of range: the record must survive intact.
-        bad = dict(before)
-        bad["diameter_mm"] = 9000
-        ok, err = car.apply_config("/wheel", bad)
+        before = dict(car.config["ramp"])
+        ok, err = car.apply_config({"ramp": {"rise_ms": 99999}})
         self.assertFalse(ok)
-        self.assertIn("diameter_mm", err)
-        self.assertEqual(car.config["/wheel"], before)
+        self.assertEqual(err[0], "out_of_range")
+        self.assertEqual(err[1], "ramp.rise_ms")
+        self.assertEqual(car.config["ramp"], before)
 
-    def test_a_missing_field_is_not_a_partial_write(self):
+    def test_gear_ratio_is_stored_as_the_scaled_integer(self):
         car = CarState()
-        before = dict(car.config["/dims"])
-        ok, _ = car.apply_config("/dims", {"track_mm": 200})
-        self.assertFalse(ok)
-        self.assertEqual(car.config["/dims"], before)
+        ok, _ = car.apply_config({"wheel": {"diameter_mm": 65, "encoder_ppr": 11,
+                                            "gear_ratio": 9.0, "quadrature": 4}})
+        self.assertTrue(ok)
+        self.assertEqual(car.config["wheel"]["gear_ratio"], 900)
+        self.assertEqual(car.config_wire()["wheel"]["gear_ratio"], 9.0)
+        ok, _ = car.apply_config({"wheel": {"diameter_mm": 65, "encoder_ppr": 11,
+                                            "gear_ratio": 9.125, "quadrature": 4}})
+        self.assertTrue(ok)
+        self.assertEqual(car.config["wheel"]["gear_ratio"], 913)
 
-    def test_unknown_endpoint(self):
-        ok, err = CarState().apply_config("/nope", {})
-        self.assertFalse(ok)
-        self.assertIn("/nope", err)
-
-    def test_field_of_names_the_offending_key(self):
+    def test_config_wire_round_trips_every_domain(self):
         car = CarState()
-        _, err = car.apply_config("/wheel", {"diameter_mm": 65, "ppr": 11,
-                                             "gear_x100": 2100, "quad": 3})
-        self.assertEqual(car.field_of("/wheel", err), "quad")
-        _, err = car.apply_config("/dims", {"track_mm": 130})
-        self.assertEqual(car.field_of("/dims", err), "wheelbase_mm")
+        wire = car.config_wire()
+        self.assertEqual(set(wire), set(DOMAINS))
+        for key, domain in DOMAINS.items():
+            for f in domain["fields"]:
+                want = domain["defaults"][f["name"]] / f["scale"] if f["type"] == "fixed" \
+                    else domain["defaults"][f["name"]]
+                self.assertEqual(wire[key][f["name"]], want, f"{key}.{f['name']}")
+
+    def test_half_the_body_being_bad_applies_neither_domain(self):
+        """Two domains, the second bad: the first must not have been applied either —
+        the car validates the whole body before writing any of it."""
+        car = CarState()
+        before_ramp = dict(car.config["ramp"])
+        before_trim = dict(car.config["trim"])
+        ok, err = car.apply_config({"ramp": {"rise_ms": 500},
+                                    "trim": {"balance_pct": 9999}})
+        self.assertFalse(ok)
+        self.assertEqual(err[0], "out_of_range")
+        self.assertEqual(car.config["ramp"], before_ramp)
+        self.assertEqual(car.config["trim"], before_trim)
 
 
 class TestBreadcrumbs(unittest.TestCase):
     def test_history_is_bounded_by_the_window(self):
         car = CarState(now=0.0)
-        window_s = car.config["/recover"]["window_ms"] / 1000.0
+        window_s = car.config["recovery"]["window_ms"] / 1000.0
         stream(car, 0.5, 0.0, 0.0, int(window_s * RT["command_hz"]) * 2)
         self.assertLessEqual(car.history_len, window_s * RT["command_hz"] + 1)
 
@@ -210,7 +254,7 @@ class TestBreadcrumbs(unittest.TestCase):
         car = CarState(now=0.0)
         last = stream(car, 0.5, 0.0, 0.0, 60)          # 6 s at 10 Hz
         self.assertGreater(car.history_len, 20)
-        ok, _ = car.apply_config("/recover", {"enabled": True, "window_ms": 1000})
+        ok, _ = car.apply_config({"recovery": {"enabled": True, "window_ms": 1000}})
         self.assertTrue(ok)
         car.note_command(0.5, 0.0, last + 0.1)
         self.assertLessEqual(car.history_len, 12)      # 1 s at 10 Hz, plus the new frame
@@ -289,7 +333,7 @@ class TestRetreat(unittest.TestCase):
         last = stream(car, 0.6, -0.2, 0.0, 20)
         car.tick(last + DEADLINE_S + 0.01)
         self.assertTrue(car.retreating)
-        self.assertEqual(car.ctl, CTL_RECOVER)
+        self.assertEqual(car.ctl, OWNER_RECOVERING)
         self.assertEqual(car.command, (-0.6, 0.2))
 
     def test_a_still_history_stops_instead(self):
@@ -299,11 +343,11 @@ class TestRetreat(unittest.TestCase):
         self.assertIn("nothing to retrace", line)
         self.assertFalse(car.retreating)
         self.assertEqual(car.command, (0.0, 0.0))
-        self.assertEqual(car.ctl, CTL_NONE)
+        self.assertEqual(car.ctl, OWNER_IDLE)
 
     def test_disabled_recovery_stops_instead(self):
         car = CarState(now=0.0)
-        car.apply_config("/recover", {"enabled": False, "window_ms": 5000})
+        car.apply_config({"recovery": {"enabled": False, "window_ms": 5000}})
         last = stream(car, 0.8, 0.0, 0.0, 20)
         line = car.tick(last + DEADLINE_S + 0.01)
         self.assertIn("auto-return off", line)
@@ -318,7 +362,7 @@ class TestRetreat(unittest.TestCase):
         self.assertTrue(car.retreating)
         car.note_command(0.4, 0.0, last + DEADLINE_S + 0.2)
         self.assertFalse(car.retreating)
-        self.assertEqual(car.ctl, CTL_RT)
+        self.assertEqual(car.ctl, OWNER_REMOTE)
         self.assertEqual(car.command, (0.4, 0.0))
 
     def test_every_replay_segment_is_capped_not_just_the_tail(self):
@@ -334,7 +378,7 @@ class TestRetreat(unittest.TestCase):
         which is the ground the car actually covered.
         """
         car = CarState(now=0.0)
-        ok, _ = car.apply_config("/recover", {"enabled": True, "window_ms": 10000})
+        ok, _ = car.apply_config({"recovery": {"enabled": True, "window_ms": 10000}})
         self.assertTrue(ok)
         for ts in (0.0, 0.1, 5.0, 5.1):
             car.note_command(0.9, 0.0, ts)
@@ -358,14 +402,14 @@ class TestRetreat(unittest.TestCase):
         self.assertIn("exhausted", end)
         self.assertFalse(car.retreating)
         self.assertEqual(car.command, (0.0, 0.0))
-        self.assertEqual(car.ctl, CTL_NONE)
+        self.assertEqual(car.ctl, OWNER_IDLE)
 
 
 class TestGoodbye(unittest.TestCase):
     def test_bye_stops_without_a_trip(self):
         """Stop, release SAFE, clear the path, disarm — the plan's four steps.
 
-        `ctl` is `none` afterwards on purpose: SAFE is released immediately, because a
+        `ctl` is `idle` afterwards on purpose: SAFE is released immediately, because a
         sticky grant would also lock out OTA, the calibration wizard and the console
         until an app reconnected. What suppresses the retreat is the cleared history,
         asserted separately.
@@ -374,7 +418,7 @@ class TestGoodbye(unittest.TestCase):
         last = stream(car, 0.9, 0.0, 0.0, 20)
         car.note_bye(last + 0.05)
         self.assertEqual(car.command, (0.0, 0.0))
-        self.assertEqual(car.ctl, CTL_NONE)
+        self.assertEqual(car.ctl, OWNER_IDLE)
         self.assertEqual(car.history_len, 0)
         for k in range(50):
             self.assertIsNone(car.tick(last + 0.05 + k * 0.05))
@@ -402,9 +446,9 @@ class TestGoodbye(unittest.TestCase):
         car.note_command(0.5, 0.0, 0.0)
         car.note_bye(0.1)
         car.adopt_session(0.2)
-        self.assertEqual(car.ctl, CTL_NONE)
+        self.assertEqual(car.ctl, OWNER_IDLE)
         car.note_command(0.3, 0.0, 0.3)
-        self.assertEqual(car.ctl, CTL_RT)
+        self.assertEqual(car.ctl, OWNER_REMOTE)
 
     def test_adopting_forgets_the_previous_drivers_path(self):
         """Step 2 of adoption. A new session has no path to retrace, and retreating
@@ -440,9 +484,9 @@ class TestActuatorOwnership(unittest.TestCase):
         car = CarState(now=0.0)
         car.note_command(0.5, 0.0, 0.0)
         self.assertTrue(car.begin_spin(0.05, 2, 1))
-        self.assertEqual(car.ctl, CTL_CALIB)
+        self.assertEqual(car.ctl, OWNER_CALIBRATION)
         car.note_command(0.5, 0.0, 0.1)      # the app keeps streaming through the pulse
-        self.assertEqual(car.ctl, CTL_CALIB)
+        self.assertEqual(car.ctl, OWNER_CALIBRATION)
         self.assertEqual(car.command, (1.0, 0.0))
 
     def test_the_stream_still_feeds_the_watchdog_through_a_spin(self):
@@ -460,14 +504,14 @@ class TestActuatorOwnership(unittest.TestCase):
     def test_a_pulse_lapses_on_its_own(self):
         car = CarState(now=0.0)
         car.begin_spin(0.0, 1, 0)
-        self.assertEqual(car.ctl, CTL_CALIB)
+        self.assertEqual(car.ctl, OWNER_CALIBRATION)
         car.tick(CarState.CALIB_HOLD_MS / 1000.0 + 0.01)
-        self.assertEqual(car.ctl, CTL_NONE)
+        self.assertEqual(car.ctl, OWNER_IDLE)
 
     def test_ota_refuses_a_spin(self):
         car = CarState(now=0.0)
         car.begin_ota(0.0)
-        self.assertEqual(car.ctl, CTL_OTA)
+        self.assertEqual(car.ctl, OWNER_UPDATE)
         self.assertFalse(car.begin_spin(0.1, 0, 1))
         car.end_ota()
         self.assertTrue(car.begin_spin(0.2, 0, 1))
@@ -482,36 +526,36 @@ class TestActuatorOwnership(unittest.TestCase):
         """
         car = CarState(now=0.0)
         car.note_bye(0.0)
-        self.assertEqual(car.ctl, CTL_NONE)
+        self.assertEqual(car.ctl, OWNER_IDLE)
         self.assertTrue(car.begin_spin(0.1, 0, 1))
-        self.assertEqual(car.ctl, CTL_CALIB)
+        self.assertEqual(car.ctl, OWNER_CALIBRATION)
 
     def test_a_goodbye_during_an_ota_leaves_the_flash_its_grant(self):
         """Rule 2: bye must not steal-and-release a sticky hold. Before this rule
-        the SAFE grab displaced OTA and released to NONE, so anything could drive
+        the SAFE grab displaced OTA and released to IDLE, so anything could drive
         the motors for the rest of the flash — and the restart could land mid-drive."""
         car = CarState(now=0.0)
         stream(car, 0.5, 0.0, 0.0, 5)
         car.begin_ota(1.0)
         self.assertFalse(car.note_bye(1.1), "no stop was issued; the flash holds")
-        self.assertEqual(car.ctl, CTL_OTA, "the goodbye did not touch the grant")
+        self.assertEqual(car.ctl, OWNER_UPDATE, "the goodbye did not touch the grant")
         self.assertEqual(car.history_len, 0, "the retreat is still suppressed")
         self.assertFalse(car.begin_spin(1.2, 0, 1), "still flashing; a spin is refused")
         for k in range(50):
             self.assertIsNone(car.tick(1.2 + k * 0.05))
         self.assertEqual(car.wdt_trips, 0, "the watchdog was still disarmed")
         car.end_ota()
-        self.assertEqual(car.ctl, CTL_NONE, "not wedged: the flash's own end releases")
+        self.assertEqual(car.ctl, OWNER_IDLE, "not wedged: the flash's own end releases")
         self.assertTrue(car.begin_spin(5.0, 0, 1))
 
     def test_a_goodbye_during_a_spin_leaves_the_pulse_alone(self):
         car = CarState(now=0.0)
         self.assertTrue(car.begin_spin(0.0, 1, 1))
         self.assertFalse(car.note_bye(0.1))
-        self.assertEqual(car.ctl, CTL_CALIB)
+        self.assertEqual(car.ctl, OWNER_CALIBRATION)
         self.assertEqual(car.command, (1.0, 0.0), "the pulse is not flattened")
         car.tick(CarState.CALIB_HOLD_MS / 1000.0 + 0.01)
-        self.assertEqual(car.ctl, CTL_NONE, "the pulse lapses on its own schedule")
+        self.assertEqual(car.ctl, OWNER_IDLE, "the pulse lapses on its own schedule")
         self.assertEqual(car.command, (0.0, 0.0))
 
     def test_ota_bumps_the_build(self):
@@ -531,7 +575,7 @@ class TestActuatorOwnership(unittest.TestCase):
         car.begin_spin(0.0, 1, 1)
         self.assertEqual(car.command, (1.0, 0.0))
         car.tick(5.0)
-        self.assertEqual(car.ctl, CTL_NONE)
+        self.assertEqual(car.ctl, OWNER_IDLE)
         self.assertEqual(car.command, (0.0, 0.0))
 
     def test_a_new_session_during_a_retreat_leaves_the_wheels_stopped(self):
@@ -540,7 +584,7 @@ class TestActuatorOwnership(unittest.TestCase):
         car.tick(last + DEADLINE_S + 0.01)
         self.assertTrue(car.retreating)
         car.adopt_session(last + 1.0)
-        self.assertEqual(car.ctl, CTL_NONE)
+        self.assertEqual(car.ctl, OWNER_IDLE)
         self.assertEqual(car.command, (0.0, 0.0))
 
     def test_a_retrace_refused_by_the_actuator_does_not_drive(self):
@@ -561,23 +605,23 @@ class TestActuatorOwnership(unittest.TestCase):
         last = stream(car, 0.8, 0.0, 0.0, 20)
         car.begin_ota(last + 0.01)
         now = stream(car, 0.8, 0.0, last + 0.1, 5)
-        self.assertEqual(car.ctl, CTL_OTA)
+        self.assertEqual(car.ctl, OWNER_UPDATE)
         line = car.tick(now + DEADLINE_S + 0.01)
         self.assertIn("refused", line)
         self.assertFalse(car.retreating)
-        self.assertEqual(car.ctl, CTL_OTA)
+        self.assertEqual(car.ctl, OWNER_UPDATE)
         self.assertEqual(car.command, (0.0, 0.0), "the flash holds the wheels at zero")
 
     def test_a_trip_with_auto_return_off_still_goes_through_the_arbiter(self):
         """recovery.c's disabled path is `car_stop(RECOVER)`, which OTA refuses."""
         car = CarState(now=0.0)
-        car.apply_config("/recover", {"enabled": False, "window_ms": 5000})
+        car.apply_config({"recovery": {"enabled": False, "window_ms": 5000}})
         last = stream(car, 0.8, 0.0, 0.0, 20)
         car.begin_spin(last + 0.01, 0, 1)        # a pulse starts as the link dies
         now = stream(car, 0.8, 0.0, last + 0.05, 2)
         line = car.tick(now + DEADLINE_S + 0.01)
         self.assertIn("auto-return off", line)
-        self.assertEqual(car.ctl, CTL_CALIB)
+        self.assertEqual(car.ctl, OWNER_CALIBRATION)
         self.assertEqual(car.command, (1.0, 0.0), "the pulse is not flattened by the trip")
 
     def test_a_spin_during_a_retreat_ends_it(self):
@@ -590,7 +634,7 @@ class TestActuatorOwnership(unittest.TestCase):
         self.assertEqual(car.command, (1.0, 0.0))
         # The retreat's own deadline must not zero the pulse halfway through.
         car.tick(last + DEADLINE_S + 0.03)
-        self.assertEqual(car.ctl, CTL_CALIB)
+        self.assertEqual(car.ctl, OWNER_CALIBRATION)
         self.assertEqual(car.command, (1.0, 0.0))
 
     def test_ota_silences_the_watchdog(self):
@@ -606,72 +650,127 @@ class TestActuatorOwnership(unittest.TestCase):
         car = CarState(now=0.0)
         self.assertTrue(car.begin_spin(0.0, 1, 1))
         car.end_spin()
-        self.assertEqual(car.ctl, CTL_NONE)
+        self.assertEqual(car.ctl, OWNER_IDLE)
         self.assertEqual(car.command, (0.0, 0.0), "the release is the stop")
         car.begin_ota(1.0)
         car.end_spin()
-        self.assertEqual(car.ctl, CTL_OTA, "end_spin never releases someone else's grant")
+        self.assertEqual(car.ctl, OWNER_UPDATE, "end_spin never releases someone else's grant")
 
     def test_ota_goes_through_the_arbiter(self):
         """ota_api.c takes the actuator through the checked car_stop(LINK_SRC_OTA)
-        and answers 500 when refused; the mock used to seize it unconditionally,
-        so the simulator never exhibited that 500."""
+        and answers 409 when refused; the mock used to seize it unconditionally,
+        so the simulator never exhibited that rejection."""
         car = CarState(now=0.0)
         # SAFE is only ever held transiently by note_bye, so stage it directly.
-        self.assertTrue(car._take(CTL_SAFE, 0.0, None))
+        self.assertTrue(car._take(OWNER_SAFE_STOP, 0.0, None))
         self.assertFalse(car.begin_ota(0.1), "SAFE outranks a flash, as on the car")
-        car._release(CTL_SAFE)
+        car._release(OWNER_SAFE_STOP)
         self.assertTrue(car.begin_ota(0.2))
         fw = car.fw
         car.end_ota(flashed=False)
-        self.assertEqual(car.ctl, CTL_NONE, "an aborted flash releases the grant")
+        self.assertEqual(car.ctl, OWNER_IDLE, "an aborted flash releases the grant")
         self.assertEqual(car.fw, fw, "and does not bump the build")
 
 
 class TestCalibration(unittest.TestCase):
+    def _wheels(self, pairs=(0, 1, 2, 3), inverted=(False, True, False, True)):
+        corners = CALIBRATION["corners"]
+        return [{"corner": c, "pair": p, "inverted": inv}
+                for c, p, inv in zip(corners, pairs, inverted)]
+
     def test_a_valid_table_is_accepted(self):
         car = CarState()
         self.assertFalse(car.calibrated)
-        wheels = [{"pair": p, "sign": s} for p, s in zip((0, 1, 2, 3), (1, -1, 1, -1))]
-        self.assertTrue(car.save_calibration(wheels))
+        ok, err = car.save_calibration(self._wheels())
+        self.assertTrue(ok)
+        self.assertIsNone(err)
         self.assertTrue(car.calibrated)
 
-    def test_invalid_tables_are_refused(self):
+    def test_calibration_table_is_reported_fl_fr_rl_rr(self):
         car = CarState()
-        for wheels in ([],
-                       [{"pair": 0, "sign": 1}] * 4,                     # not unique
-                       [{"pair": p, "sign": 0} for p in range(4)],       # sign not ±1
-                       [{"pair": p} for p in range(4)],                  # missing key
-                       "wheels",
-                       [{"pair": "0", "sign": "1"},                      # strings
-                        {"pair": "1", "sign": "1"},
-                        {"pair": "2", "sign": "1"},
-                        {"pair": "3", "sign": "1"}],
-                       [{"pair": p, "sign": True} for p in range(4)],    # booleans
-                       [{"pair": p + 0.5, "sign": 1} for p in range(4)],  # fractions
-                       [{"pair": 10**400, "sign": 1},                    # huge integer
-                        {"pair": 1, "sign": 1},
-                        {"pair": 2, "sign": 1},
-                        {"pair": 3, "sign": 1}],
-                       [{"pair": float('inf'), "sign": 1},               # non-finite
-                        {"pair": 1, "sign": 1},
-                        {"pair": 2, "sign": 1},
-                        {"pair": 3, "sign": 1}],
-                       ):
-            self.assertFalse(car.save_calibration(wheels), wheels)
+        car.save_calibration(
+            self._wheels(pairs=(2, 0, 3, 1), inverted=(True, False, False, True)))
+        table = car.calibration_table()
+        self.assertEqual([w["corner"] for w in table], CALIBRATION["corners"])
+        self.assertEqual([w["pair"] for w in table], [2, 0, 3, 1])
+        self.assertEqual([w["inverted"] for w in table], [True, False, False, True])
+
+    def test_calibration_table_is_empty_until_saved(self):
+        self.assertEqual(CarState().calibration_table(), [])
+
+    def test_a_repeated_corner_is_refused(self):
+        car = CarState()
+        wheels = self._wheels()
+        wheels[2] = dict(wheels[0])          # front_left again, at index 2
+        ok, err = car.save_calibration(wheels)
+        self.assertFalse(ok)
+        self.assertEqual(err[0], "not_allowed")
+        self.assertEqual(err[1], "wheels[2]")
+        self.assertFalse(car.calibrated)
+
+    def test_an_unknown_corner_is_refused(self):
+        car = CarState()
+        wheels = self._wheels()
+        wheels[0]["corner"] = "middle"
+        ok, err = car.save_calibration(wheels)
+        self.assertFalse(ok)
+        self.assertEqual(err[0], "not_allowed")
+        self.assertFalse(car.calibrated)
+
+    def test_a_repeated_pair_is_refused(self):
+        car = CarState()
+        wheels = self._wheels(pairs=(0, 0, 1, 2))
+        ok, err = car.save_calibration(wheels)
+        self.assertFalse(ok)
+        self.assertEqual(err[0], "not_allowed")
+        self.assertFalse(car.calibrated)
+
+    def test_a_pair_out_of_range_is_refused(self):
+        car = CarState()
+        wheels = self._wheels(pairs=(0, 1, 2, 9))
+        ok, err = car.save_calibration(wheels)
+        self.assertFalse(ok)
+        self.assertEqual(err[0], "out_of_range")
+
+    def test_an_unknown_wheel_field_is_refused(self):
+        car = CarState()
+        wheels = self._wheels()
+        wheels[0]["extra"] = True
+        ok, err = car.save_calibration(wheels)
+        self.assertFalse(ok)
+        self.assertEqual(err[0], "unknown_field")
+
+    def test_wrong_shapes_are_refused(self):
+        car = CarState()
+        rest = self._wheels()[1:]
+        for wheels in (
+            [],
+            self._wheels()[:3],
+            "wheels",
+            [{"corner": "front_left", "pair": "0", "inverted": False}] + rest,   # string pair
+            [{"corner": "front_left", "pair": True, "inverted": False}] + rest,  # bool pair
+            [{"corner": "front_left", "pair": 0.5, "inverted": False}] + rest,   # fractional pair
+            [{"corner": "front_left", "pair": 0, "inverted": "no"}] + rest,      # non-bool inverted
+            [{"corner": 1, "pair": 0, "inverted": False}] + rest,               # non-string corner
+        ):
+            ok, err = car.save_calibration(wheels)
+            self.assertFalse(ok, wheels)
+            self.assertIsNotNone(err)
         self.assertFalse(car.calibrated)
 
     def test_integral_floats_are_numbers(self):
         """cJSON sees 1.0 as a number with valueint 1; so does the car."""
         car = CarState()
-        wheels = [{"pair": float(p), "sign": 1.0} for p in range(4)]
-        self.assertTrue(car.save_calibration(wheels))
+        wheels = [{"corner": c, "pair": float(p), "inverted": bool(p % 2)}
+                  for c, p in zip(CALIBRATION["corners"], range(4))]
+        ok, _ = car.save_calibration(wheels)
+        self.assertTrue(ok)
 
 
 class TestOwnershipVocabulary(unittest.TestCase):
-    def test_ctl_names_come_from_the_schema(self):
+    def test_owner_names_come_from_the_schema(self):
         from state import PRIORITY
-        self.assertEqual(list(PRIORITY), CTL_VALUES)
+        self.assertEqual(list(PRIORITY), GROUPS["motors"]["fields"][2]["values"])
 
     def test_every_reported_owner_is_in_the_vocabulary(self):
         car = CarState(now=0.0)
@@ -687,22 +786,33 @@ class TestOwnershipVocabulary(unittest.TestCase):
         last = stream(car, 0.8, 0.0, 2.0, 20)
         car.tick(last + DEADLINE_S + 0.01)
         seen.add(car.ctl)
-        self.assertTrue(seen <= set(CTL_VALUES), seen)
-        self.assertIn(CTL_RECOVER, seen)
+        self.assertTrue(seen <= set(GROUPS["motors"]["fields"][2]["values"]), seen)
+        self.assertIn(OWNER_RECOVERING, seen)
 
     def test_the_symbols_spell_the_wire_values(self):
-        self.assertEqual((CTL_NONE, CTL_RECOVER, CTL_RT, CTL_OTA),
-                         ("none", "recover", "rt", "ota"))
+        self.assertEqual((OWNER_IDLE, OWNER_RECOVERING, OWNER_CONSOLE, OWNER_REMOTE,
+                          OWNER_UPDATE, OWNER_SAFE_STOP),
+                         ("idle", "recovering", "console", "remote", "update", "safe_stop"))
 
 
 class TestTelemetry(unittest.TestCase):
-    def test_it_carries_exactly_the_schema_fields(self):
+    def test_it_carries_the_envelope_and_exactly_the_schema_groups(self):
         car = CarState(now=0.0)
         frame = car.telemetry(10)
-        self.assertEqual(list(frame), [f["name"] for f in TELEMETRY_FIELDS])
-        types = {"int": int, "bool": bool, "str": str}
-        for f in TELEMETRY_FIELDS:
-            self.assertIsInstance(frame[f["name"]], types[f["type"]], f["name"])
+        self.assertEqual(frame["proto"], PROTO)
+        self.assertEqual(frame["type"], T["telemetry"])
+        self.assertIn("seq", frame)
+        self.assertEqual(set(frame) - {"proto", "type", "seq"}, set(TELEMETRY_GROUPS))
+        for g in TELEMETRY_GROUPS:
+            names = [f["name"] for f in GROUPS[g]["fields"]]
+            self.assertEqual(list(frame[g]), names, g)
+
+    def test_status_groups_are_the_same_three_without_the_envelope(self):
+        car = CarState(now=0.0)
+        groups = car.status_groups(10)
+        self.assertEqual(set(groups), set(TELEMETRY_GROUPS))
+        for key in ("proto", "type", "seq"):
+            self.assertNotIn(key, groups)
 
     def test_seq_is_monotonic(self):
         car = CarState(now=0.0)
@@ -725,18 +835,25 @@ class TestTelemetry(unittest.TestCase):
     def test_it_reports_the_live_state(self):
         car = CarState(now=0.0)
         last = stream(car, 0.7, 0.0, 0.0, 20)
-        self.assertEqual(car.telemetry(10)["ctl"], CTL_RT)
+        self.assertEqual(car.telemetry(10)["motors"]["owner"], OWNER_REMOTE)
         car.tick(last + DEADLINE_S + 0.01)
         frame = car.telemetry(0)
-        self.assertEqual(frame["ctl"], CTL_RECOVER)
-        self.assertEqual(frame["wdt_trips"], 1)
+        self.assertEqual(frame["motors"]["owner"], OWNER_RECOVERING)
+        self.assertEqual(frame["link"]["timeouts"], 1)
         car.set_bus_ok(False)
-        self.assertFalse(car.telemetry(0)["bus_ok"])
+        self.assertEqual(car.telemetry(0)["motors"]["bus"], "down")
+
+    def test_rssi_zero_is_null_on_the_wire(self):
+        car = CarState(now=0.0)
+        car.rssi = 0
+        self.assertIsNone(car.telemetry(10)["link"]["rssi_dbm"])
+        car.rssi = -58
+        self.assertEqual(car.telemetry(10)["link"]["rssi_dbm"], -58)
 
     def test_uptime_follows_the_clock_it_was_given(self):
         car = CarState(now=100.0)
         car.tick(142.0)
-        self.assertEqual(car.telemetry(0)["uptime_s"], 42)
+        self.assertEqual(car.telemetry(0)["system"]["uptime_s"], 42)
 
 
 def synthetic_image(version=b"v9.9+123", magic=0xABCD5432, first=0xE9, size=4096):

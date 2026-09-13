@@ -17,18 +17,16 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from generated import PROTO, RT                        # noqa: E402
-from rt_link import Impairment, REBOOT_QUIET_S, RTLink  # noqa: E402
-from state import CTL_NONE, CTL_RT, CarState           # noqa: E402
+from generated import PROTO, RT                                    # noqa: E402
+from rt_link import Impairment, REBOOT_QUIET_S, RTLink              # noqa: E402
+from state import OWNER_IDLE, OWNER_REMOTE, CarState, build_number   # noqa: E402
 
 APP = ("192.168.4.2", 50000)
 OTHER = ("192.168.4.3", 50001)
 DEADLINE_S = RT["watchdog_ms"] / 1000.0
 
-HELLO = RT["hello_field"]
-SEQ = RT["seq_field"]
-BYE = RT["bye_field"]
-T, Y = RT["throttle_field"], RT["yaw_field"]
+K = RT["keys"]
+TYPES = RT["types"]
 
 
 class FakeLoop:
@@ -77,11 +75,16 @@ def send(rt, obj, addr=APP):
 
 
 def hello(sid="7f3a91c2", proto=PROTO):
-    return {RT["proto_field"]: proto, HELLO: sid}
+    return {K["proto"]: proto, K["type"]: TYPES["hello"], K["session"]: sid}
 
 
-def cmd(seq, t=0.0, y=0.0, **extra):
-    return {SEQ: seq, T: t, Y: y, **extra}
+def cmd(seq, t=0.0, y=0.0, proto=PROTO, **extra):
+    return {K["proto"]: proto, K["type"]: TYPES["drive"], K["seq"]: seq,
+            K["throttle"]: t, K["turn"]: y, **extra}
+
+
+def bye(seq, proto=PROTO, **extra):
+    return {K["proto"]: proto, K["type"]: TYPES["bye"], K["seq"]: seq, **extra}
 
 
 class TestAdoption(Quiet):
@@ -92,8 +95,12 @@ class TestAdoption(Quiet):
         self.assertEqual(rt.session, "7f3a91c2")
         reply, addr, _ = rt.transport.sent[-1]
         self.assertEqual(addr, APP)
-        self.assertEqual(reply, {RT["proto_field"]: PROTO, HELLO: "7f3a91c2",
-                                 RT["device_field"]: car.device, RT["fw_field"]: car.fw})
+        self.assertEqual(reply[K["proto"]], PROTO)
+        self.assertEqual(reply[K["type"]], TYPES["hello_ack"])
+        self.assertEqual(reply[K["session"]], "7f3a91c2")
+        self.assertEqual(reply["device"], {"id": car.device, "fw": car.fw,
+                                           "build": build_number(car.fw),
+                                           "rolled_back": car.rollback})
 
     def test_every_repeat_is_answered_but_only_a_change_re_adopts(self):
         rt, car, _ = link()
@@ -123,8 +130,8 @@ class TestAdoption(Quiet):
         rt, car, _ = link()
         send(rt, hello())
         answered = len(rt.transport.sent)
-        for bad in ({HELLO: {"a": 1}}, {HELLO: ""}, {HELLO: 1234},
-                    {HELLO: "x" * 70}, {HELLO: 'a"b'}):
+        for bad in ({K["session"]: {"a": 1}}, {K["session"]: ""}, {K["session"]: 1234},
+                    {K["session"]: "x" * 70}, {K["session"]: 'a"b'}):
             send(rt, dict(hello(), **bad), addr=OTHER)
         self.assertEqual(rt.owner, APP)
         self.assertEqual(rt.session, "7f3a91c2")
@@ -141,7 +148,7 @@ class TestAdoption(Quiet):
         rt, _, _ = link()
         send(rt, hello(proto=PROTO + 1))
         self.assertIsNone(rt.owner)
-        self.assertEqual(rt.transport.sent[-1][0][RT["proto_field"]], PROTO,
+        self.assertEqual(rt.transport.sent[-1][0][K["proto"]], PROTO,
                          "the reply names our version so the app can stop searching")
 
     def test_a_dead_sessions_hello_is_answered_but_not_adopted(self):
@@ -151,7 +158,7 @@ class TestAdoption(Quiet):
         rt, car, _ = link()
         send(rt, hello("dead0001"))
         send(rt, cmd(1, 0.5))
-        send(rt, cmd(2, 0.0, 0.0, **{BYE: 1}))            # session 1 ends itself
+        send(rt, bye(2))                                  # session 1 ends itself
         send(rt, hello("beef0002"), addr=OTHER)           # session 2 adopts
         send(rt, cmd(1, 0.7), addr=OTHER)
         answered = len(rt.transport.sent)
@@ -191,7 +198,7 @@ class TestAdoption(Quiet):
         rt, car, _ = link()
         send(rt, hello("phoenix1"))
         send(rt, cmd(1, 0.5))
-        send(rt, cmd(2, 0.0, 0.0, **{BYE: 1}))            # dies; nobody else arrives
+        send(rt, bye(2))                                  # dies; nobody else arrives
         self.assertIsNone(rt.owner)
         send(rt, hello("phoenix1"))                       # the same sid returns
         self.assertEqual(rt.owner, APP, "with no live session, any hello adopts")
@@ -206,7 +213,7 @@ class TestOwnedTraffic(Quiet):
             loop.t = k * 0.1
             send(rt, cmd(k + 1, 0.5, -0.25))
         self.assertEqual(car.command, (0.5, -0.25))
-        self.assertEqual(car.ctl, CTL_RT)
+        self.assertEqual(car.ctl, OWNER_REMOTE)
         # rx_fps is now a per-consumer delta (needs priming); the 1 s window count
         # this line used to read through it still exists, as _window_fps.
         self.assertEqual(rt._window_fps(loop.t), 10)
@@ -247,8 +254,14 @@ class TestOwnedTraffic(Quiet):
         rt, car, _ = link()
         send(rt, hello())
         send(rt, cmd(5, 0.5))
-        for bad in ({SEQ: 6, T: True, Y: False}, {SEQ: 6, T: "0.5", Y: "0"},
-                    {SEQ: 6, T: 0.5}, {SEQ: 6}, {SEQ: 6, T: 0, Y: 0, BYE: "yes"}):
+        for bad in ({K["proto"]: PROTO, K["type"]: TYPES["drive"], K["seq"]: 6,
+                    K["throttle"]: True, K["turn"]: False},
+                   {K["proto"]: PROTO, K["type"]: TYPES["drive"], K["seq"]: 6,
+                    K["throttle"]: "0.5", K["turn"]: "0"},
+                   {K["proto"]: PROTO, K["type"]: TYPES["drive"], K["seq"]: 6,
+                    K["throttle"]: 0.5},
+                   {K["proto"]: PROTO, K["type"]: TYPES["drive"], K["seq"]: 6},
+                   {K["proto"]: PROTO, K["type"]: TYPES["bye"]}):     # bye without seq
             send(rt, bad)
         rt.datagram_received(b"{not json", APP)
         rt.datagram_received(b"[1,2]", APP)
@@ -271,8 +284,49 @@ class TestOwnedTraffic(Quiet):
     def test_a_command_without_a_seq_is_dropped(self):
         rt, car, _ = link()
         send(rt, hello())
-        send(rt, {T: 0.9, Y: 0.0})
+        send(rt, {K["proto"]: PROTO, K["type"]: TYPES["drive"],
+                  K["throttle"]: 0.9, K["turn"]: 0.0})
         self.assertEqual(car.command, (0.0, 0.0))
+
+
+class TestProtoGate(Quiet):
+    """New in v2: proto is carried but not judged by `parse_frame` — the link judges
+    it, and only for non-hello traffic (a hello's foreign proto is answered but not
+    adopted, covered under TestAdoption)."""
+
+    def test_a_drive_with_a_foreign_proto_is_dropped(self):
+        rt, car, _ = link()
+        send(rt, hello())
+        send(rt, cmd(1, 0.9, proto=PROTO + 1))
+        self.assertEqual(car.command, (0.0, 0.0))
+        self.assertIsNone(rt.last_seq, "the frame never reached the seq gate")
+
+    def test_a_drive_missing_proto_is_dropped(self):
+        rt, car, _ = link()
+        send(rt, hello())
+        frame = cmd(1, 0.9)
+        del frame[K["proto"]]
+        send(rt, frame)
+        self.assertEqual(car.command, (0.0, 0.0))
+        self.assertIsNone(rt.last_seq)
+
+    def test_a_bye_with_a_foreign_proto_is_dropped(self):
+        rt, car, _ = link()
+        send(rt, hello())
+        send(rt, cmd(1, 0.9))
+        send(rt, bye(2, proto=PROTO + 1))
+        self.assertEqual(car.command, (0.9, 0.0), "the goodbye never landed")
+        self.assertEqual(rt.owner, APP, "ownership was not dropped")
+
+    def test_a_bye_missing_proto_is_dropped(self):
+        rt, car, _ = link()
+        send(rt, hello())
+        send(rt, cmd(1, 0.9))
+        frame = bye(2)
+        del frame[K["proto"]]
+        send(rt, frame)
+        self.assertEqual(car.command, (0.9, 0.0))
+        self.assertEqual(rt.owner, APP)
 
 
 class TestGoodbye(Quiet):
@@ -282,7 +336,7 @@ class TestGoodbye(Quiet):
         loop.t = 1.0
         send(rt, cmd(1, 0.9))
         loop.t = 1.1
-        send(rt, cmd(2, 0.0, 0.0, **{BYE: 1}))
+        send(rt, bye(2))
         self.assertEqual(car.command, (0.0, 0.0))
         self.assertIsNone(rt.owner)
         self.assertIsNone(rt.last_seq)
@@ -293,15 +347,16 @@ class TestGoodbye(Quiet):
         # SAFE is released with the stop, not held: a goodbye must not lock OTA, the
         # wizard and the console out of the car until an app reconnects. What suppresses
         # the retreat is the cleared history.
-        self.assertEqual(car.ctl, CTL_NONE)
+        self.assertEqual(car.ctl, OWNER_IDLE)
         self.assertEqual(car.history_len, 0)
 
     def test_a_bare_goodbye_is_acted_on(self):
-        """`{"seq":n,"bye":1}` with no axes — the car acts on it, so this must too."""
+        """`{"proto":2,"type":"bye","seq":n}` with no axes — the car acts on it,
+        so this must too."""
         rt, car, loop = link()
         send(rt, hello())
         send(rt, cmd(1, 0.9))
-        rt.datagram_received(json.dumps({SEQ: 2, BYE: 1}).encode(), APP)
+        rt.datagram_received(json.dumps(bye(2), separators=(",", ":")).encode(), APP)
         self.assertEqual(car.command, (0.0, 0.0))
         self.assertIsNone(rt.owner, "a bare goodbye still drops ownership")
 
@@ -314,7 +369,9 @@ class TestGoodbye(Quiet):
         rt, car, _ = link()
         send(rt, hello())
         send(rt, cmd(1, 0.9))
-        rt.datagram_received(json.dumps({BYE: 1}).encode(), APP)
+        frame = bye(2)
+        del frame[K["seq"]]
+        rt.datagram_received(json.dumps(frame, separators=(",", ":")).encode(), APP)
         self.assertEqual(car.command, (0.9, 0.0))
         self.assertEqual(rt.owner, APP)
 
@@ -322,7 +379,7 @@ class TestGoodbye(Quiet):
         rt, car, _ = link()
         send(rt, hello())
         send(rt, cmd(1, 0.9))
-        send(rt, cmd(2, 0.0, 0.0, **{BYE: True}))
+        send(rt, bye(2))
         send(rt, cmd(3, 0.9))
         self.assertEqual(car.command, (0.0, 0.0), "ownership is not resumable")
         send(rt, hello("beef0002"))
@@ -469,7 +526,7 @@ class TestWatchdog(Quiet):
         """
         idle_s = RT["session_idle_ms"] / 1000.0
         rt, car, loop = link()
-        ok, _ = car.apply_config("/recover", {"enabled": True, "window_ms": 10000})
+        ok, _ = car.apply_config({"recovery": {"enabled": True, "window_ms": 10000}})
         self.assertTrue(ok)
         loop.t = 0.0
         send(rt, hello("longtrip"))
@@ -506,9 +563,9 @@ class TestTelemetry(Quiet):
         rt.push_telemetry(loop.t)
         frame, addr, size = rt.transport.sent[-1]
         self.assertEqual(addr, APP)
-        self.assertEqual(frame["ctl"], CTL_RT)
+        self.assertEqual(frame["motors"]["owner"], OWNER_REMOTE)
         # first read of the push consumer — fps_now answers 0 until it has a delta
-        self.assertEqual(frame["rx_fps"], 0)
+        self.assertEqual(frame["link"]["rx_hz"], 0)
         self.assertLessEqual(size, RT["max_datagram"])
 
     def test_pushed_seq_is_gapless(self):
@@ -517,7 +574,7 @@ class TestTelemetry(Quiet):
         rt.transport.sent.clear()
         for _ in range(5):
             rt.push_telemetry(loop.t)
-        seqs = [f[0]["seq"] for f in rt.transport.sent]
+        seqs = [f[0][K["seq"]] for f in rt.transport.sent]
         self.assertEqual(seqs, list(range(1, 6)))
 
 
@@ -616,7 +673,7 @@ class TestReboot(Quiet):
         loop.t = 10.0 + REBOOT_QUIET_S + 0.1
         send(rt, hello("fresh003"))
         self.assertEqual(rt.owner, APP, "the reconnect adopts")
-        self.assertEqual(rt.transport.sent[-1][0][RT["fw_field"]], car.fw,
+        self.assertEqual(rt.transport.sent[-1][0]["device"]["fw"], car.fw,
                          "and the hello reply carries the bumped fw")
 
 

@@ -9,7 +9,7 @@ they are pure, they are what `control_proto.c` is, and the only useful test of t
 "does this datagram mean here what it means on the car".
 
 Nothing in this file writes a range, a default, a deadline or a field name: `DOMAINS`,
-`RT`, `CTL_VALUES` and `validate` come from `contract/car-api.json` via the generator,
+`RT`, `GROUPS` and `validate_config` come from `contract/car-api.json` via the generator,
 which is the same source the firmware compiles. A literal here would be exactly the drift the schema exists to
 prevent — the mock's old `/recover` default of off/3000, against the car's on/5000, is
 why every simulator session taught that a car losing its link stops.
@@ -19,15 +19,17 @@ import math
 import re
 from collections import deque
 
-from generated import (CTL_CALIB, CTL_CONSOLE, CTL_NONE, CTL_OTA, CTL_RECOVER,
-                       CTL_RT, CTL_SAFE, CTL_VALUES, DEVICE, DOMAINS, RT,
-                       TELEMETRY_FIELDS, validate)
+from generated import (CALIBRATION, DEVICE, DOMAINS, ENVELOPE, GROUPS, PROTO, RT,
+                       TELEMETRY_GROUPS, from_wire, to_wire, validate_config)
 
-# Ownership of the actuator, lowest priority first. `link_src_t` in
-# firmware/car/core/main/link.h is generated from the same list, and these names are
-# what telemetry reports in `ctl`. Position is rank on all three sides, and the
-# per-name symbols come from the generator, same as C's and Swift's.
-PRIORITY = tuple(CTL_VALUES)
+# Ownership of the actuator, lowest priority first — the `owner` field of
+# GROUPS["motors"], the same list firmware/car/core/main/link.h's `link_src_t` is
+# generated from. Position is rank on all three sides, and the per-name symbols
+# below spell `link_src_t`'s values in `link_src_t`'s order.
+_owner_field = next(f for f in GROUPS["motors"]["fields"] if f["name"] == "owner")
+(OWNER_IDLE, OWNER_RECOVERING, OWNER_CONSOLE, OWNER_REMOTE, OWNER_CALIBRATION,
+ OWNER_UPDATE, OWNER_SAFE_STOP) = _owner_field["values"]
+PRIORITY = tuple(_owner_field["values"])
 
 # The session id, as `parse_sid` in firmware/car/core/main/control_proto.c accepts it:
 # non-empty, alphanumeric, and short enough to fit that file's CONTROL_SID_MAX with its
@@ -40,7 +42,7 @@ _SID_RE = re.compile(r"[A-Za-z0-9]{1,%d}\Z" % SID_MAX_CHARS)
 
 
 def valid_sid(v):
-    """Would control_parse_frame accept this `hello` value?
+    """Would control_parse_frame accept this `session` value?
 
     ASCII-only on purpose: Python's `str.isalnum()` says yes to "é" and C's `isalnum`
     says no, and the mock exists to be as strict as the car, not as strict as Python.
@@ -85,7 +87,8 @@ def seq_is_newer(seq, last):
 
 
 def valid_seq(v):
-    """A `seq` is a uint32. A JSON boolean is an int in Python and is not one here.
+    """A `seq` (or `proto`) is a uint32. A JSON boolean is an int in Python and is not
+    one here.
 
     Used to be deliberately stricter than the car here: `control_proto.c`'s old
     `parse_u32` tokenised `1.5` down to `1` and accepted it. It no longer does —
@@ -137,6 +140,13 @@ def parse_image_version(data):
     return ver or None
 
 
+def build_number(fw):
+    """The integer after `+` in `fw` (e.g. 9001 from `v1.0+9001`), or -1 when fw
+    carries none — `device.build` in the hello reply and in /status."""
+    _, sep, build = fw.rpartition("+")
+    return int(build) if sep and build.isdigit() else -1
+
+
 def parse_frame(data, max_command=None):
     """One inbound datagram -> a dict of the fields it carried, or None to drop it.
 
@@ -146,15 +156,15 @@ def parse_frame(data, max_command=None):
       * over the *command* cap -> dropped. `max_datagram` sizes a receive buffer; what
         the car agrees to act on is `max_command`, and the difference is the room a
         telemetry frame needs on the way out.
+      * `type` is required and must be one the app sends: hello, drive, bye. Anything
+        else (missing, unknown, or one of the car->app types) has nothing to act on.
       * every key that is present must parse, or the whole datagram is dropped. A frame
-        with a good `t` and a broken `seq` is not a command with a missing sequence
-        number; it is corrupt.
-      * `t` and `y` come as a pair. One axis without the other is a truncated frame, not
-        an instruction to hold the other at zero.
-      * a datagram carrying no hello, no axes and no goodbye has nothing to act on.
-        A *bare* goodbye is not that: `{"seq":n,"bye":1}` says stop, and the car acts
-        on it (`control_proto.c`: `if (!f.has_hello && !f.has_ty && !f.bye) return -1`).
-        `{"bye":0}` is not a goodbye and carries nothing else, so it goes.
+        with a good `throttle` and a broken `seq` is not a command with a missing
+        sequence number; it is corrupt.
+      * `throttle` and `turn` come as a pair. One axis without the other is a truncated
+        frame, not an instruction to hold the other at zero.
+      * hello needs `session`; drive needs `seq` and both axes; bye needs `seq`. Axes on
+        a bye are tolerated (the app sends them) but never required.
 
     Range is deliberately not checked here either — the arbiter clamps.
     """
@@ -167,44 +177,33 @@ def parse_frame(data, max_command=None):
         return None
     if not isinstance(frame, dict):
         return None
-
-    out = {}
-    for key in (RT["proto_field"], RT["seq_field"]):
+    K, T = RT["keys"], RT["types"]
+    kind = frame.get(K["type"])
+    if kind not in (T["hello"], T["drive"], T["bye"]):
+        return None
+    out = {K["type"]: kind}
+    for key in (K["proto"], K["seq"]):
         if key in frame:
             if not valid_seq(frame[key]):
                 return None
             out[key] = frame[key]
-
-    if RT["hello_field"] in frame:
-        if not valid_sid(frame[RT["hello_field"]]):
+    if K["session"] in frame:
+        if not valid_sid(frame[K["session"]]):
             return None
-        out[RT["hello_field"]] = frame[RT["hello_field"]]
-
-    if RT["bye_field"] in frame:
-        v = frame[RT["bye_field"]]
-        if isinstance(v, bool):
-            out[RT["bye_field"]] = v
-        else:
-            # The wire says 1, but JSON has two ways to say yes. A string does not
-            # become a goodbye by being the word "yes".
-            n = number(v)
-            if n is None:
-                return None
-            out[RT["bye_field"]] = n != 0.0
-
-    t, y = frame.get(RT["throttle_field"]), frame.get(RT["yaw_field"])
-    has_t = RT["throttle_field"] in frame
-    has_y = RT["yaw_field"] in frame
+        out[K["session"]] = frame[K["session"]]
+    has_t, has_y = K["throttle"] in frame, K["turn"] in frame
     if has_t or has_y:
         if not (has_t and has_y):
             return None
-        t, y = number(t), number(y)
+        t, y = number(frame[K["throttle"]]), number(frame[K["turn"]])
         if t is None or y is None:
             return None
-        out[RT["throttle_field"]], out[RT["yaw_field"]] = t, y
-
-    if not (RT["hello_field"] in out or RT["throttle_field"] in out
-            or out.get(RT["bye_field"])):
+        out[K["throttle"]], out[K["turn"]] = t, y
+    if kind == T["hello"] and K["session"] not in out:
+        return None
+    if kind == T["drive"] and (K["seq"] not in out or K["throttle"] not in out):
+        return None
+    if kind == T["bye"] and K["seq"] not in out:
         return None
     return out
 
@@ -229,7 +228,10 @@ class CarState:
         self.nvs_wiped = False   # one-boot flag after a simulated NVS migration erase
         self.rssi = -58
         self.heap = 200000
-        self.config = {path: dict(d["defaults"]) for path, d in DOMAINS.items()}
+        # Internal integers throughout — a `fixed` field (gear_ratio) is held as ratio x100,
+        # exactly as `defaults` already is in the schema; `to_wire`/`from_wire` are the only
+        # places that ever see the decimal the wire uses.
+        self.config = {key: dict(d["defaults"]) for key, d in DOMAINS.items()}
 
         self._started = now
         self._now = now
@@ -241,9 +243,10 @@ class CarState:
         self._wdt_trips = 0
         self._retreating = False
         self._retreat_until = now
-        self._owner = CTL_NONE
+        self._owner = OWNER_IDLE
         self._owner_until = None       # None means the grant is sticky
         self._calibrated = False
+        self._calibration = {}         # corner -> (pair, inverted)
         self._bus_ok = True
         self._tele_seq = 0
 
@@ -286,30 +289,21 @@ class CarState:
 
     # ---- configuration ---------------------------------------------------------
 
-    def apply_config(self, path, body):
-        """Validate and apply one config domain. Returns (ok, reason).
-
-        A rejected body changes nothing at all. The firmware validates every field
-        before it writes any of them, so a partially-applied record is a state neither
-        side can be in — and a client that reads back after a 400 must see what it had.
+    def apply_config(self, body):
+        """Validate the WHOLE body, then apply every present domain. Returns (True, None)
+        or (False, (code, field, message)) — the car's two-pass rule: a body that is
+        half right changes nothing.
         """
-        ok, err = validate(path, body)
+        ok, err = validate_config(body)
         if not ok:
             return False, err
-        self.config[path] = {f["name"]: body[f["name"]] for f in DOMAINS[path]["fields"]}
-        return True, ""
+        for key in body:
+            self.config[key] = from_wire(key, body[key])
+        return True, None
 
-    def field_of(self, path, reason):
-        """Which key `validate` is complaining about, for the reply's `field`.
-
-        The message text belongs to the generator, so this matches rather than parses:
-        an unrecognised wording costs an empty `field`, which the protocol already
-        allows for a fault with the body as a whole.
-        """
-        for f in DOMAINS.get(path, {}).get("fields", []):
-            if reason.startswith(f["name"] + " ") or reason.startswith("missing " + f["name"]):
-                return f["name"]
-        return ""
+    def config_wire(self):
+        """Every domain as GET /config answers it: fixed fields as decimals."""
+        return {key: to_wire(key, values) for key, values in self.config.items()}
 
     # ---- the control channel ---------------------------------------------------
 
@@ -332,15 +326,15 @@ class CarState:
             # The driver is back. recovery.c aborts mid-replay for exactly this reason:
             # the retreat exists to reach the driver, so hearing from them ends it.
             self._retreating = False
-            self._release(CTL_RECOVER)
+            self._release(OWNER_RECOVERING)
         # The firmware holds RT for one actuator tick PAST this deadline
         # (link.h LINK_HOLD_RT_MS = RT_WATCHDOG_MS + LINK_TICK_MS) so a lapse can
         # never zero the wheels before the trip is declared; the audit-fix spec files
         # that margin as firmware-local. It is moot here: `tick` runs `_trip` — which
-        # takes CTL_RECOVER and sets the reversed command — before `_expire` ever
+        # takes OWNER_RECOVERING and sets the reversed command — before `_expire` ever
         # looks at the lapsed grant, so there is no window to cover and no invented
         # tick in a mock that has none.
-        if self._take(CTL_RT, now, RT["watchdog_ms"] / 1000.0):
+        if self._take(OWNER_REMOTE, now, RT["watchdog_ms"] / 1000.0):
             self._t, self._y = t, y
             self._history.append((t, y, now))
         self._evict(now)
@@ -350,7 +344,7 @@ class CarState:
     def note_bye(self, now):
         """A deliberate goodbye: stop, suppress the retreat, drop ownership.
 
-        This is the whole point of the `bye` field. Without it, backgrounding the app is
+        This is the whole point of the `bye` type. Without it, backgrounding the app is
         indistinguishable from walking out of range, and the car reverses along its own
         path with the controls off-screen.
 
@@ -381,17 +375,17 @@ class CarState:
         self._history.clear()
         self._retreating = False
         self._armed = False
-        if self._owner in (CTL_OTA, CTL_CALIB):
+        if self._owner in (OWNER_UPDATE, OWNER_CALIBRATION):
             # Rule 2 (audit-fix spec): a sticky hold is not stolen and not released.
             # The motors are already stopped (OTA) or under the wizard's pulse; the
             # goodbye's other duties — history, watchdog, session — are done above
             # and by the caller. Grabbing SAFE here displaced OTA's grant and then
-            # released it to NONE, unlocking the motors for the rest of the flash.
+            # released it to IDLE, unlocking the motors for the rest of the flash.
             return False
-        stopped = self._take(CTL_SAFE, now, None)
+        stopped = self._take(OWNER_SAFE_STOP, now, None)
         if stopped:
             self._t = self._y = 0.0
-        self._release(CTL_SAFE)
+        self._release(OWNER_SAFE_STOP)
         return stopped
 
     def adopt_session(self, now):
@@ -413,13 +407,13 @@ class CarState:
         self._history.clear()
         self._armed = False
         self._retreating = False
-        self._release(CTL_SAFE)
-        self._release(CTL_RECOVER)
+        self._release(OWNER_SAFE_STOP)
+        self._release(OWNER_RECOVERING)
 
     def forget_path(self, now):
         """Throw away the breadcrumb path — `recovery_forget()` on the car, whose
         liveness bump is what aborts recovery.c's `retreat_task` the next time it
-        checks, mid-replay or not. A retreat still in flight loses CTL_RECOVER's
+        checks, mid-replay or not. A retreat still in flight loses OWNER_RECOVERING's
         grant right here: the firmware's task calls
         `link_release_must(LINK_SRC_RECOVER)` unconditionally once its abort check
         trips, and only while it still holds the actuator — so the release is what
@@ -436,7 +430,7 @@ class CarState:
         self._history.clear()
         if self._retreating:
             self._retreating = False
-            self._release(CTL_RECOVER)
+            self._release(OWNER_RECOVERING)
 
     def tick(self, now):
         """Advance time. Returns a log line at the moments worth printing, else None."""
@@ -448,7 +442,7 @@ class CarState:
             self._retreating = False
             # The release is the stop: it zeroes only if the retreat still owns the
             # actuator, so an exhausted replay cannot flatten a pulse that outranked it.
-            self._release(CTL_RECOVER)
+            self._release(OWNER_RECOVERING)
             line = "recover: retrace exhausted — stopped"
         self._expire(now)
         return line
@@ -460,7 +454,7 @@ class CarState:
         silent = int((now - self._last_rx) * 1000.0)
         head = f"wdt: no control frame for {silent} ms"
 
-        if not self.config["/recover"]["enabled"]:
+        if not self.config["recovery"]["enabled"]:
             self._stop(now)
             return f"{head} — stopped (auto-return off)"
         if not self._history or not self._any_motion():
@@ -469,7 +463,7 @@ class CarState:
             self._stop(now)
             return f"{head} — stopped (nothing to retrace)"
 
-        if not self._take(CTL_RECOVER, now, None):
+        if not self._take(OWNER_RECOVERING, now, None):
             # recovery.c aborts the whole replay the first time car_drive is refused,
             # rather than marching through the timeline unheard. Driving anyway would
             # reverse the car out from under an OTA or a calibration pulse while this
@@ -504,7 +498,7 @@ class CarState:
                    for t, y, _ in self._history)
 
     def _evict(self, now):
-        window = self.config["/recover"]["window_ms"] / 1000.0
+        window = self.config["recovery"]["window_ms"] / 1000.0
         while self._history and (now - self._history[0][2]) > window:
             self._history.popleft()
 
@@ -516,8 +510,8 @@ class CarState:
         The release is what zeroes, and only if the take succeeded.
         """
         self._retreating = False
-        if self._take(CTL_RECOVER, now, None):
-            self._release(CTL_RECOVER)
+        if self._take(OWNER_RECOVERING, now, None):
+            self._release(OWNER_RECOVERING)
 
     # ---- the actuator arbiter --------------------------------------------------
 
@@ -534,7 +528,7 @@ class CarState:
             self._drop_grant()
 
     def _lapsed(self, now):
-        if self._owner == CTL_NONE:
+        if self._owner == OWNER_IDLE:
             return True
         if self._owner_until is None:
             return False
@@ -549,11 +543,11 @@ class CarState:
 
         link.c makes this one fact twice — `link_release` memsets the target, and the
         actuator task zeroes on a lapsed grant — because "ownership lapsed" has to mean
-        something physical. Without it `ctl == "none"` and "the wheels are stopped" are
+        something physical. Without it `ctl == "idle"` and "the wheels are stopped" are
         independent here and coupled on the car, and a calibration pulse that lapses
         leaves the mock at full throttle with nobody driving.
         """
-        self._owner, self._owner_until = CTL_NONE, None
+        self._owner, self._owner_until = OWNER_IDLE, None
         self._t = self._y = 0.0
 
     # ---- calibration, OTA ------------------------------------------------------
@@ -562,7 +556,7 @@ class CarState:
         """Take the actuator for one identification pulse. False when something outranks."""
         self._now = now
         self._expire(now)
-        if not self._take(CTL_CALIB, now, self.CALIB_HOLD_MS / 1000.0):
+        if not self._take(OWNER_CALIBRATION, now, self.CALIB_HOLD_MS / 1000.0):
             return False
         # Taking the actuator from a retreat is what aborts it on the car: the next
         # car_drive(RECOVER) is refused. Leaving the flag set here would let the
@@ -578,45 +572,58 @@ class CarState:
         calib_api.c does exactly this after its vTaskDelay, *before* replying, so
         the wizard's 200 arrives with the wheel already stopped and the grant gone.
         """
-        self._release(CTL_CALIB)
+        self._release(OWNER_CALIBRATION)
 
     def save_calibration(self, wheels):
-        """Mirrors calibration_valid: four entries, unique pairs 0..3, signs ±1."""
-        try:
-            if not isinstance(wheels, list) or len(wheels) != 4:
-                return False
-            for w in wheels:
-                for key in ("pair", "sign"):
-                    v = w[key]
-                    # cJSON_IsNumber: a JSON number, never a bool or a string —
-                    # and rule 7 has both sides reject fractions. int("0") and
-                    # int(True) coerced here while the car answered 400, the
-                    # works-in-sim/fails-on-car trap on the one endpoint that
-                    # guards the calibration table.
-                    if isinstance(v, bool) or not isinstance(v, (int, float)):
-                        return False
-                    if float(v) != int(v):
-                        return False
-            pairs = {int(w["pair"]) for w in wheels}
-            signs = [int(w["sign"]) for w in wheels]
-        except (TypeError, ValueError, OverflowError, KeyError):
-            return False
-        if pairs != {0, 1, 2, 3} or any(s not in (-1, 1) for s in signs):
-            return False
+        """Mirrors calib_api.c: four wheels, each corner once, pairs 0..3 each once."""
+        corners, keys = CALIBRATION["corners"], CALIBRATION["keys"]
+        if not isinstance(wheels, list) or len(wheels) != 4:
+            return False, ("wrong_type", keys["wheels"], "expected four wheels")
+        table, seen = {}, set()
+        for i, w in enumerate(wheels):
+            where = f"{keys['wheels']}[{i}]"
+            if not isinstance(w, dict):
+                return False, ("wrong_type", where, "wheel needs {corner,pair,inverted}")
+            for key in w:
+                if key not in (keys["corner"], keys["pair"], keys["inverted"]):
+                    return False, ("unknown_field", where, "no such field")
+            corner, pair, inverted = w.get(keys["corner"]), w.get(keys["pair"]), w.get(keys["inverted"])
+            if not isinstance(corner, str) or not isinstance(inverted, bool) \
+                    or isinstance(pair, bool) or not isinstance(pair, (int, float)) or float(pair) != int(pair):
+                return False, ("wrong_type", where, "wheel needs {corner,pair,inverted}")
+            if corner not in corners:
+                return False, ("not_allowed", where, "unknown corner")
+            if corner in seen:
+                return False, ("not_allowed", where, "corner repeated")
+            seen.add(corner)
+            if not 0 <= int(pair) < CALIBRATION["pairs"]:
+                return False, ("out_of_range", where, "pair 0..3")
+            table[corner] = (int(pair), inverted)
+        if {p for p, _ in table.values()} != set(range(CALIBRATION["pairs"])):
+            return False, ("not_allowed", keys["wheels"], "pairs must be 0..3, each once")
+        self._calibration = table
         self._calibrated = True
-        return True
+        return True, None
+
+    def calibration_table(self):
+        """The wheels array GET /calibration answers: FL, FR, RL, RR; empty when not calibrated."""
+        if not self._calibrated:
+            return []
+        keys = CALIBRATION["keys"]
+        return [{keys["corner"]: c, keys["pair"]: self._calibration[c][0], keys["inverted"]: self._calibration[c][1]}
+                for c in CALIBRATION["corners"]]
 
     def begin_ota(self, now):
         """Nothing commands the motors during a flash; the grant is sticky.
 
         Through the arbiter, as ota_api.c goes through car_stop(LINK_SRC_OTA):
-        a refusal is the firmware's 500 "actuator busy", and the simulator must
+        a refusal is the firmware's 409 "actuator busy", and the simulator must
         be able to exhibit it. Returns False without touching anything when a
         higher-priority holder refuses.
         """
         self._now = now
         self._expire(now)
-        if not self._take(CTL_OTA, now, None):
+        if not self._take(OWNER_UPDATE, now, None):
             return False
         self._t = self._y = 0.0
         self._armed = False
@@ -626,44 +633,40 @@ class CarState:
     def end_ota(self, flashed=True, version=None):
         if flashed:
             self.fw = version or _bump_build(self.fw)
-        self._release(CTL_OTA)
+        self._release(OWNER_UPDATE)
 
     def set_bus_ok(self, ok):
         self._bus_ok = ok
 
     # ---- telemetry -------------------------------------------------------------
 
-    def telemetry(self, rx_fps, bump=True):
-        """The 5 Hz frame, built by walking the schema.
+    def status_groups(self, rx_hz):
+        """The link/motors/system groups, built by walking the schema so a field added to
+        the contract and not to the map below raises here rather than going missing on
+        the wire.
+        """
+        values = {
+            "link": {"rx_hz": int(rx_hz), "rssi_dbm": self.rssi if self.rssi != 0 else None,
+                     "timeouts": self._wdt_trips},
+            "motors": {"bus": "ok" if self._bus_ok else "down", "calibrated": self._calibrated,
+                       "owner": self._owner},
+            "system": {"uptime_s": int(self._now - self._started), "free_heap": self.heap},
+        }
+        return {g: {f["name"]: values[g][f["name"]] for f in GROUPS[g]["fields"]} for g in TELEMETRY_GROUPS}
 
-        Assembling it from `TELEMETRY_FIELDS` rather than from a literal dict means a
-        field added to the contract and not to the map below raises here, instead of
-        going quietly missing on the wire where only a client notices.
+    def telemetry(self, rx_hz, bump=True):
+        """The 5 Hz frame, built by walking the schema (via `status_groups`).
 
         `bump=False` for a reader that is not the real-time channel. `seq` numbers the
-        pushed stream, and telemetry.c keeps a counter per consumer for exactly this
-        reason: a `/status` poll at 1 Hz must not make the 5 Hz stream skip a number
-        once a second, because skipping is how the app measures loss.
+        pushed stream, and `status_groups` is shared with a `/status` poll, whose
+        `bump=False` keeps the real-time stream's `seq` continuous however often
+        something else reads the same live state.
         """
         if bump:
             self._tele_seq += 1
-        # The keys below are the schema's telemetry field names, and the generator emits
-        # no symbols for them in any of the three languages (the firmware spells them in
-        # telemetry.h the same way). They are safe as literals *because* of the
-        # comprehension underneath: a field renamed in the schema raises KeyError here
-        # rather than going quietly missing on the wire.
-        values = {
-            "seq": self._tele_seq,
-            "rx_fps": int(rx_fps),
-            "rssi": self.rssi,
-            "wdt_trips": self._wdt_trips,
-            "uptime_s": int(self._now - self._started),
-            "heap": self.heap,
-            "calibrated": self._calibrated,
-            "bus_ok": self._bus_ok,
-            "ctl": self._owner,
-        }
-        return {f["name"]: values[f["name"]] for f in TELEMETRY_FIELDS}
+        K, T = RT["keys"], RT["types"]
+        return {ENVELOPE["proto"]: PROTO, K["type"]: T["telemetry"], K["seq"]: self._tele_seq,
+                **self.status_groups(rx_hz)}
 
 
 def _bump_build(fw):
