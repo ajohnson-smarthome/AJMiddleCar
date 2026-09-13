@@ -15,57 +15,92 @@ def load():
 class TestSchema(unittest.TestCase):
     def test_top_level(self):
         s = load()
-        self.assertEqual(s["proto"], 1)
+        self.assertEqual(s["proto"], 2)
         self.assertEqual(s["device"], "ajmiddlecar")
         self.assertEqual(s["network"]["ssid"], "AJMiddleCar")
-        # No host. The app reaches the car through the dongle and never addresses 192.168.4.1
-        # itself; the dongle learns the car's address from DHCP, not from a contract. What both
-        # sides must agree on is the network's name and password — the app hands those to the
-        # dongle over POST /net — and nothing else about where the car lives.
+        # No host: the app reaches the car only through the dongle.
         self.assertNotIn("host", s["network"])
+        self.assertEqual(s["envelope"], {"proto": "proto", "ok": "ok", "error": "error",
+                                         "code": "code", "message": "message", "field": "field"})
+        self.assertEqual(s["endpoints"], {"root": "/", "status": "/status", "config": "/config",
+                                          "calibration": "/calibration",
+                                          "spin": "/calibration/spin", "ota": "/ota"})
 
-    def test_the_command_cap_is_below_the_datagram_cap(self):
-        rt = load()["rt"]
-        self.assertLess(rt["max_command"], rt["max_datagram"],
-                        "a receive buffer sized from the command cap truncates telemetry")
-
-    def test_rt_constants(self):
+    def test_rt_constants_and_vocabulary(self):
         rt = load()["rt"]
         self.assertEqual(rt["port"], 4210)
         self.assertEqual(rt["max_datagram"], 320)
+        self.assertEqual(rt["max_command"], 96)
+        self.assertLess(rt["max_command"], rt["max_datagram"])
         self.assertEqual(rt["command_hz"], 10)
         self.assertEqual(rt["telemetry_hz"], 5)
         self.assertEqual(rt["watchdog_ms"], 300)
-
-    def test_session_idle(self):
-        rt = load()["rt"]
         self.assertEqual(rt["session_idle_ms"], 10000)
-        # Mortality must be far outside the watchdog's world: a slow trip is a
-        # trip, not a death.
         self.assertGreater(rt["session_idle_ms"], rt["watchdog_ms"] * 10)
+        self.assertEqual(rt["keys"], {"proto": "proto", "type": "type", "session": "session",
+                                      "seq": "seq", "throttle": "throttle", "turn": "turn"})
+        self.assertEqual(rt["types"], {"hello": "hello", "hello_ack": "hello_ack",
+                                       "drive": "drive", "bye": "bye", "telemetry": "telemetry"})
 
-    def test_domains_are_unique(self):
+    def test_groups(self):
+        g = load()["groups"]
+        self.assertEqual(list(g), ["device", "link", "motors", "radio", "storage", "system"])
+        names = {k: [f["name"] for f in v["fields"]] for k, v in g.items()}
+        self.assertEqual(names["device"], ["id", "fw", "build", "rolled_back"])
+        self.assertEqual(names["link"], ["rx_hz", "rssi_dbm", "timeouts"])
+        self.assertEqual(names["motors"], ["bus", "calibrated", "owner"])
+        self.assertEqual(names["radio"], ["fw", "expected", "state"])
+        self.assertEqual(names["storage"], ["reset_at_boot"])
+        self.assertEqual(names["system"], ["uptime_s", "free_heap"])
+        owner = next(f for f in g["motors"]["fields"] if f["name"] == "owner")
+        self.assertEqual(owner["type"], "state")
+        self.assertEqual(owner["values"], ["idle", "recovering", "console", "remote",
+                                           "calibration", "update", "safe_stop"])
+        self.assertEqual(owner["swift"], "MotorsOwner")
+        rssi = next(f for f in g["link"]["fields"] if f["name"] == "rssi_dbm")
+        self.assertTrue(rssi.get("nullable"))
+        for k, v in g.items():
+            self.assertTrue(v["swift"], k)
+            for f in v["fields"]:
+                self.assertIn(f["type"], ("int", "bool", "str", "state"), f"{k}.{f['name']}")
+                self.assertTrue(f["doc"].strip(), f"{k}.{f['name']}")
+                if f["type"] == "state":
+                    self.assertTrue(f["swift"], f"{k}.{f['name']}")
+                    self.assertEqual(len(f["values"]), len(set(f["values"])))
+
+    def test_telemetry_and_status_pick_groups_that_exist(self):
         s = load()
-        paths = [d["path"] for d in s["domains"]]
-        keys = [d["nvs_key"] for d in s["domains"]]
-        names = [d["swift"] for d in s["domains"]]
-        self.assertEqual(len(paths), len(set(paths)))
-        self.assertEqual(len(keys), len(set(keys)))
-        self.assertEqual(len(names), len(set(names)))
-        self.assertEqual(set(paths), {"/ramp", "/trim", "/recover", "/wheel", "/dims"})
+        self.assertEqual(s["telemetry"]["groups"], ["link", "motors", "system"])
+        self.assertEqual(s["status"]["groups"],
+                         ["device", "link", "motors", "radio", "storage", "system"])
+        for name in s["telemetry"]["groups"] + s["status"]["groups"]:
+            self.assertIn(name, s["groups"])
+        self.assertEqual(s["telemetry"]["swift"], "Telemetry")
+        self.assertEqual(s["status"]["swift"], "CarStatus")
 
-    def test_every_field_is_well_formed(self):
-        for d in load()["domains"]:
-            self.assertTrue(d["fields"], f"{d['path']} has no fields")
+    def test_config_domains(self):
+        c = load()["config"]
+        self.assertEqual(c["path"], "/config")
+        self.assertEqual(c["swift"], "CarConfig")
+        keys = [d["key"] for d in c["domains"]]
+        self.assertEqual(keys, ["ramp", "trim", "recovery", "wheel", "chassis"])
+        self.assertEqual([d["nvs_key"] for d in c["domains"]],
+                         ["ramp", "trim", "recover", "wheel", "dims"])
+        self.assertEqual([d["swift"] for d in c["domains"]],
+                         ["Ramp", "Trim", "Recovery", "Wheel", "Chassis"])
+        for d in c["domains"]:
+            self.assertTrue(d["fields"], d["key"])
             for f in d["fields"]:
-                where = f"{d['path']}.{f['name']}"
+                where = f"{d['key']}.{f['name']}"
                 self.assertTrue(re.fullmatch(r"[a-z][a-z0-9_]*", f["name"]), where)
-                self.assertIn(f["type"], ("int", "bool", "enum"), where)
+                self.assertIn(f["type"], ("int", "bool", "enum", "fixed"), where)
                 self.assertTrue(f["doc"].strip(), where)
-                if f["type"] == "int":
+                if f["type"] in ("int", "fixed"):
                     self.assertLess(f["min"], f["max"], where)
                     self.assertGreaterEqual(f["default"], f["min"], where)
                     self.assertLessEqual(f["default"], f["max"], where)
+                    if f["type"] == "fixed":
+                        self.assertGreater(f["scale"], 1, where)
                 elif f["type"] == "enum":
                     self.assertIn(f["default"], f["values"], where)
                     self.assertEqual(len(f["values"]), len(set(f["values"])), where)
@@ -75,50 +110,40 @@ class TestSchema(unittest.TestCase):
     def test_ranges_match_the_firmware_today(self):
         """The schema must describe the firmware that exists, not one we imagined."""
         main = ROOT / "firmware" / "car" / "core" / "main"
-        # The five *_api.c files are gone: cfg_api.c drives all of them from the
-        # generated table, so a range literal no longer appears in any handler. What
-        # remains are the setters' own clamps, which are the C-side constants this
-        # test exists to keep the schema honest against.
-        #
-        # Each domain's file is checked in isolation rather than as one concatenated
-        # blob: a corpus-wide search let /recover window_ms's 1000 floor hide behind
-        # /wheel ppr's unrelated 1000 ceiling in wheel.h, so a genuine floor drift in
-        # recovery.h went undetected. Scoping per file closes that cross-domain
-        # collision.
-        file_for_path = {
-            "/wheel": "wheel.h", "/dims": "dims.h", "/recover": "recovery.h",
-            "/ramp": "ramp.c", "/trim": "car.c",
-        }
-        src_by_file = {n: (main / n).read_text() for n in set(file_for_path.values())}
+        file_for_key = {"wheel": "wheel.h", "chassis": "dims.h", "recovery": "recovery.h",
+                        "ramp": "ramp.c", "trim": "car.c"}
+        src_by_file = {n: (main / n).read_text() for n in set(file_for_key.values())}
         expected = {
-            ("/wheel", "diameter_mm"): (20, 150), ("/wheel", "ppr"): (1, 1000),
-            ("/wheel", "gear_x100"): (100, 30000),
-            ("/dims", "track_mm"): (60, 300), ("/dims", "wheelbase_mm"): (90, 360),
-            ("/recover", "window_ms"): (1000, 10000),
-            ("/ramp", "ramp_ms"): (0, 2000), ("/trim", "trim_pct"): (-30, 30),
+            ("wheel", "diameter_mm"): (20, 150), ("wheel", "encoder_ppr"): (1, 1000),
+            ("wheel", "gear_ratio"): (100, 30000),
+            ("chassis", "track_mm"): (60, 300), ("chassis", "wheelbase_mm"): (90, 360),
+            ("recovery", "window_ms"): (1000, 10000),
+            ("ramp", "rise_ms"): (0, 2000), ("trim", "balance_pct"): (-30, 30),
         }
         got = {}
-        for d in load()["domains"]:
+        for d in load()["config"]["domains"]:
             for f in d["fields"]:
-                if f["type"] == "int":
-                    got[(d["path"], f["name"])] = (f["min"], f["max"])
+                if f["type"] in ("int", "fixed"):
+                    got[(d["key"], f["name"])] = (f["min"], f["max"])
         self.assertEqual(got, expected)
-        for (path, name), (lo, hi) in expected.items():
-            fname = file_for_path[path]
-            src = src_by_file[fname]
+        for (key, name), (lo, hi) in expected.items():
+            src = src_by_file[file_for_key[key]]
             for bound in (lo, hi):
-                # Word-bounded: "2000" must not be satisfied by "12000", and "30"
-                # must not be found inside "-30". The min bounds were entirely
-                # unchecked before — a firmware floor drifting from the schema is
-                # exactly what this test exists to catch. Scoped to the one file that
-                # owns this domain's clamps, so an identical literal in another
-                # domain's file (e.g. wheel.h's WHEEL_PPR_MAX 1000) cannot mask a
-                # drift here. Not bulletproof within a single file, though: 0 (the
-                # /ramp floor) is common enough that another unrelated 0 in ramp.c
-                # could still mask a real drift there — a residual, one-file risk.
                 pat = rf"(?<![\w.-]){re.escape(str(bound))}(?![\w.])"
-                self.assertRegex(src, pat,
-                                 f"{path} {name}: bound {bound} not in {fname}")
+                self.assertRegex(src, pat, f"{key} {name}: bound {bound} not in {file_for_key[key]}")
+
+    def test_calibration_and_errors(self):
+        s = load()
+        c = s["calibration"]
+        self.assertEqual(c["corners"], ["front_left", "front_right", "rear_left", "rear_right"])
+        self.assertEqual(c["directions"], ["forward", "reverse"])
+        self.assertEqual(c["pairs"], 4)
+        self.assertEqual(c["keys"], {"calibrated": "calibrated", "wheels": "wheels",
+                                     "corner": "corner", "pair": "pair",
+                                     "inverted": "inverted", "direction": "direction"})
+        self.assertEqual(s["errors"], ["bad_json", "missing_field", "unknown_field", "wrong_type",
+                                       "out_of_range", "not_allowed", "busy", "too_small",
+                                       "not_firmware", "write_failed", "internal"])
 
 
 import filecmp
