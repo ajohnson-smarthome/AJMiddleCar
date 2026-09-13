@@ -42,18 +42,20 @@ static void ota_progress_clear(void)
 static esp_err_t ota_post(httpd_req_t *req)
 {
     if (req->content_len < 4096) {  /* reject obviously-bogus uploads before erasing a slot */
-        return api_reply_error(req, "400 Bad Request", "", "image too small");
+        return api_reply_error(req, "400 Bad Request", DONGLE_ERR_TOO_SMALL, "", "image too small");
     }
     if (req->content_len > INT_MAX) {  /* guard the (int) cast below: a huge len wraps negative */
-        return api_reply_error(req, "400 Bad Request", "", "image too large");
+        return api_reply_error(req, "400 Bad Request", DONGLE_ERR_NOT_FIRMWARE, "",
+                               "image larger than the slot");
     }
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
     if (part == NULL) {
-        api_reply_error(req, "500 Internal Server Error", "", "no ota partition");
+        api_reply_error(req, "500 Internal Server Error", DONGLE_ERR_WRITE_FAILED, "", "no ota partition");
         return ESP_FAIL;
     }
     if ((uint32_t)req->content_len > part->size) {
-        return api_reply_error(req, "400 Bad Request", "", "image too large");
+        return api_reply_error(req, "400 Bad Request", DONGLE_ERR_NOT_FIRMWARE, "",
+                               "image larger than the slot");
     }
 
     esp_ota_handle_t handle = 0;
@@ -69,10 +71,10 @@ static esp_err_t ota_post(httpd_req_t *req)
                It gets its own message anyway: "ota begin failed" would send someone hunting the
                flash for a fault that is really a race. */
             ESP_LOGE(TAG, "refusing: this image has not finished verifying its own boot");
-            return api_reply_error(req, "409 Conflict", "", "image still pending verify");
+            return api_reply_error(req, "409 Conflict", DONGLE_ERR_BUSY, "", "image still pending verify");
         }
         ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(berr));
-        api_reply_error(req, "500 Internal Server Error", "", "ota begin failed");
+        api_reply_error(req, "500 Internal Server Error", DONGLE_ERR_WRITE_FAILED, "", "ota begin failed");
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "OTA -> %s, %d bytes", part->label, (int)req->content_len);
@@ -100,7 +102,7 @@ static esp_err_t ota_post(httpd_req_t *req)
                      (int)req->content_len - remaining, (int)req->content_len, r);
             esp_ota_abort(handle);
             ota_progress_clear();
-            api_reply_error(req, "400 Bad Request", "", "recv error");
+            api_reply_error(req, "400 Bad Request", DONGLE_ERR_INTERNAL, "", "upload stalled");
             return ESP_FAIL;
         }
         timeouts = 0;  /* progress resets the stall budget */
@@ -113,14 +115,14 @@ static esp_err_t ota_post(httpd_req_t *req)
             esp_ota_abort(handle);
             if (werr == ESP_ERR_OTA_VALIDATE_FAILED) {
                 /* The client sent something that isn't a valid app image — its fault. */
-                api_reply_error(req, "400 Bad Request", "", "image invalid");
+                api_reply_error(req, "400 Bad Request", DONGLE_ERR_NOT_FIRMWARE, "", "image invalid");
             } else {
                 /* Anything else (e.g. an esp_partition_write flash error) is this device's
                    fault, not the client's. The car's twin (firmware/car/core/main/ota_api.c) reports
                    500 for both cases, which is wrong in the other direction — most of its
                    failures here are this same magic-byte rejection, not a device fault. */
                 ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(werr));
-                api_reply_error(req, "500 Internal Server Error", "", "ota write failed");
+                api_reply_error(req, "500 Internal Server Error", DONGLE_ERR_WRITE_FAILED, "", "ota write failed");
             }
             ota_progress_clear();
             return ESP_FAIL;
@@ -131,7 +133,7 @@ static esp_err_t ota_post(httpd_req_t *req)
 
     if (esp_ota_end(handle) != ESP_OK) {
         ota_progress_clear();
-        api_reply_error(req, "400 Bad Request", "", "image invalid");
+        api_reply_error(req, "400 Bad Request", DONGLE_ERR_NOT_FIRMWARE, "", "image invalid");
         return ESP_FAIL;
     }
     esp_err_t serr = esp_ota_set_boot_partition(part);
@@ -139,7 +141,7 @@ static esp_err_t ota_post(httpd_req_t *req)
         ESP_LOGE(TAG, "set_boot_partition failed: %s (image written+valid but not booted)",
                  esp_err_to_name(serr));
         ota_progress_clear();
-        api_reply_error(req, "500 Internal Server Error", "", "set boot failed");
+        api_reply_error(req, "500 Internal Server Error", DONGLE_ERR_WRITE_FAILED, "", "set boot failed");
         return ESP_FAIL;
     }
     /* Cleared here too, ahead of the reboot below: the image is already committed either way,
