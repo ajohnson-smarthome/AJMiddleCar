@@ -76,6 +76,7 @@ struct RootView: View {
                 }
             }
             .onChange(of: link.fw) { _, fw in flow.carIdentified(fw: fw) }
+            .onChange(of: link.probedFw) { _, fw in flow.carProbed(fw: fw) }
             .onChange(of: link.state) { old, new in
                 // The identity may already be known when the gate finishes; re-asking is cheap
                 // and closes the race where the hello landed before `startupCheck` returned.

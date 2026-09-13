@@ -16,8 +16,8 @@ actor CarTransport {
     static let shared = CarTransport()
 
     enum Event: Sendable {
-        /// The car answered our hello. `device` may be someone else's — the caller decides.
-        case sessionOpened(device: String, fw: String)
+        /// The car answered our hello. Its identity may be someone else's — the caller decides.
+        case sessionOpened(DeviceInfo)
         /// A car answered in a protocol version this app does not speak. Reported by name: the
         /// car replies to a mismatched hello precisely so this is sayable.
         case protoMismatch(theirs: Int)
@@ -216,7 +216,7 @@ actor CarTransport {
         conn = socket
         lastRx = ContinuousClock.now
 
-        let identity: Identity
+        let identity: DeviceInfo
         switch try await handshake(sid: sid) {
         case .identity(let found):
             identity = found
@@ -229,15 +229,15 @@ actor CarTransport {
             await holdIdentity()
             throw CarError.malformed("protocol \(theirs), not \(CarContract.proto)")
         }
-        emit(.sessionOpened(device: identity.device, fw: identity.fw))
+        emit(.sessionOpened(identity))
 
-        guard identity.device == CarContract.device else {
+        guard identity.id == CarContract.device else {
             // Not our car. A single command frame here would drive it, so instead of streaming
             // we say goodbye — the other car drops ownership and stops — and hold the session
             // long enough that the wrong-car screen is not a flicker.
             await sayGoodbye(on: socket)
             await holdIdentity()
-            throw CarError.malformed("foreign device \(identity.device)")
+            throw CarError.malformed("foreign device \(identity.id)")
         }
 
         sessionAdopted = true
@@ -253,12 +253,10 @@ actor CarTransport {
 
     // MARK: - session phases
 
-    private struct Identity { let device: String; let fw: String }
-
     /// What a hello exchange produced. A protocol mismatch is an answer, not a failure — the car
     /// deliberately replies to a hello it cannot serve so that the app can name the problem.
     private enum Handshake {
-        case identity(Identity)
+        case identity(DeviceInfo)
         case protoMismatch(theirs: Int)
     }
 
@@ -294,8 +292,8 @@ actor CarTransport {
             // A reply for another session id is a leftover from the previous socket; ignoring it
             // is what makes ownership non-resumable rather than accidentally inherited.
             switch SessionPolicy.handshakeOutcome(RTFrame.parse(text), sid: sid) {
-            case .identity(let device, let fw):
-                return .identity(Identity(device: device, fw: fw))
+            case .identity(let device):
+                return .identity(device)
             case .protoMismatch(let theirs):
                 return .protoMismatch(theirs: theirs)
             case .ignore:
@@ -314,7 +312,7 @@ actor CarTransport {
             guard let conn else { throw CarError.refused }
             let c = outbox.get()
             seq = RTFrame.nextSeq(seq)
-            try await send(RTFrame.command(seq: seq, t: c.t, y: c.y), on: conn)
+            try await send(RTFrame.command(seq: seq, throttle: c.t, turn: c.y), on: conn)
             deadline += period
             // A send that overran the period must not be repaid with a burst of catch-up frames.
             if deadline < ContinuousClock.now { deadline = ContinuousClock.now + period }

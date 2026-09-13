@@ -7,8 +7,10 @@ func check(_ ok: Bool, _ what: String) {
     if !ok { print("FAIL: \(what)"); failures += 1 }
 }
 
-var fresh = Telemetry()
-fresh.uptimeS = 10
+let fresh = Telemetry(proto: 2, seq: 1,
+                      link: LinkInfo(rx_hz: 10, rssi_dbm: -58, timeouts: 0),
+                      motors: MotorsInfo(bus: .ok, calibrated: true, owner: .remote),
+                      system: SystemInfo(uptime_s: 10, free_heap: 200000))
 
 let adopted = SessionState.adopted(device: CarContract.device, fw: "v1.0+517")
 func compose(_ p: PathState, _ s: SessionState, _ t: Telemetry?, _ age: TimeInterval?) -> Link {

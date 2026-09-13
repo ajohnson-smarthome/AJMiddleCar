@@ -26,13 +26,20 @@ final class CarLink: ObservableObject {
     /// The radio co-processor's firmware, from `/status`. Not carried by telemetry and not part
     /// of the app image, so a pinned-version mismatch is invisible unless it is surfaced.
     @Published private(set) var radio: RadioStatus?
-    /// The car's report that the bootloader reverted the last update (decision 1): `/status`
-    /// `rollback`, nil until a fresh post-adoption fetch answers (or on firmware that
-    /// predates the key). Reset on every adoption so a pre-reboot value cannot leak forward.
+    /// The car's report that the bootloader reverted the last update (decision 1): the hello
+    /// reply's `device.rolled_back`, set the instant a session opens rather than waiting on a
+    /// separate `/status` fetch. Reset on every adoption so a pre-reboot value cannot leak
+    /// forward.
     @Published private(set) var rollback: Bool?
     /// The newest numbers we ever saw, live or not. `state` is the truth about the link; this is
     /// for screens that legitimately show the last known reading (uptime, firmware, trips).
     @Published private(set) var lastTelemetry: Telemetry?
+    /// The v1 bridge (spec: "The flag day, and the two bridges across it"). A v1 car drops a v2
+    /// hello unanswered, so its version cannot reach the update gate through the handshake. When
+    /// hellos go unanswered, `/status` is read once through the relay and its identity — v1 or v2
+    /// spelling — is published here for `AppFlow.carProbed`, which may force an update but never
+    /// declares the car ready. Cleared the moment a real session opens.
+    @Published private(set) var probedFw: String?
 
     /// Optional so the debug gallery can hold a frozen link without a real `NWPathMonitor`
     /// running behind every frame it builds.
@@ -55,6 +62,10 @@ final class CarLink: ObservableObject {
     /// generation check remains the authoritative guard against a stale response landing
     /// after a newer session already asked again, cancellation or not.
     private var radioFetchGen = 0
+    private var probe: Task<Void, Never>?
+    private var lastProbeAt: ContinuousClock.Instant?
+    private static let probeAfter: Duration = .seconds(2)
+    private static let probeSpacing: Duration = .seconds(5)
     private var pathSub: AnyCancellable?
     /// Lifecycle operations run strictly in call order. `start()` and `requestStop()` enqueue
     /// synchronously on the main actor, so the order the scene handler calls them in is the
@@ -98,6 +109,7 @@ final class CarLink: ObservableObject {
         // `pathState` before the pump this enqueues starts.
         path?.refresh()
         enqueue { [weak self] in await self?.beginPumping() }
+        scheduleProbe()
     }
 
     /// Leaving the app is a goodbye said in words — the car is told to stop rather than left
@@ -141,6 +153,7 @@ final class CarLink: ObservableObject {
         pump?.cancel(); pump = nil
         decay?.cancel(); decay = nil
         radioFetch?.cancel(); radioFetch = nil
+        probe?.cancel()
         // Bounded: a goodbye stuck on a dead path (the dongle's interface gone while the socket
         // was still `.waiting`) must not dam the lifecycle chain forever — every later start/stop
         // queues behind an unbounded await otherwise. 300 ms covers 3 sends at 10 Hz spacing with
@@ -197,16 +210,20 @@ final class CarLink: ObservableObject {
 
     private func handle(_ event: CarTransport.Event) {
         switch event {
-        case .sessionOpened(let device, let fw):
-            self.device = device
+        case .sessionOpened(let info):
+            probe?.cancel()
+            probedFw = nil
+            self.device = info.id
             lastTelemetrySeq = nil
-            if device == CarContract.device {
+            if info.id == CarContract.device {
                 // The firmware version is published only for our own car. It feeds the launch
                 // gate, and a foreign car's build number there can force an OTA onto a car
                 // that is not ours — routing straight around the wrong-car screen.
-                self.fw = fw
-                session = .adopted(device: device, fw: fw)
-                rollback = nil
+                self.fw = info.fw
+                session = .adopted(device: info.id, fw: info.fw)
+                // The bootloader's verdict on the last update rides with the handshake now;
+                // /status is fetched only for the radio.
+                rollback = info.rolled_back
                 fetchRadio()
                 // The car is reachable exactly now. Prefetching from `onAppear` ran while the
                 // gate was still talking to GitHub, so both GETs timed out and every trick
@@ -214,7 +231,7 @@ final class CarLink: ObservableObject {
                 config?.prefetchDriveGeometry()
             } else {
                 self.fw = nil
-                session = .foreign(device: device)
+                session = .foreign(device: info.id)
             }
         case .protoMismatch(let theirs):
             self.fw = nil
@@ -228,6 +245,7 @@ final class CarLink: ObservableObject {
             telemetry = nil
             lastFrame = nil
             lastTelemetrySeq = nil
+            scheduleProbe()
         }
     }
 
@@ -264,12 +282,13 @@ final class CarLink: ObservableObject {
     /// `/status` is one GET against a single-request server that is busy with the geometry
     /// prefetch fired in the same instant — one miss must not hide a radio mismatch for the
     /// whole session. Four tries, backing off; if every try fails the status becomes
-    /// `.unavailable` rather than silence. `rollback` is parsed independently of the radio
-    /// object: it must survive a malformed radio block, and its absence (older firmware)
-    /// stays nil. Every write is guarded by `radioFetchGen`: a fetch superseded by a newer
-    /// `.sessionOpened` (e.g. the reconnect right after an OTA reboot) must not let its
-    /// in-flight response — which cancellation now usually aborts, but can still lose the
-    /// race to a response already in flight — overwrite the newer session's fresh values.
+    /// `.unavailable` rather than silence. `rollback` no longer comes from here — the
+    /// bootloader's verdict rides with the handshake now (`.sessionOpened`'s `DeviceInfo`) — so
+    /// this fetch exists only for the radio. Every write is guarded by `radioFetchGen`: a fetch
+    /// superseded by a newer `.sessionOpened` (e.g. the reconnect right after an OTA reboot)
+    /// must not let its in-flight response — which cancellation now usually aborts, but can
+    /// still lose the race to a response already in flight — overwrite the newer session's
+    /// fresh values.
     private func fetchRadio() {
         radioFetch?.cancel()
         radioFetchGen += 1
@@ -287,15 +306,9 @@ final class CarLink: ObservableObject {
                 // the non-optional bound above (still in scope, same iteration) — only the
                 // generation can have moved.
                 guard gen == self.radioFetchGen else { return }
-                if let data, let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    if let rb = j["rollback"] as? Bool { self.rollback = rb }
-                    if let r = j["radio"] as? [String: Any],
-                       let fw = r[CarContract.fwField] as? String {
-                        // Missing/malformed `ok` is NOT health (decision 17): unknown means
-                        // the one flag this line exists for could not be read.
-                        self.radio = .known(fw: fw, ok: r["ok"] as? Bool ?? false)
-                        return
-                    }
+                if let data, let s = try? JSONDecoder().decode(CarStatus.self, from: data) {
+                    self.radio = .known(fw: s.radio.fw ?? "", ok: s.radio.state == .ok)
+                    return
                 }
             }
             guard let self, gen == self.radioFetchGen else { return }
@@ -306,6 +319,20 @@ final class CarLink: ObservableObject {
     /// FirmwareView calls this on appear: the radio line is that screen's reason to exist,
     /// and an OTA just behind us may have changed the answer.
     func refreshRadio() { fetchRadio() }
+
+    private func scheduleProbe() {
+        probe?.cancel()
+        probe = Task { [weak self, transport] in
+            try? await Task.sleep(for: Self.probeAfter)
+            guard !Task.isCancelled, let self, case .none = self.session else { return }
+            if let last = self.lastProbeAt, ContinuousClock.now - last < Self.probeSpacing { return }
+            self.lastProbeAt = ContinuousClock.now
+            guard let data = try? await transport.get(CarContract.statusPath, timeout: 2),
+                  let id = LegacyIdentity.parse(data), id.device == CarContract.device,
+                  !Task.isCancelled else { return }
+            self.probedFw = id.fw
+        }
+    }
 
     #if DEBUG
     /// One screen's worth of link, for the gallery. Nothing runs behind it.
