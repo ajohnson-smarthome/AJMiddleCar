@@ -2,10 +2,11 @@
 // DongleReply.of(_:) — the pure decisions behind "find the dongle, update it, point it at the
 // car, then drive". Run with swiftc; no XCTest, no simulator.
 //
-// `sources` lists DongleLink.swift, DongleStatus.swift, UpdateRules.swift AND CarError.swift:
-// DongleLink calls UpdateRules.mustUpdate directly (its declared Task 4 dependency), and
-// DongleReply.of classifies the transport's own error vocabulary, so both have to be on the
-// compile line for this to link at all.
+// `sources` lists DongleLink.swift, LegacyIdentity.swift, UpdateRules.swift AND CarError.swift:
+// DongleLink calls UpdateRules.mustUpdate directly (its declared Task 4 dependency), reads a
+// v1 dongle's identity through LegacyIdentity (the v1 bridge), and DongleReply.of classifies
+// the transport's own error vocabulary — all three have to be on the compile line for this to
+// link at all.
 import Foundation
 
 var failures = 0
@@ -23,18 +24,22 @@ extension DongleReply {
 }
 
 /// Builds a `/status` body, decodes it and wraps it as the reply `next` takes — varying only
-/// what each test cares about. Every fixture is a full, valid document, because
-/// `DongleStatus.parse` throws on a short one and this file is not testing that
-/// (donglestatus/main.swift already does). `device` defaults to the generated contract's own
-/// value, so only the identity test below has to name one.
+/// what each test cares about. Every fixture is a full, valid document, because the generated
+/// `DongleStatus` throws on a short one and this file is not testing that (donglestatus/main.swift
+/// already does). `device` defaults to the generated contract's own value, so only the identity
+/// test below has to name one.
 func reply(fw: String, rollback: Bool, ssid: String, state: String, rssi: Int = -50,
            device: String = DongleContract.device) -> DongleReply {
     let json = #"""
-    {"device":"\#(device)","fw":"\#(fw)","idf":"v6.0.2","usb":"\#(DongleUsbState.up)",
-     "rollback":\#(rollback),
-     "net":{"ssid":"\#(ssid)","state":"\#(state)","rssi":\#(rssi)}}
+    {"proto":1,
+     "device":{"id":"\#(device)","fw":"\#(fw)","build":0,"rolled_back":\#(rollback),"idf":"v6.0.2"},
+     "usb":{"state":"up"},
+     "wifi":{"ssid":"\#(ssid)","configured":\#(!ssid.isEmpty),"state":"\#(state)","rssi_dbm":\#(rssi),"channel":1,
+             "attempts":{"used":0,"max":5}},
+     "relay":{"to_car_hz":0.0,"to_phone_hz":0.0,"udp_sessions":0,"tcp_connections":0,"last_error":null},
+     "system":{"uptime_s":1,"free_heap":1}}
     """#
-    return .status(try! DongleStatus.parse(Data(json.utf8)))
+    return DongleReply.decode(Data(json.utf8))
 }
 
 let behind = "v1.0+100"   // running build
@@ -91,13 +96,13 @@ check(DongleReply.of(CancellationError()).isSilent, "a cancelled read says nothi
 // that never compares the field would answer .readyForCar and drive the car through somebody
 // else's hardware.
 check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: carSSID,
-                                   state: DongleNetState.connected, device: "some-other-adapter"),
+                                   state: "connected", device: "some-other-adapter"),
                       latestTag: latest, expectedSSID: carSSID) == .wrongDongle(device: "some-other-adapter"),
       "an adapter that is not ours is named, not driven")
 // And it is answered BEFORE anything in the document is acted on: a foreign device's fw and
 // rollback flag describe a device this app knows nothing about, so neither an update nor a
 // rollback report may be reached through them.
-check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: "", state: DongleNetState.idle,
+check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: "", state: "idle",
                                    device: "some-other-adapter"),
                       latestTag: latest, expectedSSID: carSSID) == .wrongDongle(device: "some-other-adapter"),
       "identity is checked before the update, the rollback and the credentials")
@@ -109,12 +114,12 @@ check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: "", state: 
 // would return .readyForCar here instead, which is exactly the ordering bug the spec calls
 // out: "The dongle updates before the car... Settle the pipe before pushing the long transfer
 // down it."
-check(DongleLink.next(reply: reply(fw: behind, rollback: false, ssid: carSSID, state: DongleNetState.connected),
+check(DongleLink.next(reply: reply(fw: behind, rollback: false, ssid: carSSID, state: "connected"),
                       latestTag: latest, expectedSSID: carSSID) == .updating,
       "a dongle behind the latest release updates first, even if its net is already connected")
 
 // -- current and never configured: send the car's credentials ---------------------------
-check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: "", state: DongleNetState.idle),
+check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: "", state: "idle"),
                       latestTag: latest, expectedSSID: carSSID) == .sendCredentials,
       "current firmware, no SSID on the dongle, sends the car's credentials")
 
@@ -124,14 +129,14 @@ check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: "", state
 // implementation that checks only `!ssid.isEmpty` would answer .waiting or .readyForCar here,
 // leaving a mis-pointed dongle stuck forever with no way to re-point it (this is where a
 // mis-pointed dongle used to dead-end).
-check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: "someOtherNetwork", state: DongleNetState.connected),
+check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: "someOtherNetwork", state: "connected"),
                       latestTag: latest, expectedSSID: carSSID) == .sendCredentials,
       "a dongle connected to the wrong network is re-pointed, not treated as ready")
 
 // -- configured, net joining: wait, do not re-POST ---------------------------------------
 // The radio is working through its own bounded budget; nothing has failed yet, so a re-POST
 // would only restart a budget that is already running.
-check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: carSSID, state: DongleNetState.joining),
+check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: carSSID, state: "joining"),
                       latestTag: latest, expectedSSID: carSSID) == .waiting,
       "configured and joining waits, not sendCredentials and not retryJoin")
 
@@ -145,22 +150,22 @@ check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: carSSID, 
 // parks the app on a "connecting" screen that nothing on the dongle will ever end. The
 // every-boot case — the dongle keeps its network in RAM only, so it starts IDLE with an
 // EMPTY ssid — is the second check, not this one.
-check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: carSSID, state: DongleNetState.idle),
+check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: carSSID, state: "idle"),
                       latestTag: latest, expectedSSID: carSSID) == .retryJoin,
       "configured but idle asks the radio again — nothing else can leave IDLE")
-check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: "", state: DongleNetState.idle),
+check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: "", state: "idle"),
                       latestTag: latest, expectedSSID: carSSID) == .sendCredentials,
       "an idle dongle with no SSID on the dongle is still the configure step, not the retry step")
 
 // -- net failed: the retry step, not the configure step ----------------------------------
 // This is where U2 lands: the credentials on the dongle are already correct, so the fix is asking
 // the radio to try again, not re-sending the same SSID/password as though nothing were saved.
-check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: carSSID, state: DongleNetState.failed),
+check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: carSSID, state: "failed"),
                       latestTag: latest, expectedSSID: carSSID) == .retryJoin,
       "a failed join retries the join, it does not re-send credentials")
 
 // -- net connected: hand off to the car's existing gate -----------------------------------
-check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: carSSID, state: DongleNetState.connected),
+check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: carSSID, state: "connected"),
                       latestTag: latest, expectedSSID: carSSID) == .readyForCar,
       "current, configured for the car's own network, connected hands off to the car")
 
@@ -169,13 +174,13 @@ check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: carSSID, 
 // failed, so mustUpdate is also true here — a version of `next` that checked mustUpdate first
 // and rollback second would answer .updating, which is precisely the "offering the same
 // update again forever" loop this field exists to break.
-check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: DongleNetState.idle),
+check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: "idle"),
                       latestTag: latest, expectedSSID: carSSID) == .rolledBack,
       "rollback true reports the rollback instead of re-offering the same update")
 // Rollback is reported even where a naive implementation might reach .readyForCar first —
 // checked here with a net that is otherwise fully connected, to prove rollback is not merely
 // a modifier tucked inside the update branch.
-check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: DongleNetState.connected),
+check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: "connected"),
                       latestTag: latest, expectedSSID: carSSID) == .rolledBack,
       "rollback true is reported even when the net looks fully connected")
 
@@ -192,12 +197,12 @@ check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, st
 // than quietly restoring the old behaviour.
 for choice in [RollbackChoice.unanswered, .recheck(from: latest), .recheck(from: nil)] {
     let step = DongleLink.next(
-        reply: reply(fw: behind, rollback: true, ssid: carSSID, state: DongleNetState.connected),
+        reply: reply(fw: behind, rollback: true, ssid: carSSID, state: "connected"),
         latestTag: latest, expectedSSID: carSSID, rollback: choice)
     check(step != .readyForCar,
           "no rollback answer reaches the car on the reverted firmware (\(choice))")
 }
-check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: DongleNetState.connected),
+check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: "connected"),
                       latestTag: latest, expectedSSID: carSSID) == .rolledBack,
       "the choice defaults to .unanswered — a caller that forgets to pass it still sees rolledBack")
 
@@ -208,26 +213,26 @@ check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, st
 // thing rollback exists to prevent. A release NEWER than the one that was on offer when the
 // user asked is a different image, and it is offered.
 let newer = "v1.0+900"
-check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: DongleNetState.connected),
+check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: "connected"),
                       latestTag: newer, expectedSSID: carSSID,
                       rollback: .recheck(from: latest)) == .updating,
       "a release newer than the one that rolled back is offered when the user asks for it")
 // The same ask against the same release that just failed must NOT re-flash it: that is the
 // loop the rollback report exists to break, and it would look identical to the user.
-check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: DongleNetState.connected),
+check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: "connected"),
                       latestTag: latest, expectedSSID: carSSID,
                       rollback: .recheck(from: latest)) == .rolledBack,
       "checking again with nothing newer returns to the report, it does not re-flash the same image")
 // Asked while nothing was known (offline, no cache), answered once a tag exists: `from` is nil,
 // so the only remaining question is the ordinary one — is this newer than what is running.
-check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: DongleNetState.connected),
+check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: carSSID, state: "connected"),
                       latestTag: latest, expectedSSID: carSSID,
                       rollback: .recheck(from: nil)) == .updating,
       "a recheck asked with no tag in hand still takes a release once one is known")
 // A newer TAG that is not newer than the firmware actually running is not an update either —
 // both comparisons have to hold, or a dongle already on the newest build would be told to
 // flash it again.
-check(DongleLink.next(reply: reply(fw: newer, rollback: true, ssid: carSSID, state: DongleNetState.connected),
+check(DongleLink.next(reply: reply(fw: newer, rollback: true, ssid: carSSID, state: "connected"),
                       latestTag: newer, expectedSSID: carSSID,
                       rollback: .recheck(from: latest)) == .rolledBack,
       "a recheck on a dongle already running the newest build does not re-flash it")
@@ -246,7 +251,7 @@ check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: carSSID, 
 // Same status, two different latestTags either side of the running build: the output must
 // differ. Catches an implementation that hardcodes .waiting/.readyForCar and ignores
 // latestTag entirely.
-let steady = reply(fw: current, rollback: false, ssid: carSSID, state: DongleNetState.connected)
+let steady = reply(fw: current, rollback: false, ssid: carSSID, state: "connected")
 check(DongleLink.next(reply: steady, latestTag: latest, expectedSSID: carSSID) !=
       DongleLink.next(reply: steady, latestTag: "v1.0+900", expectedSSID: carSSID),
       "a newer latestTag changes the answer for the same status")
@@ -254,7 +259,7 @@ check(DongleLink.next(reply: steady, latestTag: latest, expectedSSID: carSSID) !
 // fallback that fills this in) must not force an update: mustUpdate(_, latestTag: nil) is
 // false by construction, so this dongle proceeds rather than being stuck offering an update
 // it has no version to compare against.
-check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: "", state: DongleNetState.idle),
+check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: "", state: "idle"),
                       latestTag: nil, expectedSSID: carSSID) == .sendCredentials,
       "no latestTag at all does not force .updating")
 // Same status, two different expectedSSIDs either side of the one on the dongle: the output must
@@ -264,5 +269,17 @@ check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: "", state
 check(DongleLink.next(reply: steady, latestTag: latest, expectedSSID: carSSID) !=
       DongleLink.next(reply: steady, latestTag: latest, expectedSSID: "someOtherNetwork"),
       "a different expectedSSID changes the answer for the same status")
+
+// -- the v1 bridge: an old dongle is recognised by its legacy identity and updated ---------
+let v1 = #"{"device":"ajdongle","fw":"\#(behind)","idf":"v6.0.2","usb":"up","rollback":false,"net":{"ssid":"","state":"idle","rssi":0}}"#
+check(DongleLink.next(reply: DongleReply.decode(Data(v1.utf8)), latestTag: latest, expectedSSID: carSSID) == .updating,
+      "a v1 dongle behind the release is updated, not declared faulty")
+let v1other = v1.replacingOccurrences(of: "ajdongle", with: "someones-adapter")
+check(DongleLink.next(reply: DongleReply.decode(Data(v1other.utf8)), latestTag: latest, expectedSSID: carSSID)
+        == .wrongDongle(device: "someones-adapter"), "a foreign v1 adapter is named, not flashed")
+let v1current = v1.replacingOccurrences(of: behind, with: current)
+check(DongleLink.next(reply: DongleReply.decode(Data(v1current.utf8)), latestTag: latest, expectedSSID: carSSID) == .faulty,
+      "a v1 dongle that is not behind cannot be driven from — the release it matches is v1")
+check(DongleReply.decode(Data("junk".utf8)).isFaulty, "junk decodes as faulty")
 
 if failures == 0 { print("test_donglelink: OK") } else { exit(1) }

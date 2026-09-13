@@ -27,25 +27,25 @@ public enum DongleStep: Equatable {
     /// (`DongleReply.denied`). Not a wait — the user has to change it in Settings — and
     /// certainly not "plug in an adapter".
     case accessDenied
-    /// Something is answering at the dongle's address and it is not our dongle: `status.device`
+    /// Something is answering at the dongle's address and it is not our dongle: `status.device.id`
     /// disagrees with `DongleContract.device`. The spec names that field for exactly this —
     /// "how the app tells this apart from any other USB-Ethernet adapter the user might plug
     /// in" — and this is its analogue of the car's own wrong-car screen. `device` is what
     /// answered, so the screen can name it.
     case wrongDongle(device: String)
-    /// The bootloader reverted the dongle's last update (`DongleStatus.rollback`). Reported
+    /// The bootloader reverted the dongle's last update (`status.device.rolled_back`). Reported
     /// ahead of the update check that would otherwise re-offer the very image that just failed,
     /// forever — see `next(...)`'s own doc for the ordering. Standing until the user answers
     /// (`RollbackChoice`): the app must give a way past this, and — because the flag is sticky
     /// and the app is the only OTA path — a way back TO an update too, or the only exit left is
     /// a bench reflash.
     case rolledBack
-    /// The dongle's own firmware is behind `latestTag`. Comes before every net/join question
+    /// The dongle's own firmware is behind `latestTag`. Comes before every wifi/join question
     /// on purpose — the spec's own words: "The dongle updates before the car... Settle the
     /// pipe before pushing the long transfer down it." A dongle mid-relay-bug is not something
     /// to hand credentials to first.
     case updating
-    /// Not pointed at the car's own network — either never told one (`net.ssid` empty) or
+    /// Not pointed at the car's own network — either never told one (`wifi.ssid` empty) or
     /// pointed at some other one (a stale bench SSID, a previous car). Send the car's own
     /// credentials either way; see `next(...)`'s doc for why comparing against the expected
     /// SSID, not just checking emptiness, is what this case now means.
@@ -59,12 +59,12 @@ public enum DongleStep: Equatable {
     case searchingCar
     case waiting
     /// Pointed at the right network, and the dongle will not get any further on its own:
-    /// `net.state == .failed` (the budget its own join policy allows ran out) or `.idle` (its
+    /// `wifi.state == .failed` (the budget its own join policy allows ran out) or `.idle` (its
     /// state machine never left IDLE — see `next(...)`'s branch for how a CONFIGURED dongle
     /// gets there). The credentials are already on the dongle and correct; what is needed is asking
     /// the radio to try again, which is a POST, which is what this step is.
     case retryJoin
-    /// Pointed at the right network and `net.state == .connected`: the pipe is up. Hand off to
+    /// Pointed at the right network and `wifi.state == .connected`: the pipe is up. Hand off to
     /// the car's own existing gate, unchanged — this step exists so the flow knows to stop
     /// asking the dongle anything further, not to replace what happens next.
     case readyForCar
@@ -106,6 +106,9 @@ public enum DongleReply {
     /// A `/status` document this build could decode. Whether it describes OUR dongle is
     /// `next(...)`'s first question, not this one's.
     case status(DongleStatus)
+    /// A v1 dongle: its `/status` does not decode as a v2 document, but says who it is. The
+    /// only thing to do with it is update it — see `next`.
+    case legacy(LegacyIdentity)
     /// Nothing answered: no cable, a refused connection, a deadline that expired with no bytes.
     case silent
     /// Something answered and it was not usable: an HTTP error status, a truncated stream, or a
@@ -114,8 +117,15 @@ public enum DongleReply {
     /// iOS refused to let the request leave the phone at all: local-network access is denied.
     case denied
 
-    /// Classify what `DongleClient.status()` threw. Pure, and here rather than in the flow so
-    /// the rule is host-tested — the flow's job is to catch, log and pass it on.
+    /// Read a `/status` body as v2, else as a v1 identity, else as a fault. Pure.
+    public static func decode(_ data: Data) -> DongleReply {
+        if let s = try? JSONDecoder().decode(DongleStatus.self, from: data) { return .status(s) }
+        if let id = LegacyIdentity.parse(data) { return .legacy(id) }
+        return .faulty
+    }
+
+    /// Classify what `DongleClient.statusData()` threw. Pure, and here rather than in the flow
+    /// so the rule is host-tested — the flow's job is to catch, log and pass it on.
     public static func of(_ error: Error) -> DongleReply {
         if let e = error as? CarError {
             switch e {
@@ -146,7 +156,7 @@ public enum DongleLink {
     ///     answers either device from the same comparison since one release tags both images
     ///     identically.
     ///   - expectedSSID: The car's own network name (`CarContract.ssid`), the one value this
-    ///     function compares `status.net.ssid` against. A dongle can read as "configured" while
+    ///     function compares `status.wifi.ssid` against. A dongle can read as "configured" while
     ///     pointed at the wrong network entirely — leftover bench credentials, a different car
     ///     — and a comparison against `.isEmpty` alone cannot tell that apart from "pointed at
     ///     ours". Comparing against the expected value can, and is what lets a mis-pointed
@@ -159,6 +169,11 @@ public enum DongleLink {
         let status: DongleStatus
         switch reply {
         case .status(let s): status = s
+        case .legacy(let id):
+            guard id.device == DongleContract.device else { return .wrongDongle(device: id.device) }
+            // The bridge's one job. A v1 dongle that is NOT behind the release means the release
+            // itself is v1, which this build cannot drive through: faulty, not readyForCar.
+            return UpdateRules.mustUpdate(carFw: id.fw, latestTag: latestTag) ? .updating : .faulty
         case .silent: return .plugIn
         case .faulty: return .faulty
         case .denied: return .accessDenied
@@ -167,14 +182,14 @@ public enum DongleLink {
         // Identity first, before a single other field of this document is believed. The spec
         // puts `device` in `/status` for one reason — "how the app tells this apart from any
         // other USB-Ethernet adapter the user might plug in" — and a foreign adapter's `fw`,
-        // `rollback` and `net` describe a device this app knows nothing about. Reading them
+        // `rolled_back` and `wifi` describe a device this app knows nothing about. Reading them
         // anyway ends in one of two places: flashing our image onto it, or handing it the car's
         // credentials. Both are worse than a screen that says which adapter answered.
-        guard status.device == DongleContract.device else {
-            return .wrongDongle(device: status.device)
+        guard status.device.id == DongleContract.device else {
+            return .wrongDongle(device: status.device.id)
         }
 
-        if status.rollback {
+        if status.device.rolled_back {
             switch rollback {
             case .unanswered:
                 return .rolledBack
@@ -184,7 +199,7 @@ public enum DongleLink {
                 // image that just rolled back from being re-flashed into the same rollback, the
                 // second is the ordinary update question. Both, or nothing happens.
                 if UpdateRules.isUpdateAvailable(running: from, latest: latestTag),
-                   UpdateRules.mustUpdate(carFw: status.fw, latestTag: latestTag) {
+                   UpdateRules.mustUpdate(carFw: status.device.fw, latestTag: latestTag) {
                     return .updating
                 }
                 // Nothing newer to try. Back to the standing report and its two buttons rather
@@ -192,19 +207,19 @@ public enum DongleLink {
                 // a fix yet", and the answer is no.
                 return .rolledBack
             }
-        } else if UpdateRules.mustUpdate(carFw: status.fw, latestTag: latestTag) {
+        } else if UpdateRules.mustUpdate(carFw: status.device.fw, latestTag: latestTag) {
             return .updating
         }
 
-        // Compared, not just checked for emptiness: `net.ssid` is the same signal `GET /net`'s
-        // `configured` reports (both come from the firmware's single `s_configured`/`s_cfg` pair
-        // — `firmware/dongle/main/status_api.c`, `firmware/dongle/main/net_api.c`), so an empty value
+        // Compared, not just checked for emptiness: `wifi.ssid` is the same signal `wifi.configured`
+        // reports (both come from the firmware's single `s_configured`/`s_cfg` pair —
+        // `firmware/dongle/main/status_api.c`, `firmware/dongle/main/net_api.c`), so an empty value
         // still means "never configured". But a NON-empty value that disagrees with
         // `expectedSSID` means "configured for something else" — stale bench credentials, a
         // different car — and that is exactly as unready as empty, not a state to hand off from.
-        guard status.net.ssid == expectedSSID else { return .sendCredentials }
+        guard status.wifi.ssid == expectedSSID else { return .sendCredentials }
 
-        switch status.net.state {
+        switch status.wifi.state {
         case .connected: return .readyForCar
         // Both of these mean "the dongle will not get any further by itself".
         //
@@ -214,7 +229,7 @@ public enum DongleLink {
         // state lock was busy at the one moment it needed it (`wifi_sta.c`: "state lock busy —
         // join requested without recording it"), so the radio was told to connect while the
         // machine still says nothing has been asked. Rare, and nothing the dongle does on its
-        // own leaves it — IDLE's one exit is a POST /net. So waiting here waits forever, and a
+        // own leaves it — IDLE's one exit is a POST /wifi. So waiting here waits forever, and a
         // re-POST is the fix. (The dongle keeps its network in RAM only, so every boot starts
         // IDLE with an EMPTY ssid — that case is the guard above, not this branch.)
         case .failed, .idle: return .retryJoin

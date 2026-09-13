@@ -1,4 +1,4 @@
-// Host test for the dongle's /status and /net decoding. Run with swiftc; no XCTest, no simulator.
+// Host test for the generated /status decoder. Run with swiftc; no XCTest.
 import Foundation
 
 var failures = 0
@@ -6,97 +6,35 @@ func check(_ ok: Bool, _ what: String) {
     if !ok { print("FAIL: \(what)"); failures += 1 }
 }
 
-// -- a complete /status body decodes every field ---------------------------------------
-let fullStatus = #"""
-{"device":"ajdongle","fw":"v1.0+123","idf":"v6.0.2","usb":"\#(DongleUsbState.up)","rollback":false,
- "net":{"ssid":"benchnet","state":"\#(DongleNetState.connected)","rssi":-42}}
-"""#
-let status = try! DongleStatus.parse(Data(fullStatus.utf8))
-check(status.device == "ajdongle", "device decodes")
-check(status.fw == "v1.0+123", "fw decodes")
-check(status.idf == "v6.0.2", "idf decodes")
-check(status.usb == DongleUsbState.up, "usb decodes")
-check(status.rollback == false, "rollback decodes")
-check(status.net.ssid == "benchnet", "net.ssid decodes")
-check(status.net.state == .connected, "net.state decodes")
-check(status.net.rssi == -42, "net.rssi decodes")
+let full = #"{"proto":1,"device":{"id":"ajdongle","fw":"v1.0+789","build":789,"rolled_back":false,"idf":"v6.0.2"},"usb":{"state":"up"},"wifi":{"ssid":"AJMiddleCar","configured":true,"state":"connected","rssi_dbm":-53,"channel":1,"attempts":{"used":0,"max":5}},"relay":{"to_car_hz":10.0,"to_phone_hz":5.0,"udp_sessions":1,"tcp_connections":2,"last_error":{"errno":118,"message":"No route to host","count":3,"age_s":41}},"system":{"uptime_s":412,"free_heap":8551152}}"#
+let s = try! JSONDecoder().decode(DongleStatus.self, from: Data(full.utf8))
+check(s.proto == 1 && s.device.id == "ajdongle" && s.device.build == 789 && s.device.idf == "v6.0.2", "device")
+check(s.usb.state == .up, "usb")
+check(s.wifi.ssid == "AJMiddleCar" && s.wifi.configured && s.wifi.state == .connected, "wifi")
+check(s.wifi.rssi_dbm == -53 && s.wifi.channel == 1 && s.wifi.attempts == DongleWifiAttempts(used: 0, max: 5), "wifi readings")
+check(s.relay.to_car_hz == 10.0 && s.relay.udp_sessions == 1, "relay")
+check(s.relay.last_error == DongleRelayError(errno: 118, message: "No route to host", count: 3, age_s: 41), "last error")
+check(s.system.uptime_s == 412 && s.system.free_heap == 8551152, "system")
 
-// A second, fully distinct fixture: device, idf and usb all differ from the first fixture
-// and from anything a plausible hardcode would produce (not "ajdongle", not "up") — the
-// point is to prove these three are read off the wire, not assigned from a constant or a
-// fixed literal that happens to match the first fixture's values.
-let altStatus = #"""
-{"device":"benchdongle-2","fw":"v2.0+9","idf":"idf-vX.Y-alt","usb":"provisioning","rollback":true,
- "net":{"ssid":"otherlab","state":"\#(DongleNetState.failed)","rssi":-77}}
-"""#
-let alt = try! DongleStatus.parse(Data(altStatus.utf8))
-check(alt.device == "benchdongle-2", "device decodes from a second, distinct fixture")
-check(alt.idf == "idf-vX.Y-alt", "idf decodes from a second, distinct fixture")
-check(alt.usb == "provisioning", "usb decodes from a second, distinct fixture")
+let idle = #"{"proto":1,"device":{"id":"ajdongle","fw":"v1.0+789","build":789,"rolled_back":true,"idf":"v6.0.2"},"usb":{"state":"up"},"wifi":{"ssid":"","configured":false,"state":"idle","rssi_dbm":null,"channel":null,"attempts":{"used":0,"max":5}},"relay":{"to_car_hz":0.0,"to_phone_hz":0.0,"udp_sessions":0,"tcp_connections":0,"last_error":null},"system":{"uptime_s":3,"free_heap":1}}"#
+let i = try! JSONDecoder().decode(DongleStatus.self, from: Data(idle.utf8))
+check(i.wifi.rssi_dbm == nil && i.wifi.channel == nil && i.relay.last_error == nil, "nulls decode as nil")
+check(i.device.rolled_back && !i.wifi.configured && i.wifi.state == .idle, "idle after boot")
 
-// -- rollback:true is readable — it is the "the update was reverted" signal ------------
-let rolledBack = #"""
-{"device":"ajdongle","fw":"v1.0+123","idf":"v6.0.2","usb":"\#(DongleUsbState.up)","rollback":true,
- "net":{"ssid":"benchnet","state":"\#(DongleNetState.idle)","rssi":0}}
-"""#
-check(try! DongleStatus.parse(Data(rolledBack.utf8)).rollback == true,
-      "rollback:true is readable")
+// A state word this build does not know is kept, not a decode failure.
+let odd = full.replacingOccurrences(of: #""state":"connected""#, with: #""state":"dreaming""#)
+check((try? JSONDecoder().decode(DongleStatus.self, from: Data(odd.utf8)))?.wifi.state == .unknown("dreaming"),
+      "unknown wifi state")
+// A document missing a group is not a status.
+let short = #"{"proto":1,"device":{"id":"ajdongle","fw":"v1.0+789","build":789,"rolled_back":false,"idf":"v6.0.2"}}"#
+check((try? JSONDecoder().decode(DongleStatus.self, from: Data(short.utf8))) == nil, "a short document throws")
 
-// -- net.state covers every contract case, plus an unknown one surfaced not swallowed --
-func statusWith(state: String) -> Data {
-    Data(#"{"device":"ajdongle","fw":"v1","idf":"v6","usb":"\#(DongleUsbState.up)","rollback":false,"net":{"ssid":"n","state":"\#(state)","rssi":0}}"#.utf8)
-}
-check(try! DongleStatus.parse(statusWith(state: DongleNetState.idle)).net.state == .idle, "state idle")
-check(try! DongleStatus.parse(statusWith(state: DongleNetState.joining)).net.state == .joining, "state joining")
-check(try! DongleStatus.parse(statusWith(state: DongleNetState.connected)).net.state == .connected, "state connected")
-check(try! DongleStatus.parse(statusWith(state: DongleNetState.failed)).net.state == .failed, "state failed")
-// "rebooting" is deliberately not one of DongleNetState's four — this is the one fixture in
-// the file that must NOT come from the generated vocabulary, because it is testing what
-// happens when the wire outgrows it.
-check(try! DongleStatus.parse(statusWith(state: "rebooting")).net.state == .unknown("rebooting"),
-      "an unknown state is surfaced, not silently mapped to a known one")
-
-// -- a /status body missing a field fails to parse rather than defaulting --------------
-let missingTopLevel = #"""
-{"device":"ajdongle","idf":"v6.0.2","usb":"\#(DongleUsbState.up)","rollback":false,
- "net":{"ssid":"benchnet","state":"\#(DongleNetState.connected)","rssi":-42}}
-"""#
-do {
-    _ = try DongleStatus.parse(Data(missingTopLevel.utf8))
-    check(false, "a body missing a top-level field (fw) must not parse")
-} catch {
-    check(true, "a body missing a top-level field (fw) must not parse")
-}
-
-let missingNested = #"""
-{"device":"ajdongle","fw":"v1.0+123","idf":"v6.0.2","usb":"\#(DongleUsbState.up)","rollback":false,
- "net":{"ssid":"benchnet","state":"\#(DongleNetState.connected)"}}
-"""#
-do {
-    _ = try DongleStatus.parse(Data(missingNested.utf8))
-    check(false, "a body missing a nested field (net.rssi) must not parse")
-} catch {
-    check(true, "a body missing a nested field (net.rssi) must not parse")
-}
-
-// -- GET /net decodes ssid and configured; a password key is accepted but not stored ---
-let netWithPassword = #"{"ssid":"benchnet","configured":true,"password":"irrelevant"}"#
-let net = try! DongleNet.parse(Data(netWithPassword.utf8))
-check(net.ssid == "benchnet", "net ssid decodes")
-check(net.configured == true, "net configured decodes")
-let netMirror = Mirror(reflecting: net)
-check(!netMirror.children.contains { $0.label?.lowercased().contains("password") == true },
-      "DongleNet has no field that could hold a password")
-
-// -- SSIDs with an escaped quote and a backslash both round-trip -----------------------
-// net_cfg deliberately allows both bytes in an SSID; a raw \" or \\ here must decode to
-// the literal " or \ rather than breaking the parse or being stripped.
-let quotedSSID = #"{"ssid":"studio\"2","configured":true}"#
-check(try! DongleNet.parse(Data(quotedSSID.utf8)).ssid == "studio\"2",
-      "an SSID with an escaped quote round-trips")
-
-let backslashSSID = #"{"ssid":"studio\\2","configured":true}"#
-check(try! DongleNet.parse(Data(backslashSSID.utf8)).ssid == "studio\\2",
-      "an SSID with a backslash round-trips")
+// The POST /wifi reply and the error envelope.
+let reply = try! JSONDecoder().decode(DongleWifiReply.self, from: Data(#"{"proto":1,"ssid":"AJMiddleCar","state":"searching"}"#.utf8))
+check(reply == DongleWifiReply(proto: 1, ssid: "AJMiddleCar", state: .searching), "wifi reply")
+let err = try! JSONDecoder().decode(DongleAPIError.self, from: Data(#"{"proto":1,"error":{"code":"bad_length","message":"ssid must be 1..32 bytes","field":"ssid"}}"#.utf8))
+check(err.error.code == .bad_length && err.error.field == "ssid", "error envelope")
+let errNoField = try! JSONDecoder().decode(DongleAPIError.self, from: Data(#"{"proto":1,"error":{"code":"bad_json","message":"x"}}"#.utf8))
+check(errNoField.error.field == nil && errNoField.error.code == .bad_json, "error envelope without a field")
 
 if failures == 0 { print("test_donglestatus: OK") } else { exit(1) }

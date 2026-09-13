@@ -52,7 +52,7 @@ struct ConnectView: View {
         /// truncated stream, a body that would not decode (`DongleStep.faulty`). The radar
         /// stays: the flow keeps polling and one bad answer is often a dongle mid-boot.
         case dongleFault
-        /// A USB-Ethernet adapter answered and it is not ours — `status.device` disagrees with
+        /// A USB-Ethernet adapter answered and it is not ours — `status.device.id` disagrees with
         /// `DongleContract.device`. The dongle's analogue of `WrongCarView`, and like it, it
         /// names what answered rather than leaving the user to guess.
         case wrongDongle(String)

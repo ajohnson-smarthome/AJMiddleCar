@@ -7,11 +7,11 @@ import Foundation
 ///
 /// The v1 keys are literals on purpose: they are no longer in the contract, and the day no
 /// board in the field speaks v1 this file is deleted, not maintained.
-struct LegacyIdentity: Equatable {
+public struct LegacyIdentity: Equatable {
     let device: String
     let fw: String
 
-    static func parse(_ data: Data) -> LegacyIdentity? {
+    public static func parse(_ data: Data) -> LegacyIdentity? {
         guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         // v2: "device":{"id":…,"fw":…}
         if let d = j["device"] as? [String: Any], let id = d["id"] as? String, let fw = d["fw"] as? String {

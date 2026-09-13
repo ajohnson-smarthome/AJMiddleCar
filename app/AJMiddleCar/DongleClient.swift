@@ -1,7 +1,7 @@
 import Foundation
 import Network
 
-/// The dongle's own small API: `GET /status`, `GET`/`POST /net`, `POST /ota` on
+/// The dongle's own small API: `GET /status`, `POST /wifi`, `POST /ota` on
 /// `DongleContract.host` : `.port`. This is unrelated to the car's API even though both live in
 /// this app — it is the dongle answering for itself, before or regardless of whatever it is
 /// relaying. Modelled on `CalibClient.swift`: the same shape, just a different address and a
@@ -39,15 +39,13 @@ import Network
 final class DongleClient {
     init() {}
 
-    func status() async throws -> DongleStatus {
-        try DongleStatus.parse(try await get(DongleContract.statusPath))
+    /// The raw `/status` body: `DongleReply.decode` reads it as v2 or, failing that, as a v1
+    /// identity — the one piece of the old format this app still understands.
+    func statusData() async throws -> Data {
+        try await get(DongleContract.statusPath)
     }
 
-    func net() async throws -> DongleNet {
-        try DongleNet.parse(try await get(DongleContract.netPath))
-    }
-
-    func join(ssid: String, password: String) async throws {
+    func join(ssid: String, password: String) async throws -> DongleWifiReply {
         try await postCredentials(ssid: ssid, password: password)
     }
 
@@ -67,17 +65,15 @@ final class DongleClient {
     /// same arguments and stay meaningfully distinct anyway, which is honest rather than redundant:
     /// `join` means "configure this network", `retryJoin` means "ask again with what you already
     /// have".
-    func retryJoin(ssid: String, password: String) async throws {
+    func retryJoin(ssid: String, password: String) async throws -> DongleWifiReply {
         try await postCredentials(ssid: ssid, password: password)
     }
 
-    private func postCredentials(ssid: String, password: String) async throws {
-        let body: [String: Any] = [
-            DongleContract.ssidField: ssid,
-            DongleContract.passwordField: password,
-        ]
-        let data = try JSONSerialization.data(withJSONObject: body)
-        _ = try await post(DongleContract.netPath, body: data)
+    @discardableResult
+    private func postCredentials(ssid: String, password: String) async throws -> DongleWifiReply {
+        let body: [String: Any] = [DongleContract.ssidField: ssid, DongleContract.passwordField: password]
+        let data = try await post(DongleContract.wifiPath, body: try JSONSerialization.data(withJSONObject: body))
+        return try JSONDecoder().decode(DongleWifiReply.self, from: data)
     }
 
     /// The upload is the car's shape: a raw image in one request, `application/octet-stream`, no

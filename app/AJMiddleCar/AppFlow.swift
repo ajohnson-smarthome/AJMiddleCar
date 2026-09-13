@@ -410,9 +410,9 @@ final class AppFlow: ObservableObject {
     /// `UpdateClient.upload` already logs its own failures for exactly this reason.
     private func readStatus() async -> DongleReply {
         do {
-            let status = try await dongle.status()
+            let data = try await dongle.statusData()
             lastStatusFailure = nil
-            return .status(status)
+            return DongleReply.decode(data)
         } catch {
             // Once per distinct failure, not once per poll: this loop runs at
             // `donglePollInterval` for as long as the cable is out, and a log that repeats the
@@ -441,15 +441,17 @@ final class AppFlow: ObservableObject {
         dongleJoinAttempts += 1
         if dongleJoinAttempts >= Self.maxDongleJoinAttempts { dongleJoinGaveUp = true }
         do {
+            let reply: DongleWifiReply
             if retry {
-                try await dongle.retryJoin(ssid: CarContract.ssid, password: CarContract.password)
+                reply = try await dongle.retryJoin(ssid: CarContract.ssid, password: CarContract.password)
             } else {
-                try await dongle.join(ssid: CarContract.ssid, password: CarContract.password)
+                reply = try await dongle.join(ssid: CarContract.ssid, password: CarContract.password)
             }
+            print("dongle \(DongleContract.wifiPath): \(reply.state)")
         } catch {
             // `logDescription` names the failure's shape and nothing else — no body, and
             // nothing of what was sent. The credentials never reach a log.
-            print("dongle \(DongleContract.netPath) (\(retry ? "retry" : "configure")) failed: "
+            print("dongle \(DongleContract.wifiPath) (\(retry ? "retry" : "configure")) failed: "
                   + Self.describe(error))
         }
     }
