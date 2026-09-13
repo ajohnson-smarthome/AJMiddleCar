@@ -92,6 +92,12 @@ void car_set_calibration(const motors_config_t *cfg) {
     s_cfg_next ^= 1;
 }
 
+void car_get_calibration(motors_config_t *out) {
+    /* Copy of the published table: one pointer load and one memcpy, so this is a
+       single-threaded read too, over the same pointer car_drive loads. */
+    *out = *atomic_load(&s_cfg);
+}
+
 void car_set_trim(int8_t pct) {
     if (pct > 30) pct = 30;
     if (pct < -30) pct = -30;

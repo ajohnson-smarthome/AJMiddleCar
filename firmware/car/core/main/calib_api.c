@@ -10,118 +10,156 @@
 #include "esp_check.h"
 #include "http_server.h"
 #include "calibration.h"
+#include "calib_wire.h"
 #include "car.h"
 #include "link.h"
 #include "motors.h"
 #include "api_util.h"
+#include "contract.h"
 
 static const char *TAG = "calib_api";
 
-// GET /calib -> {"calibrated":true|false}
-static esp_err_t calib_get(httpd_req_t *req) {
-    /* The cached flag, not a flash read: a GET of a boolean should not open NVS. */
-    bool cal = calibration_is_valid();
-    httpd_resp_set_type(req, "application/json");
-    return httpd_resp_sendstr(req, cal ? "{\"calibrated\":true}" : "{\"calibrated\":false}");
+static esp_err_t reply_table(httpd_req_t *req) {
+    motors_config_t cfg;
+    car_get_calibration(&cfg);
+    char members[320];
+    if (calib_table_json(members, sizeof(members), calibration_is_valid(), &cfg) < 0) {
+        return api_reply_error(req, "500 Internal Server Error", ERR_INTERNAL, "", "table too long");
+    }
+    return api_reply_json(req, members);
 }
 
-// POST /calib/spin  body {"pair":0..3,"dir":1|0} (1=forward, 0=reverse). Pulses ~0.6s.
+// GET /calibration -> {"proto":2,"calibrated":…,"wheels":[…]}
+static esp_err_t calib_get(httpd_req_t *req) { return reply_table(req); }
+
+// POST /calibration/spin  {"pair":0..3,"direction":"forward"|"reverse"}. Pulses ~0.6 s.
 static esp_err_t calib_spin(httpd_req_t *req) {
-    char b[32];
+    char b[96];
     if (api_read_body(req, b, sizeof(b)) < 0) {
-        return api_reply_error(req, "400 Bad Request", "", "bad body");
+        return api_reply_error(req, "400 Bad Request", ERR_BAD_JSON, "", "body missing or too long");
     }
     cJSON *j = cJSON_Parse(b);
-    cJSON *jp = cJSON_GetObjectItemCaseSensitive(j, "pair");
-    cJSON *jd = cJSON_GetObjectItemCaseSensitive(j, "dir");
-    if (!cJSON_IsNumber(jp) || !cJSON_IsNumber(jd) ||
-        jp->valuedouble != (double)jp->valueint ||
-        jd->valuedouble != (double)jd->valueint) {
+    if (!j) return api_reply_error(req, "400 Bad Request", ERR_BAD_JSON, "", "malformed JSON");
+    /* Unknown keys are refused: this is a two-party API where a typo is a bug. */
+    for (const cJSON *it = j->child; it; it = it->next) {
+        if (strcmp(it->string, KEY_CALIB_PAIR) != 0 && strcmp(it->string, KEY_CALIB_DIRECTION) != 0) {
+            esp_err_t e = api_reply_error(req, "400 Bad Request", ERR_UNKNOWN_FIELD, it->string, "no such field");
+            cJSON_Delete(j);
+            return e;
+        }
+    }
+    cJSON *jp = cJSON_GetObjectItemCaseSensitive(j, KEY_CALIB_PAIR);
+    cJSON *jd = cJSON_GetObjectItemCaseSensitive(j, KEY_CALIB_DIRECTION);
+    if (!jp) { cJSON_Delete(j); return api_reply_error(req, "400 Bad Request", ERR_MISSING_FIELD, KEY_CALIB_PAIR, "required"); }
+    if (!jd) { cJSON_Delete(j); return api_reply_error(req, "400 Bad Request", ERR_MISSING_FIELD, KEY_CALIB_DIRECTION, "required"); }
+    if (!cJSON_IsNumber(jp) || jp->valuedouble != (double)jp->valueint) {
         cJSON_Delete(j);
-        return api_reply_error(req, "400 Bad Request", "", "need integer {pair,dir}");
+        return api_reply_error(req, "400 Bad Request", ERR_WRONG_TYPE, KEY_CALIB_PAIR, "expected an integer");
     }
-    int pair = jp->valueint, dir = jd->valueint;
+    if (!cJSON_IsString(jd)) {
+        cJSON_Delete(j);
+        return api_reply_error(req, "400 Bad Request", ERR_WRONG_TYPE, KEY_CALIB_DIRECTION, "expected a word");
+    }
+    int pair = jp->valueint;
+    int fwd = calib_direction_forward(jd->valuestring);
     cJSON_Delete(j);
-    if (pair < 0 || pair > 3) {
-        return api_reply_error(req, "400 Bad Request", "pair", "pair 0..3");
+    if (pair < 0 || pair >= CALIB_PAIRS) {
+        return api_reply_error(req, "400 Bad Request", ERR_OUT_OF_RANGE, KEY_CALIB_PAIR, "pair 0..3");
     }
-    if (dir != 0 && dir != 1) {
-        return api_reply_error(req, "400 Bad Request", "dir", "dir 0|1");
+    if (fwd < 0) {
+        return api_reply_error(req, "400 Bad Request", ERR_NOT_ALLOWED, KEY_CALIB_DIRECTION, "forward or reverse");
     }
-    ESP_LOGI(TAG, "spin pair %d %s", pair, dir ? "fwd" : "rev");
-    if (!car_spin_pair((uint8_t)pair, dir != 0)) {
-        /* 409 is the honest code — the request is fine, the actuator is taken. IDF's
-           httpd_err_code_t has no 409, so the status line is set directly. */
-        return api_reply_error(req, "409 Conflict", "", "actuator busy");
+    ESP_LOGI(TAG, "spin pair %d %s", pair, fwd ? "fwd" : "rev");
+    if (!car_spin_pair((uint8_t)pair, fwd != 0)) {
+        return api_reply_error(req, "409 Conflict", ERR_BUSY, "", "actuator busy");
     }
-    /* The grant lapses on its own after LINK_HOLD_CALIB_MS, so the pulse ends whether
-       or not this handler is still here. The delay is only so the reply lands after
-       the wheel has stopped, which is what the wizard's next step assumes. */
     vTaskDelay(pdMS_TO_TICKS(LINK_HOLD_CALIB_MS));
     link_release_must(LINK_SRC_CALIB);
     return api_reply_ok(req);
 }
 
-// POST /calib/save  body {"wheels":[{"pair":0..3,"sign":-1|1} x4]} in FL,FR,RL,RR order.
+// POST /calibration  {"wheels":[{"corner","pair","inverted"} x4]} — any order, each corner once.
 static esp_err_t calib_save(httpd_req_t *req) {
-    char b[128];
+    char b[320];
     if (api_read_body(req, b, sizeof(b)) < 0) {
-        return api_reply_error(req, "400 Bad Request", "", "bad body");
+        return api_reply_error(req, "400 Bad Request", ERR_BAD_JSON, "", "body missing or too long");
     }
-    // Body is JSON: {"wheels":[{"pair":..,"sign":..} × 4]} in FL,FR,RL,RR order.
     cJSON *j = cJSON_Parse(b);
-    cJSON *arr = cJSON_GetObjectItemCaseSensitive(j, "wheels");
-    if (!cJSON_IsArray(arr) || cJSON_GetArraySize(arr) != 4) {
+    if (!j) return api_reply_error(req, "400 Bad Request", ERR_BAD_JSON, "", "malformed JSON");
+    for (const cJSON *it = j->child; it; it = it->next) {
+        if (strcmp(it->string, KEY_CALIB_WHEELS) != 0) {
+            esp_err_t e = api_reply_error(req, "400 Bad Request", ERR_UNKNOWN_FIELD, it->string, "no such field");
+            cJSON_Delete(j);
+            return e;
+        }
+    }
+    cJSON *arr = cJSON_GetObjectItemCaseSensitive(j, KEY_CALIB_WHEELS);
+    if (!arr) { cJSON_Delete(j); return api_reply_error(req, "400 Bad Request", ERR_MISSING_FIELD, KEY_CALIB_WHEELS, "required"); }
+    if (!cJSON_IsArray(arr) || cJSON_GetArraySize(arr) != POS_COUNT) {
         cJSON_Delete(j);
-        return api_reply_error(req, "400 Bad Request", "wheels", "need {wheels:[4x{pair,sign}]}");
+        return api_reply_error(req, "400 Bad Request", ERR_WRONG_TYPE, KEY_CALIB_WHEELS, "expected four wheels");
     }
     motors_config_t cfg = { .deadzone = 0.05f };
-    for (int i = 0; i < 4; i++) {
+    unsigned seen = 0;
+    char where[40];
+    for (int i = 0; i < POS_COUNT; i++) {
         cJSON *w = cJSON_GetArrayItem(arr, i);
-        cJSON *jp = cJSON_GetObjectItemCaseSensitive(w, "pair");
-        cJSON *js = cJSON_GetObjectItemCaseSensitive(w, "sign");
-        if (!cJSON_IsNumber(jp) || !cJSON_IsNumber(js) ||
-            jp->valuedouble != (double)jp->valueint ||
-            js->valuedouble != (double)js->valueint) {
-            cJSON_Delete(j);
-            return api_reply_error(req, "400 Bad Request", "pair", "wheel needs integer {pair,sign}");
+        cJSON *jc = cJSON_GetObjectItemCaseSensitive(w, KEY_CALIB_CORNER);
+        cJSON *jp = cJSON_GetObjectItemCaseSensitive(w, KEY_CALIB_PAIR);
+        cJSON *ji = cJSON_GetObjectItemCaseSensitive(w, KEY_CALIB_INVERTED);
+        snprintf(where, sizeof(where), "%s[%d]", KEY_CALIB_WHEELS, i);
+        for (const cJSON *it = cJSON_IsObject(w) ? w->child : NULL; it; it = it->next) {
+            if (strcmp(it->string, KEY_CALIB_CORNER) != 0 && strcmp(it->string, KEY_CALIB_PAIR) != 0 &&
+                strcmp(it->string, KEY_CALIB_INVERTED) != 0) {
+                esp_err_t e = api_reply_error(req, "400 Bad Request", ERR_UNKNOWN_FIELD, where, "no such field");
+                cJSON_Delete(j);
+                return e;
+            }
         }
-        /* Range-checked BEFORE narrowing — the write-side twin of calibration_load's check.
-           (uint8_t)256 is 0 and (int8_t)257 is 1, both inside what calibration_valid accepts,
-           so {"pair":256,"sign":257} used to save and answer 200 while the mock's generated
-           validator answered 400 to the same bytes; {"sign":255} silently reversed a wheel. */
-        int pv = jp->valueint, sv = js->valueint;
-        if (pv < 0 || pv > UINT8_MAX || sv < INT8_MIN || sv > INT8_MAX) {
+        if (!cJSON_IsString(jc) || !cJSON_IsNumber(jp) || !cJSON_IsBool(ji) ||
+            jp->valuedouble != (double)jp->valueint) {
             cJSON_Delete(j);
-            return api_reply_error(req, "400 Bad Request", "wheels", "pair 0..3, sign -1|1");
+            return api_reply_error(req, "400 Bad Request", ERR_WRONG_TYPE, where, "wheel needs {corner,pair,inverted}");
         }
-        cfg.wheels[i].channel_pair = (uint8_t)pv;
-        cfg.wheels[i].sign = (int8_t)sv;
+        int pos = calib_corner_index(jc->valuestring);
+        if (pos < 0) {
+            cJSON_Delete(j);
+            return api_reply_error(req, "400 Bad Request", ERR_NOT_ALLOWED, where, "unknown corner");
+        }
+        if (seen & (1u << pos)) {
+            cJSON_Delete(j);
+            return api_reply_error(req, "400 Bad Request", ERR_NOT_ALLOWED, where, "corner repeated");
+        }
+        seen |= 1u << pos;
+        /* Range-checked BEFORE narrowing: (uint8_t)256 is 0, inside what calibration_valid accepts. */
+        if (jp->valueint < 0 || jp->valueint >= CALIB_PAIRS) {
+            cJSON_Delete(j);
+            return api_reply_error(req, "400 Bad Request", ERR_OUT_OF_RANGE, where, "pair 0..3");
+        }
+        cfg.wheels[pos].channel_pair = (uint8_t)jp->valueint;
+        cfg.wheels[pos].sign = cJSON_IsTrue(ji) ? -1 : 1;
     }
     cJSON_Delete(j);
-    esp_err_t e = calibration_save(&cfg);
+    esp_err_t e = calibration_save(&cfg);   /* validates: pairs 0..3 each once */
     if (e != ESP_OK) {
         ESP_LOGW(TAG, "save rejected: %s", esp_err_to_name(e));
-        return api_reply_error(req, "400 Bad Request", "wheels", "invalid calibration");
+        return api_reply_error(req, "400 Bad Request", ERR_NOT_ALLOWED, KEY_CALIB_WHEELS, "pairs must be 0..3, each once");
     }
     car_set_calibration(&cfg);
     calibration_set_valid(true);
     ESP_LOGI(TAG, "calibration saved and applied");
-    return api_reply_ok(req);
+    return reply_table(req);
 }
 
 esp_err_t calib_api_start(void) {
     httpd_handle_t server = http_server_get_handle();
-    if (server == NULL) {
-        ESP_LOGE(TAG, "http server not started");
-        return ESP_FAIL;
-    }
-    httpd_uri_t get  = { .uri = "/calib",      .method = HTTP_GET,  .handler = calib_get };
-    httpd_uri_t spin = { .uri = "/calib/spin", .method = HTTP_POST, .handler = calib_spin };
-    httpd_uri_t save = { .uri = "/calib/save", .method = HTTP_POST, .handler = calib_save };
-    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &get),  TAG, "reg /calib");
-    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &spin), TAG, "reg /calib/spin");
-    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &save), TAG, "reg /calib/save");
+    if (server == NULL) { ESP_LOGE(TAG, "http server not started"); return ESP_FAIL; }
+    httpd_uri_t get  = { .uri = PATH_CALIBRATION, .method = HTTP_GET,  .handler = calib_get };
+    httpd_uri_t spin = { .uri = PATH_SPIN,        .method = HTTP_POST, .handler = calib_spin };
+    httpd_uri_t save = { .uri = PATH_CALIBRATION, .method = HTTP_POST, .handler = calib_save };
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &get),  TAG, "reg GET " PATH_CALIBRATION);
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &spin), TAG, "reg POST " PATH_SPIN);
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &save), TAG, "reg POST " PATH_CALIBRATION);
     ESP_LOGI(TAG, "calibration endpoints registered");
     return ESP_OK;
 }

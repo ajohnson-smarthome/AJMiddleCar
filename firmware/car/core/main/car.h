@@ -37,6 +37,10 @@ bool car_stop(link_src_t src);
 // Publishes a new immutable copy; callers are serialised by the single httpd task.
 void car_set_calibration(const motors_config_t *cfg);
 
+// Copy of the published calibration table — one pointer load and one memcpy, lock-free
+// on the same published pointer car_drive reads. For GET /calibration.
+void car_get_calibration(motors_config_t *out);
+
 // Straight-line trim: pct in [-30..30]; positive slows the left side. Persisted by the API layer.
 void car_set_trim(int8_t pct);
 int8_t car_get_trim(void);
