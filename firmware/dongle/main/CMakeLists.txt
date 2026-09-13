@@ -1,4 +1,4 @@
-idf_component_register(SRCS "main.c" "usb_net.c" "status_api.c" "api_util.c" "api_guard.c"
+idf_component_register(SRCS "main.c" "usb_net.c" "status_api.c" "status_json.c" "api_util.c" "api_guard.c"
                              "net_api.c" "net_cfg.c"
                              "ota_api.c" "wifi_sta.c" "wifi_state.c" "relay_udp.c" "udp_sess.c"
                              "relay_tcp.c" "tcp_pending.c" "relay_stats.c" "screens.c"

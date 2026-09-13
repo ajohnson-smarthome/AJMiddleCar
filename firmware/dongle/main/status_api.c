@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "esp_app_desc.h"
 #include "esp_check.h"
@@ -16,6 +17,7 @@
 #include "net_api.h"
 #include "relay_stats.h"
 #include "status_api.h"
+#include "status_json.h"
 #include "usb_net.h"
 #include "wifi_sta.h"
 #include "wifi_state.h"
@@ -46,144 +48,48 @@ bool status_api_rolled_back(void)
     return s_rollback;
 }
 
-/* The identity key is `device`, spelled as the car's contract spells it
- * (contract/car-api.json, device_field). The app's "which device am I talking to" check
- * should not need two spellings for one question. */
 static esp_err_t status_get(httpd_req_t *req)
 {
     const esp_app_desc_t *app = esp_app_get_description();
-
     net_cfg_t cfg;
-    const char *ssid = net_api_current(&cfg) ? cfg.ssid : "";
+    bool configured = net_api_current(&cfg);
 
-    /* This body is one flat snprintf with no per-field isolation, so a raw '"' or '\' in
-     * the SSID would not just corrupt net.ssid — it would break the parse of the WHOLE
-     * document, taking device/fw/idf/usb down with it for every client polling this
-     * endpoint. net_cfg_validate lets a quote or backslash through on purpose (a real
-     * network can be named with one), so this must escape it rather than trust it. Reuse
-     * net_cfg's own escaper — the one net_cfg_render_public already
-     * use — instead of growing a second one here that could drift from it. */
-    char ssid_esc[72]; /* worst case: 32 SSID bytes, every one a quote, doubles to 64, +NUL = 65 */
-    if (net_cfg_escape(ssid, ssid_esc, sizeof(ssid_esc)) < 0) {
-        /* Only reachable if a future field outgrows ssid_esc — then this is the symptom. */
-        ESP_LOGE(TAG, "/status could not escape the ssid into its buffer");
-        return api_reply_error(req, "500 Internal Server Error", "", "status unavailable");
-    }
-
-    /* Read into locals, in this order, rather than passed as arguments to one snprintf.
-     * C does not order argument evaluation, and these are not one snapshot: state is taken
-     * under wifi_sta's lock, the radio's figures are an unlocked esp_wifi_sta_get_ap_info.
-     * Evaluated right-to-left, they could be sampled while the station was still down and
-     * state a moment later once it was up, publishing {"state":"connected","rssi":0} out of
-     * two readings that were each correct. Not atomicity — there is no lock spanning any of
-     * them — but an ordering that cannot invent a contradiction.
-     *
-     * The attempt count BEFORE the state, for the reason display.c's view_build() gives at
-     * length and this file must not contradict: wifi_sta publishes the two as separate atomic
-     * stores, STATE first (publish_state_locked), so a reader taking state first can pair an
-     * old «searching» with a count that has already reached the budget — {"state":"searching",
-     * "attempts":5,"attempts_max":5}, a station still trying with nothing left to try with.
-     * Taken this way round the count can only be OLDER than the state framing it, and a count
-     * older than a «searching» was inside the budget. No consumer renders an ordinal from these
-     * two today, which is why this published a contradiction rather than a visible "attempt 6
-     * of 5" — the panel is where that shows, and screens.c clamps it at the point of use. This
-     * endpoint still owes its readers a document that cannot disagree with itself.
-     *
-     * The state BEFORE the radio's figures: if state says connected, the radio was read
-     * afterwards, so a 0 means the link genuinely dropped in between — the pessimistic half of
-     * that pairing rather than the impossible one.
-     *
-     * `rssi` and `channel` are real readings from the dongle's own receiver, not placeholders:
-     * 0 when not connected, whatever esp_wifi_sta_get_ap_info reports otherwise. They come
-     * from one call because they are one reading — see wifi_sta_ap_info's own comment for what
-     * two calls could publish. */
+    /* Read order: attempts BEFORE state, state BEFORE the radio's figures — the reasons
+       are the ones the previous version of this function gave at length, and they have
+       not changed: a count can only be older than the state framing it, and a 0 RSSI
+       after a "connected" is a link that dropped in between, not an impossible pairing. */
     unsigned attempts = (unsigned)wifi_sta_attempts();
-    const char *net_state = wifi_sta_state_name();
+    const char *wifi_state = wifi_sta_state_name();
     int8_t ap_rssi;
     uint8_t ap_channel;
-    wifi_sta_ap_info(&ap_rssi, &ap_channel);
-    int net_rssi = (int)ap_rssi;
+    bool connected = wifi_sta_ap_info(&ap_rssi, &ap_channel) && wifi_sta_connected();
 
-    /* Independent of the net readings above, and of each other: none of these can disagree
-     * with another the way state/attempts and state/rssi can, so no read-ordering constraint
-     * applies among THESE — each is a single self-contained fact, read once, right here. The
-     * one field below that can still come back torn is relay_stats_shared()'s errno pair —
-     * accepted on purpose there, for the reason relay_stats.h gives: cheaper than a lock on a
-     * forwarding path that must never wait. */
-    const char *usb_state = usb_net_host_attached() ? DONGLE_USB_STATE_UP : DONGLE_USB_STATE_DOWN;
     relay_stats_t *relay = relay_stats_shared();
-    /* Seconds since the last forwarding failure, and 0 when there has never been one — without
-     * it a caller cannot tell a link failing right now from one transient errno at boot hours
-     * ago, because the errno itself latches and never clears (relay_stats.h says why it must
-     * not). 0 for "no fault" rather than the uptime the raw subtraction would give: errno is 0
-     * there too, and two fields that agree on "nothing has failed" beat one that quietly
-     * reports the age of the device. Same esp_timer milliseconds relay_stats is kept on, and
-     * unsigned throughout so the arithmetic is correct across the wrap. */
     unsigned errno_age = 0;
     if (relay->last_errno != 0) {
-        errno_age = (unsigned)(((uint32_t)(esp_timer_get_time() / 1000) - relay->last_fail_ms)
-                               / 1000u);
+        errno_age = (unsigned)(((uint32_t)(esp_timer_get_time() / 1000) - relay->last_fail_ms) / 1000u);
     }
-    long uptime_s = (long)(esp_timer_get_time() / 1000000);
-    unsigned heap = (unsigned)esp_get_free_heap_size();
-    unsigned channel = (unsigned)ap_channel;
 
-    /* 512, not 448. Worst case with the rollback, net and new fields: 243 bytes of literal
-     * template (the previous 98, minus the 2-byte "up" literal usb loses by becoming a %s now
-     * that it can also read "down", plus the keys, braces and commas the fields below add)
-     * + 31 (esp_app_desc_t.version is char[32]) + 31 (idf_ver, likewise) + 4 ("down")
-     * + 5 ("false") + 64 (a 32-byte SSID whose every byte escapes to two) + 9 ("connected")
-     * + 4 ("-128") + 10 (uptime_s, a positive long) + 10 (heap, uint32_t) + 3 (attempts,
-     * uint8_t) + 3 (attempts_max, WIFI_JOIN_ATTEMPTS) + 2 (channel, 1..14 in practice)
-     * + 5 (to_car_x10, uint16_t) + 5 (to_phone_x10, likewise) + 3 (udp_used) + 3 (tcp_used)
-     * + 4 (last_errno) + 10 (errno_count, uint32_t) + 10 (errno_age, likewise) + NUL = 460,
-     * plus the 13 bytes "errno_age" costs as a key with its quotes, colon and comma = 473. The
-     * margin is deliberate: adding one field should not also be a buffer calculation. */
-    char body[512];
-    int n = snprintf(body, sizeof(body),
-                     "{\"" DONGLE_KEY_DEVICE "\":\"" DONGLE_DEVICE "\","
-                     "\"" DONGLE_KEY_FW "\":\"%s\","
-                     "\"" DONGLE_KEY_IDF "\":\"%s\","
-                     "\"" DONGLE_KEY_USB "\":\"%s\","
-                     "\"" DONGLE_KEY_ROLLBACK "\":%s,"
-                     "\"" DONGLE_KEY_NET "\":{"
-                     "\"" DONGLE_KEY_NET_SSID "\":\"%s\","
-                     "\"" DONGLE_KEY_NET_STATE "\":\"%s\","
-                     "\"" DONGLE_KEY_NET_RSSI "\":%d},"
-                     "\"" DONGLE_KEY_UPTIME "\":%ld,"
-                     "\"" DONGLE_KEY_HEAP "\":%u,"
-                     "\"" DONGLE_KEY_ATTEMPTS "\":%u,"
-                     "\"" DONGLE_KEY_ATTEMPTS_MAX "\":%u,"
-                     "\"" DONGLE_KEY_CHANNEL "\":%u,"
-                     "\"" DONGLE_KEY_RELAY "\":{"
-                     "\"" DONGLE_KEY_RELAY_TO_CAR "\":%u,"
-                     "\"" DONGLE_KEY_RELAY_TO_PHONE "\":%u,"
-                     "\"" DONGLE_KEY_RELAY_SLOTS_UDP "\":%u,"
-                     "\"" DONGLE_KEY_RELAY_SLOTS_TCP "\":%u,"
-                     "\"" DONGLE_KEY_RELAY_ERRNO "\":%d,"
-                     "\"" DONGLE_KEY_RELAY_ERRNO_COUNT "\":%u,"
-                     "\"" DONGLE_KEY_RELAY_ERRNO_AGE "\":%u}}",
-                     app->version, app->idf_ver, usb_state, s_rollback ? "true" : "false",
-                     ssid_esc, net_state, net_rssi,
-                     uptime_s, heap, attempts, (unsigned)WIFI_JOIN_ATTEMPTS, channel,
-                     (unsigned)relay->to_car_x10, (unsigned)relay->to_phone_x10,
-                     (unsigned)relay->udp_used, (unsigned)relay->tcp_used,
-                     relay->last_errno, (unsigned)relay->errno_count, errno_age);
-    if (n < 0 || (size_t)n >= sizeof(body)) {
-        /* Same rule as the car's own /status: truncated JSON parses as something else or
-         * nothing, and shipping it under a 200 hides exactly that. Only reachable if a
-         * future field outgrows the buffer — then this is the symptom.
-         *
-         * And the same ANSWER as the car's, which this claimed and did not do: both paths out
-         * of here used to `return ESP_FAIL`, which sends nothing at all and lets
-         * esp_http_server close the session. A client polling this every 1.5 s then sees a
-         * connection reset indistinguishable from the dongle having been unplugged — on the
-         * one endpoint that exists to tell it what is wrong. api_util is already part of this
-         * component; this file simply was not using it. */
+    status_view_t v = {
+        .fw = app->version, .idf = app->idf_ver, .rolled_back = s_rollback,
+        .usb_state = usb_net_host_attached() ? DONGLE_USB_STATE_UP : DONGLE_USB_STATE_DOWN,
+        .ssid = configured ? cfg.ssid : "", .configured = configured,
+        .wifi_state = wifi_state, .connected = connected,
+        .rssi_dbm = (int)ap_rssi, .channel = (unsigned)ap_channel,
+        .attempts_used = attempts, .attempts_max = (unsigned)WIFI_JOIN_ATTEMPTS,
+        .to_car_x10 = (unsigned)relay->to_car_x10, .to_phone_x10 = (unsigned)relay->to_phone_x10,
+        .udp_sessions = (unsigned)relay->udp_used, .tcp_connections = (unsigned)relay->tcp_used,
+        .last_errno = relay->last_errno, .last_error_message = strerror(relay->last_errno),
+        .last_error_count = (unsigned)relay->errno_count, .last_error_age_s = errno_age,
+        .uptime_s = (long)(esp_timer_get_time() / 1000000),
+        .free_heap = (unsigned)esp_get_free_heap_size(),
+    };
+    char body[640];
+    int n = status_json_render(&v, body, sizeof(body));
+    if (n < 0) {
         ESP_LOGE(TAG, "/status does not fit its buffer");
-        return api_reply_error(req, "500 Internal Server Error", "", "status too long");
+        return api_reply_error(req, "500 Internal Server Error", DONGLE_ERR_INTERNAL, "", "status too long");
     }
-
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, body, n);
 }
@@ -198,7 +104,7 @@ esp_err_t status_api_start(void)
      * never move — the dongle is the new thing in the system, so the dongle takes the unusual
      * port. */
     cfg.server_port = DONGLE_PORT;
-    /* Four are registered: GET /status here, GET and POST /net (net_api.c), POST /ota
+    /* Three are registered: GET /status here, POST /wifi (net_api.c), POST /ota
      * (ota_api.c). Six is deliberate headroom, so adding an endpoint is not also a config
      * change — and it is the whole story now rather than a placeholder: the relays added no
      * URI handlers at all, being raw sockets on their own ports, and the API guard is an
@@ -208,7 +114,7 @@ esp_err_t status_api_start(void)
      * (CONFIG_LWIP_MAX_SOCKETS, sdkconfig.defaults) is shared with relay_udp.c and
      * relay_tcp.c, which is where the full budget arithmetic lives — the comment there is
      * the one to read for why this number is what it is. This server answers an admin API
-     * (/status, /net, /ota), not proxied REST traffic, so a couple of concurrent clients is
+     * (/status, /wifi, /ota), not proxied REST traffic, so a couple of concurrent clients is
      * already generous; it does not need the default's share of a table the relays need
      * far more of. */
     cfg.max_open_sockets = 3;
@@ -217,7 +123,7 @@ esp_err_t status_api_start(void)
      * false httpd_server does not even put listen_fd in its read set once every session slot
      * is taken (esp_http_server/src/httpd_main.c: `if (hd->config.lru_purge_enable ||
      * httpd_is_sess_available(hd))`). Three stranded keep-alive sessions — a phone unplugged
-     * mid-request, three times — would therefore make /status, /net and POST /ota permanently
+     * mid-request, three times — would therefore make /status, /wifi and POST /ota permanently
      * unreachable, with new connections hanging unaccepted rather than being refused, until a
      * power cycle. POST /ota is the only cable-free way to repair a device that lives in a
      * pocket, so "unreachable until a power cycle" is the one outcome worth spending a
@@ -241,7 +147,7 @@ esp_err_t status_api_start(void)
      * INADDR_ANY — USB and, since the station came up, the car's Wi-Fi too. api_guard_open is
      * what stands in front of that: it runs on every accepted connection, before a request
      * byte is parsed, and refuses (closes the socket) any connection that did not land on
-     * DONGLE_HOST. Without it, POST /net (a password) and POST /ota (unauthenticated firmware
+     * DONGLE_HOST. Without it, POST /wifi (a password) and POST /ota (unauthenticated firmware
      * writes) would both be plainly reachable from the car's network. Read api_guard.h for
      * what that check does and does not establish — it is an address check, not an
      * arrival-interface check, and the difference is written down there rather than glossed
