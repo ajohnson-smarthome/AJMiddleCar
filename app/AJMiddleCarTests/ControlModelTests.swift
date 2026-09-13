@@ -27,8 +27,8 @@ final class ControlModelTests: XCTestCase {
     }
     // The frame itself is host-tested in app/tests/rtframe; this only guards the wiring.
     func testFrame() {
-        XCTAssertEqual(RTFrame.command(seq: 7, t: 0.5, y: -1),
-                       "{\"seq\":7,\"t\":0.50,\"y\":-1.00}")
+        XCTAssertEqual(RTFrame.command(seq: 7, throttle: 0.5, turn: -1),
+                       #"{"proto":2,"type":"drive","seq":7,"throttle":0.50,"turn":-1.00}"#)
     }
     func testSidesForward() {
         let s = ControlModel.sides(t: 1, y: 0)
@@ -61,9 +61,12 @@ final class ControlModelTests: XCTestCase {
         let ex = ControlModel.trajectoryPoints(t: 0.08, y: 1, length: 120, steps: 24)
         for i in 1..<ex.count { XCTAssertLessThan(ex[i].y, ex[i - 1].y) }
     }
-    func testCalibSaveBody() {
-        let a: [Corner: (pair: Int, sign: Int)] = [.fl: (0, 1), .fr: (1, -1), .rl: (2, 1), .rr: (3, -1)]
-        XCTAssertEqual(ControlModel.calibSaveBody(a), #"{"wheels":[{"pair":0,"sign":1},{"pair":1,"sign":-1},{"pair":2,"sign":1},{"pair":3,"sign":-1}]}"#)
+    func testCalibWheels() {
+        let a: [Corner: (pair: Int, inverted: Bool)] = [.fl: (0, false), .fr: (1, true), .rl: (2, false), .rr: (3, true)]
+        XCTAssertEqual(ControlModel.calibWheels(a), [CalibWheel(corner: .front_left, pair: 0, inverted: false),
+                                                     CalibWheel(corner: .front_right, pair: 1, inverted: true),
+                                                     CalibWheel(corner: .rear_left, pair: 2, inverted: false),
+                                                     CalibWheel(corner: .rear_right, pair: 3, inverted: true)])
     }
     func testSignalLevelRssi() {
         let fps = CarContract.commandHz
@@ -85,13 +88,18 @@ final class ControlModelTests: XCTestCase {
         XCTAssertEqual(ControlModel.signalLevel(online: true, rssi: nil, rxFps: nil, expectedFps: fps), 1)
         XCTAssertEqual(ControlModel.signalLevel(online: false, rssi: nil, rxFps: 10, expectedFps: fps), 0)
     }
+    // Telemetry is now the generated Codable struct decoded straight off the wire; this only
+    // guards the wiring (the shape itself is covered by app/tests/carapi).
     func testTelemetryParse() {
-        let ok = Telemetry.parse("{\"rssi\":-55,\"rx_fps\":10,\"wdt_trips\":2,\"uptime_s\":123,\"heap\":198000,\"calibrated\":true,\"bus_ok\":true,\"ctl\":\"rt\"}")!
-        XCTAssertEqual(ok.rssi, -55); XCTAssertEqual(ok.uptimeS, 123); XCTAssertEqual(ok.calibrated, true)
-        XCTAssertEqual(ok.rxFps, 10); XCTAssertEqual(ok.busOk, true); XCTAssertEqual(ok.ctl, CtlOwner.rt)
-        XCTAssertNil(Telemetry.parse("{\"uptime_s\":1,\"rssi\":0}")!.rssi)
-        XCTAssertNil(Telemetry.parse("nope"))
-        XCTAssertNil(Telemetry.parse("{\"foo\":1}"))
+        let json = #"{"proto":2,"seq":1,"link":{"rx_hz":10,"rssi_dbm":-55,"timeouts":2},"motors":{"bus":"ok","calibrated":true,"owner":"remote"},"system":{"uptime_s":123,"free_heap":198000}}"#
+        let ok = try! JSONDecoder().decode(Telemetry.self, from: Data(json.utf8))
+        XCTAssertEqual(ok.link.rssi_dbm, -55); XCTAssertEqual(ok.system.uptime_s, 123); XCTAssertEqual(ok.motors.calibrated, true)
+        XCTAssertEqual(ok.link.rx_hz, 10); XCTAssertEqual(ok.motors.bus, .ok); XCTAssertEqual(ok.motors.owner, .remote)
+        // rssi_dbm is nullable on the wire — this is what "unmeasured" looks like.
+        let noRssiJson = #"{"proto":2,"seq":1,"link":{"rx_hz":0,"rssi_dbm":null,"timeouts":0},"motors":{"bus":"ok","calibrated":false,"owner":"idle"},"system":{"uptime_s":1,"free_heap":0}}"#
+        XCTAssertNil(try! JSONDecoder().decode(Telemetry.self, from: Data(noRssiJson.utf8)).link.rssi_dbm)
+        XCTAssertNil(try? JSONDecoder().decode(Telemetry.self, from: Data("nope".utf8)))
+        XCTAssertNil(try? JSONDecoder().decode(Telemetry.self, from: Data(#"{"foo":1}"#.utf8)))
     }
     @MainActor func testBuildNumberAndUpdate() {
         XCTAssertEqual(UpdateClient.buildNumber("v1.2+246"), 246)
