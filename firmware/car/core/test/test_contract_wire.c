@@ -63,6 +63,51 @@ static void same(const char *what, const char *schema, const char *firmware) {
     }
 }
 
+/* Does `frame` contain `"name":` inside the object that begins right after `"group":{`? */
+static int in_group(const char *frame, const char *group, const char *name) {
+    char open[80], key[80];
+    snprintf(open, sizeof(open), "\"%s\":{", group);
+    snprintf(key, sizeof(key), "\"%s\":", name);
+    const char *g = strstr(frame, open);
+    if (!g) return 0;
+    const char *end = strchr(g, '}');
+    const char *k = strstr(g, key);
+    return k != NULL && end != NULL && k < end;
+}
+
+/* The next quoted string at or after `*p`, bounded by `end`. Advances `*p` past its
+   closing quote on success, so a run of neighbouring quoted values ("a", "b", "c")
+   walks forward correctly no matter how many have already been consumed — unlike a
+   walk that leaves the cursor sitting ON the previous closing quote, which resyncs
+   one quote short of where the next value actually starts. */
+static int next_quoted(const char **p, const char *end, char *out, size_t cap) {
+    const char *open = strchr(*p, '"');
+    if (!open || open > end) return 0;
+    const char *close = strchr(open + 1, '"');
+    if (!close || close > end) return 0;
+    size_t len = (size_t)(close - open - 1);
+    if (len >= cap) return 0;
+    memcpy(out, open + 1, len);
+    out[len] = '\0';
+    *p = close + 1;
+    return 1;
+}
+
+/* The "]" that matches the "[" at `open`, by depth counting. A naive "first ']' after
+   here" landed inside a field's own nested array instead — motors.bus carries
+   "values": ["ok", "down"], whose closing bracket sits well before the fields array's
+   real end, so it silently cut "calibrated" and "owner" out of the walk. Schema strings
+   carry no escapes (the header comment's own assumption), so brackets inside a quoted
+   string are not a concern here. */
+static const char *matching_bracket(const char *open) {
+    int depth = 0;
+    for (const char *p = open; *p; p++) {
+        if (*p == '[') depth++;
+        else if (*p == ']') { if (--depth == 0) return p; }
+    }
+    return NULL;
+}
+
 int main(void) {
     char *json = slurp(CONTRACT_JSON);
     char v[64];
@@ -75,49 +120,66 @@ int main(void) {
     assert(str_after(json, "password", v, sizeof(v)));
     same("network.password", v, CAR_AP_PASS);
 
-    /* --- telemetry: the same names, in the same order ------------------------ */
-    const char *sect = strstr(json, "\"telemetry\"");
-    assert(sect);
-    const char *end = strstr(sect, "\"ctl_values\"");
-    assert(end);
+    /* --- telemetry: every field of every group the schema lists, in its group ---- */
+    telemetry_t t = { .seq = 88, .rssi = -55, .rx_hz = 10, .timeouts = 2, .uptime_s = 123,
+                      .free_heap = 198000, .calibrated = true, .owner = MOTORS_OWNER_REMOTE,
+                      .bus_ok = true };
+    char frame[RT_MAX_DATAGRAM];
+    assert(telemetry_datagram(frame, sizeof(frame), &t) > 0);
 
-    telemetry_t t = { .seq = 88, .rssi = -55, .rx_fps = 10, .wdt_trips = 2,
-                      .uptime_s = 123, .heap = 198000, .calibrated = true,
-                      .ctl = "rt", .bus_ok = true };
-    char frame[224];
-    assert(telemetry_fields(frame, sizeof(frame), &t) > 0);
+    /* Walk "telemetry".groups: each quoted name there is a group; that group's own
+       definition lives under the top-level "groups" object, and every "name" inside its
+       "fields" array must sit inside that group's object in the printed frame.
 
-    int n_fields = 0;
-    const char *scan = sect;
-    size_t at = 0;   /* how far into the frame the names have been matched, in order */
-    for (;;) {
-        const char *next = str_after(scan, "name", v, sizeof(v));
-        if (!next || next > end) break;
-        scan = next;
-        char want[80];
-        snprintf(want, sizeof(want), "\"%s\":", v);
-        const char *found = strstr(frame + at, want);
-        if (!found) {
-            printf("FAIL telemetry field \"%s\" is in the schema and not in the frame:\n"
-                   "  %s\n", v, frame);
-            assert(0);
+       "telemetry" is anchored on `"telemetry": {` rather than bare `"telemetry"`: the rt
+       section's type table carries a `"telemetry": "telemetry"` entry earlier in the
+       file, and a bare match lands there instead of on telemetry's own group. */
+    const char *groups_def = strstr(json, "\"groups\"");    /* the top-level group defs */
+    assert(groups_def);
+    const char *telemetry = strstr(json, "\"telemetry\": {");
+    if (!telemetry) telemetry = strstr(json, "\"telemetry\":{");
+    assert(telemetry);
+    const char *tg = strstr(telemetry, "\"groups\"");        /* telemetry's own groups list */
+    assert(tg);
+    const char *tg_open = strchr(tg, '[');
+    const char *tg_end  = strchr(tg, ']');
+    assert(tg_open && tg_end && tg_open < tg_end);
+
+    int n_fields = 0, n_groups = 0;
+    const char *p = tg_open;
+    char gname[32];
+    while (next_quoted(&p, tg_end, gname, sizeof(gname))) {
+        n_groups++;
+        char pat[48];
+        snprintf(pat, sizeof(pat), "\"%s\": {", gname);
+        const char *def = strstr(groups_def, pat);
+        if (!def) { snprintf(pat, sizeof(pat), "\"%s\":{", gname); def = strstr(groups_def, pat); }
+        assert(def);
+        const char *fields_key = strstr(def, "\"fields\"");
+        assert(fields_key);
+        const char *fields_open = strchr(fields_key, '[');
+        assert(fields_open);
+        const char *def_end = matching_bracket(fields_open);   /* the fields array's end */
+        assert(def_end);
+        const char *fs = def;
+        for (;;) {
+            const char *next = str_after(fs, "name", v, sizeof(v));
+            if (!next || next > def_end) break;
+            fs = next;
+            if (!in_group(frame, gname, v)) {
+                printf("FAIL telemetry field \"%s.%s\" is in the schema and not in the frame:\n"
+                       "  %s\n", gname, v, frame);
+                assert(0);
+            }
+            n_fields++;
         }
-        at = (size_t)(found - frame) + strlen(want);   /* forward only: order matters */
-        n_fields++;
     }
-    assert(n_fields == 9);
-
-    /* Nothing extra either: one comma between neighbours, none inside these values. */
-    int commas = 0;
-    for (const char *p = frame; *p; p++) if (*p == ',') commas++;
-    if (commas + 1 != n_fields) {
-        printf("FAIL the frame carries %d fields, the schema names %d:\n  %s\n",
-               commas + 1, n_fields, frame);
-        assert(0);
-    }
+    assert(n_groups == 3);
+    assert(n_fields == 8);
+    assert(strstr(frame, "\"proto\":2,\"type\":\"telemetry\",\"seq\":88,"));
 
     free(json);
-    printf("test_contract_wire: OK (%d telemetry fields, device \"%s\")\n",
-           n_fields, CAR_DEVICE_ID);
+    printf("test_contract_wire: OK (%d telemetry fields in %d groups, device \"%s\")\n",
+           n_fields, n_groups, CAR_DEVICE_ID);
     return 0;
 }

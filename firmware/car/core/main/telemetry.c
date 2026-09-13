@@ -125,20 +125,17 @@ void telemetry_gather(telemetry_t *out, telem_consumer_t who) {
 
     out->seq        = s_push_seq;
     out->rssi       = s_rssi;
-    out->rx_fps     = fps_now(who);
-    out->wdt_trips  = rt_link_wdt_trips();
+    out->rx_hz      = fps_now(who);
+    out->timeouts   = rt_link_wdt_trips();
     out->uptime_s   = (long)(esp_timer_get_time() / 1000000);
-    out->heap       = (uint32_t)esp_get_free_heap_size();
+    out->free_heap  = (uint32_t)esp_get_free_heap_size();
     out->calibrated = calibration_is_valid();
-    out->ctl        = link_src_name(link_owner());
+    out->owner      = link_src_name(link_owner());
     out->bus_ok     = link_bus_ok();
 }
 
 int telemetry_json(char *buf, size_t n) {
     telemetry_t t;
     telemetry_gather(&t, TELEM_PUSH);
-    char fields[224];
-    if (telemetry_fields(fields, sizeof(fields), &t) < 0) return -1;
-    int r = snprintf(buf, n, "{%s}", fields);
-    return (r < 0 || r >= (int)n) ? -1 : r;
+    return telemetry_datagram(buf, n, &t);
 }

@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "contract.h"   /* RT_WATCHDOG_MS, RT_COMMAND_HZ, the CTL_* vocabulary */
+#include "contract.h"   /* RT_WATCHDOG_MS, RT_COMMAND_HZ, the MOTORS_OWNER_* vocabulary */
 #include "ramp.h"
 
 /* Who may command the actuator.
@@ -74,24 +74,24 @@ static inline void link_arb_release(link_arb_t *a, link_src_t src) {
     a->sticky   = false;
 }
 
-/* Pure: the name telemetry reports in "ctl", and logs use. The spellings are the
- * schema's ctl_values, so the app and the mock read the same words this returns. */
+/* Pure: the word telemetry reports in motors.owner, and logs use. The spellings are the
+ * schema's, so the app and the mock read the same words this returns. */
 static inline const char *link_src_name(link_src_t s) {
     switch (s) {
-        case LINK_SRC_NONE:    return CTL_NONE;
-        case LINK_SRC_RECOVER: return CTL_RECOVER;
-        case LINK_SRC_CONSOLE: return CTL_CONSOLE;
-        case LINK_SRC_RT:      return CTL_RT;
-        case LINK_SRC_CALIB:   return CTL_CALIB;
-        case LINK_SRC_OTA:     return CTL_OTA;
-        case LINK_SRC_SAFE:    return CTL_SAFE;
+        case LINK_SRC_NONE:    return MOTORS_OWNER_IDLE;
+        case LINK_SRC_RECOVER: return MOTORS_OWNER_RECOVERING;
+        case LINK_SRC_CONSOLE: return MOTORS_OWNER_CONSOLE;
+        case LINK_SRC_RT:      return MOTORS_OWNER_REMOTE;
+        case LINK_SRC_CALIB:   return MOTORS_OWNER_CALIBRATION;
+        case LINK_SRC_OTA:     return MOTORS_OWNER_UPDATE;
+        case LINK_SRC_SAFE:    return MOTORS_OWNER_SAFE_STOP;
         default:               return "?";
     }
 }
 
-/* One enumerator per word in the schema's ctl_values (LINK_SRC_NONE included): a value
- * added to the contract must break this build rather than surface as "?" on the wire. */
-_Static_assert(LINK_SRC_SAFE + 2 == CTL_COUNT, "link_src_t and ctl_values disagree");
+/* One enumerator per word in the schema's motors.owner values (LINK_SRC_NONE included): a
+ * value added to the contract must break this build rather than surface as "?" on the wire. */
+_Static_assert(LINK_SRC_SAFE + 2 == MOTORS_OWNER_COUNT, "link_src_t and motors.owner disagree");
 
 /* The actuator task's beat, public because the RT hold is defined against it. */
 #define LINK_TICK_MS 20u

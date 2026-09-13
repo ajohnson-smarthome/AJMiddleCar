@@ -5,29 +5,32 @@
 #include <stdio.h>
 #include <string.h>
 
-/* Telemetry's "ctl" is a closed vocabulary the app switches on. The names come from
+/* Telemetry's "owner" is a closed vocabulary the app switches on. The names come from
    the schema through link.h; this is the check that every source has one and that no
    two share it — a duplicate would report the wrong owner, and a missing one would
    send "?" to a phone that has no case for it. */
-static void ctl_vocabulary(void) {
+static void owner_vocabulary(void) {
     const link_src_t all[] = { LINK_SRC_NONE, LINK_SRC_RECOVER, LINK_SRC_CONSOLE,
                                LINK_SRC_RT, LINK_SRC_CALIB, LINK_SRC_OTA, LINK_SRC_SAFE };
     const int n = (int)(sizeof(all) / sizeof(all[0]));
-    assert(n == CTL_COUNT);
+    assert(n == MOTORS_OWNER_COUNT);
     for (int i = 0; i < n; i++) {
         assert(strcmp(link_src_name(all[i]), "?") != 0);
         for (int j = i + 1; j < n; j++) {
             assert(strcmp(link_src_name(all[i]), link_src_name(all[j])) != 0);
         }
     }
-    assert(strcmp(link_src_name(LINK_SRC_NONE), CTL_NONE) == 0);
-    assert(strcmp(link_src_name(LINK_SRC_RT), CTL_RT) == 0);
-    assert(strcmp(link_src_name(LINK_SRC_SAFE), CTL_SAFE) == 0);
+    assert(strcmp(link_src_name(LINK_SRC_NONE), MOTORS_OWNER_IDLE) == 0);
+    assert(strcmp(link_src_name(LINK_SRC_RECOVER), MOTORS_OWNER_RECOVERING) == 0);
+    assert(strcmp(link_src_name(LINK_SRC_RT), MOTORS_OWNER_REMOTE) == 0);
+    assert(strcmp(link_src_name(LINK_SRC_CALIB), MOTORS_OWNER_CALIBRATION) == 0);
+    assert(strcmp(link_src_name(LINK_SRC_OTA), MOTORS_OWNER_UPDATE) == 0);
+    assert(strcmp(link_src_name(LINK_SRC_SAFE), MOTORS_OWNER_SAFE_STOP) == 0);
     assert(strcmp(link_src_name((link_src_t)99), "?") == 0);
 }
 
 int main(void) {
-    ctl_vocabulary();
+    owner_vocabulary();
 
     /* The RT grant must outlive the watchdog deadline by one actuator tick: with the
        two equal, the grant's >= lapsed the target to zero up to a tick before the
