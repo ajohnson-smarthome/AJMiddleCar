@@ -49,7 +49,7 @@ typedef enum {
  * silently truncated SSID would fail to associate with no visible cause.
  *
  * Also rejects any byte below 0x20, or 0x7F (DEL), in either field. What validates here
- * must be what net_cfg_render_public can produce: it escapes a
+ * must be what net_cfg_render_wifi_reply can produce: it escapes a
  * `"` or `\` by doubling it, not by the six bytes a \uXXXX control-byte escape needs, so a
  * control byte that passed on length alone could overrun a buffer sized from the narrower
  * bound. 802.11 permits arbitrary octets in an SSID, but unlike a literal quote — which is
@@ -87,7 +87,7 @@ int net_cfg_render_wifi_reply(const net_cfg_t *cfg, const char *state, char *buf
  * Returns the length written, or -1 if it will not fit. */
 int net_cfg_escape(const char *in, char *out, size_t n);
 
-/* Whether two configurations are the same — what tells an unchanged POST /net (a retry
+/* Whether two configurations are the same — what tells an unchanged POST /wifi (a retry
  * request) from a changed one (a new network), so that the first never restarts a radio
  * that is already working on it. */
 bool net_cfg_equal(const net_cfg_t *a, const net_cfg_t *b);
