@@ -3,14 +3,14 @@
 #include <stdio.h>
 #include <string.h>
 
-/* "Big enough" scratch buffers for the tests that aren't specifically pinning the
- * truncation boundary. The exact worst cases (95 public, 216 stored) follow from
+/* A "big enough" scratch buffer for the tests that aren't specifically pinning the
+ * truncation boundary. The exact worst case (95 for the public render) follows from
  * net_cfg_validate's doubling-not-sixfold guarantee — see its comment in net_cfg.h for
- * the derivation. test_validated_values_always_fit_the_stored_worst_case and its
- * public-render sibling below are what pin these as a proven bound rather than a hopeful
- * one — that pair is what would have caught the bug where these numbers were first wrong. */
+ * the derivation. test_validated_values_always_fit_the_public_worst_case below is what
+ * pins it as a proven bound rather than a hopeful one — it is what would have caught the
+ * bug where this number was first wrong. (There was a second render, the NVS body, with
+ * its own bound of 216; the dongle no longer keeps the network in flash, and it is gone.) */
 #define PUBLIC_BUF_MAX 95
-#define STORED_BUF_MAX 216
 
 static void test_accepts_a_normal_network(void) {
     net_cfg_t c;
@@ -51,7 +51,7 @@ static void test_ssid_bounds(void) {
 }
 
 static void test_ssid_rejects_control_bytes(void) {
-    /* net_cfg_render_public/net_cfg_render_stored can only widen a '"' or '\' into two
+    /* net_cfg_render_public can only widen a '"' or '\' into two
        bytes, not the six a \uXXXX control-byte escape needs — so what validates must be
        what render can produce, or a downstream buffer sized from the narrower bound
        overruns. 802.11 permits arbitrary octets, but a tab or NUL is not a network
@@ -86,7 +86,7 @@ static void test_password_rejects_control_bytes(void) {
 }
 
 static void test_a_rejected_body_does_not_write_out(void) {
-    /* The caller's stored configuration must survive a bad POST intact. */
+    /* The caller's current configuration must survive a bad POST intact. */
     net_cfg_t c;
     assert(net_cfg_validate("keep", "secretpass", &c) == NET_CFG_OK);
     assert(net_cfg_validate("", "secretpass", &c) == NET_CFG_SSID_LEN);
@@ -125,17 +125,6 @@ static void test_public_render_when_unconfigured(void) {
     assert(strstr(buf, "\"configured\":false") != NULL);
 }
 
-static void test_stored_render_round_trips(void) {
-    net_cfg_t c;
-    assert(net_cfg_validate("SomeNetwork", "secretpass", &c) == NET_CFG_OK);
-    char buf[STORED_BUF_MAX];
-    assert(net_cfg_render_stored(&c, buf, sizeof(buf)) > 0);
-    /* The stored form is what the dongle reloads to rejoin unaided, so it must carry
-       the password that the public form must not. */
-    assert(strstr(buf, "secretpass") != NULL);
-    assert(strstr(buf, "SomeNetwork") != NULL);
-}
-
 static void test_public_render_boundary_is_exact(void) {
     /* A regression from `(size_t)w >= n` to `> n` would accept a body one byte short of
        room for its NUL and pass every other render test here, since all of them use a
@@ -149,17 +138,7 @@ static void test_public_render_boundary_is_exact(void) {
     assert(net_cfg_render_public(&c, true, scratch, (size_t)len + 1) == len);
 }
 
-static void test_stored_render_boundary_is_exact(void) {
-    net_cfg_t c;
-    assert(net_cfg_validate("SomeNetwork", "secretpass", &c) == NET_CFG_OK);
-    char scratch[STORED_BUF_MAX];
-    int len = net_cfg_render_stored(&c, scratch, sizeof(scratch));
-    assert(len > 0);
-    assert(net_cfg_render_stored(&c, scratch, (size_t)len) == -1);
-    assert(net_cfg_render_stored(&c, scratch, (size_t)len + 1) == len);
-}
-
-static void test_equal_drives_the_dirty_check(void) {
+static void test_equal_tells_a_retry_from_a_new_network(void) {
     net_cfg_t a, b;
     assert(net_cfg_validate("net", "secretpass", &a) == NET_CFG_OK);
     assert(net_cfg_validate("net", "secretpass", &b) == NET_CFG_OK);
@@ -186,22 +165,6 @@ static void test_validated_values_always_fit_the_public_worst_case(void) {
     assert(net_cfg_render_public(&c, true, buf, sizeof(buf)) > 0);
 }
 
-static void test_validated_values_always_fit_the_stored_worst_case(void) {
-    /* Same invariant, the stored form: worst case is both fields at max length, entirely
-       quotes. This is the pair of tests the review specifically called for. */
-    net_cfg_t c;
-    char ssid[NET_SSID_MAX + 1];
-    char pass[NET_PASS_MAX + 1];
-    memset(ssid, '"', NET_SSID_MAX);
-    ssid[NET_SSID_MAX] = '\0';
-    memset(pass, '"', NET_PASS_MAX);
-    pass[NET_PASS_MAX] = '\0';
-    assert(net_cfg_validate(ssid, pass, &c) == NET_CFG_OK);
-
-    char buf[STORED_BUF_MAX];
-    assert(net_cfg_render_stored(&c, buf, sizeof(buf)) > 0);
-}
-
 static void test_render_escapes_a_quote_in_the_ssid(void) {
     net_cfg_t c;
     assert(net_cfg_validate("Net\"work", "secretpass", &c) == NET_CFG_OK);
@@ -209,10 +172,6 @@ static void test_render_escapes_a_quote_in_the_ssid(void) {
     char pub[PUBLIC_BUF_MAX];
     assert(net_cfg_render_public(&c, true, pub, sizeof(pub)) > 0);
     assert(strstr(pub, "\"ssid\":\"Net\\\"work\"") != NULL);
-
-    char stored[STORED_BUF_MAX];
-    assert(net_cfg_render_stored(&c, stored, sizeof(stored)) > 0);
-    assert(strstr(stored, "\"ssid\":\"Net\\\"work\"") != NULL);
 }
 
 static void test_render_escapes_a_backslash_in_the_ssid(void) {
@@ -222,17 +181,12 @@ static void test_render_escapes_a_backslash_in_the_ssid(void) {
     char pub[PUBLIC_BUF_MAX];
     assert(net_cfg_render_public(&c, true, pub, sizeof(pub)) > 0);
     assert(strstr(pub, "\"ssid\":\"Net\\\\work\"") != NULL);
-
-    char stored[STORED_BUF_MAX];
-    assert(net_cfg_render_stored(&c, stored, sizeof(stored)) > 0);
-    assert(strstr(stored, "\"ssid\":\"Net\\\\work\"") != NULL);
 }
 
 static void test_render_still_escapes_a_legacy_control_byte(void) {
     /* net_cfg_validate now refuses a control byte outright, so this path is reachable
-       only by a value that predates the rule — bytes already sitting in NVS from before
-       this fix, say. net_cfg_t's fields are plain char arrays, so a value can be built
-       directly without going through net_cfg_validate, which is what simulates that.
+       only by a value that never went through it. net_cfg_t's fields are plain char arrays,
+       so a value can be built directly without net_cfg_validate, which is what this does.
        The escaper must still turn it into valid JSON rather than compounding the
        problem: see the comment on append_escaped in net_cfg.c. */
     net_cfg_t c;
@@ -242,29 +196,6 @@ static void test_render_still_escapes_a_legacy_control_byte(void) {
     char pub[PUBLIC_BUF_MAX];
     assert(net_cfg_render_public(&c, true, pub, sizeof(pub)) > 0);
     assert(strstr(pub, "\"ssid\":\"Net\\u0001work\"") != NULL);
-
-    char stored[STORED_BUF_MAX];
-    assert(net_cfg_render_stored(&c, stored, sizeof(stored)) > 0);
-    assert(strstr(stored, "\"ssid\":\"Net\\u0001work\"") != NULL);
-}
-
-static void test_stored_render_escapes_a_quoted_ssid_exactly(void) {
-    /* The point is that the output is parseable — assert the exact escaped bytes rather
-       than merely that the raw quote is gone. */
-    net_cfg_t c;
-    assert(net_cfg_validate("Net\"work", "secretpass", &c) == NET_CFG_OK);
-    char buf[STORED_BUF_MAX];
-    assert(net_cfg_render_stored(&c, buf, sizeof(buf)) > 0);
-    assert(strcmp(buf, "{\"ssid\":\"Net\\\"work\",\"password\":\"secretpass\"}") == 0);
-}
-
-static void test_stored_render_escapes_a_quoted_password_exactly(void) {
-    /* Same property, same code path (append_escaped), the other field. */
-    net_cfg_t c;
-    assert(net_cfg_validate("net", "pass\"word1", &c) == NET_CFG_OK);
-    char buf[STORED_BUF_MAX];
-    assert(net_cfg_render_stored(&c, buf, sizeof(buf)) > 0);
-    assert(strcmp(buf, "{\"ssid\":\"net\",\"password\":\"pass\\\"word1\"}") == 0);
 }
 
 /* net_cfg_escape exists so /status can escape a single field (the SSID) into a body
@@ -314,17 +245,12 @@ int main(void) {
     test_errors_name_their_field();
     test_public_render_never_leaks_the_password();
     test_public_render_when_unconfigured();
-    test_stored_render_round_trips();
     test_public_render_boundary_is_exact();
-    test_stored_render_boundary_is_exact();
-    test_equal_drives_the_dirty_check();
+    test_equal_tells_a_retry_from_a_new_network();
     test_validated_values_always_fit_the_public_worst_case();
-    test_validated_values_always_fit_the_stored_worst_case();
     test_render_escapes_a_quote_in_the_ssid();
     test_render_escapes_a_backslash_in_the_ssid();
     test_render_still_escapes_a_legacy_control_byte();
-    test_stored_render_escapes_a_quoted_ssid_exactly();
-    test_stored_render_escapes_a_quoted_password_exactly();
     test_escape_passes_plain_text_through_unchanged();
     test_escape_refuses_a_buffer_one_byte_too_small();
     test_escape_succeeds_in_a_buffer_exactly_large_enough();

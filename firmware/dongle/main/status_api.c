@@ -61,7 +61,7 @@ static esp_err_t status_get(httpd_req_t *req)
      * document, taking device/fw/idf/usb down with it for every client polling this
      * endpoint. net_cfg_validate lets a quote or backslash through on purpose (a real
      * network can be named with one), so this must escape it rather than trust it. Reuse
-     * net_cfg's own escaper — the one net_cfg_render_public/net_cfg_render_stored already
+     * net_cfg's own escaper — the one net_cfg_render_public already
      * use — instead of growing a second one here that could drift from it. */
     char ssid_esc[72]; /* worst case: 32 SSID bytes, every one a quote, doubles to 64, +NUL = 65 */
     if (net_cfg_escape(ssid, ssid_esc, sizeof(ssid_esc)) < 0) {

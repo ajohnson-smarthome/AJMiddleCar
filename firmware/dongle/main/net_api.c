@@ -5,18 +5,20 @@
 #include "cJSON.h"
 #include "esp_check.h"
 #include "esp_log.h"
-#include "nvs.h"
 
 #include "api_util.h"
 #include "wifi_sta.h"
 
 static const char *TAG = "net_api";
 
-/* One JSON string under one key, which is how the car stores each of its five config
- * domains. The namespace is the dongle's own — nothing here shares storage with anything. */
-static const char NVS_NAMESPACE[] = "dongle";
-static const char NVS_KEY[] = "net";
-
+/* The network the app told this dongle about, and whether it has yet. In RAM only — nothing
+ * about the car's network survives a reboot, on purpose. It used to be persisted in NVS and
+ * rejoined at boot before the app arrived, which bought a few seconds on a warm start and
+ * cost three things that were worse: a search the app could not tell from its own and
+ * would restart from one; credentials that went stale the moment a release changed them,
+ * with nothing on the wire to say so (the password is never reported); and a physical
+ * reset as the only cure. The app sends the network on every launch, and a dongle that
+ * knows nothing until told is a dongle that can never be wrong about it. */
 static net_cfg_t s_cfg;
 static bool s_configured;
 
@@ -27,74 +29,6 @@ bool net_api_current(net_cfg_t *out)
     }
     *out = s_cfg;
     return true;
-}
-
-/* Persist, unless the stored bytes already say this. The dirty check is the point: an app
- * that POSTs its configuration unconditionally at every launch — which is exactly what the
- * app does — must not erase a flash sector each time. */
-static esp_err_t store(const net_cfg_t *cfg)
-{
-    /* 216 worst case: 25 literal + 32×2 escaped SSID + 63×2 escaped password + NUL; see
-     * net_cfg_validate's comment in net_cfg.h for why that ×2 is provable rather than a
-     * guess. */
-    char json[256];
-    if (net_cfg_render_stored(cfg, json, sizeof(json)) < 0) {
-        return ESP_FAIL;
-    }
-
-    nvs_handle_t h;
-    ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h), TAG, "cannot open nvs");
-
-    char existing[256];
-    size_t len = sizeof(existing);
-    if (nvs_get_str(h, NVS_KEY, existing, &len) == ESP_OK && strcmp(existing, json) == 0) {
-        nvs_close(h);
-        return ESP_OK;
-    }
-
-    esp_err_t err = nvs_set_str(h, NVS_KEY, json);
-    if (err == ESP_OK) {
-        err = nvs_commit(h);
-    }
-    nvs_close(h);
-    return err;
-}
-
-void net_api_load(void)
-{
-    nvs_handle_t h;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) {
-        return;                      /* nothing stored yet — the first boot */
-    }
-
-    /* Matches store()'s 216-byte worst case above. A short buffer here would fail to read
-     * back exactly the maximal configs store() can legitimately write, and silently — the
-     * ESP_ERR_NVS_INVALID_LENGTH falls into the same "nothing stored" return below. */
-    char json[256];
-    size_t len = sizeof(json);
-    esp_err_t err = nvs_get_str(h, NVS_KEY, json, &len);
-    nvs_close(h);
-    if (err != ESP_OK) {
-        return;
-    }
-
-    cJSON *root = cJSON_Parse(json);
-    if (root == NULL) {
-        ESP_LOGW(TAG, "stored config is not JSON; ignoring it");
-        return;
-    }
-    const cJSON *ssid = cJSON_GetObjectItemCaseSensitive(root, DONGLE_NETKEY_SSID);
-    const cJSON *pass = cJSON_GetObjectItemCaseSensitive(root, DONGLE_NETKEY_PASSWORD);
-    if (cJSON_IsString(ssid) && cJSON_IsString(pass) &&
-        net_cfg_validate(ssid->valuestring, pass->valuestring, &s_cfg) == NET_CFG_OK) {
-        s_configured = true;
-        ESP_LOGI(TAG, "network configured: %s", s_cfg.ssid);
-    } else {
-        /* Revalidated rather than trusted: bounds can move between firmware versions, and
-         * a stored value that no longer passes must not reach the radio. */
-        ESP_LOGW(TAG, "stored config failed validation; ignoring it");
-    }
-    cJSON_Delete(root);
 }
 
 static esp_err_t net_get(httpd_req_t *req)
@@ -152,11 +86,9 @@ static esp_err_t net_post(httpd_req_t *req)
     }
 
     if (s_configured && net_cfg_equal(&s_cfg, &next)) {
-        /* Nothing changed, so nothing is written: the dirty check exists to protect flash
-         * from an app that POSTs its configuration at every launch, and that reason is
-         * untouched.
-         *
-         * The radio is a separate question, and conflating the two was a bug. The design says
+        /* Nothing changed. The comparison used to guard a flash write as well; now the radio
+         * is the only thing it guards, and that was always the question that mattered. The
+         * design says
          * a failed join is reached and HELD rather than retried forever, and that the app
          * decides when to try again by POSTing again — so an unchanged re-POST is precisely
          * how a retry is requested. Returning 200 here without calling the radio meant that
@@ -165,12 +97,14 @@ static esp_err_t net_post(httpd_req_t *req)
          * POST must not restart a WORKING radio", and that is what this now enforces.
          *
          * WORKING means connected OR still trying. The first version checked only "connected",
-         * and an unchanged POST that landed while the station was on attempt three of five —
-         * the app launching while the dongle was already looking for the car it had been told
-         * about at boot — restarted the budget from one. Two searches, the second cancelling
-         * the first, and «Попытка 1 из 5» on the panel twice over for no reason a person could
-         * see. A radio mid-search is doing exactly what the POST asks; the only honest answer
-         * is 200 and hands off. A rejoin is asked for from `failed` and `idle` alone. */
+         * and an unchanged POST that landed while the station was on attempt three of five
+         * restarted the budget from one — two searches, the second cancelling the first, and
+         * «Попытка 1 из 5» on the panel twice over. The case that first produced it (a boot-
+         * time join from a stored network, overtaken by the app's own POST) no longer exists,
+         * but the case that remains is real: the app relaunching while a search it asked for
+         * earlier is still running. A radio mid-search is doing exactly what the POST asks;
+         * the only honest answer is 200 and hands off. A rejoin is asked for from `failed`
+         * and `idle` alone. */
         if (wifi_sta_connected() || wifi_sta_trying()) {
             return api_reply_ok(req);
         }
@@ -183,19 +117,15 @@ static esp_err_t net_post(httpd_req_t *req)
         return api_reply_ok(req);
     }
 
-    if (store(&next) != ESP_OK) {
-        return api_reply_error(req, "500 Internal Server Error", "", "cannot persist");
-    }
     s_cfg = next;
     s_configured = true;
     ESP_LOGI(TAG, "network set: %s", s_cfg.ssid);
     /* Reported rather than swallowed: before this, every way a join could fail still answered
      * 200, so a client could not tell "joining" from "the radio would not even start". The
-     * value IS stored by this point — hence the wording; a client that retries is retrying the
-     * join, not the write. */
+     * value is held by this point; a client that retries is retrying the join. */
     if (wifi_sta_join(&s_cfg) != ESP_OK) {
         return api_reply_error(req, "500 Internal Server Error", "",
-                               "stored, but the radio refused the join");
+                               "the radio refused the join");
     }
     return api_reply_ok(req);
 }

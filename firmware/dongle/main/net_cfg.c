@@ -46,7 +46,7 @@ net_cfg_err_t net_cfg_validate(const char *ssid, const char *password, net_cfg_t
         }
     }
 
-    /* Written last, and only here: a rejected body must leave the caller's stored
+    /* Written last, and only here: a rejected body must leave the caller's current
      * configuration exactly as it was. */
     memcpy(out->ssid, ssid, sn + 1);
     memcpy(out->password, password, pn + 1);
@@ -101,10 +101,9 @@ static bool append_str(char *buf, size_t n, size_t *pos, const char *s)
  *
  * net_cfg_validate refuses control bytes and DEL outright (see its comment), so the
  * \uXXXX branch below is unreachable for anything that passed validation — do not delete
- * it as dead code. It stays as defence: NVS can hold bytes written before that rule
- * existed, and net_cfg_t's fields are plain enough that a caller could construct one
- * without going through net_cfg_validate at all. Either way, a raw control byte reaching
- * this function must still come out as valid JSON. */
+ * it as dead code. It stays as defence: net_cfg_t's fields are plain enough that a caller
+ * could construct one without going through net_cfg_validate at all, and a raw control
+ * byte reaching this function must still come out as valid JSON. */
 static bool append_escaped(char *buf, size_t n, size_t *pos, const char *s)
 {
     for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
@@ -142,28 +141,6 @@ int net_cfg_render_public(const net_cfg_t *cfg, bool configured, char *buf, size
         return -1;
     }
     if (!append_str(buf, n, &pos, "}")) {
-        return -1;
-    }
-    buf[pos] = '\0';
-    return (int)pos;
-}
-
-int net_cfg_render_stored(const net_cfg_t *cfg, char *buf, size_t n)
-{
-    size_t pos = 0;
-    if (!append_str(buf, n, &pos, "{\"" DONGLE_NETKEY_SSID "\":\"")) {
-        return -1;
-    }
-    if (!append_escaped(buf, n, &pos, cfg->ssid)) {
-        return -1;
-    }
-    if (!append_str(buf, n, &pos, "\",\"" DONGLE_NETKEY_PASSWORD "\":\"")) {
-        return -1;
-    }
-    if (!append_escaped(buf, n, &pos, cfg->password)) {
-        return -1;
-    }
-    if (!append_str(buf, n, &pos, "\"}")) {
         return -1;
     }
     buf[pos] = '\0';

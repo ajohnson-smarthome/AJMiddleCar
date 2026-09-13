@@ -8,12 +8,13 @@
 
 /* The network the dongle has been told to join.
  *
- * Pure: no ESP-IDF, no cJSON, no NVS, so the rules below are host-tested with plain `cc`
- * rather than reasoned about. net_api.c does the JSON extraction and the flash writing
- * around this module and holds no rules of its own.
+ * Pure: no ESP-IDF, no cJSON, so the rules below are host-tested with plain `cc` rather
+ * than reasoned about. net_api.c does the JSON extraction around this module and holds no
+ * rules of its own.
  *
  * The SSID is an opaque string. This firmware does not know what a car is and must not
- * learn: the value arrives over the wire and is stored and replayed unread. */
+ * learn: the value arrives over the wire, is held in memory until the next reboot, and is
+ * handed to the radio unread. Nothing about it is written to flash. */
 
 /* WPA2's limits, not ours — and now the contract's too. 32 bytes is the maximum SSID
  * length; a PSK shorter than 8 characters cannot be used, and an empty password means an
@@ -42,14 +43,13 @@ typedef enum {
 } net_cfg_err_t;
 
 /* Validate and copy. `*out` is written only on NET_CFG_OK; a rejected body leaves the
- * caller's stored configuration untouched, which is why validation happens before any
- * flash write rather than during it.
+ * caller's current configuration untouched.
  *
  * Values are rejected, never clamped — the car's domains behave the same way, and a
  * silently truncated SSID would fail to associate with no visible cause.
  *
  * Also rejects any byte below 0x20, or 0x7F (DEL), in either field. What validates here
- * must be what net_cfg_render_public/net_cfg_render_stored can produce: those escape a
+ * must be what net_cfg_render_public can produce: it escapes a
  * `"` or `\` by doubling it, not by the six bytes a \uXXXX control-byte escape needs, so a
  * control byte that passed on length alone could overrun a buffer sized from the narrower
  * bound. 802.11 permits arbitrary octets in an SSID, but unlike a literal quote — which is
@@ -57,8 +57,8 @@ typedef enum {
  * which is why this rejects rather than escapes it.
  *
  * This is the canonical statement of that guarantee. Every worst-case buffer bound built
- * from NET_SSID_MAX/NET_PASS_MAX — the NVS blob in net_api.c, the render buffers in its
- * tests — is arithmetic derived from exactly this refusal (at most a doubling, never a
+ * from NET_SSID_MAX/NET_PASS_MAX — the render buffers in its tests, /status's escaped
+ * SSID — is arithmetic derived from exactly this refusal (at most a doubling, never a
  * sixfold \uXXXX expansion). If the rule above ever changes, those buffers are wrong until
  * they are re-derived; they point back here rather than restating the derivation. */
 net_cfg_err_t net_cfg_validate(const char *ssid, const char *password, net_cfg_t *out);
@@ -71,7 +71,7 @@ const char *net_cfg_err_field(net_cfg_err_t e);
 const char *net_cfg_err_msg(net_cfg_err_t e);
 
 /* The GET /net body. NEVER contains the password: the app holds that value itself and
- * has no use for reading it back, so an endpoint that returns a stored credential would
+ * has no use for reading it back, so an endpoint that returns a held credential would
  * be a liability with nothing on the other side of the trade.
  *
  * The SSID is an 802.11 octet string, not text: net_cfg_validate bounds its length and now
@@ -85,13 +85,6 @@ const char *net_cfg_err_msg(net_cfg_err_t e);
  * Returns the length written, or -1 if buf is too small. */
 int net_cfg_render_public(const net_cfg_t *cfg, bool configured, char *buf, size_t n);
 
-/* The NVS body. Contains the password — it has to, since this is what the dongle reloads
- * at boot to rejoin without being told again. Both fields are JSON-escaped for the same
- * reason as net_cfg_render_public — an unescaped quote here would corrupt the very blob
- * the boot-time parser reads back, silently dropping the saved credentials.
- * Returns the length written, or -1. */
-int net_cfg_render_stored(const net_cfg_t *cfg, char *buf, size_t n);
-
 /* Escape one string as JSON string CONTENT — the bytes that go between the quotes, without
  * them. The whole-object renders above use the same machinery; this exists because /status
  * builds a body this module does not own and must not therefore grow a second escaper.
@@ -99,8 +92,9 @@ int net_cfg_render_stored(const net_cfg_t *cfg, char *buf, size_t n);
  * Returns the length written, or -1 if it will not fit. */
 int net_cfg_escape(const char *in, char *out, size_t n);
 
-/* Whether two configurations are the same, for the dirty check that keeps an unchanged
- * POST from rewriting flash. */
+/* Whether two configurations are the same — what tells an unchanged POST /net (a retry
+ * request) from a changed one (a new network), so that the first never restarts a radio
+ * that is already working on it. */
 bool net_cfg_equal(const net_cfg_t *a, const net_cfg_t *b);
 
 #endif /* NET_CFG_H */

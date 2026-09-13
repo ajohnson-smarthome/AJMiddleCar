@@ -20,8 +20,9 @@
  * relays already run a select() loop that wakes at least once a second, so they poll
  * wifi_sta_gateway() instead of being told. */
 
-/* Bring up the station. Joins immediately if a configuration is already stored. Safe to call
- * once, from app_main, after nvs_flash_init and esp_event_loop_create_default. */
+/* Bring up the station, idle: it joins nothing until POST /net says what. Safe to call once,
+ * from app_main, after nvs_flash_init (the radio's calibration lives there) and
+ * esp_event_loop_create_default. */
 esp_err_t wifi_sta_start(void);
 
 /* Join this network, restarting the attempt budget. Returns the first error that stopped the
@@ -29,7 +30,7 @@ esp_err_t wifi_sta_start(void);
  * attempt is genuinely under way — ESP_OK means "the join started", never "the join
  * succeeded"; poll wifi_sta_state_name() for the outcome.
  *
- * net_api calls this when a POST /net changed the stored value, and ALSO when an unchanged
+ * net_api calls this when a POST /net changed the current value, and ALSO when an unchanged
  * POST arrives while the station is not connected. The rule is "an unchanged POST must not
  * restart a WORKING radio" — not "an unchanged POST does nothing". Those read the same until
  * the state is `failed`, which is the one state the retry exists for: the design says a failed
@@ -49,8 +50,9 @@ bool wifi_sta_connected(void);
  * same reason. net_api needs both halves of "the radio is already doing what you asked": an
  * unchanged POST /net must leave a connected radio alone, and it must equally leave a
  * SEARCHING one alone — restarting a join that is on attempt three of five throws those three
- * away and counts from one again, which is what the panel showed whenever the app launched
- * while the dongle was already looking for the car on its own. */
+ * away and counts from one again, which is what the panel showed whenever the app relaunched
+ * while a search it had asked for earlier was still running. Still needed with no boot-time
+ * join: the app relaunching is enough to reproduce it. */
 bool wifi_sta_trying(void);
 
 /* GET /status's `net.state`, spelled by the generated contract. */

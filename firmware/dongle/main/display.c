@@ -500,9 +500,11 @@ static void poll_button(int64_t now_us)
         int64_t held = now_us - s_down_us;
         if (held >= HOLD_ERASE_US) {
             /* The countdown ran out with the button still down. Everything in the default NVS
-               partition goes — the stored network, the Wi-Fi driver's own records, the PHY
-               calibration — and the device starts over as if never configured; the app tells
-               it the network again on its own. nvs_flash_erase() de-initialises the partition
+               partition goes — the Wi-Fi driver's own records and the PHY calibration; the
+               network is not there, it lives in RAM and dies with the restart anyway — and the
+               device starts over as if never configured; the app tells it the network again
+               on its own. What the gesture buys over pulling the cable is a restart without
+               reaching for the cable. nvs_flash_erase() de-initialises the partition
                itself before erasing (nvs_flash.h says so), and nothing below this line runs
                long enough to miss it: the restart is immediate. Drawn full first, so the last
                frame the glass holds is the gauge at 100 rather than the one before it. */

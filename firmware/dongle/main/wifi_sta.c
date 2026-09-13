@@ -11,7 +11,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
-#include "net_api.h"
 #include "dongle_clock.h"
 #include "wifi_state.h"
 
@@ -126,7 +125,7 @@ static void handle_disconnected(const wifi_event_sta_disconnected_t *ev)
          * disconnect had nothing to tear down and produced no event, the window stayed
          * armed across esp_wifi_connect(), and a join the AP rejected within the second was
          * swallowed here as "ours" — no attempt charged, no retry issued, the station left
-         * in JOINING with nothing in flight, on every boot with a stored network. Signed
+         * in JOINING with nothing in flight, on every join from a cold radio. Signed
          * difference, so the window is correct across the millisecond counter's wrap. */
         atomic_store(&s_join_quiet_until_ms, 0u);
         return;
@@ -250,24 +249,16 @@ esp_err_t wifi_sta_start(void)
                          TAG, "ip event register");
 
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "set mode");
-    /* Our own NVS blob (net_cfg.c / net_api.c) is the configuration's home, not esp_wifi's
-     * own flash copy — RAM storage keeps the two from drifting or double-writing flash. */
+    /* RAM, so that nothing about the network survives a reboot: net_api keeps the one copy
+     * the app sent, in memory, and esp_wifi must not keep a second one in flash that would
+     * outlive it. A dongle that knows no network until told cannot be wrong about it. */
     ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "set storage");
 
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi start");
 
-    net_cfg_t cfg;
-    if (net_api_current(&cfg)) {
-        /* Logged, not returned. app_main wraps this call in ESP_ERROR_CHECK, and a stored
-         * network the radio will not take must not become a boot loop on a device whose only
-         * repair path (POST /ota) needs the rest of app_main to finish. The station exists
-         * either way, and a POST /net can restart the join. */
-        esp_err_t jerr = wifi_sta_join(&cfg);
-        if (jerr != ESP_OK) {
-            ESP_LOGW(TAG, "the stored network could not be joined at boot: %s",
-                     esp_err_to_name(jerr));
-        }
-    }
+    /* And nothing more. The station is up and idle; the first join is the app's to ask for,
+     * through POST /net. It used to join a stored network here, before the app arrived —
+     * see net_api.c for what that cost. */
     return ESP_OK;
 }
 

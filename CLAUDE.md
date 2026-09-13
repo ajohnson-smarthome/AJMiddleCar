@@ -50,7 +50,8 @@ app/                 iOS pult (XcodeGen; the .xcodeproj is generated and gitigno
 firmware/
   car/core/          the car's firmware — all logic
   car/modem/         the radio's slave image build
-  dongle/            the USB-Ethernet dongle — knows nothing about the car
+  dongle/            the USB-Ethernet dongle — knows nothing about the car, and holds the
+                     car's network in RAM only: the app tells it on every launch
 tools/               mock_car, release.sh, env-p4.sh
 docs/                protocol.md, bringup.md, specs/, plans/, research/
 ```

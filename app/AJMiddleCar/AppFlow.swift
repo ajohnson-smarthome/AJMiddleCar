@@ -77,7 +77,7 @@ final class AppFlow: ObservableObject {
         case dongleConfiguring
         /// The dongle will not get any further on its own: the join budget ran out (`failed`),
         /// or its state machine never left `idle` — see `DongleStep.retryJoin`. The credentials
-        /// are already stored; `dongleGate()` asks the radio to try again — once, see
+        /// are already on the dongle; `dongleGate()` asks the radio to try again — once, see
         /// `maxDongleJoinAttempts` — and then holds here with a button. The spec is explicit
         /// that this state is "reached and held rather than retried forever… A radio that hunts
         /// for an absent car indefinitely is drawing the phone's battery for nothing", and that
@@ -217,11 +217,11 @@ final class AppFlow: ObservableObject {
     ///
     /// Unplugging mid-drive is handled correctly all the way down — `CarPath` goes unsatisfied,
     /// `CarLink` says the wire is gone, the screen says so — but `dongleGate()` returned for
-    /// good when it handed over, so nothing is left watching the dongle. If the dongle comes
-    /// back having failed to rejoin the car (the car was switched off in the meantime, so its
-    /// own join budget ran out while nobody was asking), it sits in `net.state: failed`
-    /// answering nobody, and `CarLink` radars indefinitely with no path back to the join logic.
-    /// This is that path, and it is the only hole in an otherwise complete unplug story.
+    /// good when it handed over, so nothing is left watching the dongle. The dongle comes back
+    /// having forgotten the car — it keeps the network in RAM only — so it sits idle with no
+    /// network, answering nobody, and `CarLink` radars indefinitely with no path back to the
+    /// join logic. This is that path, and it is the only hole in an otherwise complete unplug
+    /// story.
     ///
     /// Only the dongle half re-runs. The car's own gate already answered this session and
     /// `latestTag` is still held, so re-running it would re-probe GitHub and could strand a
@@ -308,6 +308,16 @@ final class AppFlow: ObservableObject {
             switch DongleLink.next(reply: reply, latestTag: dongleLatestTag,
                                    expectedSSID: CarContract.ssid, rollback: rollbackChoice) {
             case .plugIn:
+                // A dongle that is gone is a dongle that will come back knowing nothing: it
+                // keeps the car's network in RAM only, so a replug (or its own restart) is a
+                // fresh device with an empty configuration. The join budget is per
+                // conversation with one dongle, and this is the end of one — so the next
+                // dongle to answer gets its one ask, whatever this one spent. Without this,
+                // an app that had already given up saw the returning dongle report no
+                // network, declined to send it, and sat on «Нет связи» over a dongle that
+                // was never told what to look for.
+                dongleJoinAttempts = 0
+                dongleJoinGaveUp = false
                 setPhase(.dongleAbsent)
             case .faulty:
                 setPhase(.dongleFault)
@@ -393,7 +403,7 @@ final class AppFlow: ObservableObject {
     ///
     /// `try?` here was the wrong trade on this branch specifically. Its whole justification is
     /// that the app half and the dongle half fail in the same place with the same symptom, so a
-    /// rejected SSID (400), "stored, but the radio refused the join" (500), an undecodable body
+    /// rejected SSID (400), "the radio refused the join" (500), an undecodable body
     /// and no cable at all were four different faults with four different fixes — flattened
     /// into one `nil`, rendered as one screen telling the user to plug in a dongle that is
     /// plugged in and answering, with nothing written to the log either.
@@ -421,10 +431,10 @@ final class AppFlow: ObservableObject {
     /// One POST asking the dongle to join the car's network — `join` the first time, `retryJoin`
     /// afterwards (`DongleClient` keeps them apart on purpose; see `retryJoin`'s doc). Failures
     /// are logged, never swallowed: a 400 means the dongle rejected the credentials outright and
-    /// a 500 means it stored them and the radio refused, which are the same screen but very
+    /// a 500 means it took them and the radio refused, which are the same screen but very
     /// different bench sessions.
     private func askDongleToJoin(retry: Bool) async {
-        // Bounded, and the bound covers BOTH kinds of ask: a dongle that never stores what it
+        // Bounded, and the bound covers BOTH kinds of ask: a dongle that never holds what it
         // is told loops through `.sendCredentials` exactly as tirelessly as a radio that cannot
         // reach the car loops through `.retryJoin`, and neither may run forever.
         guard !dongleJoinGaveUp else { return }

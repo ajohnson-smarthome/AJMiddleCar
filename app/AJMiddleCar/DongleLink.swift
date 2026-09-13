@@ -61,7 +61,7 @@ public enum DongleStep: Equatable {
     /// Pointed at the right network, and the dongle will not get any further on its own:
     /// `net.state == .failed` (the budget its own join policy allows ran out) or `.idle` (its
     /// state machine never left IDLE — see `next(...)`'s branch for how a CONFIGURED dongle
-    /// gets there). The credentials are already stored and correct; what is needed is asking
+    /// gets there). The credentials are already on the dongle and correct; what is needed is asking
     /// the radio to try again, which is a POST, which is what this step is.
     case retryJoin
     /// Pointed at the right network and `net.state == .connected`: the pipe is up. Hand off to
@@ -209,17 +209,14 @@ public enum DongleLink {
         // Both of these mean "the dongle will not get any further by itself".
         //
         // `failed` is the plain one: the join budget ran out. `idle` is the edge — and it is
-        // NOT "never configured", which already returned above on the SSID comparison. It is
-        // the case `wifi_sta.c` documents at the very line this branch used to cite for the
-        // opposite conclusion: when `esp_wifi_set_config` fails, `wifi_sta_join` logs, returns
-        // early and leaves the state machine untouched — "net.state still reflects the previous
-        // attempt, not this request... The two legitimately disagree until this is retried (a
-        // corrected POST /net, which restarts the whole budget)". And IDLE has exactly one exit,
-        // `WIFI_EV_CONFIGURED` (`firmware/dongle/main/wifi_state.c`), raised only by
-        // `wifi_sta_join`, which only a POST /net (or a boot) calls. So nothing the dongle does
-        // on its own leaves this state: waiting here waits forever. Reachable from a stored
-        // network the radio refused at boot, and from a POST /net that stored the config and
-        // then answered 500.
+        // NOT "never configured", which already returned above on the SSID comparison. With
+        // the SSID in place, `idle` means wifi_sta_join could not record the request: its
+        // state lock was busy at the one moment it needed it (`wifi_sta.c`: "state lock busy —
+        // join requested without recording it"), so the radio was told to connect while the
+        // machine still says nothing has been asked. Rare, and nothing the dongle does on its
+        // own leaves it — IDLE's one exit is a POST /net. So waiting here waits forever, and a
+        // re-POST is the fix. (The dongle keeps its network in RAM only, so every boot starts
+        // IDLE with an EMPTY ssid — that case is the guard above, not this branch.)
         case .failed, .idle: return .retryJoin
         case .searching: return .searchingCar
         // `joining` is the radio working through its own bounded budget with the network in

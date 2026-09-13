@@ -103,7 +103,7 @@ check(DongleLink.next(reply: reply(fw: behind, rollback: true, ssid: "", state: 
       "identity is checked before the update, the rollback and the credentials")
 
 // -- firmware behind latest: update the dongle before anything else ---------------------
-// Deliberately paired with a net that is already `connected` with the car's own stored SSID —
+// Deliberately paired with a net that is already `connected` with the car's own SSID on the dongle —
 // proving the update check runs BEFORE the join questions, not only when the dongle also
 // happens to be unconfigured. An implementation that checks `configured`/`net.state` first
 // would return .readyForCar here instead, which is exactly the ordering bug the spec calls
@@ -116,7 +116,7 @@ check(DongleLink.next(reply: reply(fw: behind, rollback: false, ssid: carSSID, s
 // -- current and never configured: send the car's credentials ---------------------------
 check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: "", state: DongleNetState.idle),
                       latestTag: latest, expectedSSID: carSSID) == .sendCredentials,
-      "current firmware, no stored SSID, sends the car's credentials")
+      "current firmware, no SSID on the dongle, sends the car's credentials")
 
 // -- current but pointed at the WRONG network: still send the car's credentials ---------
 // A non-empty SSID that disagrees with the car's own is not "configured" from the app's seat —
@@ -136,22 +136,24 @@ check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: carSSID, 
       "configured and joining waits, not sendCredentials and not retryJoin")
 
 // -- configured, net idle: ask again — waiting here waits forever ------------------------
-// `idle` on a dongle whose stored SSID is the car's own is not "never configured" (that path
+// `idle` on a dongle that holds the car's own SSID is not "never configured" (that path
 // returns .sendCredentials above, and the fixture below proves the difference: same state,
-// different ssid). It is the edge wifi_sta.c documents: esp_wifi_set_config failed, so
-// wifi_sta_join returned early and left the state machine in IDLE while GET /net already
-// reports the network it was told. IDLE's only exit is WIFI_EV_CONFIGURED (wifi_state.c),
-// which only a POST /net raises — so an implementation that answers .waiting here (as this
-// one did) parks the app on a "connecting" screen that nothing on the dongle will ever end.
+// different ssid). It is the edge wifi_sta.c documents: the state lock was busy at the one
+// moment wifi_sta_join needed it, so the radio was told to connect while the machine still
+// says nothing was asked. IDLE's only exit is WIFI_EV_CONFIGURED (wifi_state.c), which only
+// a POST /net raises — so an implementation that answers .waiting here (as this one did)
+// parks the app on a "connecting" screen that nothing on the dongle will ever end. The
+// every-boot case — the dongle keeps its network in RAM only, so it starts IDLE with an
+// EMPTY ssid — is the second check, not this one.
 check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: carSSID, state: DongleNetState.idle),
                       latestTag: latest, expectedSSID: carSSID) == .retryJoin,
       "configured but idle asks the radio again — nothing else can leave IDLE")
 check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: "", state: DongleNetState.idle),
                       latestTag: latest, expectedSSID: carSSID) == .sendCredentials,
-      "an idle dongle with no stored SSID is still the configure step, not the retry step")
+      "an idle dongle with no SSID on the dongle is still the configure step, not the retry step")
 
 // -- net failed: the retry step, not the configure step ----------------------------------
-// This is where U2 lands: the stored credentials are already correct, so the fix is asking
+// This is where U2 lands: the credentials on the dongle are already correct, so the fix is asking
 // the radio to try again, not re-sending the same SSID/password as though nothing were saved.
 check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: carSSID, state: DongleNetState.failed),
                       latestTag: latest, expectedSSID: carSSID) == .retryJoin,
@@ -255,7 +257,7 @@ check(DongleLink.next(reply: steady, latestTag: latest, expectedSSID: carSSID) !
 check(DongleLink.next(reply: reply(fw: current, rollback: false, ssid: "", state: DongleNetState.idle),
                       latestTag: nil, expectedSSID: carSSID) == .sendCredentials,
       "no latestTag at all does not force .updating")
-// Same status, two different expectedSSIDs either side of the stored one: the output must
+// Same status, two different expectedSSIDs either side of the one on the dongle: the output must
 // differ. Catches an implementation that ignores expectedSSID entirely (Important 4's own
 // case above already proves the mismatch path exists; this proves the parameter is what
 // drives it, not the fixture's absolute string).

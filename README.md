@@ -104,7 +104,8 @@ MIPI-CSI/DSI — none of which is used yet, all of which is why this board.
   the firmware's descriptor table, the app's Swift structs, the mock's validator and the endpoint
   table in `docs/protocol.md`, and the tree fails if any of them drift
 - **JSON everywhere** — every wire format and every stored setting, one JSON string per domain
-  in NVS with a dirty check so unchanged saves do not touch flash
+  in the car's NVS with a dirty check so unchanged saves do not touch flash. The dongle stores
+  nothing: it is told the car's network by the app on every launch and forgets it on reboot
 - **Pure, host-tested modules** — mixing, PWM planning, the actuator planner, frame parsing,
   the watchdog, recovery, calibration, geometry, the dongle's join state machine, session
   table, relay backlog and every panel screen compile with plain `cc` and run on the host

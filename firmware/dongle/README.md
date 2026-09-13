@@ -29,7 +29,7 @@ The two ports are silkscreened `USB` and `COM`, and they are not interchangeable
 | `GET /status` answers over the USB wire | **yes** — HTTP 200 in 12 ms | 2026-08-30 |
 | iOS binds a CDC-NCM driver | **yes** — `http://192.168.7.1/status` (`:8080` today) answers in Safari on the phone | 2026-08-30 |
 | iPhone keeps its own internet and DNS | **yes** — an ordinary site loads by name with the dongle attached | 2026-08-30 |
-| `POST /net` persists across a reboot | *(record what you observed)* | |
+| `POST /net` does NOT persist across a reboot — the dongle comes up «Не настроен» and waits for the app | *(record what you observed)* | |
 | `GET /net` withholds the password | *(record what you observed)* | |
 | `POST /ota` accepts an image and reboots into it | *(record what you observed)* | |
 | The bootloader reverts an image that fails its first boot | *(record what you observed)* | |
@@ -150,7 +150,7 @@ Measurements taken as each plan lands, rather than assumed.
 | The car's 1.83 MB image through the relay | Delivered. That image carries the C6's firmware inside it, and is about three times the largest payload this relay had carried before | 2026-09-01 |
 | Timing, screens, retries during an over-the-air update | *(nobody was watching — no console was recording when it happened, so there is no evidence of how close the upload ran to its budget or what the screens showed; still owed)* | |
 | The app talks to the car through the relay, on a device, with no `-carHost` argument | Works. The escape hatch was kept until the dongle's OTA cycle and rollback had both been run on the bench, and retired 2026-09-13; on a device the app now has no other path | 2026-08-31 |
-| The station joins the car and keeps its credentials across a reboot (`/net` in NVS) | `joined: ip=192.168.4.2 gw=192.168.4.1`, and it rejoined by itself after a cable reflash with no second `POST /net` | 2026-08-31 |
+| The station joins the car | `joined: ip=192.168.4.2 gw=192.168.4.1`. It also rejoined by itself after a cable reflash with no second `POST /net` — the firmware of that day kept the network in NVS; since 2026-09-13 it keeps it in RAM only and joins nothing until the app tells it what (see `net_api.c` for why) | 2026-08-31 |
 | `tools/conformance.py http://192.168.7.1` — the car's whole REST surface, relayed | Every endpoint passed except one pre-existing car-vs-mock divergence, unrelated to the relay: `POST /calib/save` with string `pair`s is correctly rejected `400`, but the car's envelope names `field:"pair"` where the mock and the test expect `"wheels"`. `docs/protocol.md` says `field` names *the offending key*, so the car is right and the mock and `conformance.py` are the ones to correct. First time this suite had ever run against real hardware | 2026-08-31 |
 | `tools/conformance_rt.py 192.168.7.1:4210` — the real-time channel, relayed | All checks passed: hello, wrong-proto rejection, telemetry, datagram drops measured by `rx_fps`, the session cap, eviction, `bye`. The Mac has no route to `192.168.4.1`, so every one of those frames went through the dongle | 2026-08-31 |
 | Relayed `GET /status` round trip | 0.489 s cold (Wi-Fi association plus the upstream connect), well inside the app's budget | 2026-08-31 |
