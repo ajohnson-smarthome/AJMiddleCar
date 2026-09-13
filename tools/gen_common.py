@@ -51,6 +51,9 @@ def c_group_defines(schema, prefix):
             F = upper(f["name"])
             out.append(f'#define {prefix}KEY_{G}_{F} "{f["name"]}"')
             if f["type"] == "object":
+                # Only the sub-key names, not their value words: no current schema
+                # nests a `state` field inside an `object` field, unlike swift_groups
+                # (below), which does walk that case for its enum declarations.
                 for sub in f["fields"]:
                     out.append(f'#define {prefix}KEY_{G}_{F}_{upper(sub["name"])} "{sub["name"]}"')
             if f["type"] == "state":

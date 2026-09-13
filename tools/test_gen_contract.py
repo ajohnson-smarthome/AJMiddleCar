@@ -265,6 +265,19 @@ class TestCommonEmitters(unittest.TestCase):
         self.assertIn("        default: self = .unknown(rawValue)", out)
         self.assertIn("    public static let all: [MotorsBus] = [.ok, .down]", out)
 
+    def test_swift_state_enum_escapes_a_keyword_value_at_every_site(self):
+        """"internal" is a real wire value (schema["errors"]) and a Swift keyword: a
+        bare `case internal` fails to compile. Pin the backtick escape at all four
+        sites a case name appears, and confirm a non-keyword value is left alone."""
+        out = "\n".join(self.c.swift_state_enum("E", ["ok", "internal"], "doc"))
+        self.assertIn("    case ok", out)
+        self.assertIn("    case `internal`", out)
+        self.assertIn('        case .`internal`: return "internal"', out)
+        self.assertIn('        case "internal": self = .`internal`', out)
+        self.assertIn("    public static let all: [E] = [.ok, .`internal`]", out)
+        self.assertNotIn("case .internal:", out)
+        self.assertNotIn("self = .internal", out)
+
     def test_swift_struct_types(self):
         fields = [{"name": "rx_hz", "type": "int", "doc": "a"},
                   {"name": "rssi_dbm", "type": "int", "nullable": True, "doc": "b"},
