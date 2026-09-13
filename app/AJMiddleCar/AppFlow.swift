@@ -264,15 +264,19 @@ final class AppFlow: ObservableObject {
             let reply = await readStatus()
             // Step 2, once: something is there and is being looked over. Guarded, because this
             // loop re-reads /status forever and must not walk the ladder backwards on every poll.
-            if case .status = reply, !sawDongle {
+            // "Something" is any reply that names a device — v2 or the v1 bridge — because the
+            // v1 dongle is the one this step most needs to reach: it is only ever updated.
+            if reply.carriesIdentity, !sawDongle {
                 sawDongle = true
                 setPhase(.dongleChecking)
             }
             // Step 3, and a gate rather than a formality: the adapter's newest release must be
             // established before anything is decided about it. Retried on every poll until it
             // is — a launch that could not reach GitHub must not proceed on the assumption that
-            // nothing has changed, which is exactly what it used to do.
-            if case .status = reply, dongleLatestTag == nil {
+            // nothing has changed, which is exactly what it used to do. Keyed on the identity,
+            // not on the v2 decode: a v1 dongle that never triggered this fetch had no tag to be
+            // compared against, and `DongleLink` called it faulty on every poll, forever.
+            if reply.carriesIdentity, dongleLatestTag == nil {
                 // Announce the check only when not already holding on a failure of it. This loop
                 // re-asks every poll, and re-announcing each time made "checking" and the hold
                 // alternate — with `PhasePacer` guaranteeing each screen its 400 ms, that is a

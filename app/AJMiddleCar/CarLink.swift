@@ -297,7 +297,7 @@ final class CarLink: ObservableObject {
                 if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
                 if Task.isCancelled { return }
                 guard let self, gen == self.radioFetchGen else { return }
-                let data = try? await transport.get("/status", timeout: 2)
+                let data = try? await transport.get(CarContract.statusPath, timeout: 2)
                 // Authoritative recheck: cancelling `radioFetch` now aborts this call's
                 // in-flight connection too (the cancellation reaches HTTPRequest), but a
                 // response that beat the cancel to the wire still completes normally — so the

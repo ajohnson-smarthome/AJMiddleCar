@@ -287,7 +287,7 @@ final class UpdateClient: NSObject, ObservableObject {
         uploadProgress = 0
         guard let data = try? Data(contentsOf: binURL) else { return .failed(nil) }
         do {
-            _ = try await CarTransport.shared.post("/ota", body: data,
+            _ = try await CarTransport.shared.post(CarContract.otaPath, body: data,
                                                    contentType: "application/octet-stream",
                                                    timeout: UpdateRules.uploadTimeout(bytes: data.count)) { [weak self] p in
                 Task { @MainActor in self?.uploadProgress = p }
@@ -296,7 +296,10 @@ final class UpdateClient: NSObject, ObservableObject {
         } catch is CancellationError {
             return .cancelled
         } catch let CarError.http(status, body) {
-            let msg = ((try? JSONSerialization.jsonObject(with: body)) as? [String: Any])?["error"] as? String
+            // The v2 envelope: `error` is an object, and `message` is the car's own words
+            // (`too_small`, `not_firmware`, `busy`). Reading it as a v1 string found nothing and
+            // captioned every rejection with the bare status code.
+            let msg = (try? JSONDecoder().decode(CarAPIError.self, from: body))?.error.message
             return .failed(msg ?? "HTTP \(status)")
         } catch {
             // `CarError` (`.noDongle`, `.denied`, `.refused`, `.timeout`, `.malformed`,

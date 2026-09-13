@@ -52,7 +52,8 @@ public enum DongleStep: Equatable {
     case sendCredentials
     /// Pointed at the right network and the radio is still working: `joining` (its own bounded
     /// budget is running) or an `unknown` value this build does not recognise. Wait. Never
-    /// re-POST from here: a re-POST is a retry request, and nothing has failed yet.
+    /// re-POST from here: a re-POST is a retry request, and nothing has failed yet. Also the
+    /// answer for a v1 dongle before any release is known — the same "nothing to act on yet".
     /// The radio is scanning and has not seen the car's network. Not a failure — the budget is
     /// still running — but a different thing to say than `waiting`, because the likely cause is
     /// a car that is switched off rather than a connection in progress.
@@ -117,6 +118,18 @@ public enum DongleReply {
     /// iOS refused to let the request leave the phone at all: local-network access is denied.
     case denied
 
+    /// Whether the reply names a device at all — a v2 document or a v1 identity. This, not
+    /// "decoded as v2", is what the flow keys the release lookup on: a device whose identity
+    /// is known is one a release can be compared against, and the v1 bridge exists precisely
+    /// so that a v1 dongle gets that comparison. Gating the lookup on `.status` alone left a
+    /// v1 dongle with no tag to compare against, forever, and every poll called it faulty.
+    public var carriesIdentity: Bool {
+        switch self {
+        case .status, .legacy: return true
+        case .silent, .faulty, .denied: return false
+        }
+    }
+
     /// Read a `/status` body as v2, else as a v1 identity, else as a fault. Pure.
     public static func decode(_ data: Data) -> DongleReply {
         if let s = try? JSONDecoder().decode(DongleStatus.self, from: data) { return .status(s) }
@@ -171,6 +184,12 @@ public enum DongleLink {
         case .status(let s): status = s
         case .legacy(let id):
             guard id.device == DongleContract.device else { return .wrongDongle(device: id.device) }
+            // No release known yet means nothing can be decided about it: the flow is still
+            // fetching (or holding on a failure to), and the only honest step is the one that
+            // says "nothing has failed, wait". Not `.faulty` — `mustUpdate(_, nil)` is false by
+            // construction, and reading that as "not behind" declared every v1 dongle broken
+            // before the tag it would be compared against had arrived.
+            guard let latestTag else { return .waiting }
             // The bridge's one job. A v1 dongle that is NOT behind the release means the release
             // itself is v1, which this build cannot drive through: faulty, not readyForCar.
             return UpdateRules.mustUpdate(carFw: id.fw, latestTag: latestTag) ? .updating : .faulty

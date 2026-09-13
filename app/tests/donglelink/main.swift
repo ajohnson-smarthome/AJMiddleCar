@@ -282,4 +282,28 @@ check(DongleLink.next(reply: DongleReply.decode(Data(v1current.utf8)), latestTag
       "a v1 dongle that is not behind cannot be driven from — the release it matches is v1")
 check(DongleReply.decode(Data("junk".utf8)).isFaulty, "junk decodes as faulty")
 
+// -- the v1 bridge before any release is known: not faulty, not decided -------------------
+// The flow fetches the release lazily, after the first reply that names a device, and until
+// that fetch lands `latestTag` is nil. `mustUpdate(_, nil)` is false by construction, and an
+// implementation that reads "not behind" as "faulty" here declared every v1 dongle broken on
+// the very poll that should have started its update — and, with the fetch never triggered,
+// on every poll after. Nothing has failed: the only honest step is the wait.
+let v1noTag = DongleLink.next(reply: DongleReply.decode(Data(v1.utf8)), latestTag: nil, expectedSSID: carSSID)
+check(v1noTag != .faulty, "a v1 dongle with no release known yet is not declared faulty")
+check(v1noTag == .waiting, "a v1 dongle with no release known yet waits for the lookup")
+// And the same body, once the tag arrives, is the update — the two halves of one poll.
+check(DongleLink.next(reply: DongleReply.decode(Data(v1.utf8)), latestTag: latest, expectedSSID: carSSID) == .updating,
+      "the same v1 dongle is updated the moment a newer release is known")
+
+// -- what triggers the release lookup: an identity, in either spelling --------------------
+// The flow's rule, pinned at the pure seam: the lookup runs when a reply names a device, and
+// a v1 identity names one exactly as a v2 document does. An implementation that keyed the
+// fetch on "decoded as v2" left the v1 dongle with nothing to be compared against.
+check(DongleReply.decode(Data(v1.utf8)).carriesIdentity, "a v1 identity triggers the release lookup")
+check(reply(fw: current, rollback: false, ssid: "", state: "idle").carriesIdentity,
+      "a v2 document triggers the release lookup")
+check(!DongleReply.silent.carriesIdentity, "silence names nobody")
+check(!DongleReply.faulty.carriesIdentity, "a bad answer names nobody")
+check(!DongleReply.denied.carriesIdentity, "a denial names nobody")
+
 if failures == 0 { print("test_donglelink: OK") } else { exit(1) }
