@@ -65,10 +65,11 @@ component defaults to — answered itself: the radio comes up, so they do.
 - [x] **SDIO pull-ups.** Present. Not inspected visually — inferred from behaviour, which is
       stronger: the link comes up as `SDIO 4-bit 40000 kHz` and reports `Card init success`,
       which is exactly what missing `D2`/`D3` pull-ups would prevent by dropping the slave to SPI.
-- [ ] **Network.** SSID `AJMiddleCar` appears; the phone joins it and gets an address on `192.168.4.x`.
-      Half-answered: the AP starts and the DHCP server binds `192.168.4.1`, but no client has
-      associated yet.
-- [ ] **Identity.** `curl http://192.168.4.1/status` returns `"device":"ajmiddlecar"`.
+- [x] **Network.** SSID `AJMiddleCar` appears; the dongle joins it and gets an address on `192.168.4.x`
+      (`joined: ip=192.168.4.2 gw=192.168.4.1`, 2026-08-31 — see `firmware/dongle/README.md`). The
+      phone itself never joins: it reaches the car through the dongle.
+- [x] **Identity.** `curl http://192.168.7.1/status` through the relay returns `"device":"ajmiddlecar"`
+      (2026-08-31, same table).
 - [x] **I2C.** Both boards answer and initialise — `0x40` front, `0x60` rear. The rear address
       is not the `0x41` this file originally assumed; see the bench notes. A bus scan is the
       quickest way to check, and it is self-verifying because the on-board ES8311 codec sits at

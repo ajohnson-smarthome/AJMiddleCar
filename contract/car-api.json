@@ -3,8 +3,7 @@
   "device": "ajmiddlecar",
   "network": {
     "ssid": "AJMiddleCar",
-    "password": "drive1234",
-    "host": "192.168.4.1"
+    "password": "drive1234"
   },
   "rt": {
     "port": 4210,

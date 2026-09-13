@@ -141,7 +141,6 @@ def emit_swift(schema):
            f'    public static let device = "{schema["device"]}"',
            f'    public static let ssid = "{net["ssid"]}"',
            f'    public static let password = "{net["password"]}"',
-           f'    public static let host = "{net["host"]}"',
            f"    public static let rtPort: UInt16 = {rt['port']}",
            f"    public static let maxDatagram = {rt['max_datagram']}",
            f"    public static let maxCommand = {rt['max_command']}",

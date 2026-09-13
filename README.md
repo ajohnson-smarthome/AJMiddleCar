@@ -35,16 +35,16 @@ calls travel to the co-processor. The C6 is a modem running a vendor image we pi
 author — and that image is **embedded inside the car's own firmware**, so the car flashes its
 radio itself when the versions disagree. One OTA, both processors.
 
-The third processor is optional and lives in a pocket: an **ESP32-S3 USB-Ethernet dongle** that
-plugs into the phone, joins the car's network as a station, and relays the control channel and
-the REST API over the wire. The phone's own WiFi stays free. The dongle has a 0.96″ OLED that
-says what it is doing, and it updates over the same USB link from the same release.
+The third processor lives in a pocket and is the only way in: an **ESP32-S3 USB-Ethernet
+dongle** that plugs into the phone, joins the car's network as a station, and relays the control
+channel and the REST API over the wire. The phone never joins the car's network itself — its own
+WiFi stays free — and the app has no other path. The dongle has a 0.96″ OLED that says what it
+is doing, and it updates over the same USB link from the same release.
 
 ```mermaid
 flowchart LR
-    A["iPhone app<br/>(SwiftUI)"] -->|"WiFi · UDP 4210 + REST"| R
-    A -.->|"USB-C · CDC-NCM"| D["ESP32-S3 dongle<br/>relay + OLED"]
-    D -.->|"WiFi station"| R["ESP32-C6<br/>radio (esp_hosted slave)"]
+    A["iPhone app<br/>(SwiftUI)"] -->|"USB-C · CDC-NCM<br/>UDP 4210 + REST"| D["ESP32-S3 dongle<br/>relay + OLED"]
+    D -->|"WiFi station"| R["ESP32-C6<br/>radio (esp_hosted slave)"]
     R -->|"SDIO"| B["ESP32-P4<br/>firmware · all logic"]
     B -->|"I²C 0x40 / 0x60"| C["2× PCA9685<br/>one per axle"]
     C -->|"8 PWM channels"| E["4× BTS7960<br/>H-bridge ~43 A"]

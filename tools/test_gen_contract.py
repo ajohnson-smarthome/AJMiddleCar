@@ -18,7 +18,11 @@ class TestSchema(unittest.TestCase):
         self.assertEqual(s["proto"], 1)
         self.assertEqual(s["device"], "ajmiddlecar")
         self.assertEqual(s["network"]["ssid"], "AJMiddleCar")
-        self.assertEqual(s["network"]["host"], "192.168.4.1")
+        # No host. The app reaches the car through the dongle and never addresses 192.168.4.1
+        # itself; the dongle learns the car's address from DHCP, not from a contract. What both
+        # sides must agree on is the network's name and password — the app hands those to the
+        # dongle over POST /net — and nothing else about where the car lives.
+        self.assertNotIn("host", s["network"])
 
     def test_the_command_cap_is_below_the_datagram_cap(self):
         rt = load()["rt"]

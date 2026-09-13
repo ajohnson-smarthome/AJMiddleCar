@@ -9,9 +9,12 @@ tested):
   * the aiohttp REST server, whose five config domains are one handler pair registered
     in a loop over the schema.
 
-It binds `0.0.0.0` by default, not loopback, because loopback exercises none of what
-actually breaks on a phone: App Transport Security, local-network privacy, and interface
-pinning. Point a real device at the address printed at startup.
+It binds `0.0.0.0` by default, not loopback, so that a simulator on this Mac can be pointed
+at the Mac's LAN address (`-carHost`) and the conformance tools can be run from another
+machine. A device build cannot be pointed here at all: on a phone the app addresses the
+dongle, and only the dongle — the direct path it once had is gone. What a device exercises
+that a simulator does not — App Transport Security, local-network privacy, interface
+pinning — is exercised against the real dongle and the real car, or not at all.
 
 Impairment flags are seeded from `--seed`, never from the clock, so the *inbound* loss
 pattern replays exactly for a client that behaves the same way. Outbound loss rides a
@@ -41,7 +44,7 @@ OTA_MIN_BYTES = 4096       # the firmware refuses to erase a slot for anything s
 
 
 def is_private(addr):
-    """RFC 1918 — the ranges a phone and a Mac share on a home network or on the car's AP."""
+    """RFC 1918 — the ranges a Mac and a simulator share on a home network."""
     if addr.startswith("10.") or addr.startswith("192.168."):
         return True
     if addr.startswith("172."):
@@ -51,13 +54,13 @@ def is_private(addr):
 
 
 def lan_address():
-    """The address a phone on this network can reach.
+    """The address another machine on this network can reach.
 
     Two sources, because neither alone is reliable: asking the routing table which
     interface would carry traffic to a public address (no packet is sent) answers with the
     VPN tunnel when one is up, and `gethostbyname(gethostname())` answers 127.0.0.1 often
     enough to be useless. A private address is preferred over whatever the route named,
-    since that is the one a phone on the same Wi-Fi — or on the car's AP — can dial.
+    since that is the one a simulator or a second Mac on the same Wi-Fi can dial.
     """
     candidates = []
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -277,7 +280,7 @@ async def serve(args):
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--host", default="0.0.0.0",
-                   help="bind address; the default is reachable from a real phone")
+                   help="bind address; the default is reachable from the LAN")
     p.add_argument("--port", type=int, default=8080, help="REST port")
     p.add_argument("--rt-port", type=int, default=RT["port"],
                    help="real-time UDP port; only move it to run a second mock, since "

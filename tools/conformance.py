@@ -2,7 +2,7 @@
 """The REST request matrix, run against the mock or against a real car.
 
     python3 tools/conformance.py http://127.0.0.1:8080
-    python3 tools/conformance.py http://192.168.4.1
+    python3 tools/conformance.py http://192.168.7.1      # the car, through the dongle's relay
 
 Every expectation comes from contract/car-api.json: the field sets, both ends of every
 range, the value one past each end, the members of every enum. Nothing here is written
@@ -313,7 +313,7 @@ class Conformance:
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("base_url", help="e.g. http://127.0.0.1:8080 or http://192.168.4.1")
+    p.add_argument("base_url", help="e.g. http://127.0.0.1:8080 (the mock) or http://192.168.7.1 (the car, through the dongle)")
     p.add_argument("-v", "--verbose", action="store_true", help="log every request")
     args = p.parse_args()
 

@@ -15,9 +15,10 @@ python3 -m venv .venv
 .venv/bin/python mock_car.py
 ```
 
-It binds `0.0.0.0` and prints the address a phone can reach. Loopback exercises neither
-App Transport Security, nor local-network privacy, nor interface pinning, which between
-them are most of what breaks on a device — so drive it from a real phone when you can.
+It binds `0.0.0.0` and prints the address the LAN can reach. A device build cannot be
+pointed at it: on a phone the app addresses the dongle and only the dongle. The mock is
+the simulator's car; what only a device can exercise — App Transport Security,
+local-network privacy, interface pinning — is exercised against the real dongle and car.
 
 | Flag | |
 |---|---|

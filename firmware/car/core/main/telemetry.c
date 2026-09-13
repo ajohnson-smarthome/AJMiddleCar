@@ -30,10 +30,10 @@ static const char *TAG = "telemetry";
    signal level, not a fact. */
 static volatile int s_rssi = 0;
 
-/* WHOSE signal. The AP admits four stations and the dongle joins it exactly as a phone does,
-   so "the AP's station list" can hold two radios at once, and sta[0] — which is what this
-   reported — is whichever one the driver enumerates first. The app plotted the dongle's
-   signal while the phone drove, or the reverse, with nothing to say which.
+/* WHOSE signal. The AP admits four stations, and the dongle is one of them — but so can be a
+   bench Mac or a second adapter, so "the AP's station list" can hold two radios at once,
+   and sta[0] — which is what this reported — is whichever one the driver enumerates first.
+   The app plotted whichever station happened to come first, with nothing to say which.
 
    The reading is the SESSION OWNER's station when there is one: the MAC list from the
    radio, the MAC->IP table from this side's DHCP server, and the owner's address from

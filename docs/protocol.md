@@ -4,13 +4,18 @@ The contract between `app/` and `firmware/car/core/`. These two never reference 
 this document and `tools/mock_car` are the whole seam. Either side should be reimplementable
 from this file alone.
 
-Everything is JSON. The car is a WPA2 softAP; the app talks to the gateway address directly and
-never reads the SSID (it has no such entitlement).
+Everything is JSON. The car is a WPA2 softAP. The app does not join it: on a device the phone
+carries a USB-Ethernet dongle that joins the car's network as a station and relays both
+channels below, byte for byte, between the phone and the car — the app addresses the dongle,
+and the dongle addresses the car. The dongle never parses a datagram or a request; it moves
+them, so everything in this document holds unchanged across it. Its own API, the ports it
+listens on and how the app tells it the network's name and password are
+`contract/dongle-api.json`'s business, not this file's.
 
 | | |
 |---|---|
 | Network | SSID `AJMiddleCar`, WPA2, password `drive1234` |
-| Address | `192.168.4.1` (simulator builds talk to the mock at `127.0.0.1` — same UDP port, REST on `:8080`) |
+| Address | the car is `192.168.4.1` on its own network; the app reaches it at the dongle's `192.168.7.1`, same ports (simulator builds talk to the mock at `127.0.0.1` — same UDP port, REST on `:8080`) |
 | Channels | control and telemetry on UDP `4210`; REST on `:80` for configuration and OTA |
 
 The numbers both sides must agree on — the port, the two datagram caps, the rates, the watchdog

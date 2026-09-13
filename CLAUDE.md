@@ -146,9 +146,11 @@ cd tools/mock_car && python3 -m venv .venv && .venv/bin/pip install -r requireme
 nohup .venv/bin/python -u mock_car.py >/tmp/mock.log 2>&1 &
 ```
 
-`CarHost` is the single source of the address: `127.0.0.1:8080` in the simulator,
-`192.168.4.1` on a device. `MOCK_DEVICE=esp32-car` makes the mock impersonate the other car,
-which is how the wrong-car screen is exercised.
+`CarHost` is the single source of the address: `127.0.0.1:8080` in the simulator, the dongle's
+`192.168.7.1` on a device (REST `:80` and UDP `:4210` relayed to the car unchanged; the dongle's
+own API on `:8080`). There is no direct path from a device to the car and no argument that
+opens one — the bench escape hatch was retired 2026-09-13. `MOCK_DEVICE=esp32-car` makes the
+mock impersonate the other car, which is how the wrong-car screen is exercised.
 
 Pure Swift modules are host-tested with `swiftc` directly — no XCTest runtime needed.
 

@@ -7,7 +7,6 @@ public enum CarContract {
     public static let device = "ajmiddlecar"
     public static let ssid = "AJMiddleCar"
     public static let password = "drive1234"
-    public static let host = "192.168.4.1"
     public static let rtPort: UInt16 = 4210
     public static let maxDatagram = 320
     public static let maxCommand = 96

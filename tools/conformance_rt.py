@@ -2,7 +2,7 @@
 """The real-time (UDP) conformance matrix, run against the mock or a real car.
 
     python3 tools/conformance_rt.py 127.0.0.1:4237
-    python3 tools/conformance_rt.py 192.168.4.1:4210
+    python3 tools/conformance_rt.py 192.168.7.1:4210     # the car, through the dongle's relay
 
 What conformance.py is to REST, this is to the wire the app drives on: the hello
 handshake, replies to repeats, the telemetry push and its schema, silence toward
@@ -388,7 +388,7 @@ class RTConformance:
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("target", help="host:port, e.g. 127.0.0.1:4237 or 192.168.4.1:4210")
+    p.add_argument("target", help="host:port, e.g. 127.0.0.1:4237 (the mock) or 192.168.7.1:4210 (the car, through the dongle)")
     p.add_argument("-v", "--verbose", action="store_true", help="log every frame")
     args = p.parse_args()
     host, _, port = args.target.partition(":")
