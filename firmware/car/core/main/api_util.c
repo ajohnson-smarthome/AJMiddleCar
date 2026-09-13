@@ -1,18 +1,38 @@
 #include "api_util.h"
 #include <stdio.h>
+#include "contract.h"
 
-esp_err_t api_reply_error(httpd_req_t *req, const char *status, const char *field,
-                          const char *msg) {
-    char buf[128];
-    snprintf(buf, sizeof(buf), "{\"error\":\"%s\",\"field\":\"%s\"}", msg, field);
+esp_err_t api_reply_error(httpd_req_t *req, const char *status, const char *code,
+                          const char *field, const char *msg) {
+    char buf[224];
+    int n;
+    if (field && field[0]) {
+        n = snprintf(buf, sizeof(buf),
+                     "{\"" KEY_PROTO "\":%d,\"" KEY_ERROR "\":{\"" KEY_ERROR_CODE "\":\"%s\","
+                     "\"" KEY_ERROR_MESSAGE "\":\"%s\",\"" KEY_ERROR_FIELD "\":\"%s\"}}",
+                     RT_PROTO, code, msg, field);
+    } else {
+        n = snprintf(buf, sizeof(buf),
+                     "{\"" KEY_PROTO "\":%d,\"" KEY_ERROR "\":{\"" KEY_ERROR_CODE "\":\"%s\","
+                     "\"" KEY_ERROR_MESSAGE "\":\"%s\"}}",
+                     RT_PROTO, code, msg);
+    }
+    if (n < 0 || n >= (int)sizeof(buf)) return ESP_FAIL;
     httpd_resp_set_status(req, status);
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_sendstr(req, buf);
+    return httpd_resp_send(req, buf, n);
 }
 
 esp_err_t api_reply_ok(httpd_req_t *req) {
+    return api_reply_json(req, "\"" KEY_OK "\":true");
+}
+
+esp_err_t api_reply_json(httpd_req_t *req, const char *members) {
+    char buf[640];
+    int n = snprintf(buf, sizeof(buf), "{\"" KEY_PROTO "\":%d,%s}", RT_PROTO, members);
+    if (n < 0 || n >= (int)sizeof(buf)) return ESP_FAIL;
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_sendstr(req, "{\"ok\":true}");
+    return httpd_resp_send(req, buf, n);
 }
 
 /* Read the whole body, however TCP chose to split it. The five handlers this file

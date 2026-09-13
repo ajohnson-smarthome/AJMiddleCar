@@ -15,7 +15,8 @@
 #include "watchdog.h"
 #include "recovery.h"
 #include "telemetry.h"
-#include "identity.h"
+#include "device_json.h"
+#include "status_api.h"
 #include "car.h"
 #include "link.h"
 #include "rt_glue.h"
@@ -84,14 +85,19 @@ static void log_peer(const char *what, const struct sockaddr_in *p) {
 /* The reply carries identity, so "is this our car" is answered on the first exchange
    over the channel that then carries telemetry — the app needs no separate probe. */
 static void send_hello_reply(int sock, const char *sid, const struct sockaddr_in *to) {
+    char device[160];
+    if (device_group_json(device, sizeof(device), esp_app_get_description()->version,
+                          status_api_rolled_back()) < 0) {
+        ESP_LOGE(TAG, "hello reply: the device group does not fit");
+        return;
+    }
     char buf[RT_MAX_DATAGRAM];
     int n = snprintf(buf, sizeof(buf),
-                     "{\"" RT_KEY_PROTO "\":%d,\"" RT_KEY_HELLO "\":\"%s\","
-                     "\"" RT_KEY_DEVICE "\":\"" CAR_DEVICE_ID "\",\"" RT_KEY_FW "\":\"%s\"}",
-                     RT_PROTO, sid, esp_app_get_description()->version);
+                     "{\"" KEY_PROTO "\":%d,\"" RT_KEY_TYPE "\":\"" RT_TYPE_HELLO_ACK "\","
+                     "\"" RT_KEY_SESSION "\":\"%s\",%s}",
+                     RT_PROTO, sid, device);
     if (n < 0 || n >= (int)sizeof(buf)) {
-        /* Only reachable if the firmware version string grows absurdly. A truncated
-           identity is worse than none: it would parse as a different car. */
+        /* A truncated identity is worse than none: it would parse as a different car. */
         ESP_LOGE(TAG, "hello reply does not fit a datagram");
         return;
     }
