@@ -36,7 +36,7 @@ void app_main(void)
     ESP_ERROR_CHECK(usb_net_start());
     /* Before status_api_start(): /status must never be asked before the station exists.
      * The station comes up idle and stays idle until the app sends a network over
-     * POST /net — nothing about the car's network is kept across a reboot (net_api.c). */
+     * POST /wifi — nothing about the car's network is kept across a reboot (net_api.c). */
     ESP_ERROR_CHECK(wifi_sta_start());
     /* After wifi_sta_start(): the relay task waits on wifi_sta_gateway() itself, polling
      * rather than blocking this function, so it only needs the station to exist, not to have
