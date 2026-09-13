@@ -5,8 +5,8 @@ import SwiftUI
 struct TrimView: View {
     let palette: Palette
     @ObservedObject private var store = ConfigStore.shared.trim
-    @State private var trimPct = Trim.default.trim_pct    // live slider value
-    @State private var demoPct = Trim.default.trim_pct    // illustration only, applied on release
+    @State private var trimPct = Trim.default.balance_pct    // live slider value
+    @State private var demoPct = Trim.default.balance_pct    // illustration only, applied on release
     @Environment(\.dismiss) private var dismiss
     private var p: Palette { palette }
 
@@ -21,8 +21,8 @@ struct TrimView: View {
 
     private func adopt() {
         guard let v = store.value else { return }
-        trimPct = v.trim_pct
-        demoPct = v.trim_pct
+        trimPct = v.balance_pct
+        demoPct = v.balance_pct
     }
 
     private var valueText: String {
@@ -39,10 +39,10 @@ struct TrimView: View {
                 Slider(value: Binding(
                     get: { Double(trimPct) },
                     set: { trimPct = Int($0.rounded()) }
-                ), in: Double(Trim.trim_pctRange.lowerBound)...Double(Trim.trim_pctRange.upperBound)) { editing in
+                ), in: Double(Trim.balance_pctRange.lowerBound)...Double(Trim.balance_pctRange.upperBound)) { editing in
                     if !editing {
                         demoPct = trimPct
-                        Task { await store.save(Trim(trim_pct: trimPct)) }
+                        Task { await store.save(Trim(balance_pct: trimPct)) }
                     }
                 }
                 .tint(p.accent)

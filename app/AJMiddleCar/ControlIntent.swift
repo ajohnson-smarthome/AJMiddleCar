@@ -39,7 +39,7 @@ final class ControlIntent: ObservableObject {
     func startTrick(_ base: Trick) {
         let trick = Self.build(base,
                                vmaxMS: Self.vmax(config.wheel.value),
-                               trackM: Self.track(config.dims.value))
+                               trackM: Self.track(config.chassis.value))
         let epoch = core.beginTrick()
         runningTrick = trick
         trickStartedAt = Date()
@@ -91,13 +91,15 @@ final class ControlIntent: ObservableObject {
 
     /// Linear speed (m/s) from the car's wheel and motor params, with the nominal fallback.
     static func vmax(_ w: Wheel?) -> Double {
-        guard let w, let rpm = MotorPresets.match(ppr: w.ppr, gearX100: w.gear_x100, quad: w.quad)?.rpm
+        guard let w, let rpm = MotorPresets.match(ppr: w.encoder_ppr,
+                                                   gearX100: Int((w.gear_ratio * 100).rounded()),
+                                                   quad: w.quadrature)?.rpm
         else { return Tricks.donutNominalVmaxMS }
         return Double.pi * (Double(w.diameter_mm) / 1000) * Double(rpm) / 60
     }
 
     /// Track (m) from the car's dimensions, with the nominal fallback.
-    static func track(_ d: Dims?) -> Double {
+    static func track(_ d: Chassis?) -> Double {
         d.map { Double($0.track_mm) / 1000 } ?? Tricks.donutTrackFallbackM
     }
 

@@ -1,16 +1,20 @@
 import Foundation
 
-/// A configuration domain the car serves at a path, generated from `contract/car-api.json`.
+/// A configuration domain: one member of `/config`, generated from `contract/car-api.json`.
 protocol ConfigDomain: Codable, Equatable, Sendable {
-    static var path: String { get }
+    static var key: String { get }
     static var `default`: Self { get }
+    /// This domain out of a whole `/config` document, nil when the car did not send it.
+    static func pick(from: CarConfig) -> Self?
+    /// A `/config` body carrying only this domain — what a POST sends.
+    static func wrap(_ v: Self) -> CarConfig
 }
 
 extension Ramp: ConfigDomain {}
 extension Trim: ConfigDomain {}
-extension Recover: ConfigDomain {}
+extension Recovery: ConfigDomain {}
 extension Wheel: ConfigDomain {}
-extension Dims: ConfigDomain {}
+extension Chassis: ConfigDomain {}
 
 /// What the app knows about one domain, and the transitions between those states.
 ///

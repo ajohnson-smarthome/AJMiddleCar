@@ -6,10 +6,10 @@ import SwiftUI
 struct RampView: View {
     let palette: Palette
     @ObservedObject private var store = ConfigStore.shared.ramp
-    @State private var rampMs = Ramp.default.ramp_ms   // live slider value (label)
+    @State private var rampMs = Ramp.default.rise_ms   // live slider value (label)
     /// Applied on release — keeps the illustration from jumping mid-drag. It drives the
     /// animation only, never a write.
-    @State private var demoMs = Ramp.default.ramp_ms
+    @State private var demoMs = Ramp.default.rise_ms
     @Environment(\.dismiss) private var dismiss
     private var p: Palette { palette }
 
@@ -24,8 +24,8 @@ struct RampView: View {
 
     private func adopt() {
         guard let v = store.value else { return }
-        rampMs = v.ramp_ms
-        demoMs = v.ramp_ms
+        rampMs = v.rise_ms
+        demoMs = v.rise_ms
     }
 
     private var rightPanel: some View {
@@ -37,10 +37,10 @@ struct RampView: View {
                 Slider(value: Binding(
                     get: { Double(rampMs) },
                     set: { rampMs = Int($0 / 50) * 50 }
-                ), in: Double(Ramp.ramp_msRange.lowerBound)...Double(Ramp.ramp_msRange.upperBound)) { editing in
+                ), in: Double(Ramp.rise_msRange.lowerBound)...Double(Ramp.rise_msRange.upperBound)) { editing in
                     if !editing {
                         demoMs = rampMs
-                        Task { await store.save(Ramp(ramp_ms: rampMs)) }
+                        Task { await store.save(Ramp(rise_ms: rampMs)) }
                     }
                 }
                 .tint(p.accent)

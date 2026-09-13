@@ -18,7 +18,7 @@ check(ConfigState<Wheel>.failed(.refused).afterSaveRequest(Wheel.default) == nil
       "a failed read refuses a save")
 
 // A read that lands is the car's value.
-let carsOwn = Wheel(diameter_mm: 70, ppr: 12, gear_x100: 960, quad: 2)
+let carsOwn = Wheel(diameter_mm: 70, encoder_ppr: 12, gear_ratio: 9.6, quadrature: 2)
 let loaded = ConfigState<Wheel>.afterLoad(.success(carsOwn))
 check(loaded == .loaded(carsOwn) && loaded.value == carsOwn, "a read becomes the value")
 check(ConfigState<Wheel>.afterLoad(.failure(.timeout(3))) == .failed(.timeout(3)), "a failed read")
@@ -27,7 +27,7 @@ check(ConfigState<Wheel>.afterLoad(.failure(.timeout(3))) == .failed(.timeout(3)
 check(loaded.afterSaveRequest(carsOwn) == nil, "saving the same value is refused")
 
 // A write of a different value goes through saving, and the value stays readable while it does.
-let edited = Wheel(diameter_mm: 65, ppr: 12, gear_x100: 960, quad: 2)
+let edited = Wheel(diameter_mm: 65, encoder_ppr: 12, gear_ratio: 9.6, quadrature: 2)
 guard let saving = loaded.afterSaveRequest(edited) else {
     print("FAIL: a changed value must be saveable"); exit(1)
 }
@@ -43,7 +43,8 @@ check(failed.value == nil, "and stops pretending to know the car's value")
 check(failed.error == .http(status: 400, body: Data()), "the reason is kept")
 
 // Every generated domain is one of these.
-check(Ramp.path == "/ramp" && Trim.path == "/trim" && Recover.path == "/recover"
-      && Wheel.path == "/wheel" && Dims.path == "/dims", "the five domains")
+check(Ramp.key == "ramp" && Trim.key == "trim" && Recovery.key == "recovery"
+      && Wheel.key == "wheel" && Chassis.key == "chassis", "the five domains")
+check(Wheel.pick(from: Wheel.wrap(carsOwn)) == carsOwn, "wrap then pick is the identity")
 
 if failures == 0 { print("test_configstate: OK") } else { exit(1) }

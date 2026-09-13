@@ -4,13 +4,13 @@ import SwiftUI
 /// controls appear only once the car's own configuration has been read.
 struct RecoverView: View {
     let palette: Palette
-    @ObservedObject private var store = ConfigStore.shared.recover
-    @State private var enabled = Recover.default.enabled
-    @State private var windowSec = Recover.default.window_ms / 1000
+    @ObservedObject private var store = ConfigStore.shared.recovery
+    @State private var enabled = Recovery.default.enabled
+    @State private var windowSec = Recovery.default.window_ms / 1000
     @Environment(\.dismiss) private var dismiss
     private var p: Palette { palette }
 
-    private static let secRange = Recover.window_msRange.lowerBound / 1000 ... Recover.window_msRange.upperBound / 1000
+    private static let secRange = Recovery.window_msRange.lowerBound / 1000 ... Recovery.window_msRange.upperBound / 1000
 
     var body: some View {
         SplitScreen(palette: p, title: L.recoverTitle, onBack: { dismiss() }) {
@@ -28,7 +28,7 @@ struct RecoverView: View {
     }
 
     private func save() {
-        Task { await store.save(Recover(enabled: enabled, window_ms: windowSec * 1000)) }
+        Task { await store.save(Recovery(enabled: enabled, window_ms: windowSec * 1000)) }
     }
 
     private var rightPanel: some View {

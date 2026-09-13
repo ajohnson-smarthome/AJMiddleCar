@@ -16,10 +16,10 @@ struct WheelParamsView: View {
 
     @ObservedObject private var store = ConfigStore.shared.wheel
     @State private var diameterMm = Wheel.default.diameter_mm
-    @State private var ppr = Wheel.default.ppr
-    @State private var gearX100 = Wheel.default.gear_x100
-    @State private var quad = Wheel.default.quad
-    @State private var gearText = WheelParamsView.gearString(Wheel.default.gear_x100)
+    @State private var ppr = Wheel.default.encoder_ppr
+    @State private var gearX100 = Int((Wheel.default.gear_ratio * 100).rounded())
+    @State private var quad = Wheel.default.quadrature
+    @State private var gearText = WheelParamsView.gearString(Wheel.default.gear_ratio)
 
     private var preset: MotorPreset? { MotorPresets.match(ppr: ppr, gearX100: gearX100, quad: quad) }
     private var cpr: Double { MotorPresets.cpr(ppr: ppr, gearX100: gearX100, quad: quad) }
@@ -56,10 +56,10 @@ struct WheelParamsView: View {
     private func adopt() {
         guard let w = store.value else { return }
         diameterMm = w.diameter_mm
-        ppr = w.ppr
-        gearX100 = w.gear_x100
-        quad = w.quad
-        gearText = Self.gearString(w.gear_x100)
+        ppr = w.encoder_ppr
+        gearX100 = Int((w.gear_ratio * 100).rounded())
+        quad = w.quadrature
+        gearText = Self.gearString(w.gear_ratio)
     }
 
     // MARK: header
@@ -123,7 +123,7 @@ struct WheelParamsView: View {
             }
             divider
             row(L.wheelPpr) {
-                Stepper("\(ppr)", value: $ppr, in: Wheel.pprRange)
+                Stepper("\(ppr)", value: $ppr, in: Wheel.encoder_pprRange)
                     .fixedSize().foregroundStyle(p.text)
                     .onChange(of: ppr) { _, _ in save() }
             }
@@ -137,7 +137,7 @@ struct WheelParamsView: View {
             divider
             row(L.wheelQuad) {
                 Picker("", selection: $quad) {
-                    ForEach(Wheel.quadAllowed, id: \.self) { q in Text("×\(q)").tag(q) }
+                    ForEach(Wheel.quadratureAllowed, id: \.self) { q in Text("×\(q)").tag(q) }
                 }
                 .pickerStyle(.segmented).frame(width: 150)
                 .onChange(of: quad) { _, _ in save() }
@@ -150,31 +150,28 @@ struct WheelParamsView: View {
     // MARK: actions
     private func apply(_ m: MotorPreset) {
         ppr = m.ppr; gearX100 = m.gearX100; quad = m.quad
-        gearText = Self.gearString(m.gearX100)
+        gearText = Self.gearString(Double(m.gearX100) / 100)
         save()
     }
 
     private func commitGear() {
         let norm = gearText.replacingOccurrences(of: ",", with: ".")
         guard let g = Double(norm) else { return }
-        let x100 = Int((g * 100).rounded())
-        guard Wheel.gear_x100Range.contains(x100) else { return }   // the car rejects, so don't ask
-        gearX100 = x100
+        guard Wheel.gear_ratioRange.contains(g) else { return }   // the car rejects, so don't ask
+        gearX100 = Int((g * 100).rounded())
         save()
     }
 
     /// Save-dedup and the "never write what we did not read" rule both live in the store.
     private func save() {
         Task {
-            await store.save(Wheel(diameter_mm: diameterMm, ppr: ppr,
-                                   gear_x100: gearX100, quad: quad))
+            await store.save(Wheel(diameter_mm: diameterMm, encoder_ppr: ppr,
+                                   gear_ratio: Double(gearX100) / 100, quadrature: quad))
         }
     }
 
-    static func gearString(_ x100: Int) -> String {
-        if x100 % 100 == 0 { return String(x100 / 100) }
-        if x100 % 10 == 0  { return String(format: "%.1f", Double(x100) / 100) }
-        return String(format: "%.2f", Double(x100) / 100)
+    static func gearString(_ g: Double) -> String {
+        String(format: "%.2f", g)
     }
 
     // MARK: row/card builders

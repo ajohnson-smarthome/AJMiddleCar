@@ -30,7 +30,9 @@ final class ConfigDomainStore<T: ConfigDomain>: ObservableObject {
 
     private func read() async -> Result<T, CarError> {
         do {
-            return .success(try JSONDecoder().decode(T.self, from: try await transport.get(T.path)))
+            let cfg = try JSONDecoder().decode(CarConfig.self, from: try await transport.get(CarContract.configPath))
+            guard let v = T.pick(from: cfg) else { return .failure(.malformed("\(T.key) missing from /config")) }
+            return .success(v)
         } catch let e as CarError {
             return .failure(e)
         } catch {
@@ -59,8 +61,11 @@ final class ConfigDomainStore<T: ConfigDomain>: ObservableObject {
 
     private func write(_ v: T) async -> Result<T, CarError> {
         do {
-            _ = try await transport.post(T.path, body: try JSONEncoder().encode(v))
-            return .success(v)
+            // The car answers a POST with the whole configuration as now held, so what is kept
+            // is what the car has, not what was sent.
+            let data = try await transport.post(CarContract.configPath, body: try JSONEncoder().encode(T.wrap(v)))
+            let cfg = try JSONDecoder().decode(CarConfig.self, from: data)
+            return .success(T.pick(from: cfg) ?? v)
         } catch let e as CarError {
             return .failure(e)
         } catch {
@@ -77,14 +82,14 @@ final class ConfigStore {
 
     let ramp = ConfigDomainStore<Ramp>()
     let trim = ConfigDomainStore<Trim>()
-    let recover = ConfigDomainStore<Recover>()
+    let recovery = ConfigDomainStore<Recovery>()
     let wheel = ConfigDomainStore<Wheel>()
-    let dims = ConfigDomainStore<Dims>()
+    let chassis = ConfigDomainStore<Chassis>()
 
     /// Warm the two domains the drive screen needs before the user can press anything that
     /// depends on them.
     func prefetchDriveGeometry() {
         Task { await wheel.loadIfNeeded() }
-        Task { await dims.loadIfNeeded() }
+        Task { await chassis.loadIfNeeded() }
     }
 }

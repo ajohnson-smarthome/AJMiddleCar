@@ -17,9 +17,9 @@ struct TrickSimView: View {
     var wiggleAmp: Double? = nil
     var wiggleWags: Int? = nil
     @ObservedObject private var wheelStore = ConfigStore.shared.wheel
-    @ObservedObject private var dimsStore = ConfigStore.shared.dims
+    @ObservedObject private var chassisStore = ConfigStore.shared.chassis
     private var wheel: Wheel? { wheelStore.value }
-    private var track: Double { ControlIntent.track(dimsStore.value) }
+    private var track: Double { ControlIntent.track(chassisStore.value) }
     private var p: Palette { palette }
 
     // Car geometry — v1 constants (metres). TODO: move to settings next to the motor params.
@@ -45,7 +45,8 @@ struct TrickSimView: View {
 
     private var rpm: Int? {
         guard let w = wheel else { return nil }
-        return MotorPresets.match(ppr: w.ppr, gearX100: w.gear_x100, quad: w.quad)?.rpm
+        return MotorPresets.match(ppr: w.encoder_ppr, gearX100: Int((w.gear_ratio * 100).rounded()),
+                                  quad: w.quadrature)?.rpm
     }
     private var vmaxMS: Double? {
         guard let w = wheel, let rpm else { return nil }
@@ -82,7 +83,7 @@ struct TrickSimView: View {
         .padding(.horizontal, 12).padding(.top, 8)
         .task {
             await wheelStore.loadIfNeeded()
-            await dimsStore.loadIfNeeded()
+            await chassisStore.loadIfNeeded()
         }
     }
 

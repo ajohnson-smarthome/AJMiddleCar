@@ -67,9 +67,9 @@ struct GalleryView: View {
         // stores so the settings screens show their controls (one frame keeps the notice).
         ConfigStore.shared.ramp.seed(.default)
         ConfigStore.shared.trim.seed(.default)
-        ConfigStore.shared.recover.seed(.default)
+        ConfigStore.shared.recovery.seed(.default)
         ConfigStore.shared.wheel.seed(.default)
-        ConfigStore.shared.dims.seed(.default)
+        ConfigStore.shared.chassis.seed(.default)
         // One helper, two devices: the whole point of the unification is that these render the
         // same screen with a different object under the chip.
         func fw(_ phase: FwPhase, forced: Bool = false,

@@ -13,9 +13,9 @@ struct CarDimensionsView: View {
     @Environment(\.dismiss) private var dismiss
     private var p: Palette { palette }
 
-    @ObservedObject private var store = ConfigStore.shared.dims
-    @State private var trackMm = Dims.default.track_mm
-    @State private var wheelbaseMm = Dims.default.wheelbase_mm
+    @ObservedObject private var store = ConfigStore.shared.chassis
+    @State private var trackMm = Chassis.default.track_mm
+    @State private var wheelbaseMm = Chassis.default.wheelbase_mm
 
     var body: some View {
         ZStack {
@@ -83,9 +83,9 @@ struct CarDimensionsView: View {
 
     private var card: some View {
         VStack(spacing: 0) {
-            stepperRow(L.dimsTrack, L.dimsTrackHint, value: $trackMm, range: Dims.track_mmRange)
+            stepperRow(L.dimsTrack, L.dimsTrackHint, value: $trackMm, range: Chassis.track_mmRange)
             Rectangle().fill(p.metal.opacity(0.25)).frame(height: 1)
-            stepperRow(L.dimsBase, L.dimsBaseHint, value: $wheelbaseMm, range: Dims.wheelbase_mmRange)
+            stepperRow(L.dimsBase, L.dimsBaseHint, value: $wheelbaseMm, range: Chassis.wheelbase_mmRange)
         }
         .background(p.panel)
         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -120,6 +120,6 @@ struct CarDimensionsView: View {
 
     /// Save-dedup and the "never write what we did not read" rule both live in the store.
     private func save() {
-        Task { await store.save(Dims(track_mm: trackMm, wheelbase_mm: wheelbaseMm)) }
+        Task { await store.save(Chassis(track_mm: trackMm, wheelbase_mm: wheelbaseMm)) }
     }
 }
