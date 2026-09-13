@@ -242,7 +242,7 @@ void app_main(void) {
     if ((err = ota_api_start()) != ESP_OK)
         ESP_LOGE(TAG, "ota_api_start failed: %s — OTA endpoint is down, this car cannot be updated over the air", esp_err_to_name(err));
     if ((err = cfg_api_start()) != ESP_OK)
-        ESP_LOGE(TAG, "cfg_api_start failed: %s — config endpoints are down, all five domains", esp_err_to_name(err));
+        ESP_LOGE(TAG, "cfg_api_start failed: %s — the /config endpoint is down", esp_err_to_name(err));
 
     /* Not ESP_ERROR_CHECKed — this file's own rule, from the mark-valid comment above: nothing
        past that line may panic, because a panic there is a boot loop with no rollback and no

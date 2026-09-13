@@ -3,6 +3,7 @@
 #include "esp_check.h"
 #include "identity.h"
 #include "esp_app_desc.h"
+#include "contract.h"
 
 static const char *TAG = "http";
 static httpd_handle_t s_server = NULL;
@@ -25,20 +26,20 @@ httpd_handle_t http_server_get_handle(void) {
 esp_err_t http_server_start(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    // 16 URI handlers: /, /status, /ota, /calib*3, and two per config domain — five
-    // domains, registered in a loop from the generated table, so this number now moves
-    // when contract/car-api.json does. (/ws is gone with the WebSocket.) Well over the
-    // IDF default of 8; without the bump registration aborts with HANDLERS_FULL and the
-    // car comes up with no softAP.
-    config.max_uri_handlers = 20;
+    // 8 routes: /, GET+POST /config, GET+POST /calibration, POST /calibration/spin,
+    // GET /status, POST /ota — one /config now covers every domain, so this count no
+    // longer moves when contract/car-api.json grows a domain. Above the IDF default of
+    // 8; without the bump registration aborts with HANDLERS_FULL and the car comes up
+    // with no softAP.
+    config.max_uri_handlers = 12;
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &config), TAG, "httpd start");
 
     httpd_uri_t root = {
-        .uri = "/",
+        .uri = PATH_ROOT,
         .method = HTTP_GET,
         .handler = root_get_handler,
     };
-    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &root), TAG, "register /");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &root), TAG, "register " PATH_ROOT);
 
     ESP_LOGI(TAG, "HTTP server started (API only, no web UI)");
     return ESP_OK;

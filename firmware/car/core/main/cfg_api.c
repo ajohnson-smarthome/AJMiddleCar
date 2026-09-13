@@ -174,7 +174,7 @@ static esp_err_t parse_domain(httpd_req_t *req, const cfg_domain_t *d, const cJS
         if (bad) {
             *sent = true;
             return api_reply_error(req, "400 Bad Request", bad, where,
-                                   bad == ERR_NOT_ALLOWED ? "not an allowed value" : "out of range");
+                                   strcmp(bad, ERR_NOT_ALLOWED) == 0 ? "not an allowed value" : "out of range");
         }
     }
     return ESP_OK;
