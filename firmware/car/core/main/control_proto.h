@@ -10,19 +10,23 @@
 // whose ids differ only past the cut would otherwise look like the same session.
 #define CONTROL_SID_MAX 16
 
-// One decoded real-time datagram. Every key is optional on the wire, so each carries a
-// flag saying whether it was there; a caller that needs one and finds it absent must
-// drop the frame rather than read the zero left behind.
+// What a datagram says it is — its `type` word. The three the app sends; the two the car
+// sends (hello_ack, telemetry) are refused here, since a car does not take its own words
+// back as instructions.
+typedef enum { CT_NONE = 0, CT_HELLO, CT_DRIVE, CT_BYE } control_type_t;
+
+// One decoded real-time datagram. `type` is what the datagram is; the flags say which
+// optional keys were there. A caller that needs one and finds it absent must drop the
+// frame rather than read the zero left behind.
 typedef struct {
+    control_type_t type;
     bool     has_proto;
     uint32_t proto;
     bool     has_seq;
     uint32_t seq;
-    bool     has_ty;              // both axes were present and finite
-    float    t, y;
-    bool     has_hello;
-    char     sid[CONTROL_SID_MAX];  // NUL-terminated, alphanumeric, non-empty
-    bool     bye;                 // a goodbye: stop, do not retreat, drop the session
+    bool     has_axes;              // both axes were present and finite
+    float    throttle, turn;
+    char     sid[CONTROL_SID_MAX];  // CT_HELLO: NUL-terminated, alphanumeric, non-empty
 } control_frame_t;
 
 // Parse one datagram of `len` bytes into `out`. Zero-alloc and bounded: nothing is read
@@ -31,13 +35,15 @@ typedef struct {
 // datagram the car accepts — the cap belongs to the transport, so it arrives as an
 // argument rather than being compiled in here).
 //
-// Returns 0 when the datagram carries at least one thing worth acting on — a hello, a
-// goodbye, or both control axes — and every key present parsed cleanly. Returns -1:
-// oversized, unparseable, one axis without the other, a non-finite axis, a hello whose
-// id is empty, over-long or not alphanumeric, or anything but a hello that carries no
-// `seq` (the wire's rule: a datagram the transport cannot order is one it will not
-// apply, and that includes a goodbye). `*out` is undefined on -1.
+// Returns 0 when the datagram is a known type carrying what that type needs — a hello
+// with a session, a drive with seq and both axes, a bye with seq — and every key present
+// parsed cleanly. Returns -1: oversized, unparseable, no type or a type the app does not
+// send, a missing required key, one axis without the other, a non-finite axis, a session
+// id that is empty, over-long or not alphanumeric, or any key that appears twice. `*out`
+// is undefined on -1.
 //
+// `proto` is parsed when present and never judged: whether the car speaks it is policy,
+// and the classifier in rt_link.h owns it (a foreign hello is still answered).
 // Range is deliberately not checked: car_drive clamps, and a parser that also enforced
 // policy would have two reasons to change.
 int control_parse_frame(const char *msg, size_t len, size_t max_len, control_frame_t *out);

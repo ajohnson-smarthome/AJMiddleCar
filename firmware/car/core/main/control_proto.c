@@ -170,15 +170,40 @@ static int parse_sid(const char *p, size_t n, char *out, size_t cap) {
     return 0;
 }
 
+/* The `type` word: a JSON string whose content is exactly one of the app->car words.
+   Compared as bytes, not as a token, so "drive " or "Drive" are not drive. */
+static int parse_type(const char *p, size_t n, control_type_t *out) {
+    if (n < 2 || p[0] != '"') return -1;
+    const char *end = memchr(p + 1, '"', n - 1);
+    if (!end) return -1;
+    size_t k = (size_t)(end - (p + 1));
+    if (!token_ends(p, n, k + 2)) return -1;
+    if (k == strlen(RT_TYPE_HELLO) && memcmp(p + 1, RT_TYPE_HELLO, k) == 0) { *out = CT_HELLO; return 0; }
+    if (k == strlen(RT_TYPE_DRIVE) && memcmp(p + 1, RT_TYPE_DRIVE, k) == 0) { *out = CT_DRIVE; return 0; }
+    if (k == strlen(RT_TYPE_BYE)   && memcmp(p + 1, RT_TYPE_BYE, k) == 0)   { *out = CT_BYE;   return 0; }
+    return -1;
+}
+
 int control_parse_frame(const char *msg, size_t len, size_t max_len, control_frame_t *out) {
     if (msg == NULL || out == NULL || len == 0 || len > max_len) return -1;
+    /* A datagram is one object. Anything else — an array, a bare word — is refused
+       before a key is looked for, since value_of would find nothing at depth 1 and the
+       requirement checks below would then be the only thing standing. */
+    size_t i = 0;
+    while (i < len && is_ws(msg[i])) i++;
+    if (i >= len || msg[i] != '{') return -1;
+    size_t j = len;
+    while (j > i && is_ws(msg[j - 1])) j--;
+    if (j == i || msg[j - 1] != '}') return -1;
 
     control_frame_t f = {0};
     const char *v = NULL;
-    size_t left = 0;   /* every reader below is guarded by its lookup, but an
-                          indeterminate read is not something to leave lying around */
+    size_t left = 0;
 
-    int r;
+    int r = value_of(msg, len, RT_KEY_TYPE, &v, &left);
+    if (r != 0) return -1;                          /* absent or duplicated: no type, no frame */
+    if (parse_type(v, left, &f.type) != 0) return -1;
+
     r = value_of(msg, len, RT_KEY_PROTO, &v, &left);
     if (r < 0) return -1;
     if (r == 0) {
@@ -191,49 +216,41 @@ int control_parse_frame(const char *msg, size_t len, size_t max_len, control_fra
         if (parse_u32(v, left, &f.seq) != 0) return -1;
         f.has_seq = true;
     }
-    r = value_of(msg, len, RT_KEY_HELLO, &v, &left);
+    r = value_of(msg, len, RT_KEY_SESSION, &v, &left);
     if (r < 0) return -1;
+    bool has_session = false;
     if (r == 0) {
         if (parse_sid(v, left, f.sid, sizeof(f.sid)) != 0) return -1;
-        f.has_hello = true;
-    }
-    r = value_of(msg, len, RT_KEY_BYE, &v, &left);
-    if (r < 0) return -1;
-    if (r == 0) {
-        /* The wire says 1, but JSON has two ways to say yes and a client that picks the
-           other one must not have its goodbye read as a drive command. */
-        float b;
-        if (left >= 4 && memcmp(v, "true", 4) == 0 && token_ends(v, left, 4)) f.bye = true;
-        else if (left >= 5 && memcmp(v, "false", 5) == 0 && token_ends(v, left, 5)) f.bye = false;
-        else if (parse_num(v, left, &b) == 0) f.bye = (b != 0.0f);
-        else return -1;
+        has_session = true;
     }
 
     const char *vt = NULL, *vy = NULL;
     size_t left_t = 0, left_y = 0;
     r = value_of(msg, len, RT_KEY_THROTTLE, &vt, &left_t);
     if (r < 0) return -1;
-    int ry = value_of(msg, len, RT_KEY_YAW, &vy, &left_y);
+    int ry = value_of(msg, len, RT_KEY_TURN, &vy, &left_y);
     if (ry < 0) return -1;
     if (vt != NULL || vy != NULL) {
         /* One axis without the other is a truncated or corrupt frame, not a command to
            hold the missing axis at zero. */
         if (vt == NULL || vy == NULL) return -1;
-        if (parse_num(vt, left_t, &f.t) != 0) return -1;
-        if (parse_num(vy, left_y, &f.y) != 0) return -1;
-        f.has_ty = true;
+        if (parse_num(vt, left_t, &f.throttle) != 0) return -1;
+        if (parse_num(vy, left_y, &f.turn) != 0) return -1;
+        f.has_axes = true;
     }
 
-    /* Something to act on: a hello, a goodbye, or both axes. A goodbye counts without
-       the axes it usually carries — they are zeroes the stop would write anyway. */
-    if (!f.has_hello && !f.has_ty && !f.bye) return -1;
-    /* And something the transport can order. Every app->car datagram except a hello
-       carries seq — a goodbye included — because one without it would bypass replay
-       protection, so the whole frame is dropped rather than half-honoured. The rule
-       lives here as well as in rt_link so that the two halves cannot disagree about
-       which datagrams the car acts on: they did, and a goodbye the parser accepted and
-       the transport dropped looked like a working feature. */
-    if (!f.has_hello && !f.has_seq) return -1;
+    /* What each type needs. Every app->car datagram except a hello carries seq — a
+       goodbye included — because one without it would bypass replay protection, so the
+       whole frame is dropped rather than half-honoured. The rule lives here as well as in
+       rt_link so that the two halves cannot disagree about which datagrams the car acts
+       on: they did once, and a goodbye the parser accepted and the transport dropped
+       looked like a working feature. */
+    switch (f.type) {
+        case CT_HELLO: if (!has_session) return -1; break;
+        case CT_DRIVE: if (!f.has_seq || !f.has_axes) return -1; break;
+        case CT_BYE:   if (!f.has_seq) return -1; break;
+        default:       return -1;
+    }
     *out = f;
     return 0;
 }
