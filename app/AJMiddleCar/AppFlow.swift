@@ -208,18 +208,6 @@ final class AppFlow: ObservableObject {
         // whole dongle half is skipped there and only on there.
         await carGate()
         #else
-        if CarHost.direct {
-            // The bench escape hatch (`-carHost`, see `CarHost.direct`): the car is addressed
-            // directly over the phone's own Wi-Fi, so there is no dongle in this path at all —
-            // nothing to find, nothing to update, nobody to hand credentials to. The gate must
-            // not run here. It would poll `DongleContract.host`, which nothing on this path
-            // answers, and latch `.dongleAbsent` — whose `opensLink` is false — so the link
-            // would never open and the argument would address a car nothing ever talks to.
-            // That is the hatch disabled by the very gate it exists to bypass, and the hatch is
-            // the only instrument this branch has for telling an app fault from a dongle fault.
-            await carGate()
-            return
-        }
         await dongleGate()
         await carGate()
         #endif
@@ -242,10 +230,10 @@ final class AppFlow: ObservableObject {
     /// next hello, which is where the phase was before the wire went.
     func dongleReturned() async {
         #if !targetEnvironment(simulator)
-        // No dongle in the escape hatch's path at all, and nothing to re-ask if the gate never
-        // handed over in the first place — a flap during the launch gate is that gate's own
-        // business, and `gateRunning` keeps two loops from polling the same address.
-        guard !CarHost.direct, !gateRunning else { return }
+        // Nothing to re-ask if the gate never handed over in the first place — a flap during the
+        // launch gate is that gate's own business, and `gateRunning` keeps two loops from
+        // polling the same address.
+        guard !gateRunning else { return }
         guard phase == .awaitingCar || phase == .ready || phase == .updateRequired else { return }
         gateRunning = true
         defer { gateRunning = false }

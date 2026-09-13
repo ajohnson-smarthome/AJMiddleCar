@@ -1,13 +1,14 @@
 import Foundation
 import Network
 
-/// Interface and permission truth, from two `NWPathMonitor`s and a clock.
+/// Interface and permission truth, from one `NWPathMonitor` and a clock.
 ///
-/// Two monitors, because they answer different questions. Neither is asked whether the dongle is
-/// present: that is `CarInterface.attached`, an address on the dongle's subnet, because a path
-/// monitor restricted to the dongle answered "no" on hardware while the dongle was attached,
-/// addressed and serving — the bug this class had. What the monitors carry is local-network
-/// denial, which only they can report, and the Wi-Fi verdict the bench escape hatch needs.
+/// The monitor is not asked whether the dongle is present: that is `CarInterface.attached`, an
+/// address on the dongle's subnet, because a path monitor restricted to the dongle answered "no"
+/// on hardware while the dongle was attached, addressed and serving — the bug this class had.
+/// What the monitor carries is local-network denial, which only it can report. There used to be
+/// a second monitor, restricted to Wi-Fi, for the bench escape hatch that reached the car over
+/// the phone's own radio; that path is gone and the monitor with it.
 ///
 /// And a clock, because fixing the *verdict* left the *trigger* wrong, which cost a second bench
 /// session on 2026-09-01. `recompute()` used to run only from the two `pathUpdateHandler`s, so the
@@ -20,8 +21,8 @@ import Network
 /// (that half polls `/status` over a real socket, not a monitor), handed over, and the drive
 /// screen was painted over with "no adapter" for as long as the monitors stayed quiet.
 ///
-/// So presence re-answers on its own cadence now. The monitors remain — they still carry denial,
-/// still supply the Wi-Fi verdict, and are still the fastest wake-up when they do fire.
+/// So presence re-answers on its own cadence now. The monitor remains — it still carries denial,
+/// and is still the fastest wake-up when it does fire.
 ///
 /// Nothing here used to be read at all. Wi-Fi off, local network denied, wrong network and a
 /// powered-off car were one indistinguishable radar.
@@ -29,13 +30,8 @@ import Network
 final class CarPath: ObservableObject {
     @Published private(set) var state: PathState = .noDongle(.notAvailable)
 
-    /// Consulted only under the bench escape hatch (`CarHost.direct`), where the car is addressed
-    /// over the phone's own Wi-Fi and the interface type is known rather than assumed. In the
-    /// ordinary dongle path, presence is not a monitor's verdict at all — see `recompute`.
-    private let wifi = NWPathMonitor(requiredInterfaceType: .wifi)
     private let general = NWPathMonitor()
     private let queue = DispatchQueue(label: "car.path")
-    private var wifiPath: NWPath?
     private var generalPath: NWPath?
     private var ticker: Task<Void, Never>?
 
@@ -47,13 +43,9 @@ final class CarPath: ObservableObject {
     private static let recheckInterval: Duration = .seconds(1)
 
     init() {
-        wifi.pathUpdateHandler = { [weak self] p in
-            Task { @MainActor in self?.wifiPath = p; self?.recompute() }
-        }
         general.pathUpdateHandler = { [weak self] p in
             Task { @MainActor in self?.generalPath = p; self?.recompute() }
         }
-        wifi.start(queue: queue)
         general.start(queue: queue)
         ticker = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -66,7 +58,6 @@ final class CarPath: ObservableObject {
 
     deinit {
         ticker?.cancel()
-        wifi.cancel()
         general.cancel()
     }
 
@@ -85,12 +76,10 @@ final class CarPath: ObservableObject {
     }
 
     private func verdict() -> PathState {
-        // Denial is checked first and on either monitor: it is the one state waiting cannot fix,
-        // and it must never be rendered as "searching".
-        for path in [generalPath, wifiPath] {
-            if path?.status == .unsatisfied, path?.unsatisfiedReason == .localNetworkDenied {
-                return .localNetworkDenied
-            }
+        // Denial is checked first: it is the one state waiting cannot fix, and it must never be
+        // rendered as "searching".
+        if generalPath?.status == .unsatisfied, generalPath?.unsatisfiedReason == .localNetworkDenied {
+            return .localNetworkDenied
         }
         #if targetEnvironment(simulator)
         // The mock is reached over whatever the Mac uses — often Ethernet, sometimes loopback —
@@ -98,10 +87,6 @@ final class CarPath: ObservableObject {
         return generalPath?.status == .satisfied
             ? .dongleUp : .noDongle(generalPath?.unsatisfiedReason ?? .notAvailable)
         #else
-        if CarHost.direct {
-            return wifiPath?.status == .satisfied
-                ? .dongleUp : .noDongle(wifiPath?.unsatisfiedReason ?? .notAvailable)
-        }
         // Presence is an address that either exists or does not, not a monitor's opinion of
         // whether the wire is worth offering. The dongle advertises neither gateway nor DNS on
         // purpose, so a restricted monitor can report an attached, working, fully reachable

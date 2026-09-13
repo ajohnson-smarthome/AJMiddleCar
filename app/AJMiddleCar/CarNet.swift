@@ -30,11 +30,7 @@ enum CarNet {
     /// routing still delivers. Cellular stays prohibited either way — the car is never out there.
     private static func pinToCarInterface(_ p: NWParameters) -> NWParameters {
         #if !targetEnvironment(simulator)
-        if CarHost.direct {
-            // The bench escape hatch reaches the car over the phone's own Wi-Fi, where the
-            // interface type is known rather than assumed, so pinning by type is still right.
-            p.requiredInterfaceType = .wifi
-        } else if let wire = CarInterface.current {
+        if let wire = CarInterface.current {
             p.requiredInterface = wire
         }
         p.prohibitedInterfaceTypes = [.cellular]

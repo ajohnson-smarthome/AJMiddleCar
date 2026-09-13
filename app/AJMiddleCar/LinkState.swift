@@ -1,7 +1,8 @@
 import Foundation
 import Network
 
-/// Where the phone's network stands. `CarPath` produces it from two `NWPathMonitor`s.
+/// Where the phone's network stands. `CarPath` produces it from an `NWPathMonitor` and the
+/// dongle's address.
 ///
 /// The dongle unplugged, local network denied, and the dongle plugged in but with no car
 /// answering are three different problems with three different fixes, and the app used to

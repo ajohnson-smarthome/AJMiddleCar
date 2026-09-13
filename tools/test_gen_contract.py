@@ -423,9 +423,11 @@ class TestDongleAgreesWithTheCar(unittest.TestCase):
         # assertEmitsLine's docstring (below, in TestDongleEmitters) documents as having already
         # bitten a port assertion once. test_swift_exposes_the_same_vocabulary is what still
         # guards the constant's own value against contract/dongle-api.json; this test only
-        # guards that CarHost.port still takes it from there.
+        # guards that CarHost.port still takes it from there. The line used to read
+        # `directPort ?? DongleContract.relayHttpPort` while the bench escape hatch could
+        # override it; the hatch is gone and the assignment is the constant alone.
         source = (ROOT / "app" / "AJMiddleCar" / "CarHost.swift").read_text()
-        want = "    static let port: UInt16 = directPort ?? DongleContract.relayHttpPort"
+        want = "    static let port: UInt16 = DongleContract.relayHttpPort"
         self.assertIn(want, source.splitlines(),
                       "CarHost.swift's device branch no longer takes its REST port from "
                       "DongleContract.relayHttpPort — the relay could again forward the "

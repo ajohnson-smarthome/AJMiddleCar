@@ -34,7 +34,7 @@ final class CarLink: ObservableObject {
     /// for screens that legitimately show the last known reading (uptime, firmware, trips).
     @Published private(set) var lastTelemetry: Telemetry?
 
-    /// Optional so the debug gallery can hold a frozen link without two real `NWPathMonitor`s
+    /// Optional so the debug gallery can hold a frozen link without a real `NWPathMonitor`
     /// running behind every frame it builds.
     private let path: CarPath?
     private let transport: CarTransport
