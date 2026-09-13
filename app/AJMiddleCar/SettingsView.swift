@@ -95,7 +95,7 @@ struct SettingsView: View {
                 HStack(spacing: 12) {
                     HStack(spacing: 4) {
                         Image(systemName: "clock")
-                        Text(link.lastTelemetry?.uptimeS.map { L.uptime($0) } ?? "—")
+                        Text(link.lastTelemetry.map { L.uptime($0.system.uptime_s) } ?? "—")
                     }
                     HStack(spacing: 4) {
                         Image(systemName: "cpu")

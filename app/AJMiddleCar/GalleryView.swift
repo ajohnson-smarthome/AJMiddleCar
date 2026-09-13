@@ -52,12 +52,13 @@ struct GalleryView: View {
     }
 
     /// A link frozen in `.live` with plausible numbers — the gallery has no transport behind it.
-    @MainActor private func mockLink(calibrated: Bool? = true, fw: String? = "v1.0+264",
-                                     rssi: Int? = -55, wdtTrips: Int? = nil,
-                                     busOk: Bool = true, ctl: String = CtlOwner.rt) -> CarLink {
-        var t = Telemetry()
-        t.calibrated = calibrated; t.rssi = rssi; t.wdtTrips = wdtTrips
-        t.uptimeS = 3847; t.rxFps = 10; t.busOk = busOk; t.ctl = ctl
+    @MainActor private func mockLink(calibrated: Bool = true, fw: String? = "v1.0+264",
+                                     rssi: Int? = -55, wdtTrips: Int = 0,
+                                     busOk: Bool = true, owner: MotorsOwner = .remote) -> CarLink {
+        let t = Telemetry(proto: CarContract.proto, seq: 1,
+                          link: LinkInfo(rx_hz: 10, rssi_dbm: rssi, timeouts: wdtTrips),
+                          motors: MotorsInfo(bus: busOk ? .ok : .down, calibrated: calibrated, owner: owner),
+                          system: SystemInfo(uptime_s: 3847, free_heap: 131072))
         return CarLink.preview(.live(t), fw: fw, radio: .known(fw: "3.0.6", ok: true))
     }
 
@@ -134,7 +135,7 @@ struct GalleryView: View {
             ("Drive arcade",            AnyView(DriveView(link: mockLink(), intent: intent, preview: true).onAppear { UserDefaults.standard.set(Scheme.arcade.rawValue, forKey: "scheme") })),
             ("Drive tank",              AnyView(DriveView(link: mockLink(), intent: intent, preview: true).onAppear { UserDefaults.standard.set(Scheme.tank.rawValue, forKey: "scheme") })),
             ("Drive warning",           AnyView(DriveView(link: mockLink(wdtTrips: 3), intent: intent, preview: true))),
-            ("Drive bus/ctl warning",   AnyView(DriveView(link: mockLink(busOk: false, ctl: CtlOwner.recover), intent: intent, preview: true))),
+            ("Drive bus/ctl warning",   AnyView(DriveView(link: mockLink(busOk: false, owner: .recovering), intent: intent, preview: true))),
             ("Settings",                AnyView(NavigationStack { SettingsView(palette: p, link: mockLink()) })),
             ("Calibration spin",        calib(.spin)),
             ("Calibration spinning",    calib(.spinning)),

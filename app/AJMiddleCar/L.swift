@@ -137,7 +137,7 @@ enum L {
     /// The actuator owner, by the generated vocabulary — an unknown value is shown as the car
     /// said it rather than silently dropped.
     static func ctlOwner(_ raw: String) -> String {
-        CtlOwner.all.contains(raw) ? s("ctl." + raw) : raw
+        MotorsOwner.all.map(\.rawValue).contains(raw) ? s("ctl." + raw) : raw
     }
     static var wheelTitle: String { s("wheel.title") }
     static var wheelWizardTitle: String { s("wheel.wizardTitle") }

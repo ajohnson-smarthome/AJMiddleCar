@@ -31,8 +31,8 @@ struct DriveView: View {
     private var telemetry: Telemetry? { link.lastTelemetry }
     private var linkUp: Bool { link.isLive }
     private var signalLevel: Int {
-        ControlModel.signalLevel(online: linkUp, rssi: telemetry?.rssi,
-                                 rxFps: telemetry?.rxFps, expectedFps: CarContract.commandHz)
+        ControlModel.signalLevel(online: linkUp, rssi: telemetry?.link.rssi_dbm,
+                                 rxFps: telemetry?.link.rx_hz, expectedFps: CarContract.commandHz)
     }
     private var signalColor: Color { signalLevel == 0 ? .red : (signalLevel == 1 ? p.warn : p.accent) }
 
@@ -160,7 +160,7 @@ struct DriveView: View {
         .onReceive(pad.$rightY) { _ in padPush() }
         .onReceive(pad.$connected) { _ in padPush() }
         .sheet(isPresented: $showSettings) { SettingsView(palette: p, link: link) }
-        .onChange(of: telemetry?.calibrated) { _, cal in
+        .onChange(of: telemetry?.motors.calibrated) { _, cal in
             if cal == true {
                 showCalib = false                       // calibrated → close
                 lastCalibTrue = Date()
@@ -187,20 +187,20 @@ struct DriveView: View {
     // Empty in the normal case: only amber warnings ever appear here.
     private var statusBar: some View {
         HStack(spacing: 16) {
-            if let trips = telemetry?.wdtTrips, trips > 0 {
+            if let trips = telemetry?.link.timeouts, trips > 0 {
                 statusItem("exclamationmark.triangle", L.driveWdtTrips(trips), p.warn)
             }
             // A PCA9685 that stopped answering is the one failure that looks exactly like a
             // working car from up here: green pill, green bars, moving diagram, still wheels.
             // The car reports it five times a second, so it gets said.
-            if telemetry?.busOk == false {
+            if let bus = telemetry?.motors.bus, bus != .ok {
                 statusItem("bolt.trianglebadge.exclamationmark", L.driveBusFail, p.warn)
             }
             // The app can be streaming and *not* be the source the car is obeying — a retreat, a
             // calibration pulse or an OTA outranks the pult. Naming the owner is the difference
             // between "the joystick is broken" and "the car is busy doing something else".
-            if let owner = telemetry?.ctl, owner != CtlOwner.rt, owner != CtlOwner.none {
-                statusItem("hand.raised", L.driveCtlOther(L.ctlOwner(owner)), p.warn)
+            if let owner = telemetry?.motors.owner, owner != .remote, owner != .idle {
+                statusItem("hand.raised", L.driveCtlOther(L.ctlOwner(owner.rawValue)), p.warn)
             }
         }
         .font(.system(size: 10))
