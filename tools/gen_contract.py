@@ -23,6 +23,9 @@ SCHEMA = ROOT / "contract" / "car-api.json"
 # for its own directory, so `import gen_dongle` is not invocation-dependent.
 sys.path.insert(0, str(ROOT / "tools"))
 from gen_dongle import emit_dongle_c, emit_dongle_swift
+from gen_common import (c_group_defines, c_envelope_defines, c_error_defines, c_endpoint_defines,
+                        swift_state_enum, swift_struct, swift_groups, swift_document,
+                        swift_error_envelope, swift_type, py_common, lround)
 
 MARK_BEGIN = "<!-- generated:endpoints -->"
 MARK_END = "<!-- /generated:endpoints -->"
@@ -38,6 +41,9 @@ def field_range(f):
     """Human-readable range for one field, escaped for a Markdown table cell."""
     if f["type"] == "int":
         return f"{f['min']}..{f['max']}"
+    if f["type"] == "fixed":
+        s = f["scale"]
+        return f"{f['min'] / s:g}..{f['max'] / s:g}"
     if f["type"] == "enum":
         return " \\| ".join(str(v) for v in f["values"])
     return "true \\| false"
@@ -74,23 +80,27 @@ def _allowed_symbol(domain, f):
 
 def _c_field(domain, f):
     if f["type"] == "int":
-        return f'{{ "{f["name"]}", CFG_INT, {f["min"]}, {f["max"]}, {f["default"]}, NULL, 0 }}'
+        return f'{{ "{f["name"]}", CFG_INT, {f["min"]}, {f["max"]}, {f["default"]}, NULL, 0, 1 }}'
+    if f["type"] == "fixed":
+        return (f'{{ "{f["name"]}", CFG_FIXED, {f["min"]}, {f["max"]}, {f["default"]}, NULL, 0, '
+                f'{f["scale"]} }}')
     if f["type"] == "bool":
-        return f'{{ "{f["name"]}", CFG_BOOL, 0, 1, {1 if f["default"] else 0}, NULL, 0 }}'
+        return f'{{ "{f["name"]}", CFG_BOOL, 0, 1, {1 if f["default"] else 0}, NULL, 0, 1 }}'
     sym = _allowed_symbol(domain, f)
     return (f'{{ "{f["name"]}", CFG_ENUM, {min(f["values"])}, {max(f["values"])}, '
-            f'{f["default"]}, {sym}, {len(f["values"])} }}')
+            f'{f["default"]}, {sym}, {len(f["values"])}, 1 }}')
 
 
 def emit_c(schema):
+    domains = schema["config"]["domains"]
     out = [f"/* {BANNER} */", "", '#include "cfg_contract.h"', ""]
-    for d in schema["domains"]:
+    for d in domains:
         for f in d["fields"]:
             if f["type"] == "enum":
                 vals = ", ".join(str(v) for v in f["values"])
                 out.append(f"static const int32_t {_allowed_symbol(d, f)}[] = {{ {vals} }};")
     out.append("")
-    for d in schema["domains"]:
+    for d in domains:
         name = f"CFG_{d['nvs_key'].upper()}_FIELDS"
         out.append(f"static const cfg_field_t {name}[] = {{")
         for f in d["fields"]:
@@ -98,30 +108,42 @@ def emit_c(schema):
         out.append("};")
     out.append("")
     out.append("static const cfg_domain_t CFG_DOMAINS[] = {")
-    for d in schema["domains"]:
+    for d in domains:
         name = f"CFG_{d['nvs_key'].upper()}_FIELDS"
-        out.append(f'    {{ "{d["path"]}", "{d["nvs_key"]}", {name}, '
-                   f'{len(d["fields"])} }},')
+        out.append(f'    {{ "{d["key"]}", "{d["nvs_key"]}", {name}, {len(d["fields"])} }},')
     out.append("};")
     out.append("")
+    out.append(f'#define CFG_CONFIG_PATH "{schema["config"]["path"]}"')
+    out.append(f"#define CFG_DOMAIN_COUNT {len(domains)}")
+    out.append(f"#define CFG_MAX_FIELDS {max(len(d['fields']) for d in domains)}")
+    out.append("")
     rt = schema["rt"]
+    out.append(f"#define RT_PROTO {schema['proto']}")
     out.append(f'#define RT_PORT {rt["port"]}')
     out.append(f'#define RT_MAX_DATAGRAM {rt["max_datagram"]}')
     out.append(f'#define RT_MAX_COMMAND {rt["max_command"]}')
-    for k in ("hello", "seq", "bye", "proto", "device", "fw", "throttle", "yaw"):
-        out.append(f'#define RT_KEY_{k.upper()} "{rt[k + "_field"]}"')
-    for i, v in enumerate(schema["ctl_values"]):
-        out.append(f'#define CTL_{v.upper()} "{v}"')
-    out.append(f'#define CTL_COUNT {len(schema["ctl_values"])}')
     out.append(f'#define RT_COMMAND_HZ {rt["command_hz"]}')
     out.append(f'#define RT_TELEMETRY_HZ {rt["telemetry_hz"]}')
     out.append(f'#define RT_WATCHDOG_MS {rt["watchdog_ms"]}')
     out.append(f'#define RT_SESSION_IDLE_MS {rt["session_idle_ms"]}')
-    out.append(f'#define RT_PROTO {schema["proto"]}')
+    for k, v in rt["keys"].items():
+        out.append(f'#define RT_KEY_{k.upper()} "{v}"')
+    for k, v in rt["types"].items():
+        out.append(f'#define RT_TYPE_{k.upper()} "{v}"')
     out.append("")
-    out.append(f"#define CFG_DOMAIN_COUNT {len(schema['domains'])}")
-    widest = max(len(d["fields"]) for d in schema["domains"])
-    out.append(f"#define CFG_MAX_FIELDS {widest}")
+    out += c_envelope_defines(schema, "")
+    out += c_endpoint_defines(schema, "")
+    out += c_group_defines(schema, "")
+    out += c_error_defines(schema, "")
+    cal = schema["calibration"]
+    for c in cal["corners"]:
+        out.append(f'#define CORNER_{c.upper()} "{c}"')
+    out.append(f"#define CORNER_COUNT {len(cal['corners'])}")
+    for d in cal["directions"]:
+        out.append(f'#define DIRECTION_{d.upper()} "{d}"')
+    out.append(f"#define CALIB_PAIRS {cal['pairs']}")
+    for k, v in cal["keys"].items():
+        out.append(f'#define KEY_CALIB_{k.upper()} "{v}"')
     return "\n".join(out)
 
 

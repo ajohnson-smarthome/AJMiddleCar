@@ -226,41 +226,123 @@ class TestDeterminism(unittest.TestCase):
             self.assertTrue(same, "the generator wrote nothing")
 
 
-class TestCEmitter(unittest.TestCase):
-    def test_table_carries_names_ranges_and_defaults(self):
-        import gen_contract
-        out = gen_contract.emit_c(load())
-        self.assertIn(gen_contract.BANNER, out)
-        self.assertIn('{ "diameter_mm", CFG_INT, 20, 150, 65, NULL, 0 }', out)
-        self.assertIn('{ "trim_pct", CFG_INT, -30, 30, 0, NULL, 0 }', out)
-        self.assertIn('{ "enabled", CFG_BOOL, 0, 1, 1, NULL, 0 }', out)
-        self.assertIn("static const int32_t CFG_WHEEL_QUAD_ALLOWED[] = { 1, 2, 4 };", out)
-        self.assertIn('{ "quad", CFG_ENUM, 1, 4, 4, CFG_WHEEL_QUAD_ALLOWED, 3 }', out)
-        self.assertIn("#define CFG_DOMAIN_COUNT 5", out)
-        self.assertIn("#define CFG_MAX_FIELDS 4", out)   # /wheel is the widest
-        # The real-time channel's constants reach C from the same schema the app and
-        # the mock read, so the port and the deadline cannot drift between the three.
-        self.assertIn("#define RT_PORT 4210", out)
-        self.assertIn("#define RT_WATCHDOG_MS 300", out)
-        self.assertIn("#define RT_SESSION_IDLE_MS 10000", out)
-        # Two caps, deliberately different: the car accepts at most RT_MAX_COMMAND, but a
-        # telemetry frame is 119-156 bytes, so a receive buffer sized from the command cap
-        # would truncate every one of them.
-        self.assertIn("#define RT_MAX_COMMAND 96", out)
-        self.assertIn("#define RT_MAX_DATAGRAM 320", out)
-        self.assertIn('#define RT_KEY_THROTTLE "t"', out)
-        self.assertIn('#define RT_KEY_BYE "bye"', out)
-        self.assertIn('#define CTL_RECOVER "recover"', out)
-        self.assertIn("#define RT_PROTO 1", out)
+class TestCommonEmitters(unittest.TestCase):
+    def setUp(self):
+        import gen_common
+        self.c = gen_common
+        self.s = load()
 
-    def test_every_domain_appears_once(self):
+    def test_group_defines_cover_keys_states_and_counts(self):
+        out = "\n".join(self.c.c_group_defines(self.s, ""))
+        self.assertIn('#define KEY_GROUP_LINK "link"', out)
+        self.assertIn('#define KEY_LINK_RSSI_DBM "rssi_dbm"', out)
+        self.assertIn('#define MOTORS_OWNER_REMOTE "remote"', out)
+        self.assertIn('#define MOTORS_OWNER_SAFE_STOP "safe_stop"', out)
+        self.assertIn("#define MOTORS_OWNER_COUNT 7", out)
+        self.assertIn('#define RADIO_STATE_UNAVAILABLE "unavailable"', out)
+        prefixed = "\n".join(self.c.c_group_defines(self.s, "X_"))
+        self.assertIn('#define X_KEY_GROUP_LINK "link"', prefixed)
+
+    def test_object_fields_get_sub_keys(self):
+        d = json.loads((ROOT / "contract" / "dongle-api.json").read_text())
+        out = "\n".join(self.c.c_group_defines(d, "DONGLE_"))
+        self.assertIn('#define DONGLE_KEY_WIFI_ATTEMPTS "attempts"', out)
+        self.assertIn('#define DONGLE_KEY_WIFI_ATTEMPTS_USED "used"', out)
+        self.assertIn('#define DONGLE_KEY_RELAY_LAST_ERROR_AGE_S "age_s"', out)
+        self.assertIn('#define DONGLE_WIFI_STATE_SEARCHING "searching"', out)
+        self.assertIn('#define DONGLE_USB_STATE_DOWN "down"', out)
+
+    def test_envelope_errors_and_endpoints(self):
+        env = "\n".join(self.c.c_envelope_defines(self.s, ""))
+        self.assertIn('#define KEY_ERROR_CODE "code"', env)
+        self.assertIn('#define KEY_PROTO "proto"', env)
+        errs = "\n".join(self.c.c_error_defines(self.s, ""))
+        self.assertIn('#define ERR_OUT_OF_RANGE "out_of_range"', errs)
+        paths = "\n".join(self.c.c_endpoint_defines(self.s, ""))
+        self.assertIn('#define PATH_SPIN "/calibration/spin"', paths)
+
+    def test_swift_state_enum_has_unknown_and_round_trips(self):
+        out = "\n".join(self.c.swift_state_enum("MotorsBus", ["ok", "down"], "doc"))
+        self.assertIn("public enum MotorsBus: Equatable, Sendable, Codable {", out)
+        self.assertIn("    case ok", out)
+        self.assertIn("    case unknown(String)", out)
+        self.assertIn('        case "down": self = .down', out)
+        self.assertIn("        default: self = .unknown(rawValue)", out)
+        self.assertIn("    public static let all: [MotorsBus] = [.ok, .down]", out)
+
+    def test_swift_struct_types(self):
+        fields = [{"name": "rx_hz", "type": "int", "doc": "a"},
+                  {"name": "rssi_dbm", "type": "int", "nullable": True, "doc": "b"},
+                  {"name": "bus", "type": "state", "swift": "MotorsBus", "values": ["ok"], "doc": "c"},
+                  {"name": "to_car_hz", "type": "number", "doc": "d"},
+                  {"name": "last_error", "type": "object", "swift": "E", "nullable": True,
+                   "fields": [], "doc": "e"}]
+        out = "\n".join(self.c.swift_struct("S", fields, "doc"))
+        self.assertIn("    public var rx_hz: Int", out)
+        self.assertIn("    public var rssi_dbm: Int?", out)
+        self.assertIn("    public var bus: MotorsBus", out)
+        self.assertIn("    public var to_car_hz: Double", out)
+        self.assertIn("    public var last_error: E?", out)
+        self.assertIn("public init(rx_hz: Int, rssi_dbm: Int?, bus: MotorsBus, to_car_hz: Double, "
+                      "last_error: E?)", out)
+
+    def test_swift_document_puts_proto_first_then_groups(self):
+        out = "\n".join(self.c.swift_document("CarStatus", self.s, self.s["status"]["groups"], "d"))
+        lines = [l for l in out.splitlines() if l.startswith("    public var ")]
+        self.assertEqual(lines[0], "    public var proto: Int")
+        self.assertEqual(lines[1], "    public var device: DeviceInfo")
+        self.assertEqual(lines[-1], "    public var system: SystemInfo")
+
+    def test_lround_is_half_away_from_zero(self):
+        self.assertEqual(self.c.lround(900.5), 901)
+        self.assertEqual(self.c.lround(900.4999), 900)
+        self.assertEqual(self.c.lround(-2.5), -3)
+        self.assertEqual(self.c.lround(2.5), 3)
+
+
+class TestCEmitter(unittest.TestCase):
+    def setUp(self):
         import gen_contract
-        out = gen_contract.emit_c(load())
-        for d in load()["domains"]:
-            # Match the domain row's shape, not the bare key: the ctl vocabulary also
-            # contains the word "recover", and counting substrings caught that instead.
-            row = f'{{ "{d["path"]}", "{d["nvs_key"]}", '
-            self.assertEqual(out.count(row), 1, d["path"])
+        self.g = gen_contract
+        self.s = load()
+        self.out = self.g.emit_c(self.s)
+
+    def test_table_carries_names_ranges_defaults_and_scale(self):
+        self.assertIn('{ "rise_ms", CFG_INT, 0, 2000, 300, NULL, 0, 1 }', self.out)
+        self.assertIn('{ "enabled", CFG_BOOL, 0, 1, 1, NULL, 0, 1 }', self.out)
+        self.assertIn('{ "gear_ratio", CFG_FIXED, 100, 30000, 900, NULL, 0, 100 }', self.out)
+        self.assertIn('{ "quadrature", CFG_ENUM, 1, 4, 4, CFG_WHEEL_QUADRATURE_ALLOWED, 3, 1 }',
+                      self.out)
+        self.assertIn("static const int32_t CFG_WHEEL_QUADRATURE_ALLOWED[] = { 1, 2, 4 };", self.out)
+
+    def test_domains_are_keyed_not_pathed(self):
+        self.assertIn('    { "ramp", "ramp", CFG_RAMP_FIELDS, 1 },', self.out)
+        self.assertIn('    { "recovery", "recover", CFG_RECOVER_FIELDS, 2 },', self.out)
+        self.assertIn('    { "chassis", "dims", CFG_DIMS_FIELDS, 2 },', self.out)
+        self.assertIn('#define CFG_CONFIG_PATH "/config"', self.out)
+        self.assertEqual(self.out.count("CFG_DOMAINS[] = {"), 1)
+        self.assertIn("#define CFG_DOMAIN_COUNT 5", self.out)
+        self.assertIn("#define CFG_MAX_FIELDS 4", self.out)
+
+    def test_rt_symbols(self):
+        for line in ("#define RT_PORT 4210", "#define RT_MAX_DATAGRAM 320", "#define RT_MAX_COMMAND 96",
+                     "#define RT_PROTO 2", '#define RT_KEY_TYPE "type"', '#define RT_KEY_SESSION "session"',
+                     '#define RT_KEY_THROTTLE "throttle"', '#define RT_KEY_TURN "turn"',
+                     '#define RT_TYPE_HELLO_ACK "hello_ack"', '#define RT_TYPE_DRIVE "drive"',
+                     '#define RT_TYPE_TELEMETRY "telemetry"'):
+            self.assertIn(line, self.out.splitlines(), line)
+        self.assertNotIn("RT_KEY_HELLO", self.out)
+        self.assertNotIn("RT_KEY_BYE", self.out)
+        self.assertNotIn("CTL_", self.out)
+
+    def test_groups_envelope_errors_paths_and_calibration(self):
+        for line in ('#define KEY_GROUP_MOTORS "motors"', '#define KEY_MOTORS_OWNER "owner"',
+                     '#define MOTORS_OWNER_IDLE "idle"', "#define MOTORS_OWNER_COUNT 7",
+                     '#define KEY_ERROR_FIELD "field"', '#define ERR_BUSY "busy"',
+                     '#define PATH_CONFIG "/config"', '#define CORNER_REAR_RIGHT "rear_right"',
+                     "#define CORNER_COUNT 4", '#define DIRECTION_REVERSE "reverse"',
+                     "#define CALIB_PAIRS 4", '#define KEY_CALIB_INVERTED "inverted"'):
+            self.assertIn(line, self.out.splitlines(), line)
 
 
 class TestSwiftEmitter(unittest.TestCase):
