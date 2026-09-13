@@ -77,6 +77,18 @@ const char *net_cfg_err_msg(net_cfg_err_t e)
     return "";
 }
 
+const char *net_cfg_err_code(net_cfg_err_t e)
+{
+    switch (e) {
+    case NET_CFG_SSID_LEN:
+    case NET_CFG_PASS_LEN:  return DONGLE_ERR_BAD_LENGTH;
+    case NET_CFG_SSID_BYTE:
+    case NET_CFG_PASS_BYTE: return DONGLE_ERR_BAD_CHARS;
+    case NET_CFG_OK:        break;
+    }
+    return "";
+}
+
 /* Appends `s` to `buf` at `*pos`, refusing if it would leave no room for the terminating
  * NUL that the caller writes once, after the whole body is built. Every literal chunk and
  * every escaped chunk goes through this, so no single piece — however much the escaper
@@ -125,24 +137,16 @@ static bool append_escaped(char *buf, size_t n, size_t *pos, const char *s)
     return true;
 }
 
-int net_cfg_render_public(const net_cfg_t *cfg, bool configured, char *buf, size_t n)
+int net_cfg_render_wifi_reply(const net_cfg_t *cfg, const char *state, char *buf, size_t n)
 {
     size_t pos = 0;
-    if (!append_str(buf, n, &pos, "{\"" DONGLE_NETKEY_SSID "\":\"")) {
-        return -1;
-    }
-    if (!append_escaped(buf, n, &pos, cfg->ssid)) {
-        return -1;
-    }
-    if (!append_str(buf, n, &pos, "\",\"" DONGLE_NETKEY_CONFIGURED "\":")) {
-        return -1;
-    }
-    if (!append_str(buf, n, &pos, configured ? "true" : "false")) {
-        return -1;
-    }
-    if (!append_str(buf, n, &pos, "}")) {
-        return -1;
-    }
+    char head[40];
+    snprintf(head, sizeof(head), "{\"" DONGLE_KEY_PROTO "\":%d,\"" DONGLE_KEY_WIFI_SSID "\":\"", DONGLE_PROTO);
+    if (!append_str(buf, n, &pos, head)) return -1;
+    if (!append_escaped(buf, n, &pos, cfg->ssid)) return -1;
+    if (!append_str(buf, n, &pos, "\",\"" DONGLE_KEY_WIFI_STATE "\":\"")) return -1;
+    if (!append_str(buf, n, &pos, state)) return -1;
+    if (!append_str(buf, n, &pos, "\"}")) return -1;
     buf[pos] = '\0';
     return (int)pos;
 }

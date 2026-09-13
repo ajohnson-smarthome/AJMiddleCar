@@ -52,7 +52,7 @@ static dongle_view_t base(void)
 {
     dongle_view_t v;
     memset(&v, 0, sizeof(v));
-    v.state = DONGLE_STATE_CONNECTED;
+    v.state = DONGLE_WIFI_STATE_CONNECTED;
     v.host_attached = true;
     v.ssid = "AJMiddleCar";
     v.rssi = -53;
@@ -71,8 +71,8 @@ static dongle_view_t base(void)
  * neither is reachable through the ordinary state precedence a base() view walks. */
 static void test_every_headline_fits_twelve_characters(void)
 {
-    const char *states[] = { DONGLE_STATE_IDLE, DONGLE_STATE_SEARCHING, DONGLE_STATE_JOINING,
-                             DONGLE_STATE_CONNECTED, DONGLE_STATE_FAILED };
+    const char *states[] = { DONGLE_WIFI_STATE_IDLE, DONGLE_WIFI_STATE_SEARCHING, DONGLE_WIFI_STATE_JOINING,
+                             DONGLE_WIFI_STATE_CONNECTED, DONGLE_WIFI_STATE_FAILED };
     for (size_t i = 0; i < sizeof(states) / sizeof(*states); i++) {
         dongle_view_t v = base();
         v.state = states[i];
@@ -109,7 +109,7 @@ static void test_every_headline_fits_twelve_characters(void)
         check_fits(&s);
     }
 
-    /* SCREEN_SPLASH — no DONGLE_STATE_* matches, so screens_for falls back to introducing
+    /* SCREEN_SPLASH — no DONGLE_WIFI_STATE_* matches, so screens_for falls back to introducing
      * the device rather than guessing at a network. */
     {
         dongle_view_t v = base();
@@ -188,7 +188,7 @@ static void test_update_outranks_rollback(void)
 static void test_searching_counts_attempts_from_one(void)
 {
     dongle_view_t v = base();
-    v.state = DONGLE_STATE_SEARCHING;
+    v.state = DONGLE_WIFI_STATE_SEARCHING;
     screen_t s;
 
     v.attempts = 0;   /* wifi_state.c's own entry value for a fresh configuration */
@@ -211,7 +211,7 @@ static void test_an_ssid_at_the_contract_limit_stays_inside_the_row(void)
 {
     const char *latin = "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345";   /* 32 bytes, 32 glyphs */
     const char *cyr   = "АБВГДЕЖЗИКЛМНОПР";                   /* 32 bytes, 16 glyphs */
-    const char *states[] = { DONGLE_STATE_SEARCHING, DONGLE_STATE_CONNECTED };
+    const char *states[] = { DONGLE_WIFI_STATE_SEARCHING, DONGLE_WIFI_STATE_CONNECTED };
 
     for (size_t i = 0; i < sizeof(states) / sizeof(*states); i++) {
         dongle_view_t v = base();
@@ -339,7 +339,7 @@ static void test_diagnostics_pages_are_five_with_the_signal_first(void)
     check(screens_diag_pages() == 5, "five pages");
     for (uint8_t p = 0; p < 5; p++) {
         dongle_view_t d = v;
-        d.state = DONGLE_STATE_CONNECTED;
+        d.state = DONGLE_WIFI_STATE_CONNECTED;
         screen_t s;
         screens_diag(&d, p, &s);
         check(s.id == SCREEN_DIAG, "diagnostics");
@@ -362,7 +362,7 @@ static void test_diagnostics_pages_are_five_with_the_signal_first(void)
      * asked to draw. */
     {
         dongle_view_t d = v;
-        d.state = DONGLE_STATE_CONNECTED;
+        d.state = DONGLE_WIFI_STATE_CONNECTED;
         d.to_car_x10 = 6553;
         d.to_phone_x10 = 1200;
         screen_t s;
@@ -469,7 +469,7 @@ static void test_the_uptime_row_stays_in_budget_at_its_clamp(void)
 static void test_the_attempt_ordinal_never_exceeds_the_budget(void)
 {
     dongle_view_t v = base();
-    v.state = DONGLE_STATE_SEARCHING;
+    v.state = DONGLE_WIFI_STATE_SEARCHING;
     v.attempts = 5;          /* the whole budget consumed, under a state that has not caught up */
     v.attempts_max = 5;
     screen_t s;
@@ -500,7 +500,7 @@ static void test_the_address_rows_stay_in_budget_at_their_widest(void)
 static void test_diagnostic_rows_share_one_width_so_centring_aligns_them(void)
 {
     dongle_view_t v = base();
-    v.state = DONGLE_STATE_CONNECTED;
+    v.state = DONGLE_WIFI_STATE_CONNECTED;
     v.ip_msb_first = 0xC0A80402;   /* 192.168.4.2 above ... */
     v.gw_msb_first = 0xC0A8040A;   /* ... 192.168.4.10, one digit wider */
     v.channel = 11;

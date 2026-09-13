@@ -54,12 +54,12 @@ typedef enum {
     SCREEN_SPLASH = 0,     /* the two seconds after boot, and the fallback for a state this
                                build does not recognise — introduce the device rather than
                                guess at a network it may not even have queried yet */
-    SCREEN_UNCONFIGURED,   /* DONGLE_STATE_IDLE: never told a network to join */
+    SCREEN_UNCONFIGURED,   /* DONGLE_WIFI_STATE_IDLE: never told a network to join */
     SCREEN_UPDATING,       /* an OTA upload is in flight */
-    SCREEN_SEARCHING,      /* DONGLE_STATE_SEARCHING */
-    SCREEN_JOINING,        /* DONGLE_STATE_JOINING */
-    SCREEN_LINKED,         /* DONGLE_STATE_CONNECTED */
-    SCREEN_NO_NETWORK,     /* DONGLE_STATE_FAILED: the join budget ran out */
+    SCREEN_SEARCHING,      /* DONGLE_WIFI_STATE_SEARCHING */
+    SCREEN_JOINING,        /* DONGLE_WIFI_STATE_JOINING */
+    SCREEN_LINKED,         /* DONGLE_WIFI_STATE_CONNECTED */
+    SCREEN_NO_NETWORK,     /* DONGLE_WIFI_STATE_FAILED: the join budget ran out */
     SCREEN_ROLLED_BACK,    /* the bootloader reverted the previous OTA */
     SCREEN_NO_HOST,        /* no USB host attached — nothing to say about a network either */
     SCREEN_DIAG,           /* reached only by pressing BOOT — five pages, the signal first */
@@ -104,7 +104,7 @@ int8_t  screens_history_min(const screens_history_t *h);
  * this dongle's own observation of what it moved, not a claim about the car's control loop
  * (see relay_stats.h for why mixing the two would be dishonest). */
 typedef struct {
-    const char *state;        /* one of DONGLE_STATE_*; anything else falls back to the splash */
+    const char *state;        /* one of DONGLE_WIFI_STATE_*; anything else falls back to the splash */
     bool        host_attached;
 
     const char *ssid;         /* the configured (or joining, or joined) network */

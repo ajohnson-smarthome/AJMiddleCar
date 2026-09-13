@@ -69,10 +69,10 @@ bool wifi_state_step(wifi_sm_t *sm, wifi_ev_t ev)
 const char *wifi_state_name(const wifi_sm_t *sm)
 {
     switch (sm->state) {
-    case WIFI_JOINING:   return DONGLE_STATE_JOINING;
-    case WIFI_CONNECTED: return DONGLE_STATE_CONNECTED;
-    case WIFI_FAILED:    return DONGLE_STATE_FAILED;
+    case WIFI_JOINING:   return DONGLE_WIFI_STATE_JOINING;
+    case WIFI_CONNECTED: return DONGLE_WIFI_STATE_CONNECTED;
+    case WIFI_FAILED:    return DONGLE_WIFI_STATE_FAILED;
     case WIFI_IDLE:      break;
     }
-    return DONGLE_STATE_IDLE;
+    return DONGLE_WIFI_STATE_IDLE;
 }

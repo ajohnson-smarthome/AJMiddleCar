@@ -380,8 +380,8 @@ bool wifi_sta_trying(void)
  * state machine names is already as specific as it can be. */
 static const char *refine(const char *name)
 {
-    if (strcmp(name, DONGLE_STATE_JOINING) == 0 && !atomic_load(&s_associated)) {
-        return DONGLE_STATE_SEARCHING;
+    if (strcmp(name, DONGLE_WIFI_STATE_JOINING) == 0 && !atomic_load(&s_associated)) {
+        return DONGLE_WIFI_STATE_SEARCHING;
     }
     return name;
 }

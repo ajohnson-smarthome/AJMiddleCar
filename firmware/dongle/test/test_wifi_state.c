@@ -174,15 +174,15 @@ static void test_names_are_the_contract_s(void)
 {
     wifi_sm_t sm;
     wifi_state_init(&sm);
-    check(strcmp(wifi_state_name(&sm), DONGLE_STATE_IDLE) == 0, "idle spells the contract's word");
+    check(strcmp(wifi_state_name(&sm), DONGLE_WIFI_STATE_IDLE) == 0, "idle spells the contract's word");
     wifi_state_step(&sm, WIFI_EV_CONFIGURED);
-    check(strcmp(wifi_state_name(&sm), DONGLE_STATE_JOINING) == 0, "joining spells it");
+    check(strcmp(wifi_state_name(&sm), DONGLE_WIFI_STATE_JOINING) == 0, "joining spells it");
     wifi_state_step(&sm, WIFI_EV_GOT_IP);
-    check(strcmp(wifi_state_name(&sm), DONGLE_STATE_CONNECTED) == 0, "connected spells it");
+    check(strcmp(wifi_state_name(&sm), DONGLE_WIFI_STATE_CONNECTED) == 0, "connected spells it");
     wifi_state_init(&sm);
     wifi_state_step(&sm, WIFI_EV_CONFIGURED);
     for (int i = 0; i < WIFI_JOIN_ATTEMPTS; i++) wifi_state_step(&sm, WIFI_EV_DISCONNECTED);
-    check(strcmp(wifi_state_name(&sm), DONGLE_STATE_FAILED) == 0, "failed spells it");
+    check(strcmp(wifi_state_name(&sm), DONGLE_WIFI_STATE_FAILED) == 0, "failed spells it");
 }
 
 int main(void)

@@ -3,15 +3,6 @@
 #include <stdio.h>
 #include <string.h>
 
-/* A "big enough" scratch buffer for the tests that aren't specifically pinning the
- * truncation boundary. The exact worst case (95 for the public render) follows from
- * net_cfg_validate's doubling-not-sixfold guarantee — see its comment in net_cfg.h for
- * the derivation. test_validated_values_always_fit_the_public_worst_case below is what
- * pins it as a proven bound rather than a hopeful one — it is what would have caught the
- * bug where this number was first wrong. (There was a second render, the NVS body, with
- * its own bound of 216; the dongle no longer keeps the network in flash, and it is gone.) */
-#define PUBLIC_BUF_MAX 95
-
 static void test_accepts_a_normal_network(void) {
     net_cfg_t c;
     assert(net_cfg_validate("SomeNetwork", "secretpass", &c) == NET_CFG_OK);
@@ -51,7 +42,7 @@ static void test_ssid_bounds(void) {
 }
 
 static void test_ssid_rejects_control_bytes(void) {
-    /* net_cfg_render_public can only widen a '"' or '\' into two
+    /* net_cfg_render_wifi_reply can only widen a '"' or '\' into two
        bytes, not the six a \uXXXX control-byte escape needs — so what validates must be
        what render can produce, or a downstream buffer sized from the narrower bound
        overruns. 802.11 permits arbitrary octets, but a tab or NUL is not a network
@@ -105,37 +96,52 @@ static void test_errors_name_their_field(void) {
     assert(net_cfg_err_msg(NET_CFG_PASS_BYTE)[0] != '\0');
 }
 
-static void test_public_render_never_leaks_the_password(void) {
+static void test_errors_name_their_code(void) {
     net_cfg_t c;
-    assert(net_cfg_validate("SomeNetwork", "secretpass", &c) == NET_CFG_OK);
-
-    char buf[PUBLIC_BUF_MAX];
-    int n = net_cfg_render_public(&c, true, buf, sizeof(buf));
-    assert(n > 0 && (size_t)n == strlen(buf));
-    assert(strstr(buf, "secretpass") == NULL);
-    assert(strstr(buf, "\"ssid\":\"SomeNetwork\"") != NULL);
-    assert(strstr(buf, "\"configured\":true") != NULL);
+    assert(strcmp(net_cfg_err_code(net_cfg_validate("", "drive1234", &c)), DONGLE_ERR_BAD_LENGTH) == 0);
+    assert(strcmp(net_cfg_err_code(net_cfg_validate("AJMiddleCar", "short", &c)), DONGLE_ERR_BAD_LENGTH) == 0);
+    assert(strcmp(net_cfg_err_code(net_cfg_validate("AJ\tCar", "drive1234", &c)), DONGLE_ERR_BAD_CHARS) == 0);
+    assert(strcmp(net_cfg_err_code(net_cfg_validate("AJMiddleCar", "dr\x7fve1234", &c)), DONGLE_ERR_BAD_CHARS) == 0);
+    assert(strcmp(net_cfg_err_code(NET_CFG_OK), "") == 0);
 }
 
-static void test_public_render_when_unconfigured(void) {
-    net_cfg_t c = { .ssid = "", .password = "" };
-    char buf[PUBLIC_BUF_MAX];
-    assert(net_cfg_render_public(&c, false, buf, sizeof(buf)) > 0);
-    assert(strstr(buf, "\"ssid\":\"\"") != NULL);
-    assert(strstr(buf, "\"configured\":false") != NULL);
+static void test_wifi_reply_never_leaks_the_password(void) {
+    net_cfg_t c;
+    assert(net_cfg_validate("AJMiddleCar", "drive1234", &c) == NET_CFG_OK);
+    char buf[160];
+    int n = net_cfg_render_wifi_reply(&c, DONGLE_WIFI_STATE_SEARCHING, buf, sizeof(buf));
+    assert(n > 0 && n == (int)strlen(buf));
+    assert(strcmp(buf, "{\"proto\":1,\"ssid\":\"AJMiddleCar\",\"state\":\"searching\"}") == 0);
+    assert(strstr(buf, "drive1234") == NULL);
 }
 
-static void test_public_render_boundary_is_exact(void) {
-    /* A regression from `(size_t)w >= n` to `> n` would accept a body one byte short of
-       room for its NUL and pass every other render test here, since all of them use a
-       buffer far above the worst case. Pin the exact boundary instead of trusting size. */
+static void test_wifi_reply_boundary_is_exact(void) {
     net_cfg_t c;
-    assert(net_cfg_validate("SomeNetwork", "secretpass", &c) == NET_CFG_OK);
-    char scratch[PUBLIC_BUF_MAX];
-    int len = net_cfg_render_public(&c, true, scratch, sizeof(scratch));
+    assert(net_cfg_validate("AJMiddleCar", "drive1234", &c) == NET_CFG_OK);
+    char scratch[160];
+    int len = net_cfg_render_wifi_reply(&c, DONGLE_WIFI_STATE_CONNECTED, scratch, sizeof(scratch));
     assert(len > 0);
-    assert(net_cfg_render_public(&c, true, scratch, (size_t)len) == -1);
-    assert(net_cfg_render_public(&c, true, scratch, (size_t)len + 1) == len);
+    assert(net_cfg_render_wifi_reply(&c, DONGLE_WIFI_STATE_CONNECTED, scratch, (size_t)len) == -1);
+    assert(net_cfg_render_wifi_reply(&c, DONGLE_WIFI_STATE_CONNECTED, scratch, (size_t)len + 1) == len);
+}
+
+static void test_wifi_reply_escapes_a_quote_and_a_backslash(void) {
+    net_cfg_t c;
+    assert(net_cfg_validate("Say \"hi\"\\", "drive1234", &c) == NET_CFG_OK);
+    char buf[200];
+    assert(net_cfg_render_wifi_reply(&c, DONGLE_WIFI_STATE_IDLE, buf, sizeof(buf)) > 0);
+    assert(strstr(buf, "\"ssid\":\"Say \\\"hi\\\"\\\\\"") != NULL);
+}
+
+static void test_validated_values_always_fit_the_reply_worst_case(void) {
+    /* Whatever net_cfg_validate accepts must render: 32 bytes of '"' double to 64. */
+    char ssid[NET_SSID_MAX + 1];
+    memset(ssid, '"', NET_SSID_MAX);
+    ssid[NET_SSID_MAX] = '\0';
+    net_cfg_t c;
+    assert(net_cfg_validate(ssid, "", &c) == NET_CFG_OK);
+    char buf[128];   /* 11 + 64 + 2 + 22 (state key + longest word "searching") + NUL, with margin */
+    assert(net_cfg_render_wifi_reply(&c, DONGLE_WIFI_STATE_SEARCHING, buf, sizeof(buf)) > 0);
 }
 
 static void test_equal_tells_a_retry_from_a_new_network(void) {
@@ -149,61 +155,12 @@ static void test_equal_tells_a_retry_from_a_new_network(void) {
     assert(!net_cfg_equal(&a, &b));
 }
 
-static void test_validated_values_always_fit_the_public_worst_case(void) {
-    /* The invariant that matters: whatever net_cfg_validate accepts, net_cfg_render_public
-       must fit into PUBLIC_BUF_MAX. The worst case reachable now that control bytes are
-       refused is every SSID byte at max length being a '"', the only escape that still
-       expands — this is the case that would have caught the original bug, where the
-       buffer math assumed doubling but validation still let a 6x-expanding SSID through. */
-    net_cfg_t c;
-    char ssid[NET_SSID_MAX + 1];
-    memset(ssid, '"', NET_SSID_MAX);
-    ssid[NET_SSID_MAX] = '\0';
-    assert(net_cfg_validate(ssid, "secretpass", &c) == NET_CFG_OK);
-
-    char buf[PUBLIC_BUF_MAX];
-    assert(net_cfg_render_public(&c, true, buf, sizeof(buf)) > 0);
-}
-
-static void test_render_escapes_a_quote_in_the_ssid(void) {
-    net_cfg_t c;
-    assert(net_cfg_validate("Net\"work", "secretpass", &c) == NET_CFG_OK);
-
-    char pub[PUBLIC_BUF_MAX];
-    assert(net_cfg_render_public(&c, true, pub, sizeof(pub)) > 0);
-    assert(strstr(pub, "\"ssid\":\"Net\\\"work\"") != NULL);
-}
-
-static void test_render_escapes_a_backslash_in_the_ssid(void) {
-    net_cfg_t c;
-    assert(net_cfg_validate("Net\\work", "secretpass", &c) == NET_CFG_OK);
-
-    char pub[PUBLIC_BUF_MAX];
-    assert(net_cfg_render_public(&c, true, pub, sizeof(pub)) > 0);
-    assert(strstr(pub, "\"ssid\":\"Net\\\\work\"") != NULL);
-}
-
-static void test_render_still_escapes_a_legacy_control_byte(void) {
-    /* net_cfg_validate now refuses a control byte outright, so this path is reachable
-       only by a value that never went through it. net_cfg_t's fields are plain char arrays,
-       so a value can be built directly without net_cfg_validate, which is what this does.
-       The escaper must still turn it into valid JSON rather than compounding the
-       problem: see the comment on append_escaped in net_cfg.c. */
-    net_cfg_t c;
-    strcpy(c.ssid, "Net\x01" "work");
-    strcpy(c.password, "secretpass");
-
-    char pub[PUBLIC_BUF_MAX];
-    assert(net_cfg_render_public(&c, true, pub, sizeof(pub)) > 0);
-    assert(strstr(pub, "\"ssid\":\"Net\\u0001work\"") != NULL);
-}
-
 /* net_cfg_escape exists so /status can escape a single field (the SSID) into a body
  * net_cfg does not own, without growing a second escaper that could drift from the one
  * the whole-object renders above use. It must go through the same append_escaped they do
  * — these tests exercise it standalone rather than through a render, but the escaping
- * behaviour itself is already pinned by test_render_escapes_a_quote_in_the_ssid and its
- * siblings above. */
+ * behaviour itself is already pinned by test_wifi_reply_escapes_a_quote_and_a_backslash
+ * above. */
 static void test_escape_passes_plain_text_through_unchanged(void) {
     char buf[16];
     int n = net_cfg_escape("hello", buf, sizeof(buf));
@@ -243,14 +200,12 @@ int main(void) {
     test_password_rejects_control_bytes();
     test_a_rejected_body_does_not_write_out();
     test_errors_name_their_field();
-    test_public_render_never_leaks_the_password();
-    test_public_render_when_unconfigured();
-    test_public_render_boundary_is_exact();
+    test_errors_name_their_code();
+    test_wifi_reply_never_leaks_the_password();
+    test_wifi_reply_boundary_is_exact();
+    test_wifi_reply_escapes_a_quote_and_a_backslash();
     test_equal_tells_a_retry_from_a_new_network();
-    test_validated_values_always_fit_the_public_worst_case();
-    test_render_escapes_a_quote_in_the_ssid();
-    test_render_escapes_a_backslash_in_the_ssid();
-    test_render_still_escapes_a_legacy_control_byte();
+    test_validated_values_always_fit_the_reply_worst_case();
     test_escape_passes_plain_text_through_unchanged();
     test_escape_refuses_a_buffer_one_byte_too_small();
     test_escape_succeeds_in_a_buffer_exactly_large_enough();

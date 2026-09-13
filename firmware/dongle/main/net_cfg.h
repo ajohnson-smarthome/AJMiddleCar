@@ -70,20 +70,15 @@ const char *net_cfg_err_field(net_cfg_err_t e);
 /* The message that accompanies it. */
 const char *net_cfg_err_msg(net_cfg_err_t e);
 
-/* The GET /net body. NEVER contains the password: the app holds that value itself and
- * has no use for reading it back, so an endpoint that returns a held credential would
- * be a liability with nothing on the other side of the trade.
- *
- * The SSID is an 802.11 octet string, not text: net_cfg_validate bounds its length and now
- * rejects control bytes outright, but still lets a raw '"' or '\' through on purpose — a
- * real network can be named with one, and refusing it would make that network permanently
- * unreachable through this dongle — so this JSON-escapes rather than rejects those bytes.
- * Control bytes are escaped here too, not because validation still admits them, but as
- * defence for a net_cfg_t built without going through net_cfg_validate at all (its fields
- * are plain char arrays, so a caller can bypass it — see append_escaped's comment).
- *
- * Returns the length written, or -1 if buf is too small. */
-int net_cfg_render_public(const net_cfg_t *cfg, bool configured, char *buf, size_t n);
+/* The contract's word for a rejection — what the app switches on. "" for NET_CFG_OK. */
+const char *net_cfg_err_code(net_cfg_err_t e);
+
+/* The POST /wifi reply: {"proto":1,"ssid":"…","state":"…"}, the network as now held and
+ * what the radio is doing about it. NEVER contains the password: the app holds that
+ * value itself and has no use for reading it back. The SSID is JSON-escaped (a real
+ * network can be named with a quote); `state` is one of DONGLE_WIFI_STATE_* and is
+ * written as is. Returns the length written, or -1 if buf is too small. */
+int net_cfg_render_wifi_reply(const net_cfg_t *cfg, const char *state, char *buf, size_t n);
 
 /* Escape one string as JSON string CONTENT — the bytes that go between the quotes, without
  * them. The whole-object renders above use the same machinery; this exists because /status

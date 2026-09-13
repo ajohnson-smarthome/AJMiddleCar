@@ -326,11 +326,11 @@ void screens_for(const dongle_view_t *v, screen_t *out)
     if (v->rolled_back) { fill_rolled_back(out); return; }
 
     if (v->state != NULL) {
-        if (strcmp(v->state, DONGLE_STATE_IDLE) == 0) { fill_unconfigured(out); return; }
-        if (strcmp(v->state, DONGLE_STATE_SEARCHING) == 0) { fill_searching(v, out); return; }
-        if (strcmp(v->state, DONGLE_STATE_JOINING) == 0) { fill_joining(out); return; }
-        if (strcmp(v->state, DONGLE_STATE_CONNECTED) == 0) { fill_linked(v, out); return; }
-        if (strcmp(v->state, DONGLE_STATE_FAILED) == 0) { fill_no_network(out); return; }
+        if (strcmp(v->state, DONGLE_WIFI_STATE_IDLE) == 0) { fill_unconfigured(out); return; }
+        if (strcmp(v->state, DONGLE_WIFI_STATE_SEARCHING) == 0) { fill_searching(v, out); return; }
+        if (strcmp(v->state, DONGLE_WIFI_STATE_JOINING) == 0) { fill_joining(out); return; }
+        if (strcmp(v->state, DONGLE_WIFI_STATE_CONNECTED) == 0) { fill_linked(v, out); return; }
+        if (strcmp(v->state, DONGLE_WIFI_STATE_FAILED) == 0) { fill_no_network(out); return; }
     }
 
     /* A state this build does not recognise — including no state read yet at all — falls
