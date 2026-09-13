@@ -69,4 +69,12 @@ check(ControlModel.clamp(.nan) == 0, "clamp(NaN) is 0")
 check(ControlModel.clamp(.infinity) == 0, "clamp(+inf) is 0 (non-finite)")
 check(ControlModel.clamp(-.infinity) == 0, "clamp(-inf) is 0 (non-finite)")
 
+let wheels = ControlModel.calibWheels([.fl: (pair: 0, inverted: false), .fr: (pair: 1, inverted: false),
+                                       .rl: (pair: 2, inverted: true), .rr: (pair: 3, inverted: false)])
+check(wheels == [CalibWheel(corner: .front_left, pair: 0, inverted: false),
+                 CalibWheel(corner: .front_right, pair: 1, inverted: false),
+                 CalibWheel(corner: .rear_left, pair: 2, inverted: true),
+                 CalibWheel(corner: .rear_right, pair: 3, inverted: false)], "wheels by corner, FL FR RL RR")
+check(ControlModel.calibWheels([:]).count == 4, "missing corners default to pair 0, not inverted")
+
 if failures == 0 { print("test_intent: OK") } else { exit(1) }

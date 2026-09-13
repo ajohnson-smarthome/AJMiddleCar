@@ -8,7 +8,7 @@ struct CalibrationView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var step = 0
-    @State private var assign: [Corner: (pair: Int, sign: Int)] = [:]
+    @State private var assign: [Corner: (pair: Int, inverted: Bool)] = [:]
     @State private var pending: Corner?
     @State private var saving = false
     @State private var failed = false
@@ -142,8 +142,8 @@ struct CalibrationView: View {
                 if let c = pending {
                     title(L.calibWheel(c.label)); sub(L.calibWhichDir2)
                     HStack(spacing: 8) {
-                        pill(L.calibForward, p.accent) { assignDir(1) }
-                        pill(L.calibBack, p.warn) { assignDir(-1) }
+                        pill(L.calibForward, p.accent) { assign(inverted: false) }
+                        pill(L.calibBack, p.warn) { assign(inverted: true) }
                     }
                 }
             case .done:
@@ -191,7 +191,7 @@ struct CalibrationView: View {
         spinning = true; spinFailed = false; spinOK = false
         Task {
             do {
-                try await client.spin(pair: step, dir: 1)
+                try await client.spin(pair: step, direction: .forward)
                 spinOK = true
             } catch {
                 spinFailed = true
@@ -200,9 +200,9 @@ struct CalibrationView: View {
         }
     }
     private func tap(_ c: Corner) { guard assign[c] == nil, spinOK else { return }; pending = c }
-    private func assignDir(_ sign: Int) {
+    private func assign(inverted: Bool) {
         guard let c = pending else { return }
-        assign[c] = (pair: step, sign: sign)
+        assign[c] = (pair: step, inverted: inverted)
         pending = nil
         step += 1
         spinOK = false            // the next pair has to prove itself too
@@ -211,7 +211,7 @@ struct CalibrationView: View {
         saving = true; failed = false
         Task {
             do {
-                try await client.save(body: ControlModel.calibSaveBody(assign))
+                _ = try await client.save(ControlModel.calibWheels(assign))
                 saving = false
                 dismiss()
             } catch {

@@ -36,9 +36,18 @@ enum CarError: Error, Equatable {
         case .denied: return "local network denied"
         case .refused: return "refused"
         case .timeout(let s): return "timeout after \(s)s"
-        case .http(let status, _): return "http \(status)"
+        case .http(let status, _): return "http \(status)" + (apiCode.map { " \($0)" } ?? "")
         case .malformed(let what): return "malformed: \(what)"
         case .truncated(let got, let want): return "truncated \(got)/\(want)"
         }
+    }
+
+    /// The contract's error code inside an HTTP error body, when the device sent the envelope.
+    /// For logs and for a view that wants to name the reason; nil for a v1 body or a plain
+    /// HTTP error from something that is not our firmware.
+    var apiCode: String? {
+        guard case .http(_, let body) = self else { return nil }
+        struct Envelope: Decodable { struct E: Decodable { let code: String }; let error: E }
+        return (try? JSONDecoder().decode(Envelope.self, from: body))?.error.code
     }
 }

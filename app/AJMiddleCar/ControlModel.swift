@@ -5,6 +5,17 @@ enum Scheme: String { case arcade, tank }
 
 enum Corner: String, CaseIterable { case fl, fr, rl, rr }
 
+extension Corner {
+    var wire: CalibCorner {
+        switch self {
+        case .fl: return .front_left
+        case .fr: return .front_right
+        case .rl: return .rear_left
+        case .rr: return .rear_right
+        }
+    }
+}
+
 enum DiagramState { case idle, drive, spin }
 
 /// Pure mapping from joystick axes to the firmware's (throttle, yaw) in [-1,1].
@@ -58,14 +69,13 @@ enum ControlModel {
         return 1
     }
 
-    /// Build the /calib/save body JSON {"wheels":[...]} in FL,FR,RL,RR order.
-    /// Missing corners default to (0, 1) — the wizard only calls this when all 4 are set.
-    static func calibSaveBody(_ a: [Corner: (pair: Int, sign: Int)]) -> String {
-        let wheels = Corner.allCases.map { c -> String in
-            let v = a[c] ?? (pair: 0, sign: 1)
-            return #"{"pair":\#(v.pair),"sign":\#(v.sign)}"#
-        }.joined(separator: ",")
-        return #"{"wheels":[\#(wheels)]}"#
+    /// The /calibration body's wheels, by corner name. Missing corners default to (0, not
+    /// inverted) — the wizard only calls this when all four are set.
+    static func calibWheels(_ a: [Corner: (pair: Int, inverted: Bool)]) -> [CalibWheel] {
+        Corner.allCases.map { c in
+            let v = a[c] ?? (pair: 0, inverted: false)
+            return CalibWheel(corner: c.wire, pair: v.pair, inverted: v.inverted)
+        }
     }
 
     /// Which visual the diagram shows for a command.

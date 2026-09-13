@@ -8,30 +8,23 @@ final class CalibClient {
 
     init(transport: CarTransport = .shared) { self.transport = transport }
 
-    func fetchCalibrated() async throws -> Bool {
-        let data = try await transport.get("/calib")
-        guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let calibrated = j["calibrated"] as? Bool else {
-            throw CarError.malformed("/calib without a calibrated flag")
-        }
-        return calibrated
+    func fetch() async throws -> Calibration {
+        try JSONDecoder().decode(Calibration.self, from: try await transport.get(CarContract.calibrationPath))
     }
 
-    /// Spin one motor pair, and **say so when it did not happen**.
-    ///
-    /// This returned `Void` before, so a POST that never reached the car looked exactly like a
-    /// wheel that turned. Four taps on a car that answered nothing produced a table
-    /// `calibration_valid` cannot reject, and the car then drove with swapped wheels while
-    /// reporting `calibrated: true`.
-    func spin(pair: Int, dir: Int) async throws {
-        try await post("/calib/spin", body: #"{"pair":\#(pair),"dir":\#(dir)}"#)
+    /// Spin one motor pair, and **say so when it did not happen**: a POST that never reached
+    /// the car must not look like a wheel that turned.
+    func spin(pair: Int, direction: CalibDirection) async throws {
+        let body = try JSONEncoder().encode(SpinBody(pair: pair, direction: direction))
+        _ = try await transport.post(CarContract.spinPath, body: body)
     }
 
-    func save(body: String) async throws {
-        try await post("/calib/save", body: body)
+    /// Save the table; the car answers with the table as now held.
+    func save(_ wheels: [CalibWheel]) async throws -> Calibration {
+        let body = try JSONEncoder().encode(SaveBody(wheels: wheels))
+        return try JSONDecoder().decode(Calibration.self, from: try await transport.post(CarContract.calibrationPath, body: body))
     }
 
-    private func post(_ path: String, body: String) async throws {
-        _ = try await transport.post(path, body: Data(body.utf8))
-    }
+    private struct SpinBody: Encodable { let pair: Int; let direction: CalibDirection }
+    private struct SaveBody: Encodable { let wheels: [CalibWheel] }
 }
