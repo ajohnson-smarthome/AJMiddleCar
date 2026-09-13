@@ -79,7 +79,7 @@ static inline rt_action_t rt_session_classify(const rt_session_t *s,
                                               const rt_dead_sids_t *dead,
                                               bool from_owner,
                                               const control_frame_t *f) {
-    if (f->has_hello) {
+    if (f->type == CT_HELLO) {
         /* A hello from a protocol we do not speak is answered by name and not adopted:
            a session neither side can parse is worse than no session, and the reply is
            how the mismatch becomes visible at all. */
@@ -95,18 +95,21 @@ static inline rt_action_t rt_session_classify(const rt_session_t *s,
         if (s->have_owner && dead != NULL && rt_dead_known(dead, f->sid)) return RT_REPLY;
         return RT_ADOPT;   /* a different sid, or a different address: last hello wins */
     }
+    /* proto rides on every datagram, and every datagram is judged by it: a drive in a
+       dialect this car does not speak is not driven on. The hello above is the one
+       exception, and only so the mismatch can be answered. */
+    if (!f->has_proto || f->proto != RT_PROTO) return RT_DROP;
     if (!s->have_owner || !from_owner) return RT_DROP;   /* not our driver */
-    /* Every app->car datagram except a hello carries seq — a goodbye included. One
-       without it bypasses replay protection, so it is not acted on. The parser refuses
-       these too; the rule is restated here because the ordering test below is
-       meaningless without it, and this module does not get to assume its input was
-       filtered. */
+    /* Every app->car datagram except a hello carries seq — a goodbye included. The
+       parser refuses these too; the rule is restated here because the ordering test
+       below is meaningless without it, and this module does not get to assume its
+       input was filtered. */
     if (!f->has_seq) return RT_DROP;
     /* Replay protection is what leaving TCP buys: a reordered or duplicated command
        costs one dropped datagram instead of blocking the queue behind a retransmission. */
     if (s->have_seq && !control_seq_newer(f->seq, s->last_seq)) return RT_DROP;
-    if (f->bye)     return RT_BYE;
-    if (f->has_ty)  return RT_COMMAND;
+    if (f->type == CT_BYE)                  return RT_BYE;
+    if (f->type == CT_DRIVE && f->has_axes) return RT_COMMAND;
     return RT_DROP;
 }
 

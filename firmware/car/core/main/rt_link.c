@@ -134,8 +134,8 @@ static void on_command(const control_frame_t *f) {
        deadline. The breadcrumb IS gated on the grant: a refused command never moved the
        car, so recording it would corrupt the path the retreat retraces. */
     rt_session_command(&s_ses, f->seq, now_ms());
-    if (car_drive(LINK_SRC_RT, f->t, f->y)) {
-        recovery_note_command(f->t, f->y);
+    if (car_drive(LINK_SRC_RT, f->throttle, f->turn)) {
+        recovery_note_command(f->throttle, f->turn);
     }
 }
 
