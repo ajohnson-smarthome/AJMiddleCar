@@ -8,15 +8,15 @@ enum SessionPolicy {
     /// session id is a leftover from a previous socket; ignoring it is what makes ownership
     /// non-resumable rather than accidentally inherited.
     enum HandshakeOutcome: Equatable {
-        case identity(device: String, fw: String)
+        case identity(DeviceInfo)
         case protoMismatch(theirs: Int)
         case ignore
     }
 
     static func handshakeOutcome(_ inbound: RTFrame.Inbound?, sid: String) -> HandshakeOutcome {
         switch inbound {
-        case .helloReply(let replySid, let device, let fw) where replySid == sid:
-            return .identity(device: device, fw: fw)
+        case .helloReply(let replySid, let device) where replySid == sid:
+            return .identity(device)
         case .protoMismatch(let replySid, let theirs) where replySid == sid:
             return .protoMismatch(theirs: theirs)
         default:

@@ -8,22 +8,22 @@ func check(_ ok: Bool, _ what: String) {
 
 // -- handshake filtering: a reply for another sid is a leftover from a previous socket. ----
 let sid = "7f3a91c2"
-let ourReply = RTFrame.parse(#"{"proto":1,"hello":"7f3a91c2","device":"ajmiddlecar","fw":"v1.0+517"}"#)
-check(SessionPolicy.handshakeOutcome(ourReply, sid: sid)
-        == .identity(device: "ajmiddlecar", fw: "v1.0+517"), "our sid's reply is the identity")
-
-let staleReply = RTFrame.parse(#"{"proto":1,"hello":"deadbeef","device":"ajmiddlecar","fw":"v1.0+517"}"#)
-check(SessionPolicy.handshakeOutcome(staleReply, sid: sid) == .ignore,
+let me = DeviceInfo(id: "ajmiddlecar", fw: "v1.0+517", build: 517, rolled_back: false)
+func ack(_ sid: String, proto: Int = 2) -> String {
+    #"{"proto":\#(proto),"type":"hello_ack","session":"\#(sid)","device":{"id":"ajmiddlecar","fw":"v1.0+517","build":517,"rolled_back":false}}"#
+}
+check(SessionPolicy.handshakeOutcome(RTFrame.parse(ack(sid)), sid: sid) == .identity(me),
+      "our sid's reply is the identity")
+check(SessionPolicy.handshakeOutcome(RTFrame.parse(ack("deadbeef")), sid: sid) == .ignore,
       "another sid's reply is ignored — ownership is not resumable")
-
-let mismatch = RTFrame.parse(#"{"proto":2,"hello":"7f3a91c2"}"#)
-check(SessionPolicy.handshakeOutcome(mismatch, sid: sid) == .protoMismatch(theirs: 2),
+check(SessionPolicy.handshakeOutcome(RTFrame.parse(ack(sid, proto: 3)), sid: sid) == .protoMismatch(theirs: 3),
       "a proto mismatch for our sid is reported, not ignored")
-let staleMismatch = RTFrame.parse(#"{"proto":2,"hello":"deadbeef"}"#)
-check(SessionPolicy.handshakeOutcome(staleMismatch, sid: sid) == .ignore,
+check(SessionPolicy.handshakeOutcome(RTFrame.parse(ack("deadbeef", proto: 3)), sid: sid) == .ignore,
       "a proto mismatch for another sid is a leftover too")
-
-var telemetry = Telemetry(); telemetry.uptimeS = 5
+let telemetry = Telemetry(proto: 2, seq: 1,
+                          link: LinkInfo(rx_hz: 0, rssi_dbm: nil, timeouts: 0),
+                          motors: MotorsInfo(bus: .ok, calibrated: true, owner: .idle),
+                          system: SystemInfo(uptime_s: 5, free_heap: 1))
 check(SessionPolicy.handshakeOutcome(.telemetry(telemetry), sid: sid) == .ignore,
       "telemetry during the handshake is not an answer")
 check(SessionPolicy.handshakeOutcome(nil, sid: sid) == .ignore, "garbage is ignored")
