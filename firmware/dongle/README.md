@@ -29,8 +29,7 @@ The two ports are silkscreened `USB` and `COM`, and they are not interchangeable
 | `GET /status` answers over the USB wire | **yes** — HTTP 200 in 12 ms | 2026-08-30 |
 | iOS binds a CDC-NCM driver | **yes** — `http://192.168.7.1/status` (`:8080` today) answers in Safari on the phone | 2026-08-30 |
 | iPhone keeps its own internet and DNS | **yes** — an ordinary site loads by name with the dongle attached | 2026-08-30 |
-| `POST /net` does NOT persist across a reboot — the dongle comes up «Не настроен» and waits for the app | *(record what you observed)* | |
-| `GET /net` withholds the password | *(record what you observed)* | |
+| `POST /wifi` does NOT persist across a reboot — the dongle comes up «Не настроен» and waits for the app | *(record what you observed)* | |
 | `POST /ota` accepts an image and reboots into it | *(record what you observed)* | |
 | The bootloader reverts an image that fails its first boot | *(record what you observed)* | |
 
@@ -207,6 +206,62 @@ outright — see the comment at that line in `sdkconfig.defaults`, which now rec
 switches it back. The lesson for the next radio-bearing board in this project: with PSRAM on,
 static TX buffers are not a tuning preference, they are a requirement.
 
+## API — HTTP `:8080`
+
+Everything this firmware serves is JSON, and every reply carries `proto`. This section is a
+quick reference; `contract/dongle-api.json` is the source of truth, and `tools/gen_dongle.py`
+is what actually emits the C, Swift and Python that speak it.
+
+```json
+// GET /status
+{"proto":1,
+ "device":{"id":"ajdongle","fw":"v1.0+789","build":789,"rolled_back":false,"idf":"v6.0.2"},
+ "usb":   {"state":"up"},
+ "wifi":  {"ssid":"AJMiddleCar","configured":true,"state":"connected",
+           "rssi_dbm":-53,"channel":1,"attempts":{"used":0,"max":5}},
+ "relay": {"to_car_hz":10.0,"to_phone_hz":5.0,"udp_sessions":1,"tcp_connections":2,
+           "last_error":{"errno":118,"message":"No route to host","count":3,"age_s":41}},
+ "system":{"uptime_s":412,"free_heap":8551152}}
+```
+
+Five groups: `device` (identity — `id`, `fw`, `build`, `rolled_back` share their shape with the
+car's own `device` group, plus `idf`, because this firmware's ESP-IDF version is worth knowing
+and the car's is not); `usb` (whether a host is attached); `wifi` (the network the app told it,
+and how the join is going — `rssi_dbm` and `channel` are `null` until connected); `relay` (what
+is being forwarded, and `last_error` — an object with the errno, its `strerror`, a repeat count
+and its age in seconds, or `null` when nothing has failed since boot); `system` (uptime and free
+heap).
+
+There is no `GET /net`: `wifi.ssid` and `wifi.configured` in `/status` are the same two fields it
+used to serve, so a second endpoint for them bought nothing.
+
+```jsonc
+// POST /wifi ← {"ssid":"AJMiddleCar","password":"drive1234"}
+//           → {"proto":1,"ssid":"AJMiddleCar","state":"searching"}
+```
+
+The network lives in RAM only — nothing about the car's network survives a reboot, and the app
+sends it again on every launch. A new network is remembered and joined; the same network, while
+connected or still searching, does nothing (`200`, the state exactly as it already was — a POST
+must not restart a join that is already working); the same network after `failed` starts a fresh
+search. The reply carries the `wifi` group's two words, not `{"proto":1,"ok":true}` — the point
+of asking is what the dongle now holds, the same rule `/config` and `/calibration` follow on the
+car.
+
+Every error reply is the same envelope shape as the car's, with the dongle's own `proto` — `1`,
+not `2`, because this is a separate contract for a device that knows nothing about the car, and
+its number moves only when its own format does:
+
+```json
+{"proto":1,"error":{"code":"bad_length","message":"ssid must be 1..32 bytes","field":"ssid"}}
+```
+
+Dongle error codes: `bad_json`, `missing_field`, `unknown_field`, `wrong_type`, `bad_length`
+(SSID or password outside its bounds), `bad_chars`, `radio_refused` (500), `too_small`,
+`not_firmware`, `write_failed` (500), `busy` (409), `internal` (500).
+
+`POST /ota` is unchanged in shape: an image in, `{"proto":1,"ok":true}` out, before the reboot.
+
 ## Build
 
 ```bash
@@ -238,17 +293,18 @@ curl --data-binary @build/ajdongle.bin \
      http://192.168.7.1:8080/ota
 ```
 
-Expect `{"ok":true}`, then the USB interface drops and comes back within a few seconds as the
-dongle reboots into the new slot. Confirm with `/status`:
+Expect `{"proto":1,"ok":true}`, then the USB interface drops and comes back within a few seconds
+as the dongle reboots into the new slot. Confirm with `/status`:
 
 ```bash
 curl -s http://192.168.7.1:8080/status
 ```
 
-`fw` should be the version just built, and **`rollback` should be `false`**. `rollback:true` means
-the bootloader put the previous image back — the new one failed its first boot before `app_main`
-finished, so it never got to cancel the revert. That is the safety net working, not a bug in the
-update; the `fw` you see is the old image, and pushing the same binary again will do the same thing.
+`device.fw` should be the version just built, and **`device.rolled_back` should be `false`**.
+`rolled_back:true` means the bootloader put the previous image back — the new one failed its
+first boot before `app_main` finished, so it never got to cancel the revert. That is the safety
+net working, not a bug in the update; the `fw` you see is the old image, and pushing the same
+binary again will do the same thing.
 
 **Rollback protects against an image that panics, not one that hangs.** A panic reboots
 immediately and the bootloader reverts on the next boot, unaided. An image that instead hangs

@@ -81,9 +81,10 @@ MIPI-CSI/DSI — none of which is used yet, all of which is why this board.
   under one tag `v<semver>+<build>`; the app force-updates whichever board is behind
 - **Rollback that means it** — an image that fails before it has proved it can serve `/ota` is
   rolled back by the bootloader; nothing after that point is allowed to panic
-- **`/status` that cannot lie in the reassuring direction** — `bus_ok` is false unless both PWM
-  boards finished their init, the reported RSSI is the session owner's station, and the dongle's
-  fault record carries its age so "failing now" and "failed once at boot" read differently
+- **`/status` that cannot lie in the reassuring direction** — `motors.bus` reads `"down"` unless
+  both PWM boards finished their init, the reported RSSI is the session owner's station, and the
+  dongle's fault record carries its age so "failing now" and "failed once at boot" read
+  differently
 - **Two cars, one bench** — both cars serve the same API at the same address, so each pult
   checks the car's device identifier and refuses to drive the other one
 

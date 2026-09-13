@@ -77,7 +77,7 @@ else
         exit 1
     fi
 
-    python3 tools/conformance.py "http://127.0.0.1:$PORT"
+    python3 tools/conformance.py --write-calibration "http://127.0.0.1:$PORT"
     # Latent coupling: if conformance.py ever grows a valid-image OTA case, note
     # that the mock's simulated reboot (rt_link.py's REBOOT_QUIET_S, 4 s) outlasts
     # this tool's ~3 s hello-retry budget — a run started right after would see

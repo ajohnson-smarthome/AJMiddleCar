@@ -66,11 +66,17 @@ because it knows anything about the car — it knows neither the motors nor the 
 ## The contract
 
 `contract/car-api.json` is the source of truth for everything both sides agree on: the
-protocol version, the real-time channel's constants, and the five config domains with
-their ranges and defaults. `tools/gen_contract.py` emits all four expressions of it —
-the firmware's descriptor table (`main/cfg_table.inc`), the app's Swift structs
-(`app/AJMiddleCar/Generated/CarAPI.swift`), the mock's table and validator
-(`tools/mock_car/generated.py`), and the endpoint table inside `docs/protocol.md`.
+protocol version, the real-time channel's constants, the six status/telemetry groups
+(`device`, `link`, `motors`, `radio`, `storage`, `system`), the state words each group's enum
+fields take (`motors.owner`, `motors.bus`, `radio.state`), the five config domains with their
+ranges and defaults, and the car's error codes. `tools/gen_contract.py` emits all four
+expressions of it — the firmware's descriptor table (`main/cfg_table.inc`, plus the key,
+type-word and error-code macros the printers in `telemetry.h`, `device_json.h`, `status_api.c`
+and `calib_api.c` build their format strings from), the app's Swift structs
+(`app/AJMiddleCar/Generated/CarAPI.swift`, which now includes the generated `Telemetry` and
+`CarStatus` structs alongside the config ones), the mock's table and validator
+(`tools/mock_car/generated.py`), and the endpoint table inside `docs/protocol.md`. The dongle's
+side of the same idea is `contract/dongle-api.json` and `tools/gen_dongle.py`.
 
 Never hand-edit a generated file. Change the schema and re-run the generator;
 `tools/check_contract.sh` fails a tree where the two disagree, and `tools/test-all.sh`
@@ -90,12 +96,14 @@ The pure modules have **zero ESP-IDF dependencies** and are host-tested with pla
 - `motors.{c,h}` — *pure*. Side speeds → 8 PWM duties through a per-wheel calibration table.
   Shoot-through-safe by construction.
 - `control_proto.{c,h}` — *pure*, zero-alloc parser for the 10 Hz control frame. Deliberately
-  not cJSON: ten parses a second is ten mallocs a second on the control path.
+  not cJSON: ten parses a second is ten mallocs a second on the control path. Datagrams are
+  typed — `hello`, `drive`, `bye` — read from the wire's `type` key, not guessed from which
+  other keys showed up.
 - `car.{c,h}` — clamps, mixes, plans, and offers the duties to the actuator arbiter. Holds the
   mutex around the calibration read, with a bounded 200 ms wait so a stuck holder cannot wedge
   the watchdog.
-- `ramp.{c,h}` — *pure* slew step plus the `/ramp` config; the 50 Hz actuator task lives in
-  `link.c`. Bounded rise, instant fall.
+- `ramp.{c,h}` — *pure* slew step plus the `ramp` domain of `/config`; the 50 Hz actuator task
+  lives in `link.c`. Bounded rise, instant fall.
 - `link.{c,h}` — the actuator arbiter (who may command the motors: `rt`, `console`, `calib`,
   `recover`, `ota`, `safe`) and the 50 Hz task that is the **sole writer** to the PCA9685.
 - `rt_link.{c,h}` — the UDP real-time channel: session ownership, the sequence gate, the
@@ -105,6 +113,11 @@ The pure modules have **zero ESP-IDF dependencies** and are host-tested with pla
   to retrace back into range, aborting the instant a frame arrives.
 - `pca9685`, `wifi_ap`, `http_server`, `telemetry`, `calibration`, `wheel`, `dims`,
   `trim`, `cfg_json` and the four `*_api` modules — driver, transport, config, persistence.
+  `cfg_api.c` serves one route, `/config`, for all five domains — GET walks every domain,
+  POST validates whatever subset it was sent before applying any of it. `calib_api.c` speaks
+  corners by name (`front_left`, `front_right`, `rear_left`, `rear_right`) and `inverted`
+  rather than array position and sign; `calibration.c` itself, and what NVS stores, are
+  unchanged underneath it.
 
 All configuration persists in NVS as **one JSON string per domain**, with a dirty check so an
 unchanged POST does not rewrite flash.
@@ -181,14 +194,15 @@ Pure Swift modules are host-tested with `swiftc` directly — no XCTest runtime 
    its own UART header — but it can also be reflashed over SDIO with no wire at all
    (`firmware/car/modem/README.md`).
 10. **The radio's version is load-bearing, not cosmetic.** A mismatch costs five seconds of every
-    boot (a timed-out RPC), disables SDIO aggregation, and leaves `radio.ok` false.
+    boot (a timed-out RPC), disables SDIO aggregation, and leaves `radio.state` at `mismatch`
+    instead of `ok`.
 
 ## Status
 
 Ported from AJPicoCar with feature parity, and **first run on hardware 2026-08-20**: the board
 boots, the softAP comes up, and the radio was updated from its shipped image to the pinned 3.0.6.
 The motors were not wired at first, so `board.h`'s I2C pins went unverified for a while — a
-stock build boots anyway with `bus_ok:false` (network and OTA up, motors inert, by design).
+stock build boots anyway with `motors.bus:"down"` (network and OTA up, motors inert, by design).
 `docs/bringup.md` is the live record of what the board has and has not answered.
 
 Two notes that used to live here are stale as of 2026-08-31 and were corrected on the bench:

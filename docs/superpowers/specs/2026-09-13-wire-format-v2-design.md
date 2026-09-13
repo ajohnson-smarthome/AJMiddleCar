@@ -1,6 +1,6 @@
 # Формат v2 — один словарь для машинки и адаптера
 
-**Статус:** дизайн, утверждён 2026-09-13; план — `docs/superpowers/plans/2026-09-13-wire-format-v2.md`
+**Статус:** дизайн, утверждён 2026-09-13; план — `docs/superpowers/plans/2026-09-13-wire-format-v2.md`; реализовано 2026-09-13 (ветка wire-format-v2)
 **Заменяет:** раскладки proto 1 в `docs/protocol.md`, `contract/car-api.json` и
 `contract/dongle-api.json`; список полей `/status` и `/net` из
 `docs/superpowers/specs/2026-08-30-dongle-api-design.md`.
