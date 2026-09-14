@@ -7,6 +7,7 @@
 #include "esp_log.h"
 
 #include "api_util.h"
+#include "uplink.h"
 #include "wifi_sta.h"
 
 static const char *TAG = "net_api";
@@ -139,10 +140,14 @@ static esp_err_t net_post(httpd_req_t *req)
          * earlier is still running. A radio mid-search is doing exactly what the POST asks;
          * the only honest answer is 200 and hands off. A rejoin is asked for from `failed`
          * and `idle` alone. */
-        if (wifi_sta_connected() || wifi_sta_trying()) {
+        if (wifi_sta_trying() || (wifi_sta_connected() && !uplink_dead(uplink_shared()))) {
             return reply_state(req);
         }
-        ESP_LOGI(TAG, "network unchanged, but the station is not connected — rejoining %s",
+        /* `connected` with a dead uplink is the association the car's softAP forgot — see
+         * uplink.h. The relays kick it themselves within seconds; this is the same answer
+         * for the person who pressed «Повторить» first. */
+        ESP_LOGI(TAG, "network unchanged, but the station is %s — rejoining %s",
+                 wifi_sta_connected() ? "connected with a dead uplink" : "not connected",
                  s_cfg.ssid);
         if (wifi_sta_join(&s_cfg) != ESP_OK) {
             return api_reply_error(req, "500 Internal Server Error", DONGLE_ERR_RADIO_REFUSED, "",

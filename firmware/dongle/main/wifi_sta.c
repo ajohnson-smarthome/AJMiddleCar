@@ -287,8 +287,24 @@ static void abort_join_locked_or_not(void)
     }
 }
 
+/* What wifi_sta_rejoin re-joins. Written by wifi_sta_join under no lock: net_api serialises
+ * the POSTs that write it, and a rejoin racing a POST re-joins either the old network or the
+ * new one — both of which the caller wanted joined. */
+static net_cfg_t s_last_cfg;
+static bool s_have_cfg;
+
+esp_err_t wifi_sta_rejoin(void)
+{
+    if (!s_have_cfg) return ESP_ERR_INVALID_STATE;
+    return wifi_sta_join(&s_last_cfg);
+}
+
 esp_err_t wifi_sta_join(const net_cfg_t *cfg)
 {
+    if (cfg != &s_last_cfg) {
+        s_last_cfg = *cfg;
+        s_have_cfg = true;
+    }
     /* Armed unconditionally — no lock needed, and none can make this fail to happen. See
      * s_join_quiet_until_ms's own comment for why that is the point, and why this is a
      * deadline rather than a flag somebody has to remember to clear. */

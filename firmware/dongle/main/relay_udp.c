@@ -15,6 +15,7 @@
 #include "rate_gate.h"
 #include "relay_stats.h"
 #include "udp_sess.h"
+#include "uplink.h"
 #include "usb_net.h"
 #include "wifi_sta.h"
 
@@ -181,7 +182,21 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
     }
 
     if (send(r->car_sock[idx], buf, (size_t)n, 0) < 0) {
-        relay_stats_failed(relay_stats_shared(), errno, boot_ms());
+        int err = errno;
+        relay_stats_failed(relay_stats_shared(), err, boot_ms());
+        /* The station's own view is the guard: a streak while it says `connected` is the
+         * association the car's softAP forgot (uplink.h), and a re-join is the only exit.
+         * While it says anything else the sends fail for a reason wifi_state already owns —
+         * its budget and its hold — and kicking from here would be the radio hunting an
+         * absent car forever, which the design forbids. */
+        if (uplink_failed(uplink_shared(), boot_ms()) && wifi_sta_connected()) {
+            ESP_LOGW(TAG, "%s: %u sends to the car failed in a row (last errno %d) while the "
+                          "station says connected — rejoining", r->cfg->name,
+                     (unsigned)UPLINK_DEAD_AFTER, err);
+            esp_err_t jerr = wifi_sta_rejoin();
+            if (jerr != ESP_OK) ESP_LOGW(TAG, "rejoin refused: %s", esp_err_to_name(jerr));
+        }
+        errno = err;
         /* Rate-limited: a Wi-Fi drop fails every send, and udp_sess_touch (above) refreshes
          * this session's deadline on every phone datagram regardless of whether the send that
          * follows succeeds — so the session cannot age out while the phone keeps streaming,
@@ -193,11 +208,12 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
             ESP_LOGW(TAG, "%s: phone->car send failed on slot %d: errno %d", r->cfg->name,
                      idx, errno);
         }
-    } else if (!r->cfg->video) {
+    } else {
+        uplink_sent(uplink_shared());
         /* The video instance's phone->car direction is view datagrams, not control frames —
          * counting them here would colour to_car_hz with a channel relay_stats.h's own
          * comment says belongs to the control loop alone. */
-        relay_stats_forwarded(relay_stats_shared(), true);
+        if (!r->cfg->video) relay_stats_forwarded(relay_stats_shared(), true);
     }
 }
 

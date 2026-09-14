@@ -12,6 +12,7 @@
 #include "dongle_contract.inc"
 #include "dongle_clock.h"
 #include "relay_stats.h"
+#include "uplink.h"
 #include "tcp_pending.h"
 #include "usb_net.h"
 #include "wifi_sta.h"
@@ -387,11 +388,24 @@ static void handle_accept(relay_state_t *r)
          * often seen on a loopback-fast path); lwIP does not special-case it away, so this
          * has to be handled rather than assumed impossible. */
         r->slots[idx].state = SLOT_ACTIVE;
+        uplink_sent(uplink_shared());
     } else if (errno == EINPROGRESS) {
         r->slots[idx].state = SLOT_CONNECTING;
         r->slots[idx].connect_started_ms = boot_ms();
         r->slots[idx].phone_queued = false;
     } else {
+        /* The SYN could not even leave: scored with the UDP relay's sends (uplink.h), because
+         * during a launch gate or an update's reboot watch these polls may be the only
+         * traffic toward the car, and the association the car forgot has to be noticed from
+         * them too. Same guard, same reason as relay_udp.c. */
+        int cerr = errno;
+        if (uplink_failed(uplink_shared(), boot_ms()) && wifi_sta_connected()) {
+            ESP_LOGW(TAG, "%u sends to the car failed in a row (last errno %d) while the "
+                          "station says connected — rejoining", (unsigned)UPLINK_DEAD_AFTER, cerr);
+            esp_err_t jerr = wifi_sta_rejoin();
+            if (jerr != ESP_OK) ESP_LOGW(TAG, "rejoin refused: %s", esp_err_to_name(jerr));
+        }
+        errno = cerr;
         /* Rate-limited: a car actively refusing the port (ECONNREFUSED comes back fast, no
          * SYN retries involved) fails this on every attempt a retrying client makes. */
         static log_throttle_t s_throttle = LOG_THROTTLE_INIT;

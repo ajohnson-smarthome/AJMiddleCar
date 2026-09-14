@@ -37,6 +37,13 @@ esp_err_t wifi_sta_start(void);
  * join is held rather than retried forever and the app decides when to try again by POSTing
  * again, so an unchanged re-POST is exactly how that decision arrives. */
 esp_err_t wifi_sta_join(const net_cfg_t *cfg);
+/* Join the last network wifi_sta_join was given, again — the same disconnect, reconfigure and
+ * connect, the same fresh attempt budget. For the one failure the station cannot see for
+ * itself: an association the car's softAP has forgotten (it rebooted) while this side still
+ * hears its beacons and reports `connected`. The relays detect it by the sends that fail
+ * (uplink.h) and call this; net_api calls it when an unchanged POST /wifi lands on that same
+ * state. ESP_ERR_INVALID_STATE before any join. */
+esp_err_t wifi_sta_rejoin(void);
 
 /* Whether the station is associated AND addressed right now. Lock-free, so /net's handler can
  * ask without waiting behind the event task; it reads the same _Atomic mirror
