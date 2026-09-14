@@ -19,7 +19,16 @@ final class VideoLink: ObservableObject {
     @Published private(set) var hasPicture = false
 
     /// Called on `queue` with a complete, decodable frame (Annex B) and whether it is an IDR.
-    nonisolated(unsafe) var onFrame: ((Data, Bool) -> Void)?
+    /// It must never block on main: the main actor blocks on `queue` (`queue.sync`) to read
+    /// the counters, so a `DispatchQueue.main.sync` inside it is a deadlock.
+    ///
+    /// Stored inside `State` so the read on `queue` and the write from the main actor cannot
+    /// race — a closure store is not atomic against a concurrent load. Never call the getter
+    /// from `queue`: it hops there synchronously.
+    nonisolated var onFrame: (@Sendable (Data, Bool) -> Void)? {
+        get { queue.sync { state.onFrame } }
+        set { queue.async { [state] in state.onFrame = newValue } }
+    }
 
     nonisolated let queue = DispatchQueue(label: "ajmiddlecar.video", qos: .userInteractive)
 
@@ -32,12 +41,28 @@ final class VideoLink: ObservableObject {
 
     /// Everything the receive path touches, confined to `queue`.
     private final class State: @unchecked Sendable {
+        /// Ten one-second intervals need eleven samples: the loss count is `last - first`.
+        static let lossSamples = 11
+
+        var onFrame: (@Sendable (Data, Bool) -> Void)?
         var receiver = VideoReceiver()
         var needKey = false
         var frames = 0
-        var lostWindow: [Int] = Array(repeating: 0, count: 10)
+        var lostWindow: [Int] = Array(repeating: 0, count: lossSamples)
         var lastFrameAt: Date = .distantPast
         var lastKeyAskAt: Date = .distantPast
+
+        /// Back to the state a fresh socket deserves — every field, not just the receiver. A
+        /// new receiver counts `dropped` from zero, and a window still holding the previous
+        /// session's cumulative values would read it as negative losses until it drained.
+        func reset() {
+            receiver = VideoReceiver()
+            needKey = false
+            frames = 0
+            lostWindow = Array(repeating: 0, count: Self.lossSamples)
+            lastFrameAt = .distantPast
+            lastKeyAskAt = .distantPast
+        }
     }
 
     func session(sid: String) {
@@ -71,15 +96,14 @@ final class VideoLink: ObservableObject {
     private func open() {
         let c = NWConnection(to: CarNet.videoEndpoint(), using: CarNet.udpParams())
         conn = c
-        queue.async { [state] in
-            state.receiver = VideoReceiver()
-            state.needKey = false
-        }
-        c.stateUpdateHandler = { [weak self] st in
+        queue.async { [state] in state.reset() }
+        c.stateUpdateHandler = { [weak self, state] st in
             guard case .ready = st else { return }
             // The first view goes the moment the socket is up — waiting a whole period here
-            // is a second of black screen at every session start.
-            Task { @MainActor in self?.sendView(key: false) }
+            // is a second of black screen at every session start. The handler runs on `queue`,
+            // so the keyframe ask is read here and carried across the hop.
+            let key = state.needKey
+            Task { @MainActor in self?.sendView(key: key) }
         }
         c.start(queue: queue)
         receiveLoop(c)
@@ -117,7 +141,7 @@ final class VideoLink: ObservableObject {
                     state.frames += 1
                     state.lastFrameAt = Date()
                     if key { state.needKey = false }
-                    self.onFrame?(frame, key)
+                    state.onFrame?(frame, key)
                 case .loss:
                     // Once per loss, then the periodic view keeps asking until a keyframe lands.
                     if !state.needKey || Date().timeIntervalSince(state.lastKeyAskAt) > 1 {
