@@ -50,7 +50,7 @@ stage 1 of the video plan exists to close them.
 
 | # | Assumption | Status |
 |---|---|---|
-| 7 | The sensor is **OV5647** (SCCB `0x36`, chip id `0x5647`) — every 5 MP fisheye/night-vision Pi camera module is | **open** — probe SCCB from the console before the first line of camera code runs; OV5640 would answer at `0x3c` instead |
+| 7 | The sensor is **OV5647** (SCCB `0x36`, chip id `0x5647`) — every 5 MP fisheye/night-vision Pi camera module is | **closed 2026-09-14** — the first boot with the ribbon in logged `ov5647: Detected Camera sensor PID=0x5647` and `camera: sensor up on /dev/video0, 1280x960`, over the shared bus at 100 kHz |
 | 8 | Whether this particular module is **NoIR** (no IR-cut filter — daytime colours skew pink, a property, not a defect) or carries a mechanical IR-cut plus a photoresistor fed from 3.3 V | **open** — inspect the lens board; a photoresistor changes the current budget too |
 | 9 | A snapshot shows the **whole lens's field of view**, not a crop — `esp_video` does not scale on this silicon, and crops only on silicon ≥ v3.0, which this board is not | **open** — check `GET /snapshot` against what the lens actually sees, right side up |
 | 10 | The bus survives 400 kHz SCCB on top of the two PCA9685 pull-ups, the board's own 2.2 kΩ, and a camera ribbon | **open** — the firmware ships conservatively at **100 kHz** (`BOARD_SCCB_HZ`, `board.h`) until the scope says the edges pass at 400 kHz; raise it only then |
@@ -137,6 +137,29 @@ are the closing sweep, run once stage 4 itself passes.
 ## Notes from the bench
 
 _Record anything surprising here — it is the raw material for the next spec._
+
+### The AE/AWB library was built for silicon this board is not (2026-09-14)
+
+The first boot of v1.0+862 with the camera ribbon in detected the sensor and panicked in the
+same millisecond: `Guru Meditation Error: Core 0 panic'ed (Illegal instruction)` at
+`esp_ipa_pipeline_create`, seven boots in thirty seconds. `MTVAL` held the instruction,
+`0x20fac7b3` — `sh2add`, from the Zba extension. `readelf -A` on the archive says why:
+`esp_ipa` 2.3.0's IDF-6 build carries `zba1p0_zbb1p0_zbs1p0`, the B extension the P4 grew in
+revision 3.0, while everything compiled from source in this tree (our code, `esp_video`) is
+built without it because `sdkconfig.defaults` selects the <3.0 family. A prebuilt library
+does not read `sdkconfig`. The same component ships an IDF-5.5 archive built for the older
+ISA (`xesploop` only); it links against 6.0.2 with no undefined symbols, and on it the car
+boots once and stays up with the sensor detected. `firmware/car/core/CMakeLists.txt` now
+points the component's imported target at that archive whenever the <3.0 family is selected
+— the vendor component itself is untouched, so a bump re-evaluates the question.
+
+Two things this does not prove yet: that the IDF-5.5 archive's AE/AWB actually runs when the
+pipeline streams (it only initialised here), and that nothing else in the tree hides a B
+instruction behind a code path the boot did not take. `GET /snapshot` answers the first.
+
+It also proved the rollback move made the same day for exactly this case would have worked
+had the update gone over the air: the panic lands before `esp_ota_mark_app_valid_cancel_rollback`.
+The cable flash had no rollback to offer, which is why the loop was visible at all.
 
 ### The chip is early silicon, and IDF 6.0 refuses it by default (2026-08-20)
 

@@ -33,3 +33,21 @@ set(PROJECT_VER "v${SEMVER}+${BUILD_NUM}")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(ajmiddlecar)
+
+# ESP32-P4 revision 1.3 has no Zba/Zbb/Zbs. esp_ipa 2.3.0 ships its IDF-6 archive built WITH them
+# (`readelf -A lib/esp32p4/v6.0+/libesp_ipa.a` → `zba1p0_zbb1p0_zbs1p0`), so the first `sh2add`
+# inside esp_ipa_pipeline_create is an illegal-instruction panic the moment a sensor is
+# detected — a boot loop, found on the bench 2026-09-14. The same component ships an IDF-5.5
+# archive built for the older ISA (`xesploop` only); it links cleanly against 6.0.2 and the
+# sensor comes up on it, so the component's imported target is pointed at that one instead.
+# Keyed on the revision selection, not on the IDF version: a board on revision 3.0 keeps the
+# archive the vendor meant for it. Re-check on every esp_ipa bump — the day the v6.0+ archive
+# is built without the B extension (or the vendor ships one per revision), this goes.
+if(CONFIG_ESP32P4_SELECTS_REV_LESS_V3 AND TARGET prebuilt)
+    set(ipa_old_isa "${CMAKE_CURRENT_LIST_DIR}/managed_components/espressif__esp_ipa/lib/esp32p4/v5.5/libesp_ipa.a")
+    if(NOT EXISTS "${ipa_old_isa}")
+        message(FATAL_ERROR "esp_ipa: no IDF-5.5 archive at ${ipa_old_isa} — the revision <3.0 override needs it")
+    endif()
+    set_target_properties(prebuilt PROPERTIES IMPORTED_LOCATION "${ipa_old_isa}")
+    message(STATUS "esp_ipa: revision <3.0 selected — linking the IDF-5.5 archive (no Zba/Zbb)")
+endif()

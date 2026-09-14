@@ -14,7 +14,7 @@ Both are alive; they share a protocol and a design language, and their code dive
 | Radio | **ESP32-C6 on the same board**, over SDIO. The P4 has no radio of its own. |
 | PWM driver | **2× PCA9685** on the header's I2C (SDA `GPIO7` pin 3, SCL `GPIO8` pin 5) — `0x40` front axle, `0x60` rear |
 | Motor driver | 4× BTS7960 full H-bridge |
-| Camera | MIPI-CSI, 2-lane, connector `J4`; SCCB shares the header's I2C 0 with both PCA9685 boards (`i2c_bus.c` owns the bus, `BOARD_SCCB_HZ` on the camera, 400 kHz on the PWM boards); sensor assumed **OV5647** (Aitewin 5MP night-vision fisheye) — unconfirmed until the SCCB probe in `docs/bringup.md`; no reset/pwdn pin wired |
+| Camera | MIPI-CSI, 2-lane, connector `J4`; SCCB shares the header's I2C 0 with both PCA9685 boards (`i2c_bus.c` owns the bus, `BOARD_SCCB_HZ` on the camera, 400 kHz on the PWM boards); sensor **OV5647** (Aitewin 5MP night-vision fisheye), confirmed on the bench 2026-09-14; no reset/pwdn pin wired. `esp_ipa`'s IDF-6 archive is built for revision ≥3.0 (Zba/Zbb) and panics on this chip — `firmware/car/core/CMakeLists.txt` links its IDF-5.5 archive instead whenever the <3.0 family is selected |
 | Framework | ESP-IDF **6.0.2** at `~/esp/esp-idf-v6.0.2` |
 
 **The C6 is a modem, not a brain.** It runs Espressif's `esp_hosted` slave image — a vendor
