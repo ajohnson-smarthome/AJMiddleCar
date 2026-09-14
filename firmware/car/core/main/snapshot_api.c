@@ -21,10 +21,10 @@ static const char *TAG = "snapshot";
 static jpeg_encoder_handle_t s_jpeg;
 
 static esp_err_t snapshot_get(httpd_req_t *req) {
-    /* Declared up front: camera_start's failure now joins the same `goto out` the rest of
-       the capture uses (R5 — ESP_RETURN_ON_ERROR returning straight out of an httpd
-       handler skips the 500 envelope and esp_http_server just resets the socket), and a
-       goto is not allowed to jump forward past a declaration it might then use. */
+    /* Declared up front: camera_start's failure now joins the same 500 reply the rest of
+       the capture uses, via `failed:` (R5 — ESP_RETURN_ON_ERROR returning straight out of
+       an httpd handler skips the 500 envelope and esp_http_server just resets the socket),
+       and a goto is not allowed to jump forward past a declaration it might then use. */
     esp_err_t err = ESP_OK;
     camera_frame_t f;
     uint8_t *jpg = NULL;
@@ -43,11 +43,15 @@ static esp_err_t snapshot_get(httpd_req_t *req) {
        start itself is (camera.h's lock), which is what makes losing the race a clean
        INVALID_STATE rather than two owners of one fd. It must answer here rather than at
        `out:`, whose camera_stop() would STREAMOFF and close the stream's fd under the
-       encoder (R9a). Any other failure started nothing, and `out:` remains the right exit. */
+       encoder (R9a). */
     if (err == ESP_ERR_INVALID_STATE) {
         return api_reply_error(req, "409 Conflict", ERR_BUSY, "", "stream running");
     }
-    if (err != ESP_OK) goto out;
+    /* Any other failure started nothing — every failure path inside camera_start closes
+       and unmaps its own fd — so this must not reach `out:` either: its camera_stop() runs
+       after the lock was released, and a stream that started in that gap would be the one
+       it stopped. `failed:` is the same reply, past the stop. */
+    if (err != ESP_OK) goto failed;
 
     for (int i = 0; i < SNAPSHOT_WARMUP_FRAMES; i++) {
         if ((err = camera_acquire(&f)) != ESP_OK) goto out;
@@ -80,7 +84,9 @@ static esp_err_t snapshot_get(httpd_req_t *req) {
     return err;
 
 out:
+    /* Only the paths where this handler started the pipeline arrive here. */
     camera_stop();
+failed:
     ESP_LOGE(TAG, "capture: %s", esp_err_to_name(err));
     return api_reply_error(req, "500 Internal Server Error", ERR_INTERNAL, "", "capture failed");
 }
