@@ -87,6 +87,13 @@ def bye(seq, proto=PROTO, **extra):
     return {K["proto"]: proto, K["type"]: TYPES["bye"], K["seq"]: seq, **extra}
 
 
+def view(sid="7f3a91c2", key=None, proto=PROTO):
+    obj = {K["proto"]: proto, K["type"]: TYPES["view"], K["session"]: sid}
+    if key is not None:
+        obj[K["key"]] = key
+    return obj
+
+
 class TestAdoption(Quiet):
     def test_a_hello_is_adopted_and_answered_with_identity(self):
         rt, car, _ = link()
@@ -287,6 +294,25 @@ class TestOwnedTraffic(Quiet):
         send(rt, {K["proto"]: PROTO, K["type"]: TYPES["drive"],
                   K["throttle"]: 0.9, K["turn"]: 0.0})
         self.assertEqual(car.command, (0.0, 0.0))
+
+    def test_a_view_from_the_owner_is_dropped_it_belongs_on_the_video_port(self):
+        """view subscribes to the FPV stream on a different port — this dispatcher only
+        serves control traffic on 4210, exactly as control_proto.c's classifier drops
+        the same bytes there. It also carries no seq, so falling through to the seq
+        gate the way drive/bye do would raise KeyError instead of dropping cleanly.
+        """
+        rt, car, loop = link()
+        send(rt, hello())
+        loop.t = 0.1
+        send(rt, cmd(5, 0.5))
+        activity = rt._last_activity
+        loop.t = 0.2
+        send(rt, view())                       # no exception
+        send(rt, view(key=True))               # nor with the optional key
+        self.assertEqual(rt.last_seq, 5, "a view cannot burn a sequence number")
+        self.assertEqual(car.command, (0.5, 0.0), "a view is not a command")
+        self.assertEqual(rt._last_activity, activity, "a view must not feed the watchdog")
+        self.assertEqual(rt.owner, APP)
 
 
 class TestProtoGate(Quiet):

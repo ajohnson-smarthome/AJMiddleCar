@@ -137,6 +137,13 @@ class RTLink(asyncio.DatagramProtocol):
             self._adopt(frame, addr, now)
             return
 
+        # `view` subscribes to the FPV stream and belongs on the video port, not here —
+        # and it carries no seq, so falling through to the seq gate below would raise.
+        # control_proto.c's classifier on 4210 drops the same bytes for the same reason.
+        if frame[K["type"]] == T["view"]:
+            self._drop(now, "view belongs on the video port")
+            return
+
         # A non-hello datagram speaking a proto this car does not is dropped whole,
         # judged here rather than by `parse_frame` — only the link knows which proto is
         # ours. A hello's foreign proto is judged inside `_adopt`, which still answers.
