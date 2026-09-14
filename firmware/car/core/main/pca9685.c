@@ -1,5 +1,6 @@
 #include "pca9685.h"
 #include "board.h"
+#include "i2c_bus.h"
 #include "driver/i2c_master.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -32,7 +33,6 @@ static const char *TAG = "pca9685";
 static const uint8_t s_addr[PCA_COUNT] = { BOARD_PCA_ADDR_FRONT, BOARD_PCA_ADDR_REAR };
 static const char   *s_name[PCA_COUNT] = { "front", "rear" };
 
-static i2c_master_bus_handle_t bus_handle;
 static i2c_master_dev_handle_t s_dev[PCA_COUNT];
 
 /* Set only when pca9685_init has taken every board through the whole sequence. See the
@@ -58,24 +58,16 @@ static esp_err_t pca9685_read_reg(int idx, uint8_t reg, uint8_t *value) {
     return i2c_master_transmit_receive(s_dev[idx], &reg, 1, value, 1, PCA_I2C_TIMEOUT_MS);
 }
 
-esp_err_t pca9685_bus_init(int sda_pin, int scl_pin, uint32_t i2c_speed_hz) {
-    i2c_master_bus_config_t bus_cfg = {
-        .i2c_port = I2C_NUM_0,
-        .sda_io_num = sda_pin,
-        .scl_io_num = scl_pin,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
-    };
-    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_cfg, &bus_handle), TAG, "I2C bus init failed");
-
+esp_err_t pca9685_attach(uint32_t i2c_speed_hz) {
+    i2c_master_bus_handle_t bus = i2c_bus_handle();
+    if (bus == NULL) return ESP_ERR_INVALID_STATE;
     for (int i = 0; i < PCA_COUNT; i++) {
         i2c_device_config_t dev_cfg = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
             .device_address = s_addr[i],
             .scl_speed_hz = i2c_speed_hz,
         };
-        ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(bus_handle, &dev_cfg, &s_dev[i]),
+        ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(bus, &dev_cfg, &s_dev[i]),
                             TAG, "%s PCA9685 (0x%02x) add failed", s_name[i], s_addr[i]);
     }
     return ESP_OK;
@@ -157,8 +149,7 @@ esp_err_t pca9685_bus_recover(void) {
        recovery for a wedged I2C bus and it is the only lever the firmware has: the
        PCA9685's outputs cannot be commanded while the bus is stuck, so without it the
        motors hold their last duty until the battery comes off. */
-    if (bus_handle == NULL) return ESP_ERR_INVALID_STATE;
-    return i2c_master_bus_reset(bus_handle);
+    return i2c_bus_recover();
 }
 
 esp_err_t pca9685_zero_all(void) {

@@ -23,6 +23,13 @@
 #define BOARD_I2C_SCL        8
 
 #define BOARD_I2C_HZ         400000
+
+// The camera's SCCB on the same wire. 100 kHz to start: the bus already carries the two
+// PWM boards' 10 kΩ pull-ups on top of the board's 2.2 kΩ and a ribbon's worth of
+// capacitance, and the Waveshare demo for this board logs the same figure. Raised to
+// 400 kHz only after the scope on SCL says the edges pass (spec, «Риски / Шина I²C»).
+#define BOARD_SCCB_HZ        100000
+
 #define BOARD_PWM_HZ         1000
 
 // Two PCA9685 boards on the same bus, one per axle: the front axle's two motors on 0x40, the

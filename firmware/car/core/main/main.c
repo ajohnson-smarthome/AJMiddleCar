@@ -9,6 +9,7 @@
 
 #include "board.h"
 #include "identity.h"
+#include "i2c_bus.h"
 #include "pca9685.h"
 #include "car.h"
 #include "link.h"
@@ -165,7 +166,8 @@ void app_main(void) {
     /* A dead motor bus must not take the radio with it. Booting into the network
        with bus_ok=false is diagnosable and OTA-recoverable; a boot loop needs a
        USB cable and tells you nothing. */
-    bool motors_ok = pca9685_bus_init(BOARD_I2C_SDA, BOARD_I2C_SCL, BOARD_I2C_HZ) == ESP_OK
+    bool motors_ok = i2c_bus_init(BOARD_I2C_SDA, BOARD_I2C_SCL) == ESP_OK
+                  && pca9685_attach(BOARD_I2C_HZ) == ESP_OK
                   && pca9685_init(BOARD_PWM_HZ) == ESP_OK;
     /* Immediately, not later in link_init, and UNCONDITIONALLY. pca9685_init ends by writing
        MODE1 with the RESTART bit, which by design resumes every channel at its pre-sleep duty

@@ -5,8 +5,9 @@
 #include <stdint.h>
 #include "esp_err.h"
 
-// Initialize the I2C bus and both PCA9685 devices. Call once before anything else.
-esp_err_t pca9685_bus_init(int sda_pin, int scl_pin, uint32_t i2c_speed_hz);
+// Add both PCA9685 devices to the shared bus (i2c_bus_init must have succeeded). Call once
+// before anything else here.
+esp_err_t pca9685_attach(uint32_t i2c_speed_hz);
 
 // Configure the PWM frequency on both devices (sleep->prescale->wake->restart).
 esp_err_t pca9685_init(uint16_t pwm_freq_hz);
