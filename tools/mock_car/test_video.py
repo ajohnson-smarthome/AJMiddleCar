@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from video import access_units   # noqa: E402
+from video import VideoLink, access_units   # noqa: E402
 
 SC = b"\x00\x00\x00\x01"
 SPS, PPS, SEI = b"\x67\x42\x00\x1f", b"\x68\xce\x38\x80", b"\x06\x05\x01"
@@ -36,6 +36,41 @@ class AccessUnits(unittest.TestCase):
             if key:
                 self.assertIn(b"\x67", au[:16], "every IDR carries SPS/PPS")
         self.assertLessEqual(os.path.getsize(path), 400 * 1024)
+
+
+class _FakeLoop:
+    def time(self):
+        return 0.0
+
+
+class _FakeTransport:
+    def sendto(self, data, addr):
+        pass
+
+
+class _FakeLink:
+    session = "sid"
+
+
+class _FakeCar:
+    video_state = "idle"
+    video_fps = 0
+    video_kbps = 0
+
+
+class StopClearsHeldDatagram(unittest.TestCase):
+    """A datagram delayed for reordering must not survive a stopped stream — flushed by a
+    future _emit, it would carry the ended stream's (now stale) `stream` number into
+    whatever streams next."""
+
+    def test_stop_clears_a_reorder_held_datagram(self):
+        sample = SC + SPS + SC + PPS + SC + IDR
+        v = VideoLink(_FakeCar(), _FakeLink(), sample, loop=_FakeLoop())
+        v.transport = _FakeTransport()
+        v.peer = ("127.0.0.1", 4211)
+        v._held = b"stale datagram from the ended stream"
+        v._stop("test stop")
+        self.assertIsNone(v._held)
 
 
 if __name__ == "__main__":

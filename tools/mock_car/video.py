@@ -4,8 +4,10 @@
 shape the car's encoder produces) plays in a loop at VIDEO["fps"], one access unit per
 frame, chunked with video_wire.chunks exactly as the car chunks. `frame` keeps counting
 across loops and `stream` stays put: to the receiver a looped clip is one long stream.
-A `key:true` jumps to the next IDR in the clip. Losses, reordering and duplicates are
-seeded, like rt_link.Impairment, so a failing conformance run is repeatable.
+A `key:true` re-sends the most recent IDR access unit in place, without moving `pos` (R3):
+seeking forward to the clip's next IDR could take up to a whole loop. Losses, reordering
+and duplicates are seeded, like rt_link.Impairment, so a failing conformance run is
+repeatable.
 """
 import asyncio
 import bisect
@@ -112,6 +114,9 @@ class VideoLink(asyncio.DatagramProtocol):
         self.last_view = None
         self.car.video_state = "idle"
         self.car.video_fps = self.car.video_kbps = 0
+        # A datagram held for reordering must not survive into the next stream — flushed
+        # by a future _emit, it would carry this stream's (now stale) `stream` number.
+        self._held = None
 
     def _emit(self, dgram):
         """One datagram through the impairments and out."""
@@ -119,6 +124,7 @@ class VideoLink(asyncio.DatagramProtocol):
             return
         if self.dup_pct and self.rng.random() * 100 < self.dup_pct:
             self.transport.sendto(dgram, self.peer)
+            self._sent_bytes += len(dgram)
         if self.reorder_pct and self.rng.random() * 100 < self.reorder_pct and self._held is None:
             self._held = dgram              # goes out after the next one
             return
