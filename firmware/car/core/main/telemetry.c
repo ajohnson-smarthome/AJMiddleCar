@@ -11,7 +11,7 @@
 #include "motors.h"
 #include "rt_link.h"
 #include "link.h"
-#include "camera.h"
+#include "video_link.h"
 
 static const char *TAG = "telemetry";
 
@@ -134,12 +134,12 @@ void telemetry_gather(telemetry_t *out, telem_consumer_t who) {
     out->owner      = link_src_name(link_owner());
     out->bus_ok     = link_bus_ok();
 
-    /* Filled by video_link once it exists (task 6); until then this reports only
-       whether the sensor is there, from camera_init's detection at boot. */
-    out->video_state   = camera_present() ? VIDEO_STATE_IDLE : VIDEO_STATE_OFF;
-    out->video_fps     = 0;
-    out->video_kbps    = 0;
-    out->video_dropped = 0;
+    video_link_stats_t vs;
+    video_link_stats(&vs);
+    out->video_state   = vs.state;
+    out->video_fps     = vs.fps;
+    out->video_kbps    = vs.kbps;
+    out->video_dropped = vs.dropped;
 }
 
 int telemetry_json(char *buf, size_t n) {

@@ -35,6 +35,7 @@
 #include "radio_expected.h"
 #include "camera.h"
 #include "snapshot_api.h"
+#include "video_link.h"
 
 static const char *TAG = "main";
 
@@ -240,6 +241,8 @@ void app_main(void) {
     esp_err_t err;
     if ((err = rt_link_start()) != ESP_OK)
         ESP_LOGE(TAG, "rt_link_start failed: %s — control channel is down", esp_err_to_name(err));
+    if ((err = video_link_start()) != ESP_OK)
+        ESP_LOGE(TAG, "video_link_start failed: %s — the video channel is down", esp_err_to_name(err));
     if ((err = http_server_start()) != ESP_OK)
         ESP_LOGE(TAG, "http_server_start failed: %s — HTTP API is down", esp_err_to_name(err));
     if ((err = calib_api_start()) != ESP_OK)
