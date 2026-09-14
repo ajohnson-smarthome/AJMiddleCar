@@ -1,10 +1,13 @@
 #include "relay_udp.h"
 
 #include <errno.h>
+#include <stdlib.h>
+#include <string.h>
 #include <fcntl.h>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -38,6 +41,7 @@ static const char *TAG = "relay_udp";
  * even on a channel that has gone completely quiet. */
 #define RELAY_LOOP_MS 1000
 
+
 /* The gate's job is the AVERAGE toward the phone, not the burst: a keyframe (60-100 KB)
  * must fit inside one window whole, or the gate would refuse half of every one of them at
  * the top bitrate. The burst itself is absorbed by the widened lwIP/NCM buffers, not here. */
@@ -63,6 +67,97 @@ typedef struct {
     char *phone_buf;
     char *car_buf;
 } relay_state_t;
+
+#if CONFIG_DONGLE_VIDEO_BENCH
+/* The bench generator (Kconfig: DONGLE_VIDEO_BENCH). One frame every 1/15 s, sized to the rate
+ * the phone's last `view` asked for, cut into 1400-byte chunks behind the car's own 12-byte
+ * wire header (contract/car-api.json `video.header`): proto 1, flags bit0 = key (every 45th
+ * frame, the car's GOP), stream 0xFE so a receiver can tell it from the car, big-endian frame
+ * and captured_ms. Paced one chunk per pass of the relay loop, whose select() timeout drops to
+ * DONGLE_VIDEO_BENCH_PACE_US while a bench is on. `kbps` 0 is off — the relay behaves as built. */
+#define BENCH_CHUNK_BYTES 1400
+#define BENCH_HDR_BYTES   12
+#define BENCH_FPS         15
+#define BENCH_GOP         45
+static struct {
+    uint32_t kbps;
+    uint16_t frame;
+    uint8_t  chunk, count;
+    uint32_t next_frame_ms;
+    bool     in_frame;
+    uint8_t  buf[BENCH_HDR_BYTES + BENCH_CHUNK_BYTES];
+} s_bench;
+
+static bool bench_view(const char *buf, int n)
+{
+    /* The view is JSON the dongle otherwise never parses; the one key it looks for here is
+     * bench-only and never sent by the app. */
+    char tmp[RELAY_BUF_LEN];
+    int len = n < (int)sizeof(tmp) - 1 ? n : (int)sizeof(tmp) - 1;
+    memcpy(tmp, buf, (size_t)len); tmp[len] = 0;
+    const char *k = strstr(tmp, "\"bench\":");
+    if (!k) return false;
+    uint32_t kbps = (uint32_t)atoi(k + 8);
+    if (kbps != s_bench.kbps) {
+        ESP_LOGW(TAG, "bench: %u kbps (%u us per chunk)", (unsigned)kbps, (unsigned)CONFIG_DONGLE_VIDEO_BENCH_PACE_US);
+        s_bench.kbps = kbps; s_bench.in_frame = false; s_bench.next_frame_ms = boot_ms();
+    }
+    return true;
+}
+
+static int64_t s_bench_next_us;
+
+static bool bench_one_chunk(relay_state_t *r)
+{
+    uint32_t now = boot_ms();
+    if (!s_bench.in_frame) {
+        if ((int32_t)(now - s_bench.next_frame_ms) < 0) return false;
+        s_bench.next_frame_ms += 1000 / BENCH_FPS;
+        if ((int32_t)(now - s_bench.next_frame_ms) > 200) s_bench.next_frame_ms = now;   /* fell far behind: resync */
+        uint32_t frame_bytes = s_bench.kbps * 1000u / 8u / BENCH_FPS;
+        uint32_t count = (frame_bytes + BENCH_CHUNK_BYTES - 1) / BENCH_CHUNK_BYTES;
+        s_bench.count = (uint8_t)(count < 1 ? 1 : count > 255 ? 255 : count);
+        s_bench.chunk = 0; s_bench.in_frame = true; s_bench.frame++;
+    }
+    uint8_t *h = s_bench.buf;
+    bool key = (s_bench.frame % BENCH_GOP) == 1;
+    h[0] = 1; h[1] = key ? 1 : 0; h[2] = 0xFE; h[3] = 0;
+    h[4] = (uint8_t)(s_bench.frame >> 8); h[5] = (uint8_t)s_bench.frame;
+    h[6] = s_bench.chunk; h[7] = s_bench.count;
+    h[8] = (uint8_t)(now >> 24); h[9] = (uint8_t)(now >> 16); h[10] = (uint8_t)(now >> 8); h[11] = (uint8_t)now;
+    /* payload: the chunk index repeated, so a receiver could even verify content */
+    memset(h + BENCH_HDR_BYTES, s_bench.chunk, BENCH_CHUNK_BYTES);
+    size_t len = BENCH_HDR_BYTES + BENCH_CHUNK_BYTES;
+    for (int i = 0; i < UDP_SESS_MAX; i++) {
+        const udp_sess_t *s = &r->sess.s[i];
+        if (!s->used) continue;
+        struct sockaddr_in to = { .sin_family = AF_INET, .sin_addr.s_addr = s->addr, .sin_port = htons(s->port) };
+        if (sendto(r->phone_sock, h, len, 0, (struct sockaddr *)&to, sizeof(to)) < 0) {
+            relay_stats_video_dropped(relay_stats_shared());
+        } else {
+            relay_stats_video_forwarded(relay_stats_shared(), (uint32_t)len);
+        }
+    }
+    if (++s_bench.chunk >= s_bench.count) s_bench.in_frame = false;
+    return true;
+}
+
+/* Every chunk that has come due since the last pass, at DONGLE_VIDEO_BENCH_PACE_US apart on
+ * the clock — not one per pass: select()'s timeout rounds up to a FreeRTOS tick (10 ms), so a
+ * pass runs ~50 times a second and one chunk per pass capped the bench at ~570 kbit/s whatever
+ * it was asked for. Bounded per pass so a stall cannot turn into an unbounded burst. */
+static void bench_tick(relay_state_t *r)
+{
+    if (s_bench.kbps == 0) return;
+    int64_t now_us = esp_timer_get_time();
+    if (s_bench_next_us == 0 || now_us - s_bench_next_us > 200000) s_bench_next_us = now_us;
+    int budget = 64;
+    while (now_us >= s_bench_next_us && budget-- > 0) {
+        if (!bench_one_chunk(r)) { s_bench_next_us = now_us + 1000; break; }   /* between frames */
+        s_bench_next_us += CONFIG_DONGLE_VIDEO_BENCH_PACE_US;
+    }
+}
+#endif /* CONFIG_DONGLE_VIDEO_BENCH */
 
 /* Every socket this relay opens is made non-blocking, here, right after it is created —
  * before it is ever added to a select() set. Without this, a socket that select() marked
@@ -153,6 +248,15 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
     uint32_t addr = from->sin_addr.s_addr;
     uint16_t port = ntohs(from->sin_port);
 
+#if CONFIG_DONGLE_VIDEO_BENCH
+    if (r->cfg->video && bench_view(buf, n)) {
+        /* The bench answers this peer itself: a session with no car-facing socket, so it
+         * works with the car switched off and no gateway learned. close_car_sock tolerates
+         * the -1 when the slot is later reused or expired. */
+        udp_sess_touch(&r->sess, addr, port, boot_ms());
+        return;
+    }
+#endif
     bool is_new = udp_sess_find(&r->sess, addr, port) < 0;
 
     /* The socket comes FIRST, before the table is touched, and the touch is skipped entirely
@@ -327,6 +431,11 @@ static void relay_task(void *arg)
      * poll, not a callback — see wifi_sta.h's own comment on why one callback slot cannot
      * serve both this relay and relay_tcp's — so this is an ordinary retry loop, not a wait on
      * anything. */
+#if CONFIG_DONGLE_VIDEO_BENCH
+    /* The bench serves the phone with no car and no gateway; the loop below still re-aims
+     * the moment a gateway appears, exactly as it does after any later re-join. */
+    if (!r.cfg->video)
+#endif
     while (!wifi_sta_gateway(&r.gateway_be)) {
         vTaskDelay(pdMS_TO_TICKS(RELAY_LOOP_MS));
     }
@@ -395,7 +504,13 @@ static void relay_task(void *arg)
         }
 
         struct timeval tv = { .tv_sec = RELAY_LOOP_MS / 1000, .tv_usec = 0 };
+#if CONFIG_DONGLE_VIDEO_BENCH
+        if (r.cfg->video && s_bench.kbps != 0) tv = (struct timeval){ .tv_sec = 0, .tv_usec = CONFIG_DONGLE_VIDEO_BENCH_PACE_US };
+#endif
         int nready = select(maxfd + 1, &rfds, NULL, NULL, &tv);
+#if CONFIG_DONGLE_VIDEO_BENCH
+        if (r.cfg->video) bench_tick(&r);
+#endif
         if (nready > 0) {
             if (FD_ISSET(r.phone_sock, &rfds)) {
                 struct sockaddr_in from;

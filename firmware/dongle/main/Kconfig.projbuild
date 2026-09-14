@@ -1,0 +1,23 @@
+menu "AJ dongle"
+
+    config DONGLE_VIDEO_BENCH
+        bool "Video relay bench: synthesise the car's stream on the dongle (bench builds only)"
+        default n
+        help
+            With this set, a `view` datagram from the phone that carries a `"bench":<kbps>` key
+            makes the video relay synthesise frames itself — 15 a second, sized to <kbps>, cut
+            into 1400-byte chunks with genuine wire headers, paced one chunk per
+            DONGLE_VIDEO_BENCH_PACE_US — and send them to the phone over the same socket, from
+            the same task, through the same lwIP → NCM → USB path the relayed stream takes.
+            Nothing reaches the car: the view is not forwarded. It measures the dongle → host
+            path alone, with the same probe that measures the real stream
+            (scratchpad loss_probe.py, `--bench-kbps`). A view without the key relays as usual.
+            Never in a release.
+
+    config DONGLE_VIDEO_BENCH_PACE_US
+        int "Bench: microseconds between chunks"
+        depends on DONGLE_VIDEO_BENCH
+        default 1000
+        range 100 20000
+
+endmenu
