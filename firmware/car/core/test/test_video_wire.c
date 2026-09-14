@@ -145,6 +145,63 @@ int main(void) {
         assert(small.dropped == 1);
     }
 
+    /* --- R7(a): a stream change mid-frame discards the abandoned frame silently ----
+       (rule 3): no LOSS for the stray stream-1 chunk, no dropped++, and the stream-2
+       keyframe that follows is still delivered whole. */
+    {
+        vw_rx_t rx2;
+        vw_rx_init(&rx2);
+        fill(g_frame, 3000, 21);
+        assert(send(&rx2, 1, 0, true, 3000, in_order, 3, -1, &out_len) == VW_RX_FRAME);
+        assert(send(&rx2, 1, 1, false, 3000, first, 1, -1, &out_len) == VW_RX_NONE);  /* in progress */
+        fill(g_frame, 3000, 29);
+        assert(send(&rx2, 2, 0, true, 3000, in_order, 3, -1, &out_len) == VW_RX_FRAME);
+        assert(out_len == 3000 && memcmp(g_out, g_frame, 3000) == 0);
+        assert(rx2.dropped == 0);
+    }
+
+    /* --- R7(b): a flags mismatch mid-frame (same frame, same count) is corruption --- */
+    {
+        vw_rx_t rx3;
+        vw_rx_init(&rx3);
+        fill(g_frame, 3000, 33);
+        assert(send(&rx3, 1, 0, true, 3000, in_order, 3, -1, &out_len) == VW_RX_FRAME);
+        vw_header_t base2 = { .proto = VIDEO_WIRE_PROTO, .flags = 0, .stream = 1, .frame = 1, .captured_ms = 1001 };
+        size_t d0 = vw_chunk(&base2, g_frame, 3000, 0, g_dgram);       /* flags 0, count 3 */
+        assert(d0 > 0);
+        assert(vw_rx_feed(&rx3, g_dgram, d0, g_out, sizeof(g_out), &out_len) == VW_RX_NONE);
+        vw_header_t mismatched = { .proto = VIDEO_WIRE_PROTO, .flags = VW_FLAG_KEY, .stream = 1,
+                                   .frame = 1, .chunk = 1, .count = 3, .captured_ms = 1001 };
+        vw_pack(&mismatched, g_dgram);
+        memcpy(g_dgram + VIDEO_HEADER_BYTES, g_frame + VIDEO_CHUNK_BYTES, VIDEO_CHUNK_BYTES);
+        assert(vw_rx_feed(&rx3, g_dgram, VIDEO_HEADER_BYTES + VIDEO_CHUNK_BYTES, g_out, sizeof(g_out),
+                          &out_len) == VW_RX_LOSS);
+        assert(rx3.dropped == 1);
+    }
+
+    /* --- R7(c): a bad header and a straggler leave wait_key and bookkeeping untouched --- */
+    {
+        vw_rx_t rx4;
+        vw_rx_init(&rx4);
+        fill(g_frame, 3000, 41);
+        assert(send(&rx4, 1, 0, true, 3000, in_order, 3, -1, &out_len) == VW_RX_FRAME);
+        fill(g_frame, 3000, 47);
+        assert(send(&rx4, 1, 1, false, 3000, in_order, 3, -1, &out_len) == VW_RX_FRAME);
+        vw_header_t foreign = { .proto = 0, .flags = 0, .stream = 1, .frame = 2, .chunk = 0,
+                                .count = 3, .captured_ms = 0 };
+        vw_pack(&foreign, g_dgram);
+        memset(g_dgram + VIDEO_HEADER_BYTES, 0, VIDEO_CHUNK_BYTES);
+        assert(vw_rx_feed(&rx4, g_dgram, VIDEO_HEADER_BYTES + VIDEO_CHUNK_BYTES, g_out, sizeof(g_out),
+                          &out_len) == VW_RX_BAD);
+        vw_header_t base3 = { .proto = VIDEO_WIRE_PROTO, .flags = 0, .stream = 1, .frame = 1, .captured_ms = 1001 };
+        size_t sd = vw_chunk(&base3, g_frame, 3000, 0, g_dgram);       /* already-delivered frame 1 */
+        assert(sd > 0);
+        assert(vw_rx_feed(&rx4, g_dgram, sd, g_out, sizeof(g_out), &out_len) == VW_RX_NONE);
+        fill(g_frame, 3000, 53);
+        assert(send(&rx4, 1, 2, false, 3000, in_order, 3, -1, &out_len) == VW_RX_FRAME);
+        assert(rx4.dropped == 0);
+    }
+
     printf("test_video_wire: OK\n");
     return 0;
 }
