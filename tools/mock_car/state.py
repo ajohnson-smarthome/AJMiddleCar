@@ -156,15 +156,17 @@ def parse_frame(data, max_command=None):
       * over the *command* cap -> dropped. `max_datagram` sizes a receive buffer; what
         the car agrees to act on is `max_command`, and the difference is the room a
         telemetry frame needs on the way out.
-      * `type` is required and must be one the app sends: hello, drive, bye. Anything
-        else (missing, unknown, or one of the car->app types) has nothing to act on.
+      * `type` is required and must be one the app sends: hello, drive, bye, view.
+        Anything else (missing, unknown, or one of the car->app types) has nothing to
+        act on.
       * every key that is present must parse, or the whole datagram is dropped. A frame
         with a good `throttle` and a broken `seq` is not a command with a missing
         sequence number; it is corrupt.
       * `throttle` and `turn` come as a pair. One axis without the other is a truncated
         frame, not an instruction to hold the other at zero.
-      * hello needs `session`; drive needs `seq` and both axes; bye needs `seq`. Axes on
-        a bye are tolerated (the app sends them) but never required.
+      * hello and view need `session`; view may carry `key`. drive needs `seq` and both
+        axes; bye needs `seq`. Axes on a bye are tolerated (the app sends them) but
+        never required.
 
     Range is deliberately not checked here either — the arbiter clamps.
     """
@@ -179,7 +181,7 @@ def parse_frame(data, max_command=None):
         return None
     K, T = RT["keys"], RT["types"]
     kind = frame.get(K["type"])
-    if kind not in (T["hello"], T["drive"], T["bye"]):
+    if kind not in (T["hello"], T["drive"], T["bye"], T["view"]):
         return None
     out = {K["type"]: kind}
     for key in (K["proto"], K["seq"]):
@@ -191,6 +193,10 @@ def parse_frame(data, max_command=None):
         if not valid_sid(frame[K["session"]]):
             return None
         out[K["session"]] = frame[K["session"]]
+    if K["key"] in frame:
+        if not isinstance(frame[K["key"]], bool):
+            return None
+        out[K["key"]] = frame[K["key"]]
     has_t, has_y = K["throttle"] in frame, K["turn"] in frame
     if has_t or has_y:
         if not (has_t and has_y):
@@ -200,6 +206,8 @@ def parse_frame(data, max_command=None):
             return None
         out[K["throttle"]], out[K["turn"]] = t, y
     if kind == T["hello"] and K["session"] not in out:
+        return None
+    if kind == T["view"] and K["session"] not in out:
         return None
     if kind == T["drive"] and (K["seq"] not in out or K["throttle"] not in out):
         return None
@@ -249,6 +257,12 @@ class CarState:
         self._calibration = {}         # corner -> (pair, inverted)
         self._bus_ok = True
         self._tele_seq = 0
+        # Task 13 wires a real encoder in; until then the group says the honest thing —
+        # idle, nothing sent.
+        self.video_state = "idle"
+        self.video_fps = 0
+        self.video_kbps = 0
+        self.video_dropped = 0
 
     # ---- what the outside reads ------------------------------------------------
 
@@ -663,6 +677,8 @@ class CarState:
             "motors": {"bus": "ok" if self._bus_ok else "down", "calibrated": self._calibrated,
                        "owner": self._owner},
             "system": {"uptime_s": int(self._now - self._started), "free_heap": self.heap},
+            "video": {"state": self.video_state, "fps": self.video_fps, "kbps": self.video_kbps,
+                      "dropped": self.video_dropped},
         }
         return {g: {f["name"]: values[g][f["name"]] for f in GROUPS[g]["fields"]} for g in TELEMETRY_GROUPS}
 

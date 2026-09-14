@@ -23,7 +23,8 @@ check(SessionPolicy.handshakeOutcome(RTFrame.parse(ack("deadbeef", proto: 3)), s
 let telemetry = Telemetry(proto: 2, seq: 1,
                           link: LinkInfo(rx_hz: 0, rssi_dbm: nil, timeouts: 0),
                           motors: MotorsInfo(bus: .ok, calibrated: true, owner: .idle),
-                          system: SystemInfo(uptime_s: 5, free_heap: 1))
+                          system: SystemInfo(uptime_s: 5, free_heap: 1),
+                          video: VideoInfo(state: .idle, fps: 0, kbps: 0, dropped: 0))
 check(SessionPolicy.handshakeOutcome(.telemetry(telemetry), sid: sid) == .ignore,
       "telemetry during the handshake is not an answer")
 check(SessionPolicy.handshakeOutcome(nil, sid: sid) == .ignore, "garbage is ignored")

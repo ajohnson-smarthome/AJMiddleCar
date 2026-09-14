@@ -130,9 +130,10 @@ async def status(request):
     car, link = request.app["car"], request.app["link"]
     now = asyncio.get_running_loop().time()
     dev = [f["name"] for f in GROUPS["device"]["fields"]]
-    # Schema order (STATUS_GROUPS): device, link, motors, radio, storage, system —
+    # Schema order (STATUS_GROUPS): device, link, motors, radio, storage, system, video —
     # `radio` and `storage` are /status-only diagnostics the schema does not describe,
-    # inserted between the two groups `status_groups` already returns in order.
+    # inserted between link/motors and system/video, the groups `status_groups` already
+    # returns in order.
     groups = car.status_groups(link.rx_fps(now, "status"))
     return reply({
         "device": dict(zip(dev, [car.device, car.fw, build_number(car.fw), car.rollback])),
@@ -141,6 +142,7 @@ async def status(request):
         "radio": {"fw": "mock", "expected": "mock", "state": "ok"},
         "storage": {"reset_at_boot": car.nvs_wiped},
         "system": groups["system"],
+        "video": groups["video"],
     })
 
 

@@ -18,7 +18,7 @@ static const cfg_field_t *find(const char *key, const char *name) {
 }
 
 int main(void) {
-    assert(CFG_DOMAIN_COUNT == 5);
+    assert(CFG_DOMAIN_COUNT == 6);
     assert(CFG_MAX_FIELDS == 4);
     assert(strcmp(CFG_CONFIG_PATH, "/config") == 0);
     assert(RT_PORT == 4210);

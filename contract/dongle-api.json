@@ -10,7 +10,9 @@
   "relay": {
     "http_port": 80,
     "rt_port": 4210,
-    "doc": "The ports the dongle listens on for the car's traffic, on its own address. What speaks on them is not the dongle's business."
+    "video_port": 4211,
+    "video_max_kbps": 2500,
+    "doc": "The ports the dongle listens on for the car's traffic, on its own address. What speaks on them is not the dongle's business. video_port is forwarded the same way; video_max_kbps is the admission limit the video relay enforces toward the phone."
   },
   "endpoints": {
     "status": "/status",
@@ -72,7 +74,13 @@
           {"name": "message", "type": "str", "doc": "strerror of it"},
           {"name": "count", "type": "int", "doc": "how many times in a row this errno repeated"},
           {"name": "age_s", "type": "int", "doc": "seconds since it last happened"}
-        ]}
+        ]},
+        {"name": "video_sessions", "type": "int", "nullable": true,
+         "doc": "video sessions in use, of 4; null from a dongle that predates video"},
+        {"name": "video_kbps", "type": "number", "nullable": true,
+         "doc": "video toward the phone, kbit/s with one decimal; null from a dongle that predates video"},
+        {"name": "video_dropped", "type": "int", "nullable": true,
+         "doc": "video chunks the admission limit discarded since boot; null from a dongle that predates video"}
       ]
     },
     "system": {

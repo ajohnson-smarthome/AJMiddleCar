@@ -14,6 +14,7 @@
 #include "recovery.h"
 #include "wheel.h"
 #include "dims.h"
+#include "video_cfg.h"
 #include "api_util.h"
 
 static const char *TAG = "cfg_api";
@@ -36,6 +37,9 @@ typedef struct {
 
 static void ramp_get_v(int32_t *o) { o[0] = ramp_get_ms(); }
 static bool ramp_set_v(const int32_t *v) { return ramp_set_ms((uint16_t)v[0]); }
+
+static void video_get_v(int32_t *o) { o[0] = video_cfg_get_bitrate(); }
+static bool video_set_v(const int32_t *v) { return video_cfg_set_bitrate((uint16_t)v[0]); }
 
 static void trim_get_v(int32_t *o) { o[0] = car_get_trim(); }
 static bool trim_set_v(const int32_t *v) { car_set_trim((int8_t)v[0]); return true; }
@@ -76,6 +80,7 @@ static const cfg_binding_t BINDINGS[] = {
     { "recovery", recover_get_v, recover_set_v, recovery_save },
     { "wheel",    wheel_get_v,   wheel_set_v,   wheel_save },
     { "chassis",  dims_get_v,    dims_set_v,    dims_save },
+    { "video",    video_get_v,   video_set_v,   video_cfg_save },
 };
 
 static const cfg_binding_t *binding_for(const char *key) {

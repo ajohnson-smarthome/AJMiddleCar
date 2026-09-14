@@ -24,6 +24,9 @@ static const cfg_field_t CFG_DIMS_FIELDS[] = {
     { "track_mm", CFG_INT, 60, 300, 130, NULL, 0, 1 },
     { "wheelbase_mm", CFG_INT, 90, 360, 210, NULL, 0, 1 },
 };
+static const cfg_field_t CFG_VIDEO_FIELDS[] = {
+    { "bitrate_kbps", CFG_INT, 500, 3000, 1500, NULL, 0, 1 },
+};
 
 static const cfg_domain_t CFG_DOMAINS[] = {
     { "ramp", "ramp", CFG_RAMP_FIELDS, 1 },
@@ -31,10 +34,11 @@ static const cfg_domain_t CFG_DOMAINS[] = {
     { "recovery", "recover", CFG_RECOVER_FIELDS, 2 },
     { "wheel", "wheel", CFG_WHEEL_FIELDS, 4 },
     { "chassis", "dims", CFG_DIMS_FIELDS, 2 },
+    { "video", "video", CFG_VIDEO_FIELDS, 1 },
 };
 
 #define CFG_CONFIG_PATH "/config"
-#define CFG_DOMAIN_COUNT 5
+#define CFG_DOMAIN_COUNT 6
 #define CFG_MAX_FIELDS 4
 
 #define RT_PROTO 2
@@ -51,11 +55,13 @@ static const cfg_domain_t CFG_DOMAINS[] = {
 #define RT_KEY_SEQ "seq"
 #define RT_KEY_THROTTLE "throttle"
 #define RT_KEY_TURN "turn"
+#define RT_KEY_KEY "key"
 #define RT_TYPE_HELLO "hello"
 #define RT_TYPE_HELLO_ACK "hello_ack"
 #define RT_TYPE_DRIVE "drive"
 #define RT_TYPE_BYE "bye"
 #define RT_TYPE_TELEMETRY "telemetry"
+#define RT_TYPE_VIEW "view"
 
 #define KEY_PROTO "proto"
 #define KEY_OK "ok"
@@ -70,6 +76,7 @@ static const cfg_domain_t CFG_DOMAINS[] = {
 #define PATH_CALIBRATION "/calibration"
 #define PATH_SPIN "/calibration/spin"
 #define PATH_OTA "/ota"
+#define PATH_SNAPSHOT "/snapshot"
 
 #define KEY_GROUP_DEVICE "device"
 #define KEY_DEVICE_ID "id"
@@ -114,6 +121,16 @@ static const cfg_domain_t CFG_DOMAINS[] = {
 #define KEY_SYSTEM_UPTIME_S "uptime_s"
 #define KEY_SYSTEM_FREE_HEAP "free_heap"
 
+#define KEY_GROUP_VIDEO "video"
+#define KEY_VIDEO_STATE "state"
+#define VIDEO_STATE_OFF "off"
+#define VIDEO_STATE_IDLE "idle"
+#define VIDEO_STATE_STREAMING "streaming"
+#define VIDEO_STATE_COUNT 3
+#define KEY_VIDEO_FPS "fps"
+#define KEY_VIDEO_KBPS "kbps"
+#define KEY_VIDEO_DROPPED "dropped"
+
 #define ERR_BAD_JSON "bad_json"
 #define ERR_MISSING_FIELD "missing_field"
 #define ERR_UNKNOWN_FIELD "unknown_field"
@@ -140,3 +157,18 @@ static const cfg_domain_t CFG_DOMAINS[] = {
 #define KEY_CALIB_PAIR "pair"
 #define KEY_CALIB_INVERTED "inverted"
 #define KEY_CALIB_DIRECTION "direction"
+
+#define VIDEO_PORT 4211
+#define VIDEO_WIDTH 1280
+#define VIDEO_HEIGHT 960
+#define VIDEO_FPS 15
+#define VIDEO_SENSOR_FPS 45
+#define VIDEO_CHUNK_BYTES 1400
+#define VIDEO_HEADER_BYTES 12
+#define VIDEO_WIRE_PROTO 1
+#define VIDEO_SUBSCRIBE_MS 1000
+#define VIDEO_SUBSCRIBE_TIMEOUT_MS 3000
+#define VIDEO_KEYFRAME_S 3
+#define VIDEO_IDR_MIN_MS 250
+#define VIDEO_ROTATION 0
+#define VIDEO_MIRROR 0

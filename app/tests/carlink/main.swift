@@ -10,7 +10,8 @@ func check(_ ok: Bool, _ what: String) {
 let fresh = Telemetry(proto: 2, seq: 1,
                       link: LinkInfo(rx_hz: 10, rssi_dbm: -58, timeouts: 0),
                       motors: MotorsInfo(bus: .ok, calibrated: true, owner: .remote),
-                      system: SystemInfo(uptime_s: 10, free_heap: 200000))
+                      system: SystemInfo(uptime_s: 10, free_heap: 200000),
+                      video: VideoInfo(state: .idle, fps: 0, kbps: 0, dropped: 0))
 
 let adopted = SessionState.adopted(device: CarContract.device, fw: "v1.0+517")
 func compose(_ p: PathState, _ s: SessionState, _ t: Telemetry?, _ age: TimeInterval?) -> Link {

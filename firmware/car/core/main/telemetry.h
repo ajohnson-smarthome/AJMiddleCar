@@ -22,12 +22,16 @@ typedef struct {
     bool     calibrated;  // valid calibration present
     bool     bus_ok;      // false once a PCA9685 write failed and has not since succeeded
     const char *owner;    // which source owns the actuator: one of the MOTORS_OWNER_* words
+    const char *video_state;   // one of the VIDEO_STATE_* words
+    uint32_t video_fps;        // frames encoded in the last second
+    uint32_t video_kbps;       // kbit sent in the last second
+    uint32_t video_dropped;    // frames not sent since boot
 } telemetry_t;
 
-// Pure: the "link", "motors" and "system" members (NO surrounding braces, no trailing
-// comma). Shared by the real-time push and /status. Every key is a generated macro, so a
-// rename in the schema cannot survive here; test_contract_wire checks the nesting.
-// Returns the length, or -1 on truncation.
+// Pure: the "link", "motors", "system" and "video" members (NO surrounding braces, no
+// trailing comma). Shared by the real-time push and /status. Every key is a generated
+// macro, so a rename in the schema cannot survive here; test_contract_wire checks the
+// nesting. Returns the length, or -1 on truncation.
 static inline int telemetry_groups(char *buf, size_t n, const telemetry_t *t) {
     char rssi[12];
     if (t->rssi != 0) snprintf(rssi, sizeof(rssi), "%d", t->rssi);
@@ -37,11 +41,16 @@ static inline int telemetry_groups(char *buf, size_t n, const telemetry_t *t) {
             "\"" KEY_LINK_TIMEOUTS "\":%u},"
         "\"" KEY_GROUP_MOTORS "\":{\"" KEY_MOTORS_BUS "\":\"%s\",\"" KEY_MOTORS_CALIBRATED "\":%s,"
             "\"" KEY_MOTORS_OWNER "\":\"%s\"},"
-        "\"" KEY_GROUP_SYSTEM "\":{\"" KEY_SYSTEM_UPTIME_S "\":%ld,\"" KEY_SYSTEM_FREE_HEAP "\":%u}",
+        "\"" KEY_GROUP_SYSTEM "\":{\"" KEY_SYSTEM_UPTIME_S "\":%ld,\"" KEY_SYSTEM_FREE_HEAP "\":%u}"
+        ","
+        "\"" KEY_GROUP_VIDEO "\":{\"" KEY_VIDEO_STATE "\":\"%s\",\"" KEY_VIDEO_FPS "\":%u,"
+            "\"" KEY_VIDEO_KBPS "\":%u,\"" KEY_VIDEO_DROPPED "\":%u}",
         t->rx_hz, rssi, (unsigned)t->timeouts,
         t->bus_ok ? MOTORS_BUS_OK : MOTORS_BUS_DOWN, t->calibrated ? "true" : "false",
         t->owner ? t->owner : MOTORS_OWNER_IDLE,
-        t->uptime_s, (unsigned)t->free_heap);
+        t->uptime_s, (unsigned)t->free_heap,
+        t->video_state ? t->video_state : VIDEO_STATE_OFF, (unsigned)t->video_fps,
+        (unsigned)t->video_kbps, (unsigned)t->video_dropped);
     if (r < 0 || r >= (int)n) return -1;
     return r;
 }

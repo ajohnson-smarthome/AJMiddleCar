@@ -53,13 +53,13 @@ check(RTFrame.parse(#"{"proto":2,"type":"hello_ack","session":"7f3a91c2"}"#) == 
 check(RTFrame.parse(#"{"proto":1,"hello":"7f3a91c2","device":"ajmiddlecar","fw":"v1.0+784"}"#) == nil,
       "a v1 reply is ignored")
 
-let tele = #"{"proto":2,"type":"telemetry","seq":88,"link":{"rx_hz":10,"rssi_dbm":-58,"timeouts":0},"motors":{"bus":"ok","calibrated":true,"owner":"remote"},"system":{"uptime_s":812,"free_heap":200000}}"#
+let tele = #"{"proto":2,"type":"telemetry","seq":88,"link":{"rx_hz":10,"rssi_dbm":-58,"timeouts":0},"motors":{"bus":"ok","calibrated":true,"owner":"remote"},"system":{"uptime_s":812,"free_heap":200000},"video":{"state":"idle","fps":0,"kbps":0,"dropped":0}}"#
 if case .telemetry(let t)? = RTFrame.parse(tele) {
     check(t.seq == 88 && t.link.rx_hz == 10 && t.link.rssi_dbm == -58 && t.link.timeouts == 0, "telemetry link")
     check(t.motors.bus == .ok && t.motors.calibrated && t.motors.owner == .remote, "telemetry motors")
     check(t.system.uptime_s == 812 && t.system.free_heap == 200000, "telemetry system")
 } else { check(false, "telemetry parses") }
-if case .telemetry(let t)? = RTFrame.parse(#"{"proto":2,"type":"telemetry","seq":1,"link":{"rx_hz":0,"rssi_dbm":null,"timeouts":3},"motors":{"bus":"down","calibrated":false,"owner":"hover"},"system":{"uptime_s":1,"free_heap":1}}"#) {
+if case .telemetry(let t)? = RTFrame.parse(#"{"proto":2,"type":"telemetry","seq":1,"link":{"rx_hz":0,"rssi_dbm":null,"timeouts":3},"motors":{"bus":"down","calibrated":false,"owner":"hover"},"system":{"uptime_s":1,"free_heap":1},"video":{"state":"idle","fps":0,"kbps":0,"dropped":0}}"#) {
     check(t.link.rssi_dbm == nil, "null rssi is nil")
     check(t.motors.bus == .down, "bus down")
     check(t.motors.owner == .unknown("hover"), "an owner word this build does not know is kept, not dropped")

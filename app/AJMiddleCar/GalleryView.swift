@@ -58,7 +58,8 @@ struct GalleryView: View {
         let t = Telemetry(proto: CarContract.proto, seq: 1,
                           link: LinkInfo(rx_hz: 10, rssi_dbm: rssi, timeouts: wdtTrips),
                           motors: MotorsInfo(bus: busOk ? .ok : .down, calibrated: calibrated, owner: owner),
-                          system: SystemInfo(uptime_s: 3847, free_heap: 131072))
+                          system: SystemInfo(uptime_s: 3847, free_heap: 131072),
+                          video: VideoInfo(state: .idle, fps: 0, kbps: 0, dropped: 0))
         return CarLink.preview(.live(t), fw: fw, radio: .known(fw: "3.0.6", ok: true))
     }
 

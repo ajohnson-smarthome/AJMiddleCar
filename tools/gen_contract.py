@@ -145,6 +145,13 @@ def emit_c(schema):
     out.append(f"#define CALIB_PAIRS {cal['pairs']}")
     for k, v in cal["keys"].items():
         out.append(f'#define KEY_CALIB_{k.upper()} "{v}"')
+    vid = schema["video"]
+    out.append("")
+    for k in ("port", "width", "height", "fps", "sensor_fps", "chunk_bytes", "header_bytes",
+              "wire_proto", "subscribe_ms", "subscribe_timeout_ms", "keyframe_s", "idr_min_ms",
+              "rotation"):
+        out.append(f"#define VIDEO_{k.upper()} {vid[k]}")
+    out.append(f"#define VIDEO_MIRROR {1 if vid['mirror'] else 0}")
     return "\n".join(out)
 
 
@@ -177,6 +184,20 @@ def emit_swift(schema):
            f"    public static let telemetryHz = {rt['telemetry_hz']}",
            f"    public static let watchdogMs = {rt['watchdog_ms']}",
            f"    public static let sessionIdleMs = {rt['session_idle_ms']}"]
+    vid = schema["video"]
+    out += [f"    public static let videoPort: UInt16 = {vid['port']}",
+            f"    public static let videoWidth = {vid['width']}",
+            f"    public static let videoHeight = {vid['height']}",
+            f"    public static let videoFps = {vid['fps']}",
+            f"    public static let videoChunkBytes = {vid['chunk_bytes']}",
+            f"    public static let videoHeaderBytes = {vid['header_bytes']}",
+            f"    public static let videoWireProto = {vid['wire_proto']}",
+            f"    public static let videoSubscribeMs = {vid['subscribe_ms']}",
+            f"    public static let videoSubscribeTimeoutMs = {vid['subscribe_timeout_ms']}",
+            f"    public static let videoKeyframeS = {vid['keyframe_s']}",
+            f"    public static let videoIdrMinMs = {vid['idr_min_ms']}",
+            f"    public static let videoRotation = {vid['rotation']}",
+            f"    public static let videoMirror = {'true' if vid['mirror'] else 'false'}"]
     for k, v in rt["keys"].items():
         out.append(f'    public static let {k}Field = "{v}"')
     for k in ("ok", "error"):
@@ -352,6 +373,7 @@ def emit_python(schema):
         f"RT = {schema['rt']!r}",
         f"TELEMETRY_GROUPS = {schema['telemetry']['groups']!r}",
         f"CALIBRATION = {schema['calibration']!r}",
+        f"VIDEO = {schema['video']!r}",
         f"CONFIG_PATH = {cfg['path']!r}",
         f"DOMAINS = {pprint.pformat(body, indent=4, sort_dicts=False, width=96)}",
         VALIDATE_SRC.rstrip("\n"),

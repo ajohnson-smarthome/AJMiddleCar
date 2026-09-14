@@ -9,13 +9,15 @@ int main(void) {
     char buf[RT_MAX_DATAGRAM];
     telemetry_t t = { .seq = 88, .rssi = -55, .rx_hz = 10, .timeouts = 2, .uptime_s = 123,
                       .free_heap = 198000, .calibrated = true, .owner = MOTORS_OWNER_REMOTE,
-                      .bus_ok = true };
+                      .bus_ok = true, .video_state = VIDEO_STATE_IDLE, .video_fps = 0,
+                      .video_kbps = 0, .video_dropped = 0 };
     int n = telemetry_groups(buf, sizeof(buf), &t);
     assert(n > 0);
     assert(strcmp(buf,
         "\"link\":{\"rx_hz\":10,\"rssi_dbm\":-55,\"timeouts\":2},"
         "\"motors\":{\"bus\":\"ok\",\"calibrated\":true,\"owner\":\"remote\"},"
-        "\"system\":{\"uptime_s\":123,\"free_heap\":198000}") == 0);
+        "\"system\":{\"uptime_s\":123,\"free_heap\":198000}"
+        ",\"video\":{\"state\":\"idle\",\"fps\":0,\"kbps\":0,\"dropped\":0}") == 0);
 
     n = telemetry_datagram(buf, sizeof(buf), &t);
     assert(n > 0 && n == (int)strlen(buf));
@@ -23,14 +25,17 @@ int main(void) {
         "{\"proto\":2,\"type\":\"telemetry\",\"seq\":88,"
         "\"link\":{\"rx_hz\":10,\"rssi_dbm\":-55,\"timeouts\":2},"
         "\"motors\":{\"bus\":\"ok\",\"calibrated\":true,\"owner\":\"remote\"},"
-        "\"system\":{\"uptime_s\":123,\"free_heap\":198000}}") == 0);
+        "\"system\":{\"uptime_s\":123,\"free_heap\":198000}"
+        ",\"video\":{\"state\":\"idle\",\"fps\":0,\"kbps\":0,\"dropped\":0}}") == 0);
 
     /* The push is a datagram, so the whole frame has to be one. Worst case: every
        counter wide, a negative RSSI and the longest owner name. */
     telemetry_t wide = { .seq = 4294967295u, .rssi = -100, .rx_hz = 999,
                          .timeouts = 4294967295u, .uptime_s = 999999999,
                          .free_heap = 4294967295u, .calibrated = true,
-                         .owner = MOTORS_OWNER_CALIBRATION, .bus_ok = false };
+                         .owner = MOTORS_OWNER_CALIBRATION, .bus_ok = false,
+                         .video_state = VIDEO_STATE_STREAMING, .video_fps = 999,
+                         .video_kbps = 4294967295u, .video_dropped = 4294967295u };
     int w = telemetry_datagram(buf, sizeof(buf), &wide);
     assert(w > 0);
     assert(w <= RT_MAX_DATAGRAM);

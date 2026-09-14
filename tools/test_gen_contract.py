@@ -24,7 +24,8 @@ class TestSchema(unittest.TestCase):
                                          "code": "code", "message": "message", "field": "field"})
         self.assertEqual(s["endpoints"], {"root": "/", "status": "/status", "config": "/config",
                                           "calibration": "/calibration",
-                                          "spin": "/calibration/spin", "ota": "/ota"})
+                                          "spin": "/calibration/spin", "ota": "/ota",
+                                          "snapshot": "/snapshot"})
 
     def test_rt_constants_and_vocabulary(self):
         rt = load()["rt"]
@@ -38,13 +39,15 @@ class TestSchema(unittest.TestCase):
         self.assertEqual(rt["session_idle_ms"], 10000)
         self.assertGreater(rt["session_idle_ms"], rt["watchdog_ms"] * 10)
         self.assertEqual(rt["keys"], {"proto": "proto", "type": "type", "session": "session",
-                                      "seq": "seq", "throttle": "throttle", "turn": "turn"})
+                                      "seq": "seq", "throttle": "throttle", "turn": "turn",
+                                      "key": "key"})
         self.assertEqual(rt["types"], {"hello": "hello", "hello_ack": "hello_ack",
-                                       "drive": "drive", "bye": "bye", "telemetry": "telemetry"})
+                                       "drive": "drive", "bye": "bye", "telemetry": "telemetry",
+                                       "view": "view"})
 
     def test_groups(self):
         g = load()["groups"]
-        self.assertEqual(list(g), ["device", "link", "motors", "radio", "storage", "system"])
+        self.assertEqual(list(g), ["device", "link", "motors", "radio", "storage", "system", "video"])
         names = {k: [f["name"] for f in v["fields"]] for k, v in g.items()}
         self.assertEqual(names["device"], ["id", "fw", "build", "rolled_back"])
         self.assertEqual(names["link"], ["rx_hz", "rssi_dbm", "timeouts"])
@@ -70,9 +73,9 @@ class TestSchema(unittest.TestCase):
 
     def test_telemetry_and_status_pick_groups_that_exist(self):
         s = load()
-        self.assertEqual(s["telemetry"]["groups"], ["link", "motors", "system"])
+        self.assertEqual(s["telemetry"]["groups"], ["link", "motors", "system", "video"])
         self.assertEqual(s["status"]["groups"],
-                         ["device", "link", "motors", "radio", "storage", "system"])
+                         ["device", "link", "motors", "radio", "storage", "system", "video"])
         for name in s["telemetry"]["groups"] + s["status"]["groups"]:
             self.assertIn(name, s["groups"])
         self.assertEqual(s["telemetry"]["swift"], "Telemetry")
@@ -83,11 +86,11 @@ class TestSchema(unittest.TestCase):
         self.assertEqual(c["path"], "/config")
         self.assertEqual(c["swift"], "CarConfig")
         keys = [d["key"] for d in c["domains"]]
-        self.assertEqual(keys, ["ramp", "trim", "recovery", "wheel", "chassis"])
+        self.assertEqual(keys, ["ramp", "trim", "recovery", "wheel", "chassis", "video"])
         self.assertEqual([d["nvs_key"] for d in c["domains"]],
-                         ["ramp", "trim", "recover", "wheel", "dims"])
+                         ["ramp", "trim", "recover", "wheel", "dims", "video"])
         self.assertEqual([d["swift"] for d in c["domains"]],
-                         ["Ramp", "Trim", "Recovery", "Wheel", "Chassis"])
+                         ["Ramp", "Trim", "Recovery", "Wheel", "Chassis", "Video"])
         for d in c["domains"]:
             self.assertTrue(d["fields"], d["key"])
             for f in d["fields"]:
@@ -111,7 +114,7 @@ class TestSchema(unittest.TestCase):
         """The schema must describe the firmware that exists, not one we imagined."""
         main = ROOT / "firmware" / "car" / "core" / "main"
         file_for_key = {"wheel": "wheel.h", "chassis": "dims.h", "recovery": "recovery.h",
-                        "ramp": "ramp.c", "trim": "car.c"}
+                        "ramp": "ramp.c", "trim": "car.c", "video": "video_cfg.h"}
         src_by_file = {n: (main / n).read_text() for n in set(file_for_key.values())}
         expected = {
             ("wheel", "diameter_mm"): (20, 150), ("wheel", "encoder_ppr"): (1, 1000),
@@ -119,6 +122,7 @@ class TestSchema(unittest.TestCase):
             ("chassis", "track_mm"): (60, 300), ("chassis", "wheelbase_mm"): (90, 360),
             ("recovery", "window_ms"): (1000, 10000),
             ("ramp", "rise_ms"): (0, 2000), ("trim", "balance_pct"): (-30, 30),
+            ("video", "bitrate_kbps"): (500, 3000),
         }
         got = {}
         for d in load()["config"]["domains"]:
@@ -144,6 +148,29 @@ class TestSchema(unittest.TestCase):
         self.assertEqual(s["errors"], ["bad_json", "missing_field", "unknown_field", "wrong_type",
                                        "out_of_range", "not_allowed", "busy", "too_small",
                                        "not_firmware", "write_failed", "internal"])
+
+    def test_video_section(self):
+        v = load()["video"]
+        self.assertEqual((v["port"], v["width"], v["height"], v["fps"], v["sensor_fps"]),
+                         (4211, 1280, 960, 15, 45))
+        self.assertEqual(v["sensor_fps"] % v["fps"], 0, "fps must divide the sensor rate")
+        self.assertEqual((v["chunk_bytes"], v["header_bytes"], v["wire_proto"]), (1400, 12, 1))
+        self.assertLess(v["chunk_bytes"] + v["header_bytes"] + 8 + 20 + 14, 1500)
+        self.assertEqual((v["subscribe_ms"], v["subscribe_timeout_ms"]), (1000, 3000))
+        self.assertGreater(v["subscribe_timeout_ms"], 2 * v["subscribe_ms"])
+        self.assertEqual((v["keyframe_s"], v["idr_min_ms"]), (3, 250))
+        self.assertIn(v["rotation"], (0, 180))
+        self.assertIsInstance(v["mirror"], bool)
+        self.assertNotEqual(v["port"], load()["rt"]["port"])
+        for vec in v["vectors"]:
+            self.assertEqual(len(bytes.fromhex(vec["bytes"])), v["header_bytes"], vec["name"])
+            self.assertIn("valid", vec)
+            if vec["valid"]:
+                h = vec["header"]
+                self.assertEqual(h["proto"], v["wire_proto"])
+                self.assertLess(h["chunk"], h["count"])
+        self.assertTrue(any(not vec["valid"] for vec in v["vectors"]),
+                        "the receivers need a vector they must reject")
 
 
 import filecmp
@@ -299,7 +326,7 @@ class TestCommonEmitters(unittest.TestCase):
         lines = [l for l in out.splitlines() if l.startswith("    public var ")]
         self.assertEqual(lines[0], "    public var proto: Int")
         self.assertEqual(lines[1], "    public var device: DeviceInfo")
-        self.assertEqual(lines[-1], "    public var system: SystemInfo")
+        self.assertEqual(lines[-1], "    public var video: VideoInfo")
 
     def test_lround_is_half_away_from_zero(self):
         self.assertEqual(self.c.lround(900.5), 901)
@@ -329,7 +356,7 @@ class TestCEmitter(unittest.TestCase):
         self.assertIn('    { "chassis", "dims", CFG_DIMS_FIELDS, 2 },', self.out)
         self.assertIn('#define CFG_CONFIG_PATH "/config"', self.out)
         self.assertEqual(self.out.count("CFG_DOMAINS[] = {"), 1)
-        self.assertIn("#define CFG_DOMAIN_COUNT 5", self.out)
+        self.assertIn("#define CFG_DOMAIN_COUNT 6", self.out)
         self.assertIn("#define CFG_MAX_FIELDS 4", self.out)
 
     def test_rt_symbols(self):
@@ -337,11 +364,25 @@ class TestCEmitter(unittest.TestCase):
                      "#define RT_PROTO 2", '#define RT_KEY_TYPE "type"', '#define RT_KEY_SESSION "session"',
                      '#define RT_KEY_THROTTLE "throttle"', '#define RT_KEY_TURN "turn"',
                      '#define RT_TYPE_HELLO_ACK "hello_ack"', '#define RT_TYPE_DRIVE "drive"',
-                     '#define RT_TYPE_TELEMETRY "telemetry"'):
+                     '#define RT_TYPE_TELEMETRY "telemetry"', '#define RT_TYPE_VIEW "view"',
+                     '#define RT_KEY_KEY "key"'):
             self.assertIn(line, self.out.splitlines(), line)
         self.assertNotIn("RT_KEY_HELLO", self.out)
         self.assertNotIn("RT_KEY_BYE", self.out)
         self.assertNotIn("CTL_", self.out)
+
+    def test_video_symbols(self):
+        for line in ("#define VIDEO_PORT 4211", "#define VIDEO_WIDTH 1280", "#define VIDEO_HEIGHT 960",
+                     "#define VIDEO_FPS 15", "#define VIDEO_SENSOR_FPS 45", "#define VIDEO_CHUNK_BYTES 1400",
+                     "#define VIDEO_HEADER_BYTES 12", "#define VIDEO_WIRE_PROTO 1",
+                     "#define VIDEO_SUBSCRIBE_MS 1000", "#define VIDEO_SUBSCRIBE_TIMEOUT_MS 3000",
+                     "#define VIDEO_KEYFRAME_S 3", "#define VIDEO_IDR_MIN_MS 250",
+                     "#define VIDEO_ROTATION 0", "#define VIDEO_MIRROR 0",
+                     '#define PATH_SNAPSHOT "/snapshot"', '#define KEY_GROUP_VIDEO "video"',
+                     '#define VIDEO_STATE_STREAMING "streaming"', "#define VIDEO_STATE_COUNT 3",
+                     '#define KEY_VIDEO_DROPPED "dropped"'):
+            self.assertIn(line, self.out.splitlines(), line)
+        self.assertNotIn("vectors", self.out)
 
     def test_groups_envelope_errors_paths_and_calibration(self):
         for line in ('#define KEY_GROUP_MOTORS "motors"', '#define KEY_MOTORS_OWNER "owner"',
@@ -367,11 +408,15 @@ class TestSwiftEmitter(unittest.TestCase):
                      '    public static let typeField = "type"', '    public static let sessionField = "session"',
                      '    public static let turnField = "turn"', '    public static let configPath = "/config"',
                      '    public static let spinPath = "/calibration/spin"',
-                     '    public static let okField = "ok"', '    public static let errorField = "error"'):
+                     '    public static let okField = "ok"', '    public static let errorField = "error"',
+                     "    public static let videoPort: UInt16 = 4211", "    public static let videoChunkBytes = 1400",
+                     "    public static let videoMirror = false", '    public static let keyField = "key"',
+                     '    public static let snapshotPath = "/snapshot"'):
             self.assertIn(line, self.lines(), line)
         self.assertNotIn("helloField", self.out)
         self.assertNotIn("yawField", self.out)
         self.assertIn('    public static let helloAck = "hello_ack"', self.lines())
+        self.assertIn('    public static let view = "view"', self.lines())
         self.assertIn("public enum RTType {", self.out)
 
     def test_groups_and_documents(self):
@@ -381,11 +426,14 @@ class TestSwiftEmitter(unittest.TestCase):
         self.assertIn("    public var rssi_dbm: Int?", self.lines())
         self.assertIn("public struct Telemetry: Codable, Equatable, Sendable {", self.out)
         self.assertIn("    public init(proto: Int, seq: Int, link: LinkInfo, motors: MotorsInfo, "
-                      "system: SystemInfo) { self.proto = proto; self.seq = seq; self.link = link; "
-                      "self.motors = motors; self.system = system }", self.lines())
+                      "system: SystemInfo, video: VideoInfo) { self.proto = proto; self.seq = seq; "
+                      "self.link = link; self.motors = motors; self.system = system; "
+                      "self.video = video }", self.lines())
         self.assertIn("public struct CarStatus: Codable, Equatable, Sendable {", self.out)
         self.assertIn("    public var radio: RadioInfo", self.lines())
         self.assertIn("    public var fw: String?", self.lines())   # RadioInfo.fw is nullable
+        self.assertIn("public enum VideoState: Equatable, Sendable, Codable {", self.out)
+        self.assertIn("    public var video: VideoInfo", self.lines())
 
     def test_config_structs(self):
         self.assertIn("public struct Wheel: Codable, Equatable, Sendable {", self.out)
@@ -399,12 +447,22 @@ class TestSwiftEmitter(unittest.TestCase):
         self.assertIn("    static let quadratureAllowed: [Int] = [1, 2, 4]", self.lines())
         self.assertIn("    static func pick(from c: CarConfig) -> Wheel? { c.wheel }", self.lines())
         self.assertIn("    static func wrap(_ v: Wheel) -> CarConfig { CarConfig(wheel: v) }", self.lines())
+        # Video is a single-field domain, shaped like Ramp: no Allowed list, one Range.
+        self.assertIn("public struct Video: Codable, Equatable, Sendable {", self.out)
+        self.assertIn("    public var bitrate_kbps: Int", self.lines())
+        self.assertIn('    static let key = "video"', self.lines())
+        self.assertIn("    static let `default` = Video(bitrate_kbps: 1500)", self.lines())
+        self.assertIn("    static let bitrate_kbpsRange: ClosedRange<Int> = 500...3000", self.lines())
+        self.assertIn("    static func pick(from c: CarConfig) -> Video? { c.video }", self.lines())
+        self.assertIn("    static func wrap(_ v: Video) -> CarConfig { CarConfig(video: v) }", self.lines())
         self.assertIn("public struct CarConfig: Codable, Equatable, Sendable {", self.out)
         self.assertIn("    public var recovery: Recovery?", self.lines())
+        self.assertIn("    public var video: Video?", self.lines())
         self.assertIn("    public init(proto: Int? = nil, ramp: Ramp? = nil, trim: Trim? = nil, "
-                      "recovery: Recovery? = nil, wheel: Wheel? = nil, chassis: Chassis? = nil) { "
+                      "recovery: Recovery? = nil, wheel: Wheel? = nil, chassis: Chassis? = nil, "
+                      "video: Video? = nil) { "
                       "self.proto = proto; self.ramp = ramp; self.trim = trim; self.recovery = recovery; "
-                      "self.wheel = wheel; self.chassis = chassis }", self.lines())
+                      "self.wheel = wheel; self.chassis = chassis; self.video = video }", self.lines())
         self.assertNotIn("static let path", self.out)
 
     def test_calibration_and_errors(self):
@@ -437,12 +495,15 @@ class TestPythonEmitter(unittest.TestCase):
         self.assertEqual(m.RT["keys"]["turn"], "turn")
         self.assertEqual(m.RT["types"]["hello_ack"], "hello_ack")
         self.assertEqual(m.CONFIG_PATH, "/config")
-        self.assertEqual(list(m.DOMAINS), ["ramp", "trim", "recovery", "wheel", "chassis"])
+        self.assertEqual(list(m.DOMAINS), ["ramp", "trim", "recovery", "wheel", "chassis", "video"])
         self.assertEqual(m.DOMAINS["wheel"]["defaults"]["gear_ratio"], 900)
-        self.assertEqual(m.TELEMETRY_GROUPS, ["link", "motors", "system"])
+        self.assertEqual(m.TELEMETRY_GROUPS, ["link", "motors", "system", "video"])
         self.assertEqual(m.GROUPS["motors"]["fields"][2]["values"][3], "remote")
         self.assertEqual(m.CALIBRATION["corners"][0], "front_left")
         self.assertIn("busy", m.ERRORS)
+        self.assertEqual(m.VIDEO["port"], 4211)
+        self.assertEqual(m.RT["types"]["view"], "view")
+        self.assertIn("video", m.DOMAINS)
 
     def test_validate_accepts_the_defaults_on_the_wire(self):
         m = self.m
@@ -517,7 +578,8 @@ class TestDongleSchema(unittest.TestCase):
         self.assertEqual(names["wifi"], ["ssid", "configured", "state", "rssi_dbm", "channel",
                                          "attempts"])
         self.assertEqual(names["relay"], ["to_car_hz", "to_phone_hz", "udp_sessions",
-                                          "tcp_connections", "last_error"])
+                                          "tcp_connections", "last_error", "video_sessions",
+                                          "video_kbps", "video_dropped"])
         self.assertEqual(names["system"], ["uptime_s", "free_heap"])
         for k, v in g.items():
             self.assertTrue(v["swift"].startswith("Dongle"), k)
@@ -535,6 +597,9 @@ class TestDongleSchema(unittest.TestCase):
         self.assertEqual([f["name"] for f in err["fields"]], ["errno", "message", "count", "age_s"])
         for name in ("rssi_dbm", "channel"):
             f = next(f for f in g["wifi"]["fields"] if f["name"] == name)
+            self.assertTrue(f.get("nullable"), name)
+        for name in ("video_sessions", "video_kbps", "video_dropped"):
+            f = next(f for f in g["relay"]["fields"] if f["name"] == name)
             self.assertTrue(f.get("nullable"), name)
 
     def test_status_wifi_and_errors(self):
@@ -623,6 +688,10 @@ class TestDongleAgreesWithTheCar(unittest.TestCase):
                          "relay.http_port is not the port the car actually serves; the relay "
                          "would forward REST to a port nothing listens on")
 
+    def test_relay_video_port_is_the_cars_video_port(self):
+        self.assertEqual(self.dongle["relay"]["video_port"], self.car["video"]["port"])
+        self.assertLessEqual(self.dongle["relay"]["video_max_kbps"], 3000)
+
 
 class TestDongleEmitters(unittest.TestCase):
     def setUp(self):
@@ -646,7 +715,9 @@ class TestDongleEmitters(unittest.TestCase):
                      '#define DONGLE_KEY_WIFI_ATTEMPTS_MAX "max"', '#define DONGLE_KEY_RELAY_LAST_ERROR "last_error"',
                      '#define DONGLE_WIFI_STATE_IDLE "idle"', '#define DONGLE_USB_STATE_UP "up"',
                      '#define DONGLE_WIFI_REQ_PASSWORD "password"', '#define DONGLE_ERR_BAD_LENGTH "bad_length"',
-                     '#define DONGLE_KEY_DEVICE_ID "id"'):
+                     '#define DONGLE_KEY_DEVICE_ID "id"', "#define DONGLE_RELAY_VIDEO_PORT 4211",
+                     "#define DONGLE_RELAY_VIDEO_MAX_KBPS 2500",
+                     '#define DONGLE_KEY_RELAY_VIDEO_DROPPED "video_dropped"'):
             self.assertEmitsLine(line, self.c)
         for banned in ("#include", "esp_err_t", "typedef", "struct "):
             self.assertNotIn(banned, self.c)
@@ -658,7 +729,9 @@ class TestDongleEmitters(unittest.TestCase):
                      "    public static let port: UInt16 = 8080", "    public static let relayHttpPort: UInt16 = 80",
                      "    public static let relayRtPort: UInt16 = 4210", '    public static let wifiPath = "/wifi"',
                      "    public static let ssidMax = 32", '    public static let ssidField = "ssid"',
-                     '    public static let passwordField = "password"'):
+                     '    public static let passwordField = "password"',
+                     "    public static let relayVideoPort: UInt16 = 4211",
+                     "    public static let relayVideoMaxKbps = 2500"):
             self.assertEmitsLine(line, self.sw)
         self.assertIn("public enum DongleWifiState: Equatable, Sendable, Codable {", self.sw)
         self.assertIn("    case searching", self.sw.splitlines())
@@ -666,6 +739,8 @@ class TestDongleEmitters(unittest.TestCase):
         self.assertIn("public struct DongleWifiAttempts: Codable, Equatable, Sendable {", self.sw)
         self.assertIn("    public var last_error: DongleRelayError?", self.sw.splitlines())
         self.assertIn("    public var channel: Int?", self.sw.splitlines())
+        self.assertIn("    public var video_kbps: Double?", self.sw.splitlines())
+        self.assertIn("    public var video_dropped: Int?", self.sw.splitlines())
         self.assertIn("public struct DongleStatus: Codable, Equatable, Sendable {", self.sw)
         self.assertIn("    public init(proto: Int, device: DongleDevice, usb: DongleUsb, wifi: DongleWifi, "
                       "relay: DongleRelay, system: DongleSystem) { self.proto = proto; self.device = device; "

@@ -14,12 +14,26 @@ public enum CarContract {
     public static let telemetryHz = 5
     public static let watchdogMs = 300
     public static let sessionIdleMs = 10000
+    public static let videoPort: UInt16 = 4211
+    public static let videoWidth = 1280
+    public static let videoHeight = 960
+    public static let videoFps = 15
+    public static let videoChunkBytes = 1400
+    public static let videoHeaderBytes = 12
+    public static let videoWireProto = 1
+    public static let videoSubscribeMs = 1000
+    public static let videoSubscribeTimeoutMs = 3000
+    public static let videoKeyframeS = 3
+    public static let videoIdrMinMs = 250
+    public static let videoRotation = 0
+    public static let videoMirror = false
     public static let protoField = "proto"
     public static let typeField = "type"
     public static let sessionField = "session"
     public static let seqField = "seq"
     public static let throttleField = "throttle"
     public static let turnField = "turn"
+    public static let keyField = "key"
     public static let okField = "ok"
     public static let errorField = "error"
     public static let rootPath = "/"
@@ -28,6 +42,7 @@ public enum CarContract {
     public static let calibrationPath = "/calibration"
     public static let spinPath = "/calibration/spin"
     public static let otaPath = "/ota"
+    public static let snapshotPath = "/snapshot"
 }
 
 /// The `type` word on every real-time datagram.
@@ -37,6 +52,7 @@ public enum RTType {
     public static let drive = "drive"
     public static let bye = "bye"
     public static let telemetry = "telemetry"
+    public static let view = "view"
 }
 
 /// Who is answering. The same object in the hello reply and in /status.
@@ -206,6 +222,51 @@ public struct SystemInfo: Codable, Equatable, Sendable {
     public init(uptime_s: Int, free_heap: Int) { self.uptime_s = uptime_s; self.free_heap = free_heap }
 }
 
+/// off: no sensor answered at boot; idle: sensor in standby, nobody watching; streaming: encoding for the driver
+public enum VideoState: Equatable, Sendable, Codable {
+    case off
+    case idle
+    case streaming
+    case unknown(String)
+    public var rawValue: String {
+        switch self {
+        case .off: return "off"
+        case .idle: return "idle"
+        case .streaming: return "streaming"
+        case .unknown(let raw): return raw
+        }
+    }
+    public init(rawValue: String) {
+        switch rawValue {
+        case "off": self = .off
+        case "idle": self = .idle
+        case "streaming": self = .streaming
+        default: self = .unknown(rawValue)
+        }
+    }
+    public init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+    public static let all: [VideoState] = [.off, .idle, .streaming]
+}
+
+/// The camera and the FPV stream.
+public struct VideoInfo: Codable, Equatable, Sendable {
+    /// off: no sensor answered at boot; idle: sensor in standby, nobody watching; streaming: encoding for the driver
+    public var state: VideoState
+    /// frames encoded in the last second
+    public var fps: Int
+    /// kbit sent in the last second
+    public var kbps: Int
+    /// frames not sent since boot: encoder overflow or more than 255 chunks
+    public var dropped: Int
+    public init(state: VideoState, fps: Int, kbps: Int, dropped: Int) { self.state = state; self.fps = fps; self.kbps = kbps; self.dropped = dropped }
+}
+
 /// The 5 Hz push: proto, type, seq, then these groups.
 public struct Telemetry: Codable, Equatable, Sendable {
     /// the protocol version the device speaks
@@ -218,7 +279,9 @@ public struct Telemetry: Codable, Equatable, Sendable {
     public var motors: MotorsInfo
     /// Uptime and memory.
     public var system: SystemInfo
-    public init(proto: Int, seq: Int, link: LinkInfo, motors: MotorsInfo, system: SystemInfo) { self.proto = proto; self.seq = seq; self.link = link; self.motors = motors; self.system = system }
+    /// The camera and the FPV stream.
+    public var video: VideoInfo
+    public init(proto: Int, seq: Int, link: LinkInfo, motors: MotorsInfo, system: SystemInfo, video: VideoInfo) { self.proto = proto; self.seq = seq; self.link = link; self.motors = motors; self.system = system; self.video = video }
 }
 
 /// GET /status: proto, then these groups.
@@ -237,7 +300,9 @@ public struct CarStatus: Codable, Equatable, Sendable {
     public var storage: StorageInfo
     /// Uptime and memory.
     public var system: SystemInfo
-    public init(proto: Int, device: DeviceInfo, link: LinkInfo, motors: MotorsInfo, radio: RadioInfo, storage: StorageInfo, system: SystemInfo) { self.proto = proto; self.device = device; self.link = link; self.motors = motors; self.radio = radio; self.storage = storage; self.system = system }
+    /// The camera and the FPV stream.
+    public var video: VideoInfo
+    public init(proto: Int, device: DeviceInfo, link: LinkInfo, motors: MotorsInfo, radio: RadioInfo, storage: StorageInfo, system: SystemInfo, video: VideoInfo) { self.proto = proto; self.device = device; self.link = link; self.motors = motors; self.radio = radio; self.storage = storage; self.system = system; self.video = video }
 }
 
 /// Slew-rate limit on acceleration. Rise is bounded, fall is instant, so stopping is never delayed.
@@ -329,6 +394,21 @@ public extension Chassis {
     static func wrap(_ v: Chassis) -> CarConfig { CarConfig(chassis: v) }
 }
 
+/// The FPV encoder. Applied at the next stream start, not live.
+public struct Video: Codable, Equatable, Sendable {
+    /// target H.264 bitrate in kbit/s; the adapter's USB is the ceiling
+    public var bitrate_kbps: Int
+    public init(bitrate_kbps: Int) { self.bitrate_kbps = bitrate_kbps }
+}
+
+public extension Video {
+    static let key = "video"
+    static let `default` = Video(bitrate_kbps: 1500)
+    static let bitrate_kbpsRange: ClosedRange<Int> = 500...3000
+    static func pick(from c: CarConfig) -> Video? { c.video }
+    static func wrap(_ v: Video) -> CarConfig { CarConfig(video: v) }
+}
+
 /// GET returns every domain; POST takes any subset of domains, each complete, validates the whole body before applying any of it, and answers with the full configuration as now held.
 public struct CarConfig: Codable, Equatable, Sendable {
     public var proto: Int?
@@ -337,7 +417,8 @@ public struct CarConfig: Codable, Equatable, Sendable {
     public var recovery: Recovery?
     public var wheel: Wheel?
     public var chassis: Chassis?
-    public init(proto: Int? = nil, ramp: Ramp? = nil, trim: Trim? = nil, recovery: Recovery? = nil, wheel: Wheel? = nil, chassis: Chassis? = nil) { self.proto = proto; self.ramp = ramp; self.trim = trim; self.recovery = recovery; self.wheel = wheel; self.chassis = chassis }
+    public var video: Video?
+    public init(proto: Int? = nil, ramp: Ramp? = nil, trim: Trim? = nil, recovery: Recovery? = nil, wheel: Wheel? = nil, chassis: Chassis? = nil, video: Video? = nil) { self.proto = proto; self.ramp = ramp; self.trim = trim; self.recovery = recovery; self.wheel = wheel; self.chassis = chassis; self.video = video }
 }
 
 /// A wheel's corner, by name.

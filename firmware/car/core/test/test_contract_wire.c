@@ -174,8 +174,8 @@ int main(void) {
             n_fields++;
         }
     }
-    assert(n_groups == 3);
-    assert(n_fields == 8);
+    assert(n_groups == 4);
+    assert(n_fields == 12);
     assert(strstr(frame, "\"proto\":2,\"type\":\"telemetry\",\"seq\":88,"));
 
     free(json);

@@ -271,6 +271,7 @@ persists to NVS immediately, and a POST of unchanged values does not rewrite fla
 | `wheel` | `quadrature` | enum | 1 \| 2 \| 4 | 4 | quadrature edge multiplier |
 | `chassis` | `track_mm` | int | 60..300 | 130 | lateral distance between left and right wheel centres |
 | `chassis` | `wheelbase_mm` | int | 90..360 | 210 | longitudinal distance between front and rear wheel centres |
+| `video` | `bitrate_kbps` | int | 500..3000 | 1500 | target H.264 bitrate in kbit/s; the adapter's USB is the ceiling |
 <!-- /generated:endpoints -->
 
 ### What the values mean

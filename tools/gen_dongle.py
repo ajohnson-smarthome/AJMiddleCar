@@ -29,6 +29,8 @@ def emit_dongle_c(schema):
         f"#define DONGLE_PORT {n['port']}",
         f"#define DONGLE_RELAY_HTTP_PORT {schema['relay']['http_port']}",
         f"#define DONGLE_RELAY_RT_PORT {schema['relay']['rt_port']}",
+        f"#define DONGLE_RELAY_VIDEO_PORT {schema['relay']['video_port']}",
+        f"#define DONGLE_RELAY_VIDEO_MAX_KBPS {schema['relay']['video_max_kbps']}",
         "",
         f"#define DONGLE_SSID_MIN {b['ssid_min']}",
         f"#define DONGLE_SSID_MAX {b['ssid_max']}",
@@ -59,6 +61,8 @@ def emit_dongle_swift(schema):
         f"    public static let port: UInt16 = {n['port']}",
         f"    public static let relayHttpPort: UInt16 = {schema['relay']['http_port']}",
         f"    public static let relayRtPort: UInt16 = {schema['relay']['rt_port']}",
+        f"    public static let relayVideoPort: UInt16 = {schema['relay']['video_port']}",
+        f"    public static let relayVideoMaxKbps = {schema['relay']['video_max_kbps']}",
         "",
     ]
     for k, v in e.items():

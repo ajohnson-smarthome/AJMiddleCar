@@ -169,6 +169,17 @@ class TestWireShapes(unittest.TestCase):
         self.assertEqual(parse_frame(b'{"proto":2,"type":"hello","session":"7f3a91c2"}'),
                          {"type": "hello", "proto": 2, "session": "7f3a91c2"})
 
+    def test_a_view_is_a_hello_shaped_datagram_with_an_optional_key(self):
+        frame = parse_frame(b'{"proto":2,"type":"view","session":"7f3a91c2"}')
+        self.assertEqual(frame["type"], "view")
+        self.assertNotIn("key", frame)
+        keyed = parse_frame(b'{"proto":2,"type":"view","session":"7f3a91c2","key":true}')
+        self.assertIs(keyed["key"], True)
+        for bad in (b'{"proto":2,"type":"view"}',
+                    b'{"proto":2,"type":"view","session":"7f3a91c2","key":1}',
+                    b'{"proto":2,"type":"view","session":"7f3a91c2","key":"true"}'):
+            self.assertIsNone(parse_frame(bad), bad)
+
 
 class TestBuildNumber(unittest.TestCase):
     def test_the_number_after_plus(self):

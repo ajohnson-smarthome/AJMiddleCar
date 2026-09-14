@@ -26,6 +26,7 @@
 #include "ramp.h"
 #include "wheel.h"
 #include "dims.h"
+#include "video_cfg.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "nvs.h"
@@ -205,6 +206,7 @@ void app_main(void) {
     car_init();
     wheel_init();                          // load wheel/encoder params (NVS or defaults)
     dims_init();                           // load car dimensions (NVS or defaults)
+    ESP_ERROR_CHECK(video_cfg_init());     // load the encoder's target bitrate (NVS or default)
     ESP_ERROR_CHECK(wifi_ap_start(CAR_AP_SSID, CAR_AP_PASS));
     /* OTA rollback: the property rollback protects is "the car is reachable" — the AP is
        up, so mark the image valid NOW, before the API registrations and before

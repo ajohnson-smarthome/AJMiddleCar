@@ -132,6 +132,13 @@ void telemetry_gather(telemetry_t *out, telem_consumer_t who) {
     out->calibrated = calibration_is_valid();
     out->owner      = link_src_name(link_owner());
     out->bus_ok     = link_bus_ok();
+
+    /* Filled by video_link once it exists (task 6); until then the group says what is
+       true of this build: no camera, nothing sent. */
+    out->video_state   = VIDEO_STATE_OFF;
+    out->video_fps     = 0;
+    out->video_kbps    = 0;
+    out->video_dropped = 0;
 }
 
 int telemetry_json(char *buf, size_t n) {

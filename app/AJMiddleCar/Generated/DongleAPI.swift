@@ -7,6 +7,8 @@ public enum DongleContract {
     public static let port: UInt16 = 8080
     public static let relayHttpPort: UInt16 = 80
     public static let relayRtPort: UInt16 = 4210
+    public static let relayVideoPort: UInt16 = 4211
+    public static let relayVideoMaxKbps = 2500
 
     public static let statusPath = "/status"
     public static let wifiPath = "/wifi"
@@ -161,7 +163,13 @@ public struct DongleRelay: Codable, Equatable, Sendable {
     public var tcp_connections: Int
     /// the most recent forwarding failure, null when none since boot
     public var last_error: DongleRelayError?
-    public init(to_car_hz: Double, to_phone_hz: Double, udp_sessions: Int, tcp_connections: Int, last_error: DongleRelayError?) { self.to_car_hz = to_car_hz; self.to_phone_hz = to_phone_hz; self.udp_sessions = udp_sessions; self.tcp_connections = tcp_connections; self.last_error = last_error }
+    /// video sessions in use, of 4; null from a dongle that predates video
+    public var video_sessions: Int?
+    /// video toward the phone, kbit/s with one decimal; null from a dongle that predates video
+    public var video_kbps: Double?
+    /// video chunks the admission limit discarded since boot; null from a dongle that predates video
+    public var video_dropped: Int?
+    public init(to_car_hz: Double, to_phone_hz: Double, udp_sessions: Int, tcp_connections: Int, last_error: DongleRelayError?, video_sessions: Int?, video_kbps: Double?, video_dropped: Int?) { self.to_car_hz = to_car_hz; self.to_phone_hz = to_phone_hz; self.udp_sessions = udp_sessions; self.tcp_connections = tcp_connections; self.last_error = last_error; self.video_sessions = video_sessions; self.video_kbps = video_kbps; self.video_dropped = video_dropped }
 }
 
 /// Uptime and memory.
