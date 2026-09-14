@@ -172,3 +172,13 @@ check(UpdateRules.carReachable(live: false, probedFw: "v1.0+784"),
       "a v1 car that answered the probe is reachable")
 check(!UpdateRules.carReachable(live: false, probedFw: nil),
       "no session and no probe answer is not")
+
+// -- the reboot watch's window is the device's, not one number for both -------------------
+// The car's first boot after an update is the long one: the radio gate (an RPC of up to 5 s
+// against a mismatched slave), the camera probe, the dongle noticing the softAP forgot it and
+// re-joining (~4 s of silence, then a join), then hello with pauses of up to 5 s. 25 s ended
+// as «Прошито» on the bench (2026-09-14) for an update that had worked.
+check(UpdateRules.rebootWindow(for: .car) >= 60, "the car gets at least a minute to come back")
+check(UpdateRules.rebootWindow(for: .dongle) >= 25, "the adapter keeps at least what it had")
+check(UpdateRules.rebootWindow(for: .car) > UpdateRules.rebootWindow(for: .dongle),
+      "and the car, with a radio and a camera to bring up, waits longer than the adapter")

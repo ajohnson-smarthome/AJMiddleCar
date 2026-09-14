@@ -159,6 +159,21 @@ enum UpdateRules {
         live || probedFw != nil
     }
 
+    /// How long the reboot watch waits for `device` to answer with a version after a flash.
+    ///
+    /// The car's first boot after an update is the long one: the radio gate (an RPC of up to
+    /// 5 s against a mismatched slave), the camera probe, the dongle noticing the softAP forgot
+    /// it and re-joining (~4 s of silence, then a join), then hello with pauses of up to 5 s.
+    /// 25 s for both devices ended as «Прошито» on the bench (2026-09-14) for an update that
+    /// had worked — a second message for an event the gate then reported as success by itself.
+    /// The adapter's own reboot is ~10 s and has no radio to gate.
+    static func rebootWindow(for device: Device) -> TimeInterval {
+        switch device {
+        case .car: return 60
+        case .dongle: return 30
+        }
+    }
+
     /// How long the phone waits for an upload of `bytes` before giving up on it.
     ///
     /// This is a BACKSTOP, not the detector. `CarTransport`'s timeout is a total deadline armed

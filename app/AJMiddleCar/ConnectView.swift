@@ -56,13 +56,13 @@ struct ConnectView: View {
         /// `DongleContract.device`. The dongle's analogue of `WrongCarView`, and like it, it
         /// names what answered rather than leaving the user to guess.
         case wrongDongle(String)
-        /// The dongle's own firmware is behind the latest release; it is downloading and
-        /// flashing it before anything else in the sequence touches the car.
-        case dongleUpdating
-        /// The dongle is current and pointed at the car's own network. Either its credentials
-        /// are being sent for the first time (including a re-point, if it was pointed at some
-        /// other network), or the radio is working through its own join budget — both read as
-        /// "connecting" from here; see `DongleLink.DongleStep.sendCredentials`/`.waiting`.
+        /// The dongle is current and is being told the car's network — for the first time, or
+        /// again because it was pointed at some other one (`DongleStep.sendCredentials`). Its
+        /// own situation, because the join screen's words claimed a car nobody had looked for
+        /// yet: at this step the adapter has not searched at all.
+        case sendingNetwork
+        /// The dongle is pointed at the car's own network and its radio is joining it
+        /// (`DongleStep.waiting`: `joining`, or a state this build does not know).
         case dongleConfiguring
         /// The dongle will not reach the car on its own: the join budget ran out, or its state
         /// machine never left `idle`. `AppFlow` asks the radio to try again a bounded number of
@@ -86,10 +86,6 @@ struct ConnectView: View {
     /// `.dongleJoinFailed` only. The same offer as `onRetryDongleUpdate`, for the other bounded
     /// wait — asking again now, and with a fresh budget.
     var onRetryJoin: (() -> Void)? = nil
-    /// `.dongleUpdating` only, and optional even there: the download half reports progress, the
-    /// upload half reports progress, and a cache hit reports none because there is nothing to
-    /// measure. Absent means the rings carry the wait alone.
-    var updateProgress: Double? = nil
     @Environment(\.colorScheme) private var colorScheme
     private var p: Palette { Theme.current(colorScheme) }
 
@@ -103,7 +99,7 @@ struct ConnectView: View {
 
     /// The radar sweep reads as "still looking, will resolve on its own" — true of every
     /// situation here except the ones that hand control to a button (`.dongleRolledBack`,
-    /// `.dongleUpdateFailed`, `.wrongDongle`): none of them retries itself, so none should look
+    /// `.wrongDongle`): none of them retries itself, so none should look
     /// like it will. They borrow `WrongCarView`'s static failed-car image instead, the same way
     /// `WrongCarView` does. `.dongleJoinFailed` keeps the sweep: its retries are bounded but
     /// real, and while they are running the screen is telling the truth.
@@ -160,19 +156,15 @@ struct ConnectView: View {
         case .adapterUpdateCheck:
             DeviceScene(palette: p, rings: .inward,
                         chip: (glyph: "arrow.down", tint: p.accent)) { AdapterBody(palette: p) }
-        case .dongleUpdating:
-            // Asking whether there is an update and installing one were, until this change, the
-            // same frame down to the pixel — my own regression, and exactly the defect this
-            // redesign existed to remove. They are separated the way the vocabulary already
-            // allows: `.inward` is an answer arriving, `.active` is work actually moving. The
-            // progress arc is the real one, and it is what makes the difference impossible to
-            // miss rather than merely present.
-            DeviceScene(palette: p, rings: .active,
-                        chip: (glyph: "arrow.down", tint: p.accent),
-                        progress: updateProgress) { AdapterBody(palette: p) }
         case .carUpdateCheck:
             DeviceScene(palette: p, rings: .inward,
                         chip: (glyph: "arrow.down", tint: p.accent)) { CarBody(palette: p) }
+        case .sendingNetwork:
+            // The adapter alone, solid, rings turning inward: something is being handed to it.
+            // Not the link scene — there is no link yet, and no car in the frame that nobody
+            // has found.
+            DeviceScene(palette: p, rings: .inward,
+                        chip: (glyph: "wifi", tint: p.accent)) { AdapterBody(palette: p) }
         case .dongleConfiguring:
             LinkScene(palette: p)
         // Everything left is a search of the air, which is the one thing the sweep means.
@@ -195,7 +187,7 @@ struct ConnectView: View {
         case .localNetworkDenied: return L.linkDeniedTitle
         case .dongleFault: return L.dongleFaultTitle
         case .wrongDongle: return L.dongleWrongTitle
-        case .dongleUpdating: return L.dongleUpdatingTitle
+        case .sendingNetwork: return L.dongleSendingNetTitle
         case .dongleConfiguring: return L.dongleConfiguringTitle
         case .dongleJoinFailed: return L.dongleJoinFailedTitle
         case .dongleRolledBack: return L.dongleRolledBackTitle
@@ -205,7 +197,7 @@ struct ConnectView: View {
     private var message: String {
         switch situation {
         case .searching: return L.connectBody
-        case .offline: return L.gateNoInternetSub
+        case .offline: return L.dongleOfflineSub
         case .noRelease(let tag): return L.gateNoReleaseSub(tag)
         case .findingAdapter: return L.dongleFindingSub
         case .adapterUpdateCheck: return L.dongleUpdCheckSub
@@ -216,7 +208,7 @@ struct ConnectView: View {
         case .localNetworkDenied: return L.linkDeniedSub
         case .dongleFault: return L.dongleFaultSub
         case .wrongDongle(let device): return L.dongleWrongSub(device)
-        case .dongleUpdating: return L.dongleUpdatingSub
+        case .sendingNetwork: return L.dongleSendingNetSub
         case .dongleConfiguring: return L.dongleConfiguringSub
         case .dongleJoinFailed: return L.dongleJoinFailedSub
         case .dongleRolledBack: return L.dongleRolledBackSub
@@ -234,7 +226,7 @@ struct ConnectView: View {
     }
 
     /// The one button each situation can offer, if any. `.localNetworkDenied` opens Settings;
-    /// `.dongleRolledBack` and `.dongleUpdateFailed` are the two dongle-side escapes from a gate
+    /// `.dongleRolledBack` and `.dongleJoinFailed` are the two dongle-side escapes from a gate
     /// that will not clear on its own — see their `Situation` doc comments for why each needs
     /// one at all.
     @ViewBuilder private var actionButton: some View {
@@ -254,7 +246,7 @@ struct ConnectView: View {
             if let onRetryJoin {
                 pillButton(L.fwRetry, tint: p.warn, action: onRetryJoin)
             }
-        case .searching, .checkingDongle, .noDongle, .dongleUpdating, .dongleConfiguring,
+        case .searching, .checkingDongle, .noDongle, .sendingNetwork, .dongleConfiguring,
              .dongleFault, .wrongDongle,
              .findingAdapter, .adapterUpdateCheck, .findingCar, .carUpdateCheck, .offline,
              .noRelease:

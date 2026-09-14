@@ -52,9 +52,12 @@ struct FirmwareView: View {
             // came on purpose and the decision is theirs.
             if forced, flow.phase == .available { await flow.download() }
         }
-        .onChange(of: flow.phase) { _, new in
-            // The download and the flash are one movement when the gate is driving.
-            if forced, new == .downloaded, flow.reachable { Task { await flow.flash() } }
+        .task(id: flow.phase) {
+            // The download and the flash are one movement when the gate is driving — and the
+            // movement waits for the device rather than for a tap: `flashWhenReachable` polls
+            // until the car or the adapter answers, however long its reboot or re-join takes.
+            // `task(id:)` cancels the wait the moment the phase moves on.
+            if forced, flow.phase == .downloaded { await flow.flashWhenReachable() }
         }
     }
 
@@ -81,9 +84,17 @@ struct FirmwareView: View {
                             caption: { "\(L.fwTransition(flow.currentFw ?? "—", flow.release?.tag ?? "")) · \(Int($0 * 100))%" },
                             palette: p)
             case .downloaded:
-                title(L.fwConnectTitle(device)); sub(L.fwConnectSub(device))
-                fwButton(L.fwFlash, prominent: true, disabled: !flow.reachable) {
-                    Task { await flow.flash() }
+                title(L.fwConnectTitle(device))
+                if forced {
+                    // No button: the gate flashes by itself the moment the device answers
+                    // (`flashWhenReachable`), and the line says so instead of offering a
+                    // control that used to sit disabled with nothing explaining why.
+                    sub(L.fwWaitingSub)
+                } else {
+                    sub(L.fwConnectSub(device))
+                    fwButton(L.fwFlash, prominent: true, disabled: !flow.reachable) {
+                        Task { await flow.flash() }
+                    }
                 }
             case .uploading:
                 title(L.fwUploadTitle)

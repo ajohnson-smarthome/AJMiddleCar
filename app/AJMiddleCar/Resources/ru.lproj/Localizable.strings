@@ -1,15 +1,14 @@
 "connect.title"      = "Здороваюсь с машинкой";
-"connect.body"       = "Адаптер на связи. Жду, пока машинка ответит — если молчит, проверь, что она включена.";
+"connect.body"       = "Адаптер в сети машинки. Здороваюсь с ней и жду ответа.";
 "common.openSettings"= "Открыть настройки";
 "link.noDongleTitle" = "Нет адаптера";
-"link.noDongleSub"   = "Подключи USB-адаптер к телефону.";
+"link.noDongleSub"   = "Адаптер не отвечает. Подключи USB-адаптер к телефону — через него приложение говорит с машинкой.";
 "link.deniedTitle"   = "Нет доступа к локальной сети";
 "link.deniedSub"     = "Разреши доступ к локальной сети — без него приложение не может достучаться до машинки.";
-"dongle.updatingTitle"    = "Обновление адаптера";
-"dongle.updatingSub"      = "Адаптер перезагрузится и вернётся сам — это быстро.";
-"dongle.updateFailedSub"  = "Не удалось обновить адаптер: образ не скачался или адаптер его не принял. Повтори.";
 "dongle.configuringTitle" = "Подключаю адаптер к машинке";
-"dongle.configuringSub"   = "Машинка найдена. Передаю адаптеру её сеть и жду, пока он подключится.";
+"dongle.sendingNetTitle"  = "Передаю адаптеру сеть машинки";
+"dongle.sendingNetSub"    = "Адаптер готов. Говорю ему, какую сеть искать, — дальше он ищет сам.";
+"dongle.configuringSub"   = "Сеть машинки видна. Адаптер подключается к ней.";
 "dongle.joinFailedTitle"  = "Нет связи с машинкой";
 "dongle.joinFailedSub"    = "Адаптер не может подключиться к сети машинки. Проверь, что она включена, и повтори.";
 "dongle.rolledBackTitle"  = "Обновление адаптера откатилось";
@@ -70,6 +69,7 @@
 "fw.connectSub.car"      = "Через USB-адаптер";
 "fw.connectSub.dongle"   = "Напрямую по USB";
 "fw.flash"          = "Залить";
+"fw.waitingSub"     = "Жду, пока устройство выйдет на связь, — залью сама.";
 "fw.uploadTitle"    = "Заливка";
 "fw.rebootTitle"    = "Перезагрузка…";
 "fw.rebootWait.car"      = "Машинка скоро вернётся";
@@ -136,7 +136,8 @@
 "ctl.update"         = "прошивка";
 "ctl.safe_stop"      = "стоп";
 "gate.noInternetTitle"     = "Нет интернета";
-"gate.noInternetSub"       = "Подключись к интернету, чтобы проверить обновление прошивки перед поездкой.";
+"gate.noInternetSub"       = "Чтобы проверить прошивку машинки, нужен интернет. Подключись и нажми «Повторить».";
+"dongle.offlineSub"        = "Чтобы проверить прошивку адаптера, нужен интернет. Как только он появится, продолжу сам.";
 "gate.checkFailedTitle"    = "Не удалось проверить";
 "gate.checkFailedSub"      = "Не получилось проверить обновления. Повтори.";
 "gate.updateTitle"         = "Требуется обновление";
@@ -187,7 +188,7 @@
 /* The startup ladder. Each subtitle opens by confirming the step before it succeeded — that is
    what makes six similar screens read as progress instead of as one screen flickering. */
 "dongle.findingTitle"     = "Ищу адаптер";
-"dongle.findingSub"       = "Подключи USB-адаптер к телефону — через него приложение говорит с машинкой.";
+"dongle.findingSub"       = "Спрашиваю USB-адаптер, на месте ли он.";
 "dongle.updCheckTitle"    = "Проверяю обновления адаптера";
 "dongle.updCheckSub"      = "Адаптер исправен. Смотрю, не вышла ли для него новая прошивка — обновлю до поездки, а не посреди неё.";
 "car.findingTitle"        = "Ищу машинку";
@@ -197,7 +198,6 @@
 
 /* Its own line, not the generic fw.failTitle: three different screens said "Не удалось"
    and left the user to work out which of them had. */
-"dongle.updFailTitle"     = "Не удалось обновить адаптер";
 
 /* Not a network problem and not the user's to fix: a release exists and has no adapter image
    in it. Naming the tag is what makes it actionable for the one person who can publish one. */

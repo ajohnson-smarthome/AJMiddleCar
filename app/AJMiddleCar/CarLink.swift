@@ -67,7 +67,11 @@ final class CarLink: ObservableObject {
     private var radioFetchGen = 0
     private var probe: Task<Void, Never>?
     private var lastProbeAt: ContinuousClock.Instant?
-    private static let probeAfter: Duration = .seconds(2)
+    /// A v2 car answers a hello within tens of milliseconds and the transport repeats it every
+    /// 200 ms, so a car that has said nothing after this long is not going to: it is a v1 car,
+    /// and every further tenth of a second is spent on «Здороваюсь с машинкой» for a car that
+    /// has already been found. Was 2 s.
+    private static let probeAfter: Duration = .milliseconds(700)
     private static let probeSpacing: Duration = .seconds(5)
     private var pathSub: AnyCancellable?
     /// Lifecycle operations run strictly in call order. `start()` and `requestStop()` enqueue

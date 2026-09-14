@@ -114,15 +114,42 @@ final class FirmwareFlow: ObservableObject {
             return
         }
         guard let r = release else { return }
-        phase = .downloading
-        let t0 = Date()
-        let recordAs = UpdateRules.buildNumber(r.tag).map { (build: $0, tag: r.tag) }
-        if let url = await client.download(r.assetURL, recordAs: recordAs, device: device) {
-            binURL = url
-            await UpdateClient.holdAtLeast(UpdateClient.downloadMinDisplay, since: t0)
+        // The same decision the launch gate makes (`flashPlan`, pure and host-tested): an image
+        // of exactly this build that is already on disk is used, not fetched again. Before
+        // this, a forced car update re-downloaded the 2 MB the gate had cached seconds earlier
+        // and sat on «Скачивание 100 %» for the whole second fetch.
+        switch UpdateRules.flashPlan(for: device, release: (tag: r.tag, assetURL: r.assetURL),
+                                     cachedBuild: UpdateClient.cachedBuild(for: device),
+                                     hasCachedFile: UpdateClient.hasCachedFile(for: device)) {
+        case .useCache:
+            binURL = UpdateClient.cachedBinURL(for: device)
             phase = .downloaded
-        } else {
+        case .download(_, let url, let build, let tag):
+            phase = .downloading
+            let t0 = Date()
+            let recordAs = build.map { (build: $0, tag: tag) }
+            if let got = await client.download(url, recordAs: recordAs, device: device) {
+                binURL = got
+                await UpdateClient.holdAtLeast(UpdateClient.downloadMinDisplay, since: t0)
+                phase = .downloaded
+            } else {
+                phase = .failed
+            }
+        case .unavailable:
             phase = .failed
+        }
+    }
+
+    /// Forced mode's answer to `.downloaded`: flash the moment the device is reachable, whether
+    /// that is now or later. `FirmwareView` used to flash on the phase change only if the
+    /// device happened to be reachable in that same instant; a car still re-joining through
+    /// the dongle was not, and the screen then waited for a tap on a button nothing told the
+    /// user to press. Returns when the phase has moved on, or when cancelled.
+    func flashWhenReachable() async {
+        while phase == .downloaded {
+            if isReachable() { await flash(); return }
+            try? await Task.sleep(for: .milliseconds(500))
+            if Task.isCancelled { return }
         }
     }
 
@@ -162,7 +189,7 @@ final class FirmwareFlow: ObservableObject {
         phase = .rebooting
         let oldFw = runningFw()
         var sawOffline = false
-        let deadline = Date.now.addingTimeInterval(25)
+        let deadline = Date.now.addingTimeInterval(UpdateRules.rebootWindow(for: device))
         while Date.now < deadline {
             try? await Task.sleep(nanoseconds: 500_000_000)
             await refresh()

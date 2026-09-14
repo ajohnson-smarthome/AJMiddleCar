@@ -75,6 +75,11 @@ final class AppFlow: ObservableObject {
         /// state this build does not recognise) — both render the same "connecting" screen; see
         /// `DongleLink.DongleStep.sendCredentials`/`.waiting`.
         case dongleConfiguring
+        /// The dongle is current and has not been told the car's network — or was told some
+        /// other one — and is being told now. Its own phase because the screen for the join
+        /// («Подключаю адаптер к машинке — машинка найдена») claimed a car nobody had looked
+        /// for yet: at this step the adapter has not searched at all.
+        case dongleSendingNet
         /// The dongle will not get any further on its own: the join budget ran out (`failed`),
         /// or its state machine never left `idle` — see `DongleStep.retryJoin`. The credentials
         /// are already on the dongle; `dongleGate()` asks the radio to try again — once, see
@@ -108,7 +113,7 @@ final class AppFlow: ObservableObject {
                  .dongleOffline, .dongleNoRelease,
                  .dongleFault, .dongleDenied, .dongleWrong,
                  .dongleUpdating, .dongleRolledBack,
-                 .dongleConfiguring, .dongleJoinFailed,
+                 .dongleSendingNet, .dongleConfiguring, .dongleJoinFailed,
                  .checkInternet, .noInternet, .checkUpdate, .checkFailed, .downloading: return false
             }
         }
@@ -123,12 +128,6 @@ final class AppFlow: ObservableObject {
     private var queued: [Phase] = []
     private var pacing = false
     @Published var latestTag: String?
-    /// How far the adapter's own update has got, while one is running — and `nil` whenever that
-    /// cannot be answered honestly. It covers the upload half only: the download half is a fetch
-    /// from GitHub whose progress `UpdateClient` already publishes for its own screen, and a
-    /// cache hit has no download at all. An invented figure would be worse than none, because it
-    /// teaches the user not to believe the next one.
-    @Published private(set) var dongleUpdateProgress: Double?
     let client = UpdateClient()
     /// Shared with `FirmwareView`, which now runs the adapter's update through the same screen
     /// the car's goes through — one client, so the gate and the screen are talking to the same
@@ -141,17 +140,6 @@ final class AppFlow: ObservableObject {
     /// `DongleClient` asks for single-flight use, and this is what keeps every step in this loop
     /// to at most one outstanding request at a time.
     private static let donglePollInterval: Duration = .milliseconds(1500)
-
-    /// The dongle's own update "reboots it, drops the USB interface and brings it back — short,
-    /// and it recovers on its own" (spec). Without this pause the very next poll below can land
-    /// inside that gap, read as "nothing answered", and flash the plug-it-in screen for a beat
-    /// during a reboot that was never a real disconnect.
-    private static let dongleRebootGrace: Duration = .seconds(4)
-
-    /// A judgement, not a measurement, matching the same shape as the firmware's own
-    /// `WIFI_JOIN_ATTEMPTS`: enough that a single flaky download or upload does not give up
-    /// early, few enough that a phone with no usable internet and no cache is told so within a
-    /// few tries rather than re-fetching from GitHub on every poll forever.
 
     /// How many times `dongleGate()` will POST the car's network at the dongle — the first
     /// configure and every retry together — before it stops and waits for `retryDongleJoin()`.
@@ -166,6 +154,14 @@ final class AppFlow: ObservableObject {
     /// switched on after that gets its join from the Retry button, which is what the button is
     /// for.
     private static let maxDongleJoinAttempts = 1
+
+    /// Whether `dongleGate()` has handed over this session. `retry()` — the button on the car
+    /// gate's failure screens — re-runs the car gate alone while this holds: the adapter was
+    /// checked, updated and joined seconds ago, and walking it through «Ищу адаптер»,
+    /// «Проверяю адаптер» and GitHub again for a car-side failure told the user nothing and
+    /// cost them the whole ladder. `dongleReturned()` clears it, because a dongle that went
+    /// away comes back knowing nothing.
+    private var dongleHandedOver = false
 
     /// Guards against a second `startupCheck()` running while one is already in flight — a
     /// second tap on a retry button whose screen has not yet updated `phase` (`dongleGate()`'s
@@ -205,7 +201,10 @@ final class AppFlow: ObservableObject {
         // launched with `-viaDongle` (CarHost) — the adapter on the Mac's USB, the simulator as
         // the phone. Against the mock there is no dongle and the spec is explicit that nothing
         // stands in for one, so the ladder starts at the car's own gate.
-        if CarHost.viaDongle { await dongleGate() }
+        if CarHost.viaDongle && !dongleHandedOver {
+            await dongleGate()
+            dongleHandedOver = true
+        }
         await carGate()
     }
 
@@ -233,7 +232,9 @@ final class AppFlow: ObservableObject {
         guard phase == .awaitingCar || phase == .ready || phase == .updateRequired else { return }
         gateRunning = true
         defer { gateRunning = false }
+        dongleHandedOver = false
         await dongleGate()
+        dongleHandedOver = true
         setPhase(.awaitingCar)
     }
 
@@ -342,7 +343,7 @@ final class AppFlow: ObservableObject {
                 // Once the budget is spent this is the same dead end `.retryJoin` reaches, and
                 // it says so: a dongle that keeps reporting a network other than the car's
                 // after being told the car's is not "configuring", it is failing to configure.
-                setPhase(dongleJoinGaveUp ? .dongleJoinFailed : .dongleConfiguring)
+                setPhase(dongleJoinGaveUp ? .dongleJoinFailed : .dongleSendingNet)
                 // No credential state lives here or in DongleClient — CarContract's are opaque
                 // constants, read and handed over, never logged or shown (see DongleClient's own
                 // doc for why `join`/`retryJoin` are shaped this way).
@@ -514,20 +515,13 @@ final class AppFlow: ObservableObject {
     func dongleUpdateFinished() { setPhase(.dongleChecking) }
 
 
-    /// Download (or reuse the cached image) and flash the dongle's own firmware, then give it a
-    /// moment to reboot before `dongleGate()`'s loop resumes polling normally. Returns whether
-    /// the upload was actually accepted; `dongleGate()` uses that to bound retries instead of
-    /// silently re-downloading from GitHub on every poll forever.
-    ///
-    /// The decision of what to flash — download `release`'s asset, reuse what is already
-    /// cached, or give up because neither is available — is `UpdateRules.flashPlan(for:...)`,
-    /// pure and host-tested; this function performs only the network/disk work that plan names,
-    /// and always for the device the plan itself carries (see `flashPlan`'s own doc for why that
-    /// is the whole point of it returning a value rather than a bare URL).
-    /// The pre-existing pre-connect gate for the CAR's own firmware (internet probe → latest
-    /// release → download if needed), unchanged from before this task except its name — it used
-    /// to be `startupCheck()` itself. Reached only once `dongleGate()` (or the simulator's
-    /// bypass) says there is a car to talk to.
+    /// The car's own pre-connect gate (internet probe → latest release → download if needed).
+    /// It used to be `startupCheck()` itself. Reached once `dongleGate()` says there is a car
+    /// to talk to — or straight away against the mock. Its failure screens carry a button that
+    /// re-runs this gate alone (`retry`, `dongleHandedOver`). The decision of what to fetch is
+    /// `UpdateRules.flashPlan`/`needsDownload`, pure and host-tested; `FirmwareFlow.download`
+    /// makes the same decision from the same cache, so the image this gate fetches is the one
+    /// the forced update then flashes, not a second copy of it.
     private func carGate() async {
         UpdateClient.migrateCacheIfNeeded()
         setPhase(.checkInternet)

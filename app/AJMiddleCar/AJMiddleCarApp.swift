@@ -96,12 +96,14 @@ struct RootView: View {
         // resolves in milliseconds still gets its moment instead of strobing past. Decisions
         // elsewhere keep reading `phase`, which is the truth without the pacing.
         switch flow.shown {
-        // Steps 1 and 2 of the ladder. Both draw the same adapter; the first draws it faint and
-        // the second makes it solid, which is the whole reason they are two screens and not one
-        // — the movement between them IS the information. Whether nothing has answered yet or
-        // nothing is there is not a distinction worth separate copy, so both land on step 1.
-        case .checkDongle, .dongleAbsent:
+        // Steps 1 and 2 of the ladder. Step 1 has not heard from the adapter yet and says only
+        // that it is asking; step 2 has asked and got nothing, and that is the one that tells
+        // the user to plug it in — the same words `CarLink` uses when the wire goes later.
+        // Both draw the adapter faint; step 3 makes it solid.
+        case .checkDongle:
             ConnectView(situation: .findingAdapter)
+        case .dongleAbsent:
+            ConnectView(situation: .noDongle(.notAvailable))
         case .dongleChecking:
             ConnectView(situation: .checkingDongle)
         case .dongleUpdateCheck:
@@ -129,6 +131,8 @@ struct RootView: View {
         case .dongleRolledBack:
             ConnectView(situation: .dongleRolledBack,
                         onRecheckRollback: { flow.recheckDongleRollback() })
+        case .dongleSendingNet:
+            ConnectView(situation: .sendingNetwork)
         case .dongleConfiguring:
             ConnectView(situation: .dongleConfiguring)
         case .dongleJoinFailed:
