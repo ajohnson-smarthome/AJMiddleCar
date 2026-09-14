@@ -18,6 +18,8 @@ menu "AJ dongle"
         int "Bench: microseconds between chunks"
         depends on DONGLE_VIDEO_BENCH
         default 1000
-        range 100 20000
+        range 0 20000
+        help
+            0 spreads each frame's chunks evenly over the frame period (steady load).
 
 endmenu

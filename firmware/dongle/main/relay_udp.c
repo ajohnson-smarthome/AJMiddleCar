@@ -154,7 +154,11 @@ static void bench_tick(relay_state_t *r)
     int budget = 64;
     while (now_us >= s_bench_next_us && budget-- > 0) {
         if (!bench_one_chunk(r)) { s_bench_next_us = now_us + 1000; break; }   /* between frames */
-        s_bench_next_us += CONFIG_DONGLE_VIDEO_BENCH_PACE_US;
+        /* PACE_US 0 spreads a frame's chunks evenly over the frame period — a steady offered
+         * load equal to the requested rate, which is what a drain ceiling is measured
+         * against; a fixed pace measures burst tolerance instead (the car's own shape). */
+        s_bench_next_us += CONFIG_DONGLE_VIDEO_BENCH_PACE_US ? CONFIG_DONGLE_VIDEO_BENCH_PACE_US
+                                                            : (1000000 / BENCH_FPS) / (s_bench.count ? s_bench.count : 1);
     }
 }
 #endif /* CONFIG_DONGLE_VIDEO_BENCH */
@@ -505,7 +509,8 @@ static void relay_task(void *arg)
 
         struct timeval tv = { .tv_sec = RELAY_LOOP_MS / 1000, .tv_usec = 0 };
 #if CONFIG_DONGLE_VIDEO_BENCH
-        if (r.cfg->video && s_bench.kbps != 0) tv = (struct timeval){ .tv_sec = 0, .tv_usec = CONFIG_DONGLE_VIDEO_BENCH_PACE_US };
+        /* Never a zero timeout: that is a spin at priority 6 that starves TinyUSB and trips the idle watchdog. */
+        if (r.cfg->video && s_bench.kbps != 0) tv = (struct timeval){ .tv_sec = 0, .tv_usec = CONFIG_DONGLE_VIDEO_BENCH_PACE_US ? CONFIG_DONGLE_VIDEO_BENCH_PACE_US : 1000 };
 #endif
         int nready = select(maxfd + 1, &rfds, NULL, NULL, &tv);
 #if CONFIG_DONGLE_VIDEO_BENCH

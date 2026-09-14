@@ -26,5 +26,17 @@ if(NOT BUILD_NUM)
 endif()
 set(PROJECT_VER "v${SEMVER}+${BUILD_NUM}")
 
+# Two bench knobs for the USB path, both defaulting to what the driver does anyway; neither is
+# a release setting. `idf.py -DNCM_DPN=1` sends one datagram per NCM transfer block (the
+# experiment that first isolated the 2026-09-15 stall to multi-datagram blocks); `-DNCM_LOG=2`
+# turns on the NCM driver's own trace (needs CONFIG_TINYUSB_DEBUG_LEVEL>=2; level 3 does not
+# compile in tinyusb 0.21). Global definitions, because ncm.h sizes the driver's structures
+# from the first and every unit that includes the header must agree.
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+set(NCM_DPN "8" CACHE STRING "bench: datagrams per NCM transfer block toward the host (idf.py -DNCM_DPN=N; 8 is the driver default)")
+idf_build_set_property(COMPILE_DEFINITIONS "-DCFG_TUD_NCM_IN_MAX_DATAGRAMS_PER_NTB=${NCM_DPN}" APPEND)
+set(NCM_LOG "0" CACHE STRING "bench: TinyUSB NCM driver log level (needs CONFIG_TINYUSB_DEBUG_LEVEL >= the same)")
+if(NOT NCM_LOG STREQUAL "0")
+    idf_build_set_property(COMPILE_DEFINITIONS "-DCFG_TUD_NCM_LOG_LEVEL=${NCM_LOG}" APPEND)
+endif()
 project(ajdongle)

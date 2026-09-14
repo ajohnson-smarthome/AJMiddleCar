@@ -138,6 +138,46 @@ are the closing sweep, run once stage 4 itself passes.
 
 _Record anything surprising here — it is the raw material for the next spec._
 
+### The USB ceiling had a number, and the number was 127 packets (2026-09-15, night)
+
+The synthetic stream on the dongle (`CONFIG_DONGLE_VIDEO_BENCH`, a `view` with
+`"bench":<kbps>`, the same probe as the real stream) put the dongle → USB → host path on a
+bench of its own, with the car off. Two findings, one of them the whole story:
+
+1. At 1 Mbit/s every chunk arrived. At 2 Mbit/s and above the link **stalled outright** on
+   the first burst: the S3 kept running (console, screen), nothing crossed the wire in either
+   direction, and only a USB bus reset from the host recovered it — `libusb`'s `dev.reset()`
+   from the Mac, which is how the night's work went on without a hand on the cable. With one
+   datagram per NCM transfer block the stall never happened at any rate, but the host took
+   only ~170 blocks a second (~6 ms each), so one datagram per block is ~2 Mbit/s — the
+   ceiling the real stream had been hitting all evening had this shape underneath it.
+2. The NCM driver's own trace showed the stall exactly: a block of six chunks, 8792 bytes,
+   queued to the IN endpoint and never completed. The S3's DWC2 core counts packets in 7 bits
+   (`GHWCFG3`): one bulk transfer may hold at most 127 × 64 = **8128 bytes**, and TinyUSB
+   0.21's DCD programs a transfer block whole — a block past that is consumed by the core
+   without a transfer-complete event, the endpoint stays busy for good
+   ([hathach/tinyusb#3825](https://github.com/hathach/tinyusb/issues/3825), open, found on
+   MSC the same month). Our `CONFIG_TINYUSB_NCM_IN_NTB_BUFF_MAX_SIZE` was 10240. Capped at
+   8128, the bench carried **6.3 Mbit/s with 99 % of chunks whole** — the figure the
+   literature promised for a Full-Speed S3, three to four times what the car needs.
+
+Two more things changed under the same investigation. `usb_net.c` no longer sends from lwIP's
+own thread: frames go into a 64-slot ring in PSRAM and a task of its own hands them to
+TinyUSB, so a host that is slow to drain stalls that task and nothing else (before, the whole
+IP stack — both relays, the HTTP API, ping — waited on each frame). And that task re-attaches
+the USB device (`tud_disconnect`/`tud_connect`) when sends fail for 1.5 s with nothing
+completing, so a stalled link comes back without a replug; the first version counted refusals
+alone and re-attached a link that was merely full.
+
+Not yet re-measured with the real stream: the car's pacing (4 ms per chunk, chosen against
+the 1.5 Mbit/s ceiling) can probably return to 2 ms, and the encoder's default (1000 kbit/s)
+can probably rise. One bench run with the car on decides both.
+
+Lessons for the bench itself: a `select()` timeout of 0 in a relay task is a spin that
+starves TinyUSB and drops the device off the bus (the task watchdog only prints); the bench
+now floors it at 1 ms. And a stall verdict must be refusals AND silence — under an offered
+load above the drain, refusals are the ordinary shape of a full pool.
+
 ### A quarter of the video vanished, and none of it in the air (2026-09-15)
 
 The loss was measured properly this time — a probe that logs every chunk's frame and index

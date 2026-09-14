@@ -1,4 +1,6 @@
 # bench variant of the dongle: idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.bench" build
 # (main/Kconfig.projbuild). Never a release: tools/release.sh fullcleans and builds from sdkconfig.defaults alone.
+# PACE_US 0 = steady load (chunks spread over the frame), 1000 = the car's original burst shape.
 CONFIG_DONGLE_VIDEO_BENCH=y
 CONFIG_DONGLE_VIDEO_BENCH_PACE_US=1000
+CONFIG_TINYUSB_DEBUG_LEVEL=1
