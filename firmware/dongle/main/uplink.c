@@ -34,7 +34,12 @@ static bool strike(uplink_t *u, uint32_t now_ms)
     uint32_t last = atomic_load(&u->last_kick_ms);
     if (last != 0u && (int32_t)(now_ms - last) < (int32_t)UPLINK_KICK_SPACING_MS) return false;
     uint32_t stamp = now_ms != 0u ? now_ms : 1u;   /* 0 means "never", so a kick at t=0 stamps 1 */
-    return atomic_compare_exchange_strong(&u->last_kick_ms, &last, stamp);
+    if (!atomic_compare_exchange_strong(&u->last_kick_ms, &last, stamp)) return false;
+    /* The kick's own grace: the fresh association gets a full streak to answer in, rather
+     * than being kicked again by the first send after a re-join that took longer than the
+     * spacing — which would be a station re-joining forever with nothing ever heard. */
+    atomic_store(&u->strikes, 0u);
+    return true;
 }
 
 bool uplink_sent(uplink_t *u, uint32_t now_ms)   { return strike(u, now_ms); }

@@ -42,8 +42,23 @@ CONFIG_SPIRAM_MODE_OCT=y
 # Disabling SoftAP support is what makes that structural rather than just a promise wifi_sta.c
 # happens to keep — esp_wifi_set_mode(WIFI_MODE_STA) alone doesn't remove the AP code, this does.
 CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
-CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
-CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+# Receive buffers sized for the video relay, not for a REST trickle. The car sends a frame as
+# a burst of up to ~60 datagrams of 1.4 KB, one per millisecond, and the S3 has to hold the
+# burst until relay_video has copied each one out to USB. With the 8/16 this file shipped
+# with (below IDF's own 10/32, from the first commit, with no reason recorded) the bench
+# measured 49 % of chunks lost through the dongle against 3 % on the same air received by a
+# laptop — and the loss grew with the frame's length: 7 % for frames under 8 chunks, 74–92 %
+# for frames over 40. That is a receiver running out of buffers, not a radio losing frames.
+# Kconfig's own help for the dynamic count names the case: "WiFi data frames may be received
+# faster than the application can process them". Static 16 ≥ the BA window, as its help asks;
+# dynamic 64 is one whole keyframe of headroom, in internal RAM (~26 KB static, up to ~100 KB
+# dynamic, allocated on demand and freed as the relay drains) — the image leaves ~140 KB after
+# static data, so this is as far as internal RAM goes. Tried and rejected: the same pools in
+# PSRAM (CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP) with 128 dynamic buffers measured WORSE, 24 %
+# lost against 14 % — the driver's copy into PSRAM costs more than the extra buffers buy.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=64
+CONFIG_ESP_WIFI_RX_BA_WIN=16
 #
 # Static TX buffers, stated the only way that actually takes. This line used to read
 # CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1, which is a silent no-op: that symbol has no prompt and is
@@ -107,5 +122,12 @@ CONFIG_LWIP_MAX_SOCKETS=32
 # ~100 KB between them, so the car's pacing (one chunk per millisecond) is the only limit
 # that matters. ~60 KB of RAM; the S3 has PSRAM to spare.
 CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
+# The tcpip thread's own mailbox sits in front of the socket's: every received frame passes
+# through it first, and at one datagram per millisecond IDF's default of 32 is thirty-two
+# milliseconds of the tcpip thread being busy elsewhere (USB, the other relay) before frames
+# are dropped where nothing counts them. 64 is Kconfig's ceiling for both mailboxes without
+# window scaling — a value above it is silently replaced by the DEFAULT (6 for the socket's),
+# which is how a first draft of this change shipped a smaller mailbox than it removed.
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
 CONFIG_TINYUSB_NCM_IN_NTB_BUFFS_COUNT=6
 CONFIG_TINYUSB_NCM_IN_NTB_BUFF_MAX_SIZE=10240

@@ -293,9 +293,24 @@ static void abort_join_locked_or_not(void)
 static net_cfg_t s_last_cfg;
 static bool s_have_cfg;
 
+/* How long a re-join waits between its disconnect and its join. From a live association the
+ * disconnect is real and asynchronous, and a connect issued before its event has landed is
+ * dropped by the driver with no event at all — the station then says «joining» for ever,
+ * attempts 0, nothing in flight (bench, 2026-09-15: the relay's first re-join did exactly
+ * that; a POST of some other network and back, two seconds apart, joined in three). A POST's
+ * join never met this because a POST arrives with the station idle or failed, where the
+ * disconnect has nothing to tear down and produces no event. */
+#define REJOIN_SETTLE_MS 300u
+
 esp_err_t wifi_sta_rejoin(void)
 {
     if (!s_have_cfg) return ESP_ERR_INVALID_STATE;
+    /* Armed here, before the disconnect, so its event is consumed as ours even though the
+     * join that re-arms the window starts REJOIN_SETTLE_MS later. Signed-safe like every use. */
+    uint32_t until = boot_ms() + JOIN_QUIET_MS + REJOIN_SETTLE_MS;
+    atomic_store(&s_join_quiet_until_ms, until != 0u ? until : 1u);
+    esp_wifi_disconnect();
+    vTaskDelay(pdMS_TO_TICKS(REJOIN_SETTLE_MS));
     return wifi_sta_join(&s_last_cfg);
 }
 

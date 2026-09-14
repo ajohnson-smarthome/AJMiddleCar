@@ -43,7 +43,7 @@ void app_main(void)
     /* Both relays' bookkeeping, before either task exists — see relay_stats.h. */
     relay_stats_init(relay_stats_shared());
     static const relay_udp_cfg_t rt_relay    = { .port = DONGLE_RELAY_RT_PORT,    .name = "relay_udp",   .priority = 5, .video = false };
-    static const relay_udp_cfg_t video_relay = { .port = DONGLE_RELAY_VIDEO_PORT, .name = "relay_video", .priority = 4, .video = true };
+    static const relay_udp_cfg_t video_relay = { .port = DONGLE_RELAY_VIDEO_PORT, .name = "relay_video", .priority = 6, .video = true };
     /* After wifi_sta_start(): the relay tasks wait on wifi_sta_gateway() themselves, polling
      * rather than blocking this function, so they only need the station to exist, not to have
      * joined yet. */

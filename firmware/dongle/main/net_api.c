@@ -146,10 +146,12 @@ static esp_err_t net_post(httpd_req_t *req)
         /* `connected` with a dead uplink is the association the car's softAP forgot — see
          * uplink.h. The relays kick it themselves within seconds; this is the same answer
          * for the person who pressed «Повторить» first. */
+        bool dead = wifi_sta_connected();
         ESP_LOGI(TAG, "network unchanged, but the station is %s — rejoining %s",
-                 wifi_sta_connected() ? "connected with a dead uplink" : "not connected",
-                 s_cfg.ssid);
-        if (wifi_sta_join(&s_cfg) != ESP_OK) {
+                 dead ? "connected with a dead uplink" : "not connected", s_cfg.ssid);
+        /* The connected-but-dead case goes through wifi_sta_rejoin: a live association needs
+         * its disconnect to land before the join, or the driver drops the join silently. */
+        if ((dead ? wifi_sta_rejoin() : wifi_sta_join(&s_cfg)) != ESP_OK) {
             return api_reply_error(req, "500 Internal Server Error", DONGLE_ERR_RADIO_REFUSED, "",
                                    "the radio refused the join");
         }

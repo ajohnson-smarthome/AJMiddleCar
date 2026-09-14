@@ -45,8 +45,9 @@ void uplink_heard(uplink_t *u);
 /* A send toward the car went out (`sent`) or could not (`failed`) — one strike either way.
  * True when the caller should ask the station to reassociate NOW: the streak has reached
  * UPLINK_DEAD_AFTER and no kick was asked for within the last UPLINK_KICK_SPACING_MS. Only the
- * caller that gets `true` acts on it. Two names for one rule, so a call site reads as what it
- * observed. */
+ * caller that gets `true` acts on it, and the streak restarts from zero with the kick, so the
+ * re-joined association has a whole streak in which to answer. Two names for one rule, so a
+ * call site reads as what it observed. */
 bool uplink_sent(uplink_t *u, uint32_t now_ms);
 bool uplink_failed(uplink_t *u, uint32_t now_ms);
 /* Whether the streak stands at UPLINK_DEAD_AFTER or beyond — what net_api reads to tell a

@@ -284,12 +284,12 @@ grows from roughly a dozen of our datagrams to roughly 100 KB — for perhaps 60
 RAM, nothing on a board with PSRAM.
 
 **Admission, toward the phone only.** The video relay charges every chunk it forwards against
-`relay.video_max_kbps` (**2500**, `contract/dongle-api.json`) over a fixed **1000 ms** window
+`relay.video_max_kbps` (**4000**, `contract/dongle-api.json`) over a fixed **1000 ms** window
 (`rate_gate.c`, pure and host-tested) — tumbling, not sliding: the count restarts at each
 window's start — and not the 100 ms a first draft of the design assumed: a keyframe has to
 fit inside one window whole, or the gate would refuse half of every one of them at the top
 bitrate. The gate caps the *average*; the burst itself is what the wider
-buffers above absorb, not the window. A chunk the gate refuses is dropped and counted
+buffers above absorb, not the window. 4000, not 2500: the car's own ceiling is 3000 (`video.bitrate_kbps`), and a second that holds a keyframe on top of moving-scene P-frames runs past a 2500 gate even at the default 1500 — on the bench (2026-09-15) the gate refused 459 chunks in a minute, each a frame lost, each a keyframe requested, each more bytes for the gate to refuse. The gate is a guard against a runaway sender, so it sits above everything a configured sender can legitimately do. A chunk the gate refuses is dropped and counted
 (`relay.video_dropped`) here, on purpose, rather than failing silently inside `esp_tinyusb`
 when the NTB pool is full — where a refused datagram could as easily have been a telemetry
 push. A chunk the gate admits and the USB side still refuses goes into the same counter, not
