@@ -38,6 +38,7 @@ echo "== mock host tests =="
 python3 tools/mock_car/test_state.py
 python3 tools/mock_car/test_rtlink.py
 python3 tools/mock_car/test_video_wire.py
+python3 tools/mock_car/test_video.py
 
 echo "== conformance =="
 # The REST matrix needs a running mock, which needs aiohttp, which needs the venv. A
@@ -58,9 +59,10 @@ else
     # ports, and this one only has to answer REST.
     PORT=8137
     RT_PORT=4237
+    VIDEO_PORT=4238
     LOG="$(mktemp -t mockcar)"
     "$MOCK_PY" tools/mock_car/mock_car.py --host 127.0.0.1 --port "$PORT" \
-        --rt-port "$RT_PORT" > "$LOG" 2>&1 &
+        --rt-port "$RT_PORT" --video-port "$VIDEO_PORT" --video-loss-pct 2 > "$LOG" 2>&1 &
     MOCK_PID=$!
     trap 'kill "$MOCK_PID" 2>/dev/null || true; rm -f "$LOG"' EXIT
 
@@ -84,6 +86,7 @@ else
     # this tool's ~3 s hello-retry budget — a run started right after would see
     # "unreachable" instead of the fresh post-reboot handshake.
     python3 tools/conformance_rt.py "127.0.0.1:$RT_PORT"
+    python3 tools/conformance_video.py 127.0.0.1 --rt-port "$RT_PORT" --video-port "$VIDEO_PORT" --seconds 6
     kill "$MOCK_PID" 2>/dev/null || true
     wait "$MOCK_PID" 2>/dev/null || true
     rm -f "$LOG"

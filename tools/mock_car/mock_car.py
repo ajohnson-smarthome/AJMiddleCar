@@ -34,9 +34,10 @@ import sys
 from aiohttp import web
 
 from generated import (CALIBRATION, CONFIG_PATH, DEVICE, DOMAINS, ENDPOINTS, ENVELOPE,
-                       GROUPS, PROTO, RT)
+                       GROUPS, PROTO, RT, VIDEO)
 from rt_link import Impairment, RTLink, service_loop
 from state import CarState, build_number, parse_image_version
+from video import VideoLink
 
 # A flash is the one REST call that takes real time; the mock spends it so a client's
 # progress UI has something to show.
@@ -306,6 +307,14 @@ async def serve(args):
     await runner.setup()
     await web.TCPSite(runner, args.host, args.port).start()
 
+    with open(args.video_sample, "rb") as f:
+        sample = f.read()
+    _, video = await loop.create_datagram_endpoint(
+        lambda: VideoLink(car, link, sample, args.video_loss_pct, args.video_reorder_pct,
+                          args.video_dup_pct, args.seed, args.verbose),
+        local_addr=(args.host, args.video_port))
+    asyncio.create_task(video.run())
+
     where = lan_address() if args.host == "0.0.0.0" else args.host
     print(f"mock {car.device} {car.fw} (proto {PROTO})")
     print(f"  REST      http://{where}:{args.port}   /status /calibration* /ota "
@@ -314,6 +323,8 @@ async def serve(args):
           f"{RT['telemetry_hz']} Hz telemetry")
     print(f"  link      {impair.describe()}; watchdog {RT['watchdog_ms']} ms, "
           f"auto-return {car.config['recovery']['window_ms']} ms")
+    print(f"  video     udp://{where}:{args.video_port}   view -> {VIDEO['width']}x{VIDEO['height']} "
+          f"@{VIDEO['fps']}, loss {args.video_loss_pct}%")
 
     await service_loop(link)
 
@@ -343,6 +354,11 @@ def main():
     p.add_argument("--rollback", action="store_true",
                    help="rehearsal: every successful /ota 'fails its first boot' — the mock "
                         "comes back on the old fw with rollback:true in /status")
+    p.add_argument("--video-port", type=int, default=VIDEO["port"], help="video port (default from the contract)")
+    p.add_argument("--video-sample", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "sample.h264"))
+    p.add_argument("--video-loss-pct", type=float, default=0.0, help="drop this share of video datagrams")
+    p.add_argument("--video-reorder-pct", type=float, default=0.0, help="delay this share by one datagram")
+    p.add_argument("--video-dup-pct", type=float, default=0.0, help="send this share twice")
     args = p.parse_args()
     # Line buffering, so `mock_car.py > log &` shows the banner and the drops as they
     # happen rather than in 8 KB batches when something finally flushes.

@@ -32,6 +32,59 @@ local-network privacy, interface pinning — is exercised against the real dongl
 | `--seed` | impairment seed; the same seed replays the same *inbound* loss pattern for a client that behaves the same way. Outbound loss depends on how many telemetry pushes preceded the session, so it repeats only for a run driven identically |
 | `--rssi` | signal to report, default −58; `0` is the contract's "unavailable", which the app renders differently from a very weak signal |
 | `-v` | log every frame instead of one line a second |
+| `--video-port` | video UDP port, default from the contract (`VIDEO["port"]`) |
+| `--video-sample` | the Annex B clip to loop, default `sample.h264` next to this file |
+| `--video-loss-pct` | drop this percentage of outbound video datagrams |
+| `--video-reorder-pct` | delay this percentage by one datagram slot |
+| `--video-dup-pct` | send this percentage twice |
+
+## Video
+
+The video port is a second UDP endpoint, `video.py`'s `VideoLink`, entirely separate from
+the real-time channel — it only *reads* `RTLink.session` to check that a `view` comes from
+the live session's owner. A `view` datagram (like the app sends, and `tools/conformance_video.py`
+too) starts the stream: `sample.h264` plays in a loop at `VIDEO["fps"]`, one access unit per
+datagram burst, chunked exactly as `video_wire.chunks` chunks it on the car. `stream` bumps
+once per stream start; `frame` keeps counting across loops, so to the receiver a looped clip
+is one long stream. The subscription is soft — no `view` for `VIDEO["subscribe_timeout_ms"]`
+and the mock stops sending and resets `car.video_state/fps/kbps` to idle/0/0, same as the
+watchdog does for the drive channel.
+
+`view` may carry `key:true` to ask for a keyframe. The clip is only 3 s with one IDR per
+loop, so *seeking forward* to the next one could take up to 3 s — past what a real receiver
+would tolerate. Instead the mock immediately replays the most recent IDR access unit it has
+already sent (a valid IDR with SPS/PPS; the decoder does not care that it repeats) as the very
+next frame, without losing its place in the clip.
+
+`--video-loss-pct`, `--video-reorder-pct` and `--video-dup-pct` seed the same kind of
+impairment model `rt_link.py`'s `Impairment` uses for the drive channel — seeded from
+`--seed`, so a failing run is repeatable. `tools/conformance_video.py` opens a real-time
+session, subscribes on the video port, reassembles frames, asks for a keyframe on every
+loss, and checks the contract's invariants (every IDR carries SPS/PPS, a requested keyframe
+arrives in under 1 s, under 5% of frames lost); `tools/test-all.sh` runs it against a mock
+started with 2% loss.
+
+`sample.h264` is checked into the repository (≤ 400 KB) so nothing needs `ffmpeg` to run the
+mock. Regenerating it does:
+
+```bash
+brew install ffmpeg      # only needed to regenerate the clip, not to run the mock
+cd tools/mock_car && ffmpeg -y -f lavfi -i "testsrc2=size=1280x960:rate=15" -t 3 \
+  -c:v libx264 -profile:v baseline -level 3.1 -pix_fmt yuv420p -bf 0 -b:v 100k \
+  -x264-params "keyint=45:min-keyint=45:scenecut=0:bframes=0:repeat-headers=1:annexb=1:nal-hrd=none" \
+  -f h264 sample.h264
+```
+
+`-b:v` is deliberately low: `testsrc2`'s constant motion makes even a modest bitrate span
+several `VIDEO["chunk_bytes"]` (1400 B) chunks per frame, and a multi-chunk frame is lost
+whenever *any* of its chunks is — at `--video-loss-pct 2` a 6-chunk frame already loses
+11% of the time, well past the 5% the conformance run requires. `-b:v 100k` keeps most
+frames to one or two chunks (and the keyframe, replayed whole on every `key:true`, to a
+handful), which is what keeps `tools/conformance_video.py` under its loss budget; raise it
+and re-run `CONFORMANCE=required tools/test-all.sh` before trusting a bigger clip.
+
+`tools/conformance_video.py 127.0.0.1 --out /tmp/out.h264` writes the reassembled stream to
+a file; `ffplay /tmp/out.h264` opens it.
 
 ## What is where
 
