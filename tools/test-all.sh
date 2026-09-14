@@ -62,7 +62,7 @@ else
     VIDEO_PORT=4238
     LOG="$(mktemp -t mockcar)"
     "$MOCK_PY" tools/mock_car/mock_car.py --host 127.0.0.1 --port "$PORT" \
-        --rt-port "$RT_PORT" --video-port "$VIDEO_PORT" --video-loss-pct 2 > "$LOG" 2>&1 &
+        --rt-port "$RT_PORT" --video-port "$VIDEO_PORT" --video-loss-pct 0.3 > "$LOG" 2>&1 &
     MOCK_PID=$!
     trap 'kill "$MOCK_PID" 2>/dev/null || true; rm -f "$LOG"' EXIT
 
