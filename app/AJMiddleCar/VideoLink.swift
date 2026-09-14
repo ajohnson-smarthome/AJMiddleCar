@@ -46,7 +46,13 @@ final class VideoLink: ObservableObject {
 
         var onFrame: (@Sendable (Data, Bool) -> Void)?
         var receiver = VideoReceiver()
-        var needKey = false
+        /// True from the start: a fresh receiver waits for a keyframe (rule 3), so the first
+        /// `view` of a (re)opened socket asks for one. Without the ask, a return to the drive
+        /// screen inside `videoSubscribeTimeoutMs` — the settings sheet dismissed, the app
+        /// foregrounded — finds the car's subscription still alive: the view is a refresh of
+        /// the same stream, no IDR is forced, and the picture waits up to `videoKeyframeS`
+        /// for the scheduled one.
+        var needKey = true
         var frames = 0
         var lostWindow: [Int] = Array(repeating: 0, count: lossSamples)
         var lastFrameAt: Date = .distantPast
@@ -55,9 +61,10 @@ final class VideoLink: ObservableObject {
         /// Back to the state a fresh socket deserves — every field, not just the receiver. A
         /// new receiver counts `dropped` from zero, and a window still holding the previous
         /// session's cumulative values would read it as negative losses until it drained.
+        /// `needKey` goes back to true for the reason it starts there.
         func reset() {
             receiver = VideoReceiver()
-            needKey = false
+            needKey = true
             frames = 0
             lostWindow = Array(repeating: 0, count: Self.lossSamples)
             lastFrameAt = .distantPast
@@ -107,16 +114,24 @@ final class VideoLink: ObservableObject {
         }
         c.start(queue: queue)
         receiveLoop(c)
-        viewTimer = Timer.scheduledTimer(withTimeInterval: Double(CarContract.videoSubscribeMs) / 1000, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                let key = self.queue.sync { self.state.needKey }   // repeat the ask until a keyframe lands
-                self.sendView(key: key)
-            }
+        viewTimer = Self.timer(every: Double(CarContract.videoSubscribeMs) / 1000) { [weak self] in
+            guard let self else { return }
+            let key = self.queue.sync { self.state.needKey }   // repeat the ask until a keyframe lands
+            self.sendView(key: key)
         }
-        statsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.publishStats() }
+        statsTimer = Self.timer(every: 1) { [weak self] in self?.publishStats() }
+    }
+
+    /// A repeating timer on the main run loop, in `.common` as well as the default mode
+    /// `scheduledTimer` registers it in: a gesture in flight puts the main run loop into
+    /// tracking, where a default-mode timer does not fire — and a view that stops mid-drive
+    /// is a stream that ends on the car three seconds later.
+    private static func timer(every interval: TimeInterval, _ tick: @escaping @MainActor @Sendable () -> Void) -> Timer {
+        let t = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
+            Task { @MainActor in tick() }
         }
+        RunLoop.main.add(t, forMode: .common)
+        return t
     }
 
     private func close() {
@@ -124,6 +139,21 @@ final class VideoLink: ObservableObject {
         statsTimer?.invalidate(); statsTimer = nil
         conn?.cancel(); conn = nil
         fps = 0; lostLast10s = 0; hasPicture = false
+    }
+
+    /// The receive loop ended on an error. If `c` is still the live socket — not one `close`
+    /// already cancelled, whose loop ends the same way — tear it down and let `reconcile`
+    /// open a fresh one while there is still a session and a watcher. On the view's own
+    /// cadence rather than at once: a peer that answers every view with an ICMP refusal
+    /// would otherwise make this a reconnect loop at loopback speed. `reconcile` is
+    /// idempotent, so a `setWatching` or a new session in the meantime costs nothing.
+    private func socketFailed(_ c: NWConnection) {
+        guard conn === c else { return }
+        close()
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(CarContract.videoSubscribeMs))
+            reconcile()
+        }
     }
 
     private func sendView(key: Bool) {
@@ -134,7 +164,15 @@ final class VideoLink: ObservableObject {
     /// nonisolated: it re-arms itself from the socket's queue, where it also runs the receiver.
     private nonisolated func receiveLoop(_ c: NWConnection) {
         c.receiveMessage { [weak self, state] data, _, _, error in
-            guard let self, error == nil else { return }
+            guard let self else { return }
+            if error != nil {
+                // The loop ends here; a socket whose receive failed is not coming back on
+                // its own, and leaving `conn` and the view timer alive would keep sending
+                // views into it. The main actor decides — this is also how our own cancel
+                // surfaces, and only it can tell the two apart.
+                Task { @MainActor in self.socketFailed(c) }
+                return
+            }
             if let data {
                 switch state.receiver.feed(data) {
                 case .frame(let frame, let key):
@@ -143,8 +181,11 @@ final class VideoLink: ObservableObject {
                     if key { state.needKey = false }
                     state.onFrame?(frame, key)
                 case .loss:
-                    // Once per loss, then the periodic view keeps asking until a keyframe lands.
-                    if !state.needKey || Date().timeIntervalSince(state.lastKeyAskAt) > 1 {
+                    // Once per loss, then the periodic view keeps asking until a keyframe
+                    // lands — re-asked no sooner than the car would honour it, so a forced
+                    // keyframe lost on the way costs one `idr_min_ms`, not a whole period.
+                    let reask = Double(CarContract.videoIdrMinMs) / 1000
+                    if !state.needKey || Date().timeIntervalSince(state.lastKeyAskAt) > reask {
                         state.needKey = true
                         state.lastKeyAskAt = Date()
                         Task { @MainActor in self.sendView(key: true) }
