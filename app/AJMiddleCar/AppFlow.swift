@@ -201,16 +201,12 @@ final class AppFlow: ObservableObject {
         guard !gateRunning else { return }
         gateRunning = true
         defer { gateRunning = false }
-        #if targetEnvironment(simulator)
-        // On the simulator there has never been a dongle and the spec is explicit that this
-        // plan does not build one to stand in for it — the simulator keeps talking to
-        // `tools/mock_car` directly, exactly as it did before this sequence existed — so the
-        // whole dongle half is skipped there and only on there.
+        // The dongle half runs wherever there is a dongle to ask: every device, and a simulator
+        // launched with `-viaDongle` (CarHost) — the adapter on the Mac's USB, the simulator as
+        // the phone. Against the mock there is no dongle and the spec is explicit that nothing
+        // stands in for one, so the ladder starts at the car's own gate.
+        if CarHost.viaDongle { await dongleGate() }
         await carGate()
-        #else
-        await dongleGate()
-        await carGate()
-        #endif
     }
 
     /// The dongle's interface came back after going away.
@@ -229,7 +225,7 @@ final class AppFlow: ObservableObject {
     /// `.awaitingCar` is enough: `carIdentified` restores `.ready`/`.updateRequired` on the
     /// next hello, which is where the phase was before the wire went.
     func dongleReturned() async {
-        #if !targetEnvironment(simulator)
+        guard CarHost.viaDongle else { return }
         // Nothing to re-ask if the gate never handed over in the first place — a flap during the
         // launch gate is that gate's own business, and `gateRunning` keeps two loops from
         // polling the same address.
@@ -239,7 +235,6 @@ final class AppFlow: ObservableObject {
         defer { gateRunning = false }
         await dongleGate()
         setPhase(.awaitingCar)
-        #endif
     }
 
     /// Poll the dongle until it reports `.readyForCar`, acting on whatever `DongleLink` says is

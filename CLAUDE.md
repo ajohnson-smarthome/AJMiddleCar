@@ -228,7 +228,12 @@ The mock's video port loops `tools/mock_car/video.py` over `tools/mock_car/sampl
 
 `CarHost` is the single source of the address: `127.0.0.1:8080` in the simulator, the dongle's
 `192.168.7.1` on a device (REST `:80`, UDP `:4210` and UDP `:4211` relayed to the car unchanged;
-the dongle's own API on `:8080`). There is no direct path from a device to the car and no
+the dongle's own API on `:8080`). **Bench without a phone:** plug the dongle into the Mac (it
+appears as a USB-Ethernet interface, the Mac gets `192.168.7.2`) and launch the simulator with
+`-viaDongle` — it then IS the phone: same address, same relay ports, the whole launch ladder
+including the adapter's own update, the car's forced update and the drive screen with video.
+`xcrun simctl launch booted com.adamjohnson.ajmiddlecar -viaDongle`, screenshot with
+`xcrun simctl io booted screenshot`. This is how the first FPV bench round was run (2026-09-14). There is no direct path from a device to the car and no
 argument that opens one — the bench escape hatch was retired 2026-09-13. `MOCK_DEVICE=esp32-car`
 makes the mock impersonate the other car, which is how the wrong-car screen is exercised.
 
