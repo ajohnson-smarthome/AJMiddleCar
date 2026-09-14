@@ -162,3 +162,13 @@ check(UpdateRules.flashPlan(for: .dongle, release: nil, cachedBuild: 100, hasCac
       "a recorded build with no backing file is not something to flash")
 
 if failures == 0 { print("test_update: OK") } else { exit(1) }
+
+// -- the v1 bridge: what unlocks the flash button for the car -------------------------
+// A v1 car never answers a v2 hello, so the link is never live — the `/status` probe's
+// identity is the only proof the car is there. Found on the first live run (2026-09-14):
+// the forced update downloaded the image and then waited forever for a session.
+check(UpdateRules.carReachable(live: true, probedFw: nil), "a live v2 session is reachable")
+check(UpdateRules.carReachable(live: false, probedFw: "v1.0+784"),
+      "a v1 car that answered the probe is reachable")
+check(!UpdateRules.carReachable(live: false, probedFw: nil),
+      "no session and no probe answer is not")

@@ -206,10 +206,15 @@ extension FirmwareFlow {
     /// captured `oldFw == nil` and could never reach `.done`. The order matters the other way
     /// too: `.sessionOpened` sets `fw` and clears `probedFw` in the same breath, so once the
     /// flashed car answers as v2 the first read is the new version, not the stale probe.
+    ///
+    /// `isReachable` reads the same two answers, for the same reason: a v1 car is never live,
+    /// and the flash button that waited for `isLive` alone never unlocked for it
+    /// (`UpdateRules.carReachable`).
     static func forCar(link: CarLink) -> FirmwareFlow {
         FirmwareFlow(device: .car,
                      runningFw: { [weak link] in link?.fw ?? link?.probedFw },
-                     isReachable: { [weak link] in link?.isLive ?? false },
+                     isReachable: { [weak link] in
+                         UpdateRules.carReachable(live: link?.isLive ?? false, probedFw: link?.probedFw) },
                      progressPublishedByClient: true,
                      push: { url, client, _ in await client.upload(url) })
     }
