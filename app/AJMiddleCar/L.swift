@@ -109,6 +109,10 @@ enum L {
     static var rampSub: String { s("ramp.sub") }
     static var rampValueOff: String { s("ramp.valueOff") }
     static func rampValue(_ ms: Int) -> String { s("ramp.value", ms) }
+    static var videoTitle: String { s("video.title") }
+    static var videoHeadline: String { s("video.headline") }
+    static var videoSub: String { s("video.sub") }
+    static func videoValue(_ kbps: Int) -> String { s("video.value", kbps) }
     static var trimTitle: String { s("trim.title") }
     static var trimSub: String { s("trim.sub") }
     static var trimCenter: String { s("trim.center") }

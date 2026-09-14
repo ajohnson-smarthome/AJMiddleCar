@@ -15,6 +15,7 @@ extension Trim: ConfigDomain {}
 extension Recovery: ConfigDomain {}
 extension Wheel: ConfigDomain {}
 extension Chassis: ConfigDomain {}
+extension Video: ConfigDomain {}
 
 /// What the app knows about one domain, and the transitions between those states.
 ///

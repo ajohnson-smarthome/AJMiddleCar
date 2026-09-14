@@ -66,6 +66,13 @@ struct SettingsView: View {
                                 .foregroundStyle(palette.text)
                         }
                         .listRowBackground(palette.panel)
+                        NavigationLink {
+                            VideoSettingsView(palette: palette)
+                        } label: {
+                            Label(L.videoTitle, systemImage: "video")
+                                .foregroundStyle(palette.text)
+                        }
+                        .listRowBackground(palette.panel)
                     } header: {
                         sectionHeader(L.settingsGroupDriving)
                     }

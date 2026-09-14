@@ -85,6 +85,7 @@ final class ConfigStore {
     let recovery = ConfigDomainStore<Recovery>()
     let wheel = ConfigDomainStore<Wheel>()
     let chassis = ConfigDomainStore<Chassis>()
+    let video = ConfigDomainStore<Video>()
 
     /// Warm the two domains the drive screen needs before the user can press anything that
     /// depends on them.
