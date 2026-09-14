@@ -22,9 +22,22 @@
 static const char *TAG = "video";
 
 #define CTL_TICK_MS      100                          /* recvfrom timeout: the subscription clock */
-#define RING_SLOTS       2
+/* Six, not two: at SEND_PERIOD_US a 64-chunk keyframe takes ~130 ms to leave, two encoded
+   frames' worth at 15 fps, and the P-frames right after an IDR are the heavy ones. A ring of
+   two dropped the frame behind every keyframe; a ring of three still dropped about one a
+   second under motion — and every drop forces an IDR, which is another 130 ms burst, which
+   drops another frame: the bench watched the bitrate climb to 2.9 Mbit/s on a 1.5 target
+   from nothing but that loop. Slots are 256 KB each in PSRAM, of which there are 32 MB. */
+#define RING_SLOTS       6
 #define FRAME_SKIP       (VIDEO_SENSOR_FPS / VIDEO_FPS) /* encode every FRAME_SKIP-th sensor frame */
-#define SEND_PERIOD_US   1000
+/* One chunk every 2 ms — 5.6 Mbit/s while a frame is leaving, against the dongle's USB,
+   which is Full-Speed: 12 Mbit/s on the wire and ~8 usable. At 1 ms (11 Mbit/s) the bench
+   measured 49 % of chunks lost through the dongle and 3 % on the same air received by a
+   laptop, the loss growing with the frame's length — the relay stuck in sendto while USB
+   drained, the socket's mailbox overflowing behind it. The average (≤ 3 Mbit/s by config)
+   is never the problem; the burst is. Cost: a 64-chunk keyframe now takes ~130 ms to leave
+   instead of ~65 — once every 3 s. */
+#define SEND_PERIOD_US   3000
 
 _Static_assert(VIDEO_SENSOR_FPS % VIDEO_FPS == 0, "fps must divide the sensor rate");
 
@@ -139,11 +152,18 @@ static void enc_task(void *arg) {
             if (!take) { camera_release(&f); continue; }
             ring_slot_t *slot = &s_ring[s_ring_tail];
             if (__atomic_load_n(&slot->full, __ATOMIC_ACQUIRE)) {
-                /* The sender is behind. Skipping a frame breaks the reference chain, so the
-                   next one has to be an IDR. */
+                /* The sender is behind: this sensor frame is skipped BEFORE the encoder sees
+                   it, so the encoder's reference is still the last frame it encoded — which
+                   the ring holds and the sender will deliver — and `frame` below does not
+                   advance, so the receiver sees no gap either. Nothing to repair: the cost is
+                   one frame of motion, a momentarily lower fps. This used to force an IDR
+                   too, and that was the amplifier of a loop the bench watched at 2 ms pacing:
+                   a keyframe backs the ring up → a skip → a forced IDR (another 84 KB) →
+                   another skip → 2.9 Mbit/s on a 1.5 target and the USB behind the dongle
+                   overrun. The forced IDR belongs only to the branch below, where the encoder
+                   DID consume a frame as a reference and nothing was sent. */
                 camera_release(&f);
                 s_dropped++;
-                s_force_idr = true;
                 continue;
             }
             if (s_force_idr) { s_force_idr = false; video_enc_force_idr(); }
