@@ -190,7 +190,8 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
          * last_log. */
         static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
         if (log_throttle_ok(&s_throttle, boot_ms())) {
-            ESP_LOGW(TAG, "phone->car send failed on slot %d: errno %d", idx, errno);
+            ESP_LOGW(TAG, "%s: phone->car send failed on slot %d: errno %d", r->cfg->name,
+                     idx, errno);
         }
     } else if (!r->cfg->video) {
         /* The video instance's phone->car direction is view datagrams, not control frames —
@@ -221,7 +222,16 @@ static void handle_car_datagram(relay_state_t *r, int idx, const char *buf, int 
         .sin_port = htons(s->port),
     };
     if (sendto(r->phone_sock, buf, (size_t)n, 0, (struct sockaddr *)&to, sizeof(to)) < 0) {
-        relay_stats_failed(relay_stats_shared(), errno, boot_ms());
+        /* A chunk the gate admitted and the wire still refused — the NTB pool was full
+         * after all — is a video drop like any other: it goes into relay.video_dropped,
+         * the figure stage 3 measures the ceiling against, not into the errno pair. That
+         * pair is the control channel's fault record: a video burst that fails ten sends
+         * would otherwise stamp last_error with a fault the control loop never had. */
+        if (r->cfg->video) {
+            relay_stats_video_dropped(relay_stats_shared());
+        } else {
+            relay_stats_failed(relay_stats_shared(), errno, boot_ms());
+        }
         /* Rate-limited for the same reason as the phone->car send above. */
         static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
         if (log_throttle_ok(&s_throttle, boot_ms())) {
@@ -380,7 +390,7 @@ static void relay_task(void *arg)
                 } else if (n > 0 && from.sin_family == AF_INET) {
                     handle_phone_datagram(&r, r.phone_buf, n, &from);
                 } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    ESP_LOGW(TAG, "phone-facing recvfrom: errno %d", errno);
+                    ESP_LOGW(TAG, "%s: phone-facing recvfrom: errno %d", r.cfg->name, errno);
                 }
             }
             for (int i = 0; i < UDP_SESS_MAX; i++) {
@@ -393,7 +403,7 @@ static void relay_task(void *arg)
                 } else if (n > 0) {
                     handle_car_datagram(&r, i, r.car_buf, n);
                 } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                    ESP_LOGW(TAG, "car-facing recv (slot %d): errno %d", i, errno);
+                    ESP_LOGW(TAG, "%s: car-facing recv (slot %d): errno %d", r.cfg->name, i, errno);
                 }
             }
         } else if (nready < 0 && errno != EINTR) {
@@ -406,7 +416,7 @@ static void relay_task(void *arg)
              * repeating warnings. expire_sessions below still runs every pass. */
             static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
             if (log_throttle_ok(&s_throttle, boot_ms())) {
-                ESP_LOGW(TAG, "select: errno %d", errno);
+                ESP_LOGW(TAG, "%s: select: errno %d", r.cfg->name, errno);
             }
             vTaskDelay(pdMS_TO_TICKS(RELAY_LOOP_MS));
         }

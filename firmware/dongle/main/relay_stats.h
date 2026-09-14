@@ -41,7 +41,7 @@ typedef struct {
     _Atomic int      last_errno;    /* 0 when nothing has failed */
     _Atomic uint32_t errno_count;   /* repeats of last_errno, restarted when it changes */
     _Atomic uint32_t last_fail_ms;  /* when the last failure happened; 0 when none has */
-    _Atomic uint32_t video_dropped; /* chunks the admission limit refused since boot */
+    _Atomic uint32_t video_dropped; /* chunks not delivered toward the phone: gate or wire */
     uint8_t  udp_used;
     uint8_t  tcp_used;
     uint8_t  video_used;
@@ -77,8 +77,10 @@ void relay_stats_udp_slots(relay_stats_t *s, uint8_t used);
 void relay_stats_tcp_slots(relay_stats_t *s, uint8_t used);
 
 /* The video relay's own bookkeeping — see relay_udp.h's `video` flag. One forwarded chunk,
- * one refusal (rate_gate turned it away, so the caller never sent it and there is nothing
- * to attribute to `total_video_bytes`), and the live session count. */
+ * one chunk that did not reach the phone (rate_gate turned it away, or it was admitted and
+ * sendto then refused it — either way nothing to attribute to `total_video_bytes`, and
+ * neither goes into the errno pair: a keyframe burst that fails ten sends would otherwise
+ * stamp last_errno with a fault the control loop never had), and the live session count. */
 void relay_stats_video_forwarded(relay_stats_t *s, uint32_t bytes);
 void relay_stats_video_dropped(relay_stats_t *s);
 void relay_stats_video_slots(relay_stats_t *s, uint8_t used);
