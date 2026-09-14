@@ -44,6 +44,10 @@ typedef struct {
     size_t   len;
     unsigned next_chunk, n_chunks;
     vw_header_t hdr;
+    /* The publication point: the encoder fills the fields, then sets this; the sender
+       reads this, then the fields. volatile alone orders only volatile accesses, and on
+       two cores nothing else would keep the plain stores ahead of the flag — so the flag
+       is written with a release store and read with an acquire load (R8). */
     volatile bool full;
 } ring_slot_t;
 static ring_slot_t s_ring[RING_SLOTS];
@@ -76,7 +80,7 @@ static void sender_task(void *arg) {
             sec_start = t; sec_bytes = 0; sec_frames = 0;
         }
         ring_slot_t *slot = &s_ring[s_ring_head];
-        if (!slot->full) continue;
+        if (!__atomic_load_n(&slot->full, __ATOMIC_ACQUIRE)) continue;
         size_t d = vw_chunk(&slot->hdr, slot->buf, slot->len, slot->next_chunk, dgram);
         if (d > 0) {
             struct sockaddr_in to;
@@ -91,7 +95,7 @@ static void sender_task(void *arg) {
             }
         }
         if (++slot->next_chunk >= slot->n_chunks) {
-            slot->full = false;
+            __atomic_store_n(&slot->full, false, __ATOMIC_RELEASE);
             sec_frames++;
             s_ring_head = (s_ring_head + 1) % RING_SLOTS;
         }
@@ -127,13 +131,14 @@ static void enc_task(void *arg) {
         if (!s_want) { vTaskDelay(pdMS_TO_TICKS(CTL_TICK_MS)); continue; }
         if (!stream_open()) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
         frame = 0; sensor_frames = 0;
+        bool capture_failed = false;
         while (s_want) {
             camera_frame_t f;
-            if (camera_acquire(&f) != ESP_OK) { ESP_LOGE(TAG, "capture failed — stream over"); break; }
+            if (camera_acquire(&f) != ESP_OK) { ESP_LOGE(TAG, "capture failed — stream over"); capture_failed = true; break; }
             bool take = (sensor_frames++ % FRAME_SKIP) == 0;
             if (!take) { camera_release(&f); continue; }
             ring_slot_t *slot = &s_ring[s_ring_tail];
-            if (slot->full) {
+            if (__atomic_load_n(&slot->full, __ATOMIC_ACQUIRE)) {
                 /* The sender is behind. Skipping a frame breaks the reference chain, so the
                    next one has to be an IDR. */
                 camera_release(&f);
@@ -155,10 +160,12 @@ static void enc_task(void *arg) {
             slot->next_chunk = 0;
             slot->hdr = (vw_header_t){ .proto = VIDEO_WIRE_PROTO, .flags = key ? VW_FLAG_KEY : 0,
                                        .stream = s_stream, .frame = frame++, .captured_ms = f.captured_ms };
-            slot->full = true;
+            __atomic_store_n(&slot->full, true, __ATOMIC_RELEASE);
             s_ring_tail = (s_ring_tail + 1) % RING_SLOTS;
         }
         stream_close();
+        /* A sensor that stopped delivering would otherwise be reopened at ~2 Hz (R9b). */
+        if (capture_failed) vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
