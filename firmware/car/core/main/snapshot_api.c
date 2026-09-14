@@ -39,10 +39,11 @@ static esp_err_t snapshot_get(httpd_req_t *req) {
         return api_reply_error(req, "409 Conflict", ERR_BUSY, "", "stream running");
     }
     err = camera_start(CAMERA_FMT_UYVY);
-    /* The check above and this start are not atomic against the stream's own open. Losing
-       that race is INVALID_STATE, and it must answer here rather than at `out:`, whose
-       camera_stop() would STREAMOFF and close the stream's fd under the encoder (R9a).
-       Any other failure started nothing, and `out:` remains the right exit. */
+    /* The check above and this start are not atomic against the stream's own start — the
+       start itself is (camera.h's lock), which is what makes losing the race a clean
+       INVALID_STATE rather than two owners of one fd. It must answer here rather than at
+       `out:`, whose camera_stop() would STREAMOFF and close the stream's fd under the
+       encoder (R9a). Any other failure started nothing, and `out:` remains the right exit. */
     if (err == ESP_ERR_INVALID_STATE) {
         return api_reply_error(req, "409 Conflict", ERR_BUSY, "", "stream running");
     }

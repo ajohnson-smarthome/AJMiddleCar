@@ -26,7 +26,7 @@ typedef struct {
     uint32_t seq;
     bool     has_axes;              // both axes were present and finite
     float    throttle, turn;
-    char     sid[CONTROL_SID_MAX];  // CT_HELLO: NUL-terminated, alphanumeric, non-empty
+    char     sid[CONTROL_SID_MAX];  // CT_HELLO, CT_VIEW: NUL-terminated, alphanumeric, non-empty
     bool     has_key;               // CT_VIEW: the `key` flag was present
     bool     key;                   // …and asked for a keyframe
 } control_frame_t;

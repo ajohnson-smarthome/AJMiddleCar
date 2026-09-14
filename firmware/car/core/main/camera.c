@@ -10,6 +10,8 @@
 #include "esp_video_init.h"
 #include "esp_video_device.h"
 #include "esp_video_ioctl.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "linux/videodev2.h"
 #include "board.h"
 #include "contract.h"
@@ -23,8 +25,16 @@ static bool s_present;
 static int  s_fd = -1;
 static uint8_t *s_buf[CAM_BUFFERS];
 static size_t   s_buf_len[CAM_BUFFERS];
+/* Serialises camera_start and camera_stop (camera.h says why). Created in camera_init,
+   before any caller exists; the fast paths that only read s_fd stay outside it. */
+static SemaphoreHandle_t s_lock;
 
 esp_err_t camera_init(void) {
+    s_lock = xSemaphoreCreateMutex();
+    if (s_lock == NULL) {
+        ESP_LOGW(TAG, "no mutex — camera off");
+        return ESP_OK;
+    }
     i2c_master_bus_handle_t bus = i2c_bus_handle();
     if (bus == NULL) {
         ESP_LOGW(TAG, "no I2C bus — camera off");
@@ -63,9 +73,10 @@ static void unmap_all(void) {
     }
 }
 
-esp_err_t camera_start(camera_fmt_t fmt) {
-    if (!s_present) return ESP_ERR_INVALID_STATE;
-    if (s_fd >= 0)  return ESP_ERR_INVALID_STATE;
+/* The body of camera_start, under s_lock. Every early return here unwinds through the
+   wrapper below, so none of them can forget the give. */
+static esp_err_t start_locked(camera_fmt_t fmt) {
+    if (s_fd >= 0) return ESP_ERR_INVALID_STATE;
 
     int fd = open(ESP_VIDEO_MIPI_CSI_DEVICE_NAME, O_RDONLY);
     ESP_RETURN_ON_FALSE(fd >= 0, ESP_FAIL, TAG, "open %s", ESP_VIDEO_MIPI_CSI_DEVICE_NAME);
@@ -108,16 +119,28 @@ esp_err_t camera_start(camera_fmt_t fmt) {
     return ESP_OK;
 }
 
+esp_err_t camera_start(camera_fmt_t fmt) {
+    if (!s_present) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    esp_err_t err = start_locked(fmt);
+    xSemaphoreGive(s_lock);
+    return err;
+}
+
 esp_err_t camera_stop(void) {
-    if (s_fd < 0) return ESP_OK;
-    const int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    /* STREAMOFF is what puts the sensor in standby (the driver writes its stream register)
-       and parks the isp_task on an empty statistics queue. */
-    if (ioctl(s_fd, VIDIOC_STREAMOFF, &type) != 0) ESP_LOGW(TAG, "STREAMOFF failed");
-    unmap_all();
-    close(s_fd);
-    s_fd = -1;
-    ESP_LOGI(TAG, "pipeline down");
+    if (!s_present) return ESP_OK;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_fd >= 0) {
+        const int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        /* STREAMOFF is what puts the sensor in standby (the driver writes its stream
+           register) and parks the isp_task on an empty statistics queue. */
+        if (ioctl(s_fd, VIDIOC_STREAMOFF, &type) != 0) ESP_LOGW(TAG, "STREAMOFF failed");
+        unmap_all();
+        close(s_fd);
+        s_fd = -1;
+        ESP_LOGI(TAG, "pipeline down");
+    }
+    xSemaphoreGive(s_lock);
     return ESP_OK;
 }
 

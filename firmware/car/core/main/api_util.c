@@ -30,8 +30,13 @@ esp_err_t api_reply_ok(httpd_req_t *req) {
     return api_reply_json(req, "\"" KEY_OK "\":true");
 }
 
+/* What the envelope adds around `members`: `{"proto":` (9), the version's digits, `,` and
+   `}`. Five digits of proto is more than the wire will ever carry. */
+#define API_ENVELOPE_MAX (9 + 5 + 1 + 1)
+_Static_assert(RT_PROTO < 100000, "the envelope allows five digits of proto");
+
 esp_err_t api_reply_json(httpd_req_t *req, const char *members) {
-    char buf[640];
+    char buf[API_MEMBERS_MAX + API_ENVELOPE_MAX];
     int n = snprintf(buf, sizeof(buf), "{\"" KEY_PROTO "\":%d,%s}", RT_PROTO, members);
     if (n < 0 || n >= (int)sizeof(buf)) return ESP_FAIL;
     httpd_resp_set_type(req, "application/json");

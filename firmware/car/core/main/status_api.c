@@ -95,20 +95,20 @@ static esp_err_t status_get(httpd_req_t *req) {
         return api_reply_error(req, "500 Internal Server Error", ERR_INTERNAL, "", "telemetry unavailable");
     }
     /* telemetry_groups prints link, motors, system, video. The schema's status order is
-       device, link, motors, radio, storage, system, video — so the system member is
-       split off the tail and radio/storage go in before it, and everything after system
-       (video) rides with it. Splitting on the last group's opening key keeps the three
-       words spelled by the one printer telemetry uses. */
+       device, link, motors, radio, storage, system, video — so the tail from the system
+       member on is split off, radio/storage go in before it, and video rides with it.
+       Splitting on the system group's opening key keeps all four groups spelled by the
+       one printer telemetry uses. */
     char *sys = strstr(groups, "\"" KEY_GROUP_SYSTEM "\":{");
     if (!sys || sys == groups || sys[-1] != ',') {
         ESP_LOGE(TAG, "/status could not find the system group");
         return api_reply_error(req, "500 Internal Server Error", ERR_INTERNAL, "", "status malformed");
     }
-    sys[-1] = '\0';                       /* groups is now link,motors; sys is system */
+    sys[-1] = '\0';                       /* groups is now link,motors; sys is system,video */
     char radio_fw[32];
     if (s_radio_fw[0]) snprintf(radio_fw, sizeof(radio_fw), "\"%s\"", s_radio_fw);
     else               snprintf(radio_fw, sizeof(radio_fw), "null");
-    char members[720];
+    char members[API_MEMBERS_MAX];
     int n = snprintf(members, sizeof(members),
                      "%s,%s,"
                      "\"" KEY_GROUP_RADIO "\":{\"" KEY_RADIO_FW "\":%s,"

@@ -34,7 +34,7 @@ static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static struct sockaddr_in s_peer;          /* under s_mux */
 static volatile bool s_want;               /* ctl -> enc: stream wanted */
 static volatile bool s_streaming;          /* enc: pipeline and encoder are up */
-static volatile bool s_force_idr;          /* ctl/sender -> enc */
+static volatile bool s_force_idr;          /* ctl/enc -> enc */
 static volatile uint32_t s_fps, s_kbps, s_dropped;
 
 /* One encoded frame, waiting to be sent. The buffer IS the encoder's output buffer, so a
@@ -189,6 +189,12 @@ static void ctl_task(void *arg) {
                 switch (video_sub_view(&sub, owner, &f, t, &idr)) {
                 case VS_START:
                     taskENTER_CRITICAL(&s_mux); s_peer = from; taskEXIT_CRITICAL(&s_mux);
+                    /* Harmless on the fresh encoder this usually meets, and load-bearing on
+                       the one it sometimes does not: a view that lands after the encode
+                       loop's `while (s_want)` gave up but before it re-read the flag keeps
+                       the old stream going, and its first frame would be a P-frame the new
+                       viewer cannot decode. */
+                    s_force_idr = true;
                     s_want = true;
                     log_peer("view from", &from);
                     break;
@@ -235,8 +241,15 @@ esp_err_t video_link_start(void) {
     ESP_RETURN_ON_FALSE(s_sock >= 0, ESP_FAIL, TAG, "socket: errno %d", errno);
     struct sockaddr_in addr = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_ANY), .sin_port = htons(VIDEO_PORT) };
     ESP_RETURN_ON_FALSE(bind(s_sock, (struct sockaddr *)&addr, sizeof(addr)) == 0, ESP_FAIL, TAG, "bind %d: errno %d", VIDEO_PORT, errno);
+    /* The timeout IS the subscription clock: without it recvfrom blocks until the next
+       datagram, and a viewer that simply stops sending is never seen to expire. */
     struct timeval tv = { .tv_sec = 0, .tv_usec = CTL_TICK_MS * 1000 };
-    setsockopt(s_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    if (setsockopt(s_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+        ESP_LOGE(TAG, "SO_RCVTIMEO: errno %d", errno);
+        close(s_sock);
+        s_sock = -1;
+        return ESP_FAIL;
+    }
 
     ESP_RETURN_ON_FALSE(xTaskCreate(sender_task, "video_tx", 4096, NULL, 3, &s_sender) == pdPASS, ESP_FAIL, TAG, "sender task");
     ESP_RETURN_ON_FALSE(xTaskCreate(enc_task, "video_enc", 6144, NULL, 3, NULL) == pdPASS, ESP_FAIL, TAG, "encoder task");

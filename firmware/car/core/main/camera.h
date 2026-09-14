@@ -28,6 +28,15 @@ typedef enum { CAMERA_FMT_YUV420, CAMERA_FMT_UYVY } camera_fmt_t;
 size_t camera_frame_bytes(camera_fmt_t fmt);
 
 // Start the pipeline in `fmt` (ESP_ERR_INVALID_STATE if running or absent), stop it.
+//
+// Serialised against each other by a mutex, held across the whole of either. Two tasks
+// reach for the same device — the httpd task for a snapshot, the encode task for the
+// stream — and esp_video reference-counts opens rather than refusing a second one, so
+// without the lock two starts interleaved at the open could both "succeed" on one fd and
+// the loser's stop would STREAMOFF the winner's pipeline. The lock is what makes "running"
+// a single answer: the second start sees s_fd set and gets INVALID_STATE. camera_running
+// itself is a lock-free read, good enough for the snapshot's early 409 — the start that
+// follows it is the check that counts.
 esp_err_t camera_start(camera_fmt_t fmt);
 esp_err_t camera_stop(void);
 bool camera_running(void);
@@ -37,7 +46,9 @@ bool camera_running(void);
 // has no select(), so a device timeout is the only way to bound the wait instead of
 // polling, and it is what keeps a CSI that never delivers a frame from wedging the httpd
 // task or, later, the encode task. The caller is still expected to keep the pipeline
-// alive and check its own stop flag between frames.
+// alive and check its own stop flag between frames. Not under the start/stop lock: only
+// the task that started the pipeline calls these, and holding a mutex across a DQBUF
+// that may wait 500 ms would stall a stop for that long.
 typedef struct {
     uint8_t *data;
     size_t   len;

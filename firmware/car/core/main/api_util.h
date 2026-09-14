@@ -21,9 +21,16 @@ esp_err_t api_reply_error(httpd_req_t *req, const char *status, const char *code
 /* {"proto":2,"ok":true} with the JSON content type — the documented success body. */
 esp_err_t api_reply_ok(httpd_req_t *req);
 
+/* The most a caller may hand api_reply_json, NUL included. Size a members buffer with
+ * this, never a literal: api_reply_json's own buffer is derived from it, and the one time
+ * the two were literals they drifted — /status grew to 720 bytes against a 640-byte
+ * envelope, and a long status was an ESP_FAIL and a reset socket. /status is the widest
+ * caller, seven groups; the config and calibration bodies fit with room to spare. */
+#define API_MEMBERS_MAX 720
+
 /* {"proto":2,<members>} — the caller supplies the members without the outer braces and
  * without a leading comma; the envelope's proto is prepended here so no endpoint can
- * forget it. */
+ * forget it. `members` is at most API_MEMBERS_MAX bytes, NUL included. */
 esp_err_t api_reply_json(httpd_req_t *req, const char *members);
 
 /* Read the whole body into buf (NUL-terminated). Returns the length, or -1 when the

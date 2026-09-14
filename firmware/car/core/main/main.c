@@ -232,13 +232,16 @@ void app_main(void) {
        there on the car is serving and the SDIO link is not ours to drop. */
     radio_gate();
     telemetry_start();                     // 1 Hz RSSI sampler, off the control task
-    ESP_ERROR_CHECK(camera_init());   // detects the sensor; "off" is a state, not a failure
+    /* Post-mark-valid, so nothing from here on may panic — rollback is already waived, and
+       a panic is a permanent boot-loop on a car with no cable. Log loudly and keep what
+       runs. camera_init answers ESP_OK on every path today ("off" is a state, not a
+       failure); the idiom is here so the next edit to it cannot turn into a panic. */
+    esp_err_t err;
+    if ((err = camera_init()) != ESP_OK)
+        ESP_LOGE(TAG, "camera_init failed: %s — no camera this boot", esp_err_to_name(err));
     recovery_init();                       // breadcrumb buffer; the watchdog trips into it
     /* Driving comes up before the API: rt_link carries control, the watchdog and
-       telemetry, and none of it depends on the HTTP server being there.
-       Post-mark-valid: a failure here must NOT panic — rollback is already waived, so a
-       panic is a permanent boot-loop on a car with no cable. Log loudly and keep what runs. */
-    esp_err_t err;
+       telemetry, and none of it depends on the HTTP server being there. */
     if ((err = rt_link_start()) != ESP_OK)
         ESP_LOGE(TAG, "rt_link_start failed: %s — control channel is down", esp_err_to_name(err));
     if ((err = video_link_start()) != ESP_OK)

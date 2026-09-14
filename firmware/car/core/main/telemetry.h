@@ -41,8 +41,7 @@ static inline int telemetry_groups(char *buf, size_t n, const telemetry_t *t) {
             "\"" KEY_LINK_TIMEOUTS "\":%u},"
         "\"" KEY_GROUP_MOTORS "\":{\"" KEY_MOTORS_BUS "\":\"%s\",\"" KEY_MOTORS_CALIBRATED "\":%s,"
             "\"" KEY_MOTORS_OWNER "\":\"%s\"},"
-        "\"" KEY_GROUP_SYSTEM "\":{\"" KEY_SYSTEM_UPTIME_S "\":%ld,\"" KEY_SYSTEM_FREE_HEAP "\":%u}"
-        ","
+        "\"" KEY_GROUP_SYSTEM "\":{\"" KEY_SYSTEM_UPTIME_S "\":%ld,\"" KEY_SYSTEM_FREE_HEAP "\":%u},"
         "\"" KEY_GROUP_VIDEO "\":{\"" KEY_VIDEO_STATE "\":\"%s\",\"" KEY_VIDEO_FPS "\":%u,"
             "\"" KEY_VIDEO_KBPS "\":%u,\"" KEY_VIDEO_DROPPED "\":%u}",
         t->rx_hz, rssi, (unsigned)t->timeouts,
