@@ -40,8 +40,8 @@ esp_err_t wifi_sta_join(const net_cfg_t *cfg);
 /* Join the last network wifi_sta_join was given, again — the same disconnect, reconfigure and
  * connect, the same fresh attempt budget. For the one failure the station cannot see for
  * itself: an association the car's softAP has forgotten (it rebooted) while this side still
- * hears its beacons and reports `connected`. The relays detect it by the sends that fail
- * (uplink.h) and call this; net_api calls it when an unchanged POST /wifi lands on that same
+ * hears its beacons and reports `connected`. The relays detect it by the sends that go
+ * unanswered (uplink.h) and call this; net_api calls it when an unchanged POST /wifi lands on that same
  * state. ESP_ERR_INVALID_STATE before any join. */
 esp_err_t wifi_sta_rejoin(void);
 

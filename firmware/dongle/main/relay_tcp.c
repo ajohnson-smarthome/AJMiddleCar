@@ -239,6 +239,7 @@ static void pump_read(relay_state_t *r, int idx, int src, int dst, char *scratch
          * a slot whose phone is talking must not age out because the car is momentarily
          * refusing more bytes. */
         r->slots[idx].last_active_ms = boot_ms();
+        if (src == r->slots[idx].car_sock) uplink_heard(uplink_shared());
         int w = send(dst, scratch, (size_t)n, 0);
         if (w == n) {
             return;   /* the common case: forwarded whole, nothing left pending */
@@ -388,7 +389,7 @@ static void handle_accept(relay_state_t *r)
          * often seen on a loopback-fast path); lwIP does not special-case it away, so this
          * has to be handled rather than assumed impossible. */
         r->slots[idx].state = SLOT_ACTIVE;
-        uplink_sent(uplink_shared());
+        uplink_heard(uplink_shared());   /* the SYN was answered */
     } else if (errno == EINPROGRESS) {
         r->slots[idx].state = SLOT_CONNECTING;
         r->slots[idx].connect_started_ms = boot_ms();
@@ -399,11 +400,13 @@ static void handle_accept(relay_state_t *r)
          * traffic toward the car, and the association the car forgot has to be noticed from
          * them too. Same guard, same reason as relay_udp.c. */
         int cerr = errno;
-        if (uplink_failed(uplink_shared(), boot_ms()) && wifi_sta_connected()) {
-            ESP_LOGW(TAG, "%u sends to the car failed in a row (last errno %d) while the "
-                          "station says connected — rejoining", (unsigned)UPLINK_DEAD_AFTER, cerr);
-            esp_err_t jerr = wifi_sta_rejoin();
-            if (jerr != ESP_OK) ESP_LOGW(TAG, "rejoin refused: %s", esp_err_to_name(jerr));
+        if (uplink_failed(uplink_shared(), boot_ms())) {
+            if (wifi_sta_connected()) {
+                ESP_LOGW(TAG, "%s: %u sends to the car went unanswered while the station says "
+                              "connected — rejoining", "tcp", (unsigned)UPLINK_DEAD_AFTER);
+                esp_err_t jerr = wifi_sta_rejoin();
+                if (jerr != ESP_OK) ESP_LOGW(TAG, "rejoin refused: %s", esp_err_to_name(jerr));
+            }
         }
         errno = cerr;
         /* Rate-limited: a car actively refusing the port (ECONNREFUSED comes back fast, no
@@ -452,6 +455,16 @@ static void handle_connecting(relay_state_t *r, int i, bool had_ready, fd_set *r
          * elapses correctly even across the millisecond counter's ~49.7-day wrap. */
         ESP_LOGW(TAG, "upstream connect timed out (slot %d)", i);
         close_slot(r, i, "connect timed out");
+        /* A SYN that left and was never answered is the same silence uplink.h scores on
+         * the UDP side (see relay_udp.c for the guard and why). */
+        if (uplink_failed(uplink_shared(), boot_ms())) {
+            if (wifi_sta_connected()) {
+                ESP_LOGW(TAG, "%s: %u sends to the car went unanswered while the station says "
+                              "connected — rejoining", "tcp", (unsigned)UPLINK_DEAD_AFTER);
+                esp_err_t jerr = wifi_sta_rejoin();
+                if (jerr != ESP_OK) ESP_LOGW(TAG, "rejoin refused: %s", esp_err_to_name(jerr));
+            }
+        }
         return;
     }
 
@@ -489,6 +502,7 @@ static void handle_connecting(relay_state_t *r, int i, bool had_ready, fd_set *r
             close_slot(r, i, "connect failed");
         } else {
             s->state = SLOT_ACTIVE;
+            uplink_heard(uplink_shared());   /* the SYN was answered */
             /* The idle clock starts when the slot goes ACTIVE, not when the phone connected:
              * time spent waiting for the car to answer is already bounded by
              * RELAY_CONNECT_TIMEOUT_MS, and charging it twice would cut a legitimate

@@ -151,10 +151,17 @@ same network was a no-op by design while the station said `connected`, so the ap
 bogus network and then the real one — a genuine reassociation — brought the relay back
 instantly, and the simulator was driving with live video within seconds.
 
-Fix: `uplink.{c,h}` scores every send toward the car; twenty consecutive failures while the
-station still says `connected` ask it to re-join (`wifi_sta_rejoin`), no more than once per
-ten seconds, and an unchanged `POST /wifi` on that same state re-joins too. A car reboots on
-every update, so this would have hit every OTA from now on.
+It happened again an hour later, on the next update, with one difference that mattered: no
+errors at all. With only hello at 5 Hz toward the car — no video — the transmit buffers never
+filled, every send *succeeded*, and the frames simply vanished after their retries. So the
+first version of the fix, which counted failed sends, saw nothing.
+
+Fix: `uplink.{c,h}` scores silence, not failure — every send toward the car is a strike
+whether it went out or not, and anything heard from the car (a datagram on either relay, bytes
+on a TCP slot, a SYN answered) clears the count. Twenty strikes while the station still says
+`connected` ask it to re-join (`wifi_sta_rejoin`), no more than once per ten seconds; an
+unchanged `POST /wifi` on that same state re-joins too. A car reboots on every update, so this
+would have hit every OTA from now on.
 
 Also from the same session: the snapshot came out black (mean 1.8/255) because ten frames is
 ~220 ms and AE needs ~2.7 s from cold — the warm-up is now three seconds by the clock. And the
