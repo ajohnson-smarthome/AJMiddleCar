@@ -21,6 +21,15 @@ static const char *TAG = "snapshot";
 static jpeg_encoder_handle_t s_jpeg;
 
 static esp_err_t snapshot_get(httpd_req_t *req) {
+    /* Declared up front: camera_start's failure now joins the same `goto out` the rest of
+       the capture uses (R5 — ESP_RETURN_ON_ERROR returning straight out of an httpd
+       handler skips the 500 envelope and esp_http_server just resets the socket), and a
+       goto is not allowed to jump forward past a declaration it might then use. */
+    esp_err_t err = ESP_OK;
+    camera_frame_t f;
+    uint8_t *jpg = NULL;
+    size_t cap = 0;
+
     if (!camera_present()) {
         return api_reply_error(req, "500 Internal Server Error", ERR_INTERNAL, "", "camera off");
     }
@@ -29,10 +38,9 @@ static esp_err_t snapshot_get(httpd_req_t *req) {
     if (camera_running()) {
         return api_reply_error(req, "409 Conflict", ERR_BUSY, "", "stream running");
     }
-    ESP_RETURN_ON_ERROR(camera_start(CAMERA_FMT_UYVY), TAG, "start");
+    err = camera_start(CAMERA_FMT_UYVY);
+    if (err != ESP_OK) goto out;
 
-    esp_err_t err = ESP_OK;
-    camera_frame_t f;
     for (int i = 0; i < SNAPSHOT_WARMUP_FRAMES; i++) {
         if ((err = camera_acquire(&f)) != ESP_OK) goto out;
         camera_release(&f);
@@ -40,8 +48,7 @@ static esp_err_t snapshot_get(httpd_req_t *req) {
     if ((err = camera_acquire(&f)) != ESP_OK) goto out;
 
     jpeg_encode_memory_alloc_cfg_t mem = { .buffer_direction = JPEG_ENC_ALLOC_OUTPUT_BUFFER };
-    size_t cap = 0;
-    uint8_t *jpg = jpeg_alloc_encoder_mem(SNAPSHOT_OUT_MAX, &mem, &cap);
+    jpg = jpeg_alloc_encoder_mem(SNAPSHOT_OUT_MAX, &mem, &cap);
     if (!jpg) { camera_release(&f); err = ESP_ERR_NO_MEM; goto out; }
 
     jpeg_encode_cfg_t cfg = {

@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include "esp_video_init.h"
 #include "esp_video_device.h"
+#include "esp_video_ioctl.h"
 #include "linux/videodev2.h"
 #include "board.h"
 #include "contract.h"
@@ -68,6 +69,18 @@ esp_err_t camera_start(camera_fmt_t fmt) {
 
     int fd = open(ESP_VIDEO_MIPI_CSI_DEVICE_NAME, O_RDONLY);
     ESP_RETURN_ON_FALSE(fd >= 0, ESP_FAIL, TAG, "open %s", ESP_VIDEO_MIPI_CSI_DEVICE_NAME);
+
+    /* Bounds camera_acquire's DQBUF: esp_video's VFS has no select(), and the default
+       wait is portMAX_DELAY, which would let a CSI that never delivers a frame wedge
+       whichever task calls camera_acquire — the httpd task today, the encode task once
+       streaming exists. 500 ms is ~22 frame periods at 45 fps, comfortably past a single
+       dropped frame without being mistaken for progress. */
+    struct timeval tv = { .tv_sec = 0, .tv_usec = 500000 };
+    if (ioctl(fd, VIDIOC_S_DQBUF_TIMEOUT, &tv) != 0) {
+        close(fd);
+        ESP_LOGE(TAG, "S_DQBUF_TIMEOUT");
+        return ESP_FAIL;
+    }
 
     const int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     struct v4l2_format format = {

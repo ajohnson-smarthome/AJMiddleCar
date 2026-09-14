@@ -32,9 +32,12 @@ esp_err_t camera_start(camera_fmt_t fmt);
 esp_err_t camera_stop(void);
 bool camera_running(void);
 
-// One frame, driver-owned, valid until camera_release. Blocks until the sensor delivers
-// one: esp_video's VFS has no select(), so the caller — the encode task — is expected to
-// keep the pipeline alive and check its own stop flag between frames.
+// One frame, driver-owned, valid until camera_release. The wait is bounded to 500 ms —
+// ~22 frame periods at 45 fps — set as the DQBUF timeout in camera_start: esp_video's VFS
+// has no select(), so a device timeout is the only way to bound the wait instead of
+// polling, and it is what keeps a CSI that never delivers a frame from wedging the httpd
+// task or, later, the encode task. The caller is still expected to keep the pipeline
+// alive and check its own stop flag between frames.
 typedef struct {
     uint8_t *data;
     size_t   len;
