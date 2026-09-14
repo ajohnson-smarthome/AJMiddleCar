@@ -40,6 +40,9 @@ final class CarLink: ObservableObject {
     /// spelling — is published here for `AppFlow.carProbed`, which may force an update but never
     /// declares the car ready. Cleared the moment a real session opens.
     @Published private(set) var probedFw: String?
+    /// Owned here because the subscription is tied to the session: the link knows when one
+    /// opens and with which sid.
+    let video = VideoLink()
 
     /// Optional so the debug gallery can hold a frozen link without a real `NWPathMonitor`
     /// running behind every frame it builds.
@@ -166,6 +169,9 @@ final class CarLink: ObservableObject {
         telemetry = nil
         lastFrame = nil
         lastTelemetrySeq = nil
+        // The `.sessionClosed` this stop emits lands in a stream the cancelled pump no longer
+        // reads, so the session's end is applied here by hand — the video subscription's too.
+        video.sessionClosed()
         // Backgrounding is not a verdict on who the car is. Leaving `.active` — which a Control
         // Center pull-down alone does — used to clear `.protoMismatch`, so the screen naming the
         // mismatch flipped to the radar until the next hello reply landed.
@@ -210,7 +216,7 @@ final class CarLink: ObservableObject {
 
     private func handle(_ event: CarTransport.Event) {
         switch event {
-        case .sessionOpened(let info):
+        case .sessionOpened(let info, let sid):
             probe?.cancel()
             probedFw = nil
             self.device = info.id
@@ -229,14 +235,17 @@ final class CarLink: ObservableObject {
                 // gate was still talking to GitHub, so both GETs timed out and every trick
                 // spent the session on the fallback geometry the `/dims` work replaced.
                 config?.prefetchDriveGeometry()
+                video.session(sid: sid)
             } else {
                 self.fw = nil
                 session = .foreign(device: info.id)
+                video.sessionClosed()
             }
         case .protoMismatch(let theirs):
             self.fw = nil
             self.device = nil
             session = .protoMismatch(theirs: theirs)
+            video.sessionClosed()
         case .sessionClosed:
             // A foreign identity — or a protocol we cannot speak — survives the session that
             // discovered it: the transport reopens every few seconds and would otherwise
@@ -245,6 +254,7 @@ final class CarLink: ObservableObject {
             telemetry = nil
             lastFrame = nil
             lastTelemetrySeq = nil
+            video.sessionClosed()
             scheduleProbe()
         }
     }

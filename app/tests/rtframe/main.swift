@@ -16,6 +16,11 @@ check(RTFrame.command(seq: 1, throttle: .nan, turn: .infinity)
         == #"{"proto":2,"type":"drive","seq":1,"throttle":0.00,"turn":0.00}"#, "non-finite is a stop")
 check(RTFrame.bye(seq: 1235) == #"{"proto":2,"type":"bye","seq":1235}"#, "bye")
 
+// The video subscription: hello-shaped, on the video port, with an optional keyframe ask.
+check(RTFrame.view(sid: "7f3a91c2") == #"{"proto":2,"type":"view","session":"7f3a91c2"}"#, "view")
+check(RTFrame.view(sid: "7f3a91c2", key: true) == #"{"proto":2,"type":"view","session":"7f3a91c2","key":true}"#, "view with key")
+check(!RTFrame.view(sid: "7f3a91c2").contains(CarContract.seqField), "view carries no seq")
+
 // The widest drive the app can emit stays under the car's command cap.
 check(RTFrame.command(seq: .max, throttle: -1, turn: -1).utf8.count <= CarContract.maxCommand,
       "the widest drive fits max_command")

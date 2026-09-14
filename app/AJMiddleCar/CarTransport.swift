@@ -16,8 +16,9 @@ actor CarTransport {
     static let shared = CarTransport()
 
     enum Event: Sendable {
-        /// The car answered our hello. Its identity may be someone else's — the caller decides.
-        case sessionOpened(DeviceInfo)
+        /// The car answered our hello. Its identity may be someone else's — the caller decides —
+        /// and the sid the video channel subscribes with.
+        case sessionOpened(DeviceInfo, sid: String)
         /// A car answered in a protocol version this app does not speak. Reported by name: the
         /// car replies to a mismatched hello precisely so this is sayable.
         case protoMismatch(theirs: Int)
@@ -229,7 +230,7 @@ actor CarTransport {
             await holdIdentity()
             throw CarError.malformed("protocol \(theirs), not \(CarContract.proto)")
         }
-        emit(.sessionOpened(identity))
+        emit(.sessionOpened(identity, sid: sid))
 
         guard identity.id == CarContract.device else {
             // Not our car. A single command frame here would drive it, so instead of streaming

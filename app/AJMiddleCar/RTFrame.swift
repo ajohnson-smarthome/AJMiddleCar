@@ -17,6 +17,16 @@ enum RTFrame {
         + "\"\(CarContract.sessionField)\":\"\(sid)\"}"
     }
 
+    /// Subscribes to the video stream — on the video port, not the control port. Hello-shaped:
+    /// the car accepts it only from the session's owner. `key` asks for a keyframe now.
+    static func view(sid: String, key: Bool = false) -> String {
+        "{\"\(CarContract.protoField)\":\(CarContract.proto),"
+        + "\"\(CarContract.typeField)\":\"\(RTType.view)\","
+        + "\"\(CarContract.sessionField)\":\"\(sid)\""
+        + (key ? ",\"\(CarContract.keyField)\":true" : "")
+        + "}"
+    }
+
     /// One 10 Hz drive. `String(format:)` with no locale formats in the C locale, so a phone
     /// set to a comma-decimal language cannot emit `0,50` and desync the car's parser.
     static func command(seq: UInt32, throttle: Double, turn: Double) -> String {

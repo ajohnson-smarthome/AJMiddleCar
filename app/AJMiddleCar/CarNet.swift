@@ -54,4 +54,10 @@ enum CarNet {
         NWEndpoint.hostPort(host: NWEndpoint.Host(CarHost.host),
                             port: NWEndpoint.Port(rawValue: CarHost.rtPort)!)
     }
+
+    /// The video endpoint: same host, the contract's video port.
+    static func videoEndpoint() -> NWEndpoint {
+        NWEndpoint.hostPort(host: NWEndpoint.Host(CarHost.host),
+                            port: NWEndpoint.Port(rawValue: CarHost.videoPort)!)
+    }
 }

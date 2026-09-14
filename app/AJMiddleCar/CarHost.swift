@@ -13,6 +13,7 @@ enum CarHost {
     /// mock on a spare RT port (which is how `tools/test-all.sh` runs one) is only reachable if
     /// this can be pointed at it.
     static let rtPort: UInt16 = launchArgument("-carRtPort").flatMap(UInt16.init) ?? CarContract.rtPort
+    static let videoPort: UInt16 = launchArgument("-carVideoPort").flatMap(UInt16.init) ?? CarContract.videoPort
 
     private static func launchArgument(_ name: String) -> String? {
         let args = ProcessInfo.processInfo.arguments
@@ -29,6 +30,7 @@ enum CarHost {
     static let host = DongleContract.host
     static let port: UInt16 = DongleContract.relayHttpPort
     static let rtPort: UInt16 = DongleContract.relayRtPort
+    static let videoPort: UInt16 = DongleContract.relayVideoPort
     #endif
 
     static var httpBase: String { "http://\(host):\(port)" }
