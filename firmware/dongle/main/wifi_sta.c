@@ -255,6 +255,13 @@ esp_err_t wifi_sta_start(void)
     ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "set storage");
 
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi start");
+    /* No power saving. The IDF default is WIFI_PS_MIN_MODEM, under which the station sleeps
+     * between beacons and the car's AP holds every downlink frame — hello_ack, telemetry,
+     * HTTP replies, and the video stream to come — until the next DTIM: tens of ms of
+     * latency and bursts, on a link whose whole point is a 300 ms control deadline. This is a
+     * mains-fed USB dongle; the radio can stay awake. Set after esp_wifi_start(), as the
+     * driver requires. */
+    ESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_NONE), TAG, "set ps");
 
     /* And nothing more. The station is up and idle; the first join is the app's to ask for,
      * through POST /net. It used to join a stored network here, before the app arrived —
