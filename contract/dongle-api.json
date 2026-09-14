@@ -11,7 +11,7 @@
     "http_port": 80,
     "rt_port": 4210,
     "video_port": 4211,
-    "video_max_kbps": 2500,
+    "video_max_kbps": 4000,
     "doc": "The ports the dongle listens on for the car's traffic, on its own address. What speaks on them is not the dongle's business. video_port is forwarded the same way; video_max_kbps is the admission limit the video relay enforces toward the phone."
   },
   "endpoints": {

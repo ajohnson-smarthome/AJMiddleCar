@@ -458,7 +458,7 @@ class TestSwiftEmitter(unittest.TestCase):
         self.assertIn("public struct Video: Codable, Equatable, Sendable {", self.out)
         self.assertIn("    public var bitrate_kbps: Int", self.lines())
         self.assertIn('    static let key = "video"', self.lines())
-        self.assertIn("    static let `default` = Video(bitrate_kbps: 1500)", self.lines())
+        self.assertIn("    static let `default` = Video(bitrate_kbps: 1000)", self.lines())
         self.assertIn("    static let bitrate_kbpsRange: ClosedRange<Int> = 500...3000", self.lines())
         self.assertIn("    static func pick(from c: CarConfig) -> Video? { c.video }", self.lines())
         self.assertIn("    static func wrap(_ v: Video) -> CarConfig { CarConfig(video: v) }", self.lines())
@@ -697,7 +697,15 @@ class TestDongleAgreesWithTheCar(unittest.TestCase):
 
     def test_relay_video_port_is_the_cars_video_port(self):
         self.assertEqual(self.dongle["relay"]["video_port"], self.car["video"]["port"])
-        self.assertLessEqual(self.dongle["relay"]["video_max_kbps"], 3000)
+
+    def test_relay_admission_sits_above_everything_the_car_may_be_configured_to_send(self):
+        # The gate guards against a runaway sender, so it must clear the car's own ceiling —
+        # and a second that holds a keyframe on top of moving-scene P-frames runs past that
+        # ceiling even at a lower target: a 2500 gate under a 3000 max refused 459 chunks in
+        # a minute on the bench (2026-09-15), each a lost frame and a keyframe requested.
+        video = next(d for d in self.car["config"]["domains"] if d["key"] == "video")
+        bitrate = next(f for f in video["fields"] if f["name"] == "bitrate_kbps")
+        self.assertGreaterEqual(self.dongle["relay"]["video_max_kbps"], bitrate["max"] + 500)
 
 
 class TestDongleEmitters(unittest.TestCase):
@@ -723,7 +731,7 @@ class TestDongleEmitters(unittest.TestCase):
                      '#define DONGLE_WIFI_STATE_IDLE "idle"', '#define DONGLE_USB_STATE_UP "up"',
                      '#define DONGLE_WIFI_REQ_PASSWORD "password"', '#define DONGLE_ERR_BAD_LENGTH "bad_length"',
                      '#define DONGLE_KEY_DEVICE_ID "id"', "#define DONGLE_RELAY_VIDEO_PORT 4211",
-                     "#define DONGLE_RELAY_VIDEO_MAX_KBPS 2500",
+                     "#define DONGLE_RELAY_VIDEO_MAX_KBPS 4000",
                      '#define DONGLE_KEY_RELAY_VIDEO_DROPPED "video_dropped"'):
             self.assertEmitsLine(line, self.c)
         for banned in ("#include", "esp_err_t", "typedef", "struct "):
@@ -738,7 +746,7 @@ class TestDongleEmitters(unittest.TestCase):
                      "    public static let ssidMax = 32", '    public static let ssidField = "ssid"',
                      '    public static let passwordField = "password"',
                      "    public static let relayVideoPort: UInt16 = 4211",
-                     "    public static let relayVideoMaxKbps = 2500"):
+                     "    public static let relayVideoMaxKbps = 4000"):
             self.assertEmitsLine(line, self.sw)
         self.assertIn("public enum DongleWifiState: Equatable, Sendable, Codable {", self.sw)
         self.assertIn("    case searching", self.sw.splitlines())

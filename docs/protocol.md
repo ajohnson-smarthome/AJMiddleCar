@@ -385,7 +385,7 @@ cannot drift between them:
 ### Configuration — the `video` domain
 
 One field, generated into the domain table below along with the other five — `bitrate_kbps`,
-`500..3000`, default `1500`. It is read once, at the next stream start: `video_link` asks for
+`500..3000`, default `1000`. It is read once, at the next stream start: `video_link` asks for
 it when it opens the encoder, not while one is already running, so a change lands on the next
 viewer rather than mid-frame. `fps` is not a setting: it is a constant of the contract, because
 only a few whole divisors of the sensor's own frame rate make sense, and the firmware is built
@@ -395,7 +395,7 @@ against the one it picked (`sensor_fps` 45 ÷ 3 = `fps` 15), not a stored value.
 
 On a device, chunks travel through the dongle's own second `relay_udp` instance, not directly:
 `contract/dongle-api.json` adds `relay.video_port` (**4211**, forwarded exactly like
-`relay.rt_port` — the dongle parses none of it) and `relay.video_max_kbps` (**2500**), the
+`relay.rt_port` — the dongle parses none of it) and `relay.video_max_kbps` (**4000**), the
 ceiling its admission gate enforces toward the phone. The gate's window is a fixed
 **1000 ms** — tumbling, not sliding: the byte count restarts at each window's start rather
 than looking back one second from every datagram. A keyframe (60–100 KB) has to fit inside
@@ -467,7 +467,7 @@ persists to NVS immediately, and a POST of unchanged values does not rewrite fla
  "recovery": {"enabled":true,"window_ms":5000},
  "wheel":    {"diameter_mm":65,"encoder_ppr":11,"gear_ratio":9.0,"quadrature":4},
  "chassis":  {"track_mm":130,"wheelbase_mm":210},
- "video":    {"bitrate_kbps":1500}}
+ "video":    {"bitrate_kbps":1000}}
 ```
 
 <!-- generated:endpoints -->
@@ -483,7 +483,7 @@ persists to NVS immediately, and a POST of unchanged values does not rewrite fla
 | `wheel` | `quadrature` | enum | 1 \| 2 \| 4 | 4 | quadrature edge multiplier |
 | `chassis` | `track_mm` | int | 60..300 | 130 | lateral distance between left and right wheel centres |
 | `chassis` | `wheelbase_mm` | int | 90..360 | 210 | longitudinal distance between front and rear wheel centres |
-| `video` | `bitrate_kbps` | int | 500..3000 | 1500 | target H.264 bitrate in kbit/s; the adapter's USB is the ceiling |
+| `video` | `bitrate_kbps` | int | 500..3000 | 1000 | target H.264 bitrate in kbit/s; the adapter's USB is the ceiling — measured at ~1.5 Mbit/s sustained on the bench (2026-09-15), above which chunks are lost, so the default sits under it with room for keyframes |
 <!-- /generated:endpoints -->
 
 ### What the values mean

@@ -138,6 +138,54 @@ are the closing sweep, run once stage 4 itself passes.
 
 _Record anything surprising here — it is the raw material for the next spec._
 
+### A quarter of the video vanished, and none of it in the air (2026-09-15)
+
+The loss was measured properly this time — a probe that logs every chunk's frame and index
+through the dongle, then the same probe on a laptop joined to the car's own Wi-Fi with no
+dongle in the path. Direct: 3 % of chunks lost, uniformly. Through the dongle: 49 %, and it
+grew with the frame's length — 7 % for frames under 8 chunks, 74–92 % for frames over 40.
+That is a receiver running out of somewhere to put a burst, not a radio losing frames.
+
+Four things stood between the car and the phone, each found by fixing the one before it:
+
+1. **The dongle's Wi-Fi receive buffers were below IDF's defaults** — 8 static, 16 dynamic,
+   from the first commit, with no reason recorded. 16 / 64 (internal RAM; the image leaves
+   ~140 KB after static data) took the loss to 14 %. The same pools in PSRAM with 128
+   dynamic buffers measured worse, 24 %: the driver's copy into PSRAM costs more than the
+   buffers buy. The video relay's task also moved from priority 4 to 6 — above TinyUSB and
+   the other relays, still under lwIP and Wi-Fi.
+2. **The car's pacing, one chunk per millisecond, is 11 Mbit/s while a frame is leaving** —
+   and the dongle's USB is Full-Speed. At 2 ms the loss fell to 0.2–4 %; at 2 ms with a
+   deeper ring it rose again to 30 %, because the ring had stopped dropping frames and the
+   car now sustained 5.6 Mbit/s for hundreds of milliseconds. 4 ms (2.8 Mbit/s) measured
+   least; that is what ships, with a six-slot ring to hold the frames behind a keyframe.
+3. **The admission gate refused bursts the car was entitled to send** — 2500 kbit/s over one
+   second sat *below* the car's own 3000 ceiling, and a second holding a keyframe on top of
+   moving-scene P-frames ran past it even at 1500: 459 chunks refused in a minute, each a
+   frame lost, each a keyframe requested, each more bytes to refuse. Now 4000, and the
+   contract test says why.
+4. **A skipped frame forced an IDR that it did not need.** The ring-full skip happens before
+   the encoder sees the frame, so the reference chain is intact and the wire's frame counter
+   does not advance — yet the code forced a keyframe, 84 KB, which backed the ring up, which
+   skipped, which forced another: 2.9 Mbit/s on a 1.5 target from nothing but that loop.
+   Only the encode-failed branch still forces one.
+
+What is left is a ceiling, not a leak: **the dongle → USB → host path carries about
+1.5 Mbit/s and no more.** Every run, whatever the encoder produced (1.4–2.3 Mbit/s), the
+host received ~1.5; under it — 800 kbit/s — 360 frames of 360 arrived whole, 15 fps flat,
+no ring drops. The car's `video_kbps` and the dongle's `relay.video_kbps` agree, so the
+loss is past the relay's `sendto`: in `esp_tinyusb`'s synchronous send, TinyUSB's NCM
+glue, the S3's Full-Speed controller or the host's NCM driver — 1.5 Mbit/s is a tenth of
+what the wire can do, and the host→dongle direction (an OTA upload at ~0.8 Mbit/s) is
+no faster. Open. Until it is raised the encoder's default is 1000 kbit/s (`video.bitrate_kbps`,
+contract), which leaves room for keyframes under the ceiling; the range is unchanged.
+
+Also from this session: the relay's first re-join stuck the station in `joining` for
+ever, attempts 0 — `esp_wifi_connect()` issued straight after `esp_wifi_disconnect()`
+from a live association is dropped by the driver with no event. `wifi_sta_rejoin` now
+lets the disconnect land (300 ms) before it joins, and a kick restarts the strike count so
+the fresh association gets its whole streak to answer in.
+
 ### The dongle kept an association the car had forgotten (2026-09-14)
 
 First over-the-air update of the car through the dongle, watched from a Mac on the dongle's
@@ -167,7 +215,7 @@ Also from the same session: the snapshot came out black (mean 1.8/255) because t
 ~220 ms and AE needs ~2.7 s from cold — the warm-up is now three seconds by the clock. And the
 picture itself: the car encodes at 1842 kbit/s, the dongle relays 1322 — about a quarter of
 the bytes vanish between the car's `sendto` and the dongle's `recvfrom`, with `video_dropped`
-at 0 on both sides, so 10–14 % of frames are lost somewhere no counter looks. Open.
+at 0 on both sides, so 10–14 % of frames are lost somewhere no counter looks. Found the next day — see above.
 
 ### The AE/AWB library was built for silicon this board is not (2026-09-14)
 

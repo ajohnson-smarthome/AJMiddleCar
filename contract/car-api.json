@@ -185,8 +185,8 @@
         "swift": "Video",
         "doc": "The FPV encoder. Applied at the next stream start, not live.",
         "fields": [
-          {"name": "bitrate_kbps", "type": "int", "min": 500, "max": 3000, "default": 1500,
-           "doc": "target H.264 bitrate in kbit/s; the adapter's USB is the ceiling"}
+          {"name": "bitrate_kbps", "type": "int", "min": 500, "max": 3000, "default": 1000,
+           "doc": "target H.264 bitrate in kbit/s; the adapter's USB is the ceiling — measured at ~1.5 Mbit/s sustained on the bench (2026-09-15), above which chunks are lost, so the default sits under it with room for keyframes"}
         ]
       }
     ]

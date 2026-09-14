@@ -8,7 +8,7 @@ public enum DongleContract {
     public static let relayHttpPort: UInt16 = 80
     public static let relayRtPort: UInt16 = 4210
     public static let relayVideoPort: UInt16 = 4211
-    public static let relayVideoMaxKbps = 2500
+    public static let relayVideoMaxKbps = 4000
 
     public static let statusPath = "/status"
     public static let wifiPath = "/wifi"
