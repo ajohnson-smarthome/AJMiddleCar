@@ -36,8 +36,11 @@ struct VideoView: UIViewRepresentable {
         return t
     }
 
-    /// Lives on the video queue after `attach`: `onFrame` calls it there, and the renderer
-    /// takes samples from any thread.
+    /// Lives on the video queue after `attach`: `onFrame` calls it there, the renderer takes
+    /// samples from any thread, and `detach` tears the fields down there too — behind the
+    /// closure removal, so an in-flight `show` finishes before they go. `attach` writes them
+    /// on main, but before the `onFrame` assignment, whose setter is a `queue.async`: nothing
+    /// on the queue can observe them half-built.
     final class Coordinator {
         private var renderer: AVSampleBufferVideoRenderer?
         private var format: CMFormatDescription?
@@ -51,10 +54,15 @@ struct VideoView: UIViewRepresentable {
         }
 
         func detach() {
-            link?.onFrame = nil
-            renderer?.flush()
-            renderer = nil
-            format = nil
+            guard let link else { return }
+            link.onFrame = nil
+            // The removal above is a `queue.async` store; the same queue, behind it, is the one
+            // place where no `show` can still be reading these.
+            link.queue.async { [self] in
+                renderer?.flush()
+                renderer = nil
+                format = nil
+            }
         }
 
         private func show(_ frame: Data, isKey: Bool) {

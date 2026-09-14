@@ -217,6 +217,16 @@ struct DriveView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
+    /// What `statusBar` is about to show — the same conditions its items use. The scrim is
+    /// gated on it: an empty bar with padding and a background is a 16-point dot under the FAB,
+    /// visible over a frozen last frame, which is exactly the no-picture state.
+    private var hasStatus: Bool {
+        video.hasPicture
+            || (telemetry?.link.timeouts ?? 0) > 0
+            || telemetry.map { $0.motors.bus != .ok } ?? false
+            || telemetry.map { $0.motors.owner != .remote && $0.motors.owner != .idle } ?? false
+    }
+
     // The picture's numbers lead while there is one; after that only amber warnings ever
     // appear here, so with no picture and nothing wrong it is empty.
     private var statusBar: some View {
@@ -241,7 +251,9 @@ struct DriveView: View {
             }
         }
         .font(.system(size: 10))
-        .padding(8).background(p.bg.opacity(0.45)).clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(hasStatus ? 8 : 0)
+        .background(hasStatus ? p.bg.opacity(0.45) : .clear)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
     private func statusItem(_ icon: String, _ text: String, _ color: Color) -> some View {
         HStack(spacing: 4) {
