@@ -172,10 +172,12 @@ class TestSchema(unittest.TestCase):
         self.assertTrue(any(not vec["valid"] for vec in v["vectors"]),
                         "the receivers need a vector they must reject")
 
-    def test_the_c_receiver_test_carries_every_header_vector(self):
-        src = (ROOT / "firmware" / "car" / "core" / "test" / "test_video_wire.c").read_text()
+    def test_the_receiver_tests_carry_every_header_vector(self):
+        c_src = (ROOT / "firmware" / "car" / "core" / "test" / "test_video_wire.c").read_text()
+        swift_src = (ROOT / "app" / "tests" / "videowire" / "main.swift").read_text()
         for vec in load()["video"]["vectors"]:
-            self.assertIn(vec["bytes"], src, f"vector {vec['name']!r} is not in test_video_wire.c")
+            self.assertIn(vec["bytes"], c_src, f"vector {vec['name']!r} is not in test_video_wire.c")
+            self.assertIn(vec["bytes"], swift_src, f"vector {vec['name']!r} is not in app/tests/videowire/main.swift")
 
 
 import filecmp
