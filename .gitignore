@@ -31,3 +31,6 @@ __pycache__/
 
 # Claude Code session worktrees
 .claude/
+
+# Claude Code session worktrees
+.worktrees/
