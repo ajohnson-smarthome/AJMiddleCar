@@ -43,7 +43,7 @@ mixed-version bench should never need the source next to it to know which dialec
 | `drive` | app → car | `seq` (monotonic `uint32`), `throttle` (float, `[-1,1]`), `turn` (float, `[-1,1]`) |
 | `bye` | app → car | `seq` (monotonic `uint32`) |
 | `hello_ack` | car → app | `session` (string, echoed), `device` (group — see below) |
-| `telemetry` | car → app | `seq` (`uint32`, push counter), `link`, `motors`, `system` (groups — see below) |
+| `telemetry` | car → app | `seq` (`uint32`, push counter), `link`, `motors`, `system`, `video` (groups — see below) |
 
 ```jsonc
 // app → car
@@ -177,7 +177,8 @@ Pushed to the owner's address on the same socket, unsolicited:
 {"proto":2,"type":"telemetry","seq":88,
  "link":   {"rx_hz":10,"rssi_dbm":-58,"timeouts":0},
  "motors": {"bus":"ok","calibrated":true,"owner":"remote"},
- "system": {"uptime_s":812,"free_heap":200000}}
+ "system": {"uptime_s":812,"free_heap":200000},
+ "video":  {"state":"idle","fps":0,"kbps":0,"dropped":0}}
 ```
 
 `seq` is the push counter, so a client can drop a reordered datagram. `link.rx_hz` is `drive`
@@ -353,7 +354,10 @@ A bench route, not part of the app's flow: one JPEG of whatever the camera curre
   to start.
 - **`idle`** — the pipeline starts for this request alone (in UYVY — the JPEG block cannot
   take YUV420 either), a handful of frames are discarded while AE/AWB settle, one is encoded,
-  and the pipeline stops again — all inside the one request, in well under a second.
+  and the pipeline stops again — all inside the one request, in well under a second. Two more
+  `500 internal` replies can come out of this same path: `"capture failed"` if a frame does not
+  arrive (a `camera_acquire` timeout or another capture error) and `"jpeg failed"` if the
+  hardware JPEG block itself rejects the frame.
 
 ### Status and telemetry — the `video` group
 
