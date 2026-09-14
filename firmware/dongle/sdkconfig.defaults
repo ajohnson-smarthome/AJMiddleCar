@@ -98,3 +98,11 @@ CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
 # four short of the 20 above and five short of the peak; an earlier version of this comment put
 # that shortfall at seven, which was wrong twice over.)
 CONFIG_LWIP_MAX_SOCKETS=24
+
+# Room for one whole keyframe on the way to the phone. lwIP's per-socket mailbox and
+# TinyUSB's NCM transfer pool are the two places a burst is dropped silently — sized to
+# ~100 KB between them, so the car's pacing (one chunk per millisecond) is the only limit
+# that matters. ~60 KB of RAM; the S3 has PSRAM to spare.
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
+CONFIG_TINYUSB_NCM_IN_NTB_BUFFS_COUNT=6
+CONFIG_TINYUSB_NCM_IN_NTB_BUFF_MAX_SIZE=10240

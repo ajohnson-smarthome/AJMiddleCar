@@ -28,6 +28,9 @@ typedef struct {
     unsigned    to_phone_x10;
     unsigned    udp_sessions;
     unsigned    tcp_connections;
+    unsigned    video_sessions;
+    unsigned    video_kbps_x10;
+    unsigned    video_dropped;
     int         last_errno;         /* 0: never failed since boot -> last_error is null */
     const char *last_error_message; /* strerror(last_errno); ASCII, no quotes */
     unsigned    last_error_count;

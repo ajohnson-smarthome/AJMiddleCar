@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
@@ -11,6 +12,7 @@
 
 #include "dongle_contract.inc"
 #include "dongle_clock.h"
+#include "rate_gate.h"
 #include "relay_stats.h"
 #include "udp_sess.h"
 #include "usb_net.h"
@@ -35,16 +37,8 @@ static const char *TAG = "relay_udp";
  * even on a channel that has gone completely quiet. */
 #define RELAY_LOOP_MS 1000
 
-/* One task, so these can live at file scope instead of on the task's own stack — 4096 bytes
- * (this repo's precedent for a UDP relay task; see the car's rt_link.c) with two 1501-byte
- * buffers in inner scopes leaves the compiler's slot-sharing as the only thing standing
- * between select()/sendto()/ESP_LOGW's vprintf path and a stack overflow. Static removes the
- * question rather than trusting the optimisation. Never touched by more than one task, so no
- * lock is needed. */
-static char s_phone_buf[RELAY_BUF_LEN];
-static char s_car_buf[RELAY_BUF_LEN];
-
 typedef struct {
+    const relay_udp_cfg_t *cfg;
     udp_sess_table_t sess;
     /* car_sock[i] mirrors sess.s[i].used exactly: valid (>=0) whenever, and only when, slot i
      * holds a live session. Kept exact even when opening a brand-new session's car-facing
@@ -54,6 +48,14 @@ typedef struct {
     int phone_sock;
     uint32_t gateway_be;   /* network byte order, meaningful once the wait loop below returns */
     uint32_t host_be;      /* DONGLE_HOST, parsed once; network byte order */
+    rate_gate_t gate;      /* the video instance's admission toward the phone; unused otherwise */
+    /* Heap, not file scope: two instances of this task now run at once, and file-scope
+     * buffers shared between them would be the same race the old single-instance comment
+     * here warned this design avoided. One allocation per task, sized once at relay_task's
+     * start (heap_caps_malloc, MALLOC_CAP_DEFAULT) and never touched by more than the task
+     * that owns it, so no lock is needed. */
+    char *phone_buf;
+    char *car_buf;
 } relay_state_t;
 
 /* Every socket this relay opens is made non-blocking, here, right after it is created —
@@ -88,12 +90,12 @@ static void close_all_car_socks(relay_state_t *r)
     for (int i = 0; i < UDP_SESS_MAX; i++) close_car_sock(r, i);
 }
 
-/* One ephemeral UDP socket, connect()ed to gateway:DONGLE_RELAY_RT_PORT. connect() on a
+/* One ephemeral UDP socket, connect()ed to gateway:cfg->port. connect() on a
  * datagram socket sets a default destination for send() and, just as importantly, filters
  * what recv() will hand back — only datagrams from that exact address:port arrive on this
  * socket, so the socket a reply shows up on identifies the session with no lookup, per the
  * brief's "one socket per session". */
-static int open_car_sock(uint32_t gateway_be, uint32_t host_be)
+static int open_car_sock(const relay_state_t *r)
 {
     /* The gateway comes from whatever network the dongle was told to join, so it is attacker-
      * influenced in the only sense that matters here: a network that advertises DONGLE_HOST
@@ -104,7 +106,7 @@ static int open_car_sock(uint32_t gateway_be, uint32_t host_be)
      * session per iteration. Refused here rather than survived. Rate-limited: a phone
      * streaming at 10 Hz would otherwise put this on the sole UART console ten times a
      * second for the whole time such a network stays joined. */
-    if (gateway_be == host_be) {
+    if (r->gateway_be == r->host_be) {
         static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
         if (log_throttle_ok(&s_throttle, boot_ms())) {
             ESP_LOGE(TAG, "refusing to relay to %s: the joined network names the dongle "
@@ -124,8 +126,8 @@ static int open_car_sock(uint32_t gateway_be, uint32_t host_be)
     }
     struct sockaddr_in car = {
         .sin_family = AF_INET,
-        .sin_addr.s_addr = gateway_be,
-        .sin_port = htons(DONGLE_RELAY_RT_PORT),
+        .sin_addr.s_addr = r->gateway_be,
+        .sin_port = htons(r->cfg->port),
     };
     if (connect(s, (struct sockaddr *)&car, sizeof(car)) < 0) {
         ESP_LOGW(TAG, "car-facing connect: errno %d", errno);
@@ -158,7 +160,7 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
      * dropped datagram and nothing else. */
     int fresh = -1;
     if (is_new) {
-        fresh = open_car_sock(r->gateway_be, r->host_be);
+        fresh = open_car_sock(r);
         if (fresh < 0) {
             ESP_LOGW(TAG, "dropping a datagram: no car-facing socket for a new peer");
             return;
@@ -185,16 +187,28 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
         if (log_throttle_ok(&s_throttle, boot_ms())) {
             ESP_LOGW(TAG, "phone->car send failed on slot %d: errno %d", idx, errno);
         }
-    } else {
+    } else if (!r->cfg->video) {
+        /* The video instance's phone->car direction is view datagrams, not control frames —
+         * counting them here would colour to_car_hz with a channel relay_stats.h's own
+         * comment says belongs to the control loop alone. */
         relay_stats_forwarded(relay_stats_shared(), true);
     }
 }
 
 /* Car -> phone. sendto, not send: the phone-facing socket is the one shared listener, bound
- * to DONGLE_HOST:DONGLE_RELAY_RT_PORT, so every reply must name which phone it is for — the
+ * to DONGLE_HOST:cfg->port, so every reply must name which phone it is for — the
  * address and port udp_sess recorded for this slot when the session was created. */
 static void handle_car_datagram(relay_state_t *r, int idx, const char *buf, int n)
 {
+    /* The video instance only: admitted against rate_gate before it is ever handed to
+     * lwIP/TinyUSB, so a refusal is counted here rather than lost silently in the NTB pool
+     * (rate_gate.h). The control instance is never throttled — cfg->video is false for it,
+     * so this is skipped entirely and its behaviour is unchanged. */
+    if (r->cfg->video && !rate_gate_admit(&r->gate, boot_ms(), (uint32_t)n)) {
+        relay_stats_video_dropped(relay_stats_shared());
+        return;
+    }
+
     const udp_sess_t *s = &r->sess.s[idx];
     struct sockaddr_in to = {
         .sin_family = AF_INET,
@@ -208,6 +222,8 @@ static void handle_car_datagram(relay_state_t *r, int idx, const char *buf, int 
         if (log_throttle_ok(&s_throttle, boot_ms())) {
             ESP_LOGW(TAG, "car->phone send failed on slot %d: errno %d", idx, errno);
         }
+    } else if (r->cfg->video) {
+        relay_stats_video_forwarded(relay_stats_shared(), (uint32_t)n);
     } else {
         relay_stats_forwarded(relay_stats_shared(), false);
     }
@@ -236,10 +252,27 @@ static void reaim(relay_state_t *r, uint32_t gateway_be)
 
 static void relay_task(void *arg)
 {
-    (void)arg;
-    relay_state_t r = { .phone_sock = -1, .gateway_be = 0, .host_be = 0 };
+    relay_state_t r = { .cfg = (const relay_udp_cfg_t *)arg, .phone_sock = -1,
+                         .gateway_be = 0, .host_be = 0 };
     udp_sess_init(&r.sess);
     for (int i = 0; i < UDP_SESS_MAX; i++) r.car_sock[i] = -1;
+
+    /* Heap, not the old file-scope statics: two instances of this task run at once now, and
+     * a shared buffer between them would race. MALLOC_CAP_DEFAULT: PSRAM is fine for this —
+     * neither buffer crosses a DMA boundary, it is memcpy'd out by recvfrom/sendto like any
+     * other userspace buffer. */
+    r.phone_buf = heap_caps_malloc(RELAY_BUF_LEN, MALLOC_CAP_DEFAULT);
+    r.car_buf = heap_caps_malloc(RELAY_BUF_LEN, MALLOC_CAP_DEFAULT);
+    if (r.phone_buf == NULL || r.car_buf == NULL) {
+        ESP_LOGE(TAG, "%s: cannot allocate its %d-byte buffers", r.cfg->name, RELAY_BUF_LEN);
+        vTaskDelete(NULL);
+        return;
+    }
+    /* The control instance's gate is never consulted (handle_car_datagram checks cfg->video
+     * first), but initialising it unconditionally means relay_state_t never carries a field
+     * that is sometimes garbage. 100 ms: fine-grained enough that a burst inside one window
+     * cannot look like sustained overrun to the next one. */
+    rate_gate_init(&r.gate, DONGLE_RELAY_VIDEO_MAX_KBPS, 100);
 
     /* Parsed first, before the gateway is even read: open_car_sock compares against it to
      * refuse a network that advertises the dongle itself as its gateway, and that comparison
@@ -282,7 +315,7 @@ static void relay_task(void *arg)
      * phone. Refusing to serve at all is the honest outcome, and it is loud on the console
      * rather than silent. */
     if (usb_net_bind_socket(r.phone_sock) != ESP_OK) {
-        ESP_LOGE(TAG, "cannot pin the real-time relay to the USB wire — not serving it");
+        ESP_LOGE(TAG, "cannot pin %s to the USB wire — not serving it", r.cfg->name);
         close(r.phone_sock);
         vTaskDelete(NULL);
         return;
@@ -293,18 +326,18 @@ static void relay_task(void *arg)
      * so a phone's socket accepts it. */
     struct sockaddr_in phone_addr = {
         .sin_family = AF_INET,
-        .sin_port = htons(DONGLE_RELAY_RT_PORT),
+        .sin_port = htons(r.cfg->port),
         .sin_addr.s_addr = r.host_be,
     };
     if (bind(r.phone_sock, (struct sockaddr *)&phone_addr, sizeof(phone_addr)) < 0) {
-        ESP_LOGE(TAG, "phone-facing bind %s:%d: errno %d", DONGLE_HOST, DONGLE_RELAY_RT_PORT,
-                 errno);
+        ESP_LOGE(TAG, "%s: phone-facing bind %s:%u: errno %d", r.cfg->name, DONGLE_HOST,
+                 r.cfg->port, errno);
         close(r.phone_sock);
         vTaskDelete(NULL);
         return;
     }
 
-    ESP_LOGI(TAG, "real-time relay up on %s:%d", DONGLE_HOST, DONGLE_RELAY_RT_PORT);
+    ESP_LOGI(TAG, "%s up on %s:%u", r.cfg->name, DONGLE_HOST, r.cfg->port);
 
     for (;;) {
         /* Polled once per pass, per the task brief's correction: there is no connected
@@ -334,13 +367,13 @@ static void relay_task(void *arg)
                 /* Non-blocking (set_nonblocking, above): a stale readiness bit — e.g. this
                  * fd was reused by an eviction after select() sampled it but before this line
                  * runs — costs an EAGAIN here, not a wait. */
-                int n = recvfrom(r.phone_sock, s_phone_buf, sizeof(s_phone_buf), 0,
+                int n = recvfrom(r.phone_sock, r.phone_buf, RELAY_BUF_LEN, 0,
                                   (struct sockaddr *)&from, &flen);
                 if (n == RELAY_BUF_LEN) {
                     ESP_LOGW(TAG, "phone->car datagram over %d bytes, dropped whole",
                               RELAY_DATAGRAM_MAX);
                 } else if (n > 0 && from.sin_family == AF_INET) {
-                    handle_phone_datagram(&r, s_phone_buf, n, &from);
+                    handle_phone_datagram(&r, r.phone_buf, n, &from);
                 } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     ESP_LOGW(TAG, "phone-facing recvfrom: errno %d", errno);
                 }
@@ -348,12 +381,12 @@ static void relay_task(void *arg)
             for (int i = 0; i < UDP_SESS_MAX; i++) {
                 if (r.car_sock[i] < 0 || !FD_ISSET(r.car_sock[i], &rfds)) continue;
                 /* Same non-blocking guarantee as the phone-facing read above. */
-                int n = recv(r.car_sock[i], s_car_buf, sizeof(s_car_buf), 0);
+                int n = recv(r.car_sock[i], r.car_buf, RELAY_BUF_LEN, 0);
                 if (n == RELAY_BUF_LEN) {
                     ESP_LOGW(TAG, "car->phone datagram over %d bytes, dropped whole (slot %d)",
                               RELAY_DATAGRAM_MAX, i);
                 } else if (n > 0) {
-                    handle_car_datagram(&r, i, s_car_buf, n);
+                    handle_car_datagram(&r, i, r.car_buf, n);
                 } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     ESP_LOGW(TAG, "car-facing recv (slot %d): errno %d", i, errno);
                 }
@@ -361,9 +394,9 @@ static void relay_task(void *arg)
         } else if (nready < 0 && errno != EINTR) {
             /* select() failing returns immediately, so this pass has no wait left in it. An
              * error that persists — EBADF the instant any fd in the sets is dead, which is
-             * what a socket closed underneath this task produces — would otherwise make a
-             * priority-5 task spin at full speed with an unthrottled log per iteration, which
-             * is worse for the device than the fault being reported. Take the pass's wait
+             * what a socket closed underneath this task produces — would otherwise make this
+             * task spin at full speed with an unthrottled log per iteration, which is worse
+             * for the device than the fault being reported. Take the pass's wait
              * here instead, and rate-limit the line to the same 1 Hz as this file's other
              * repeating warnings. expire_sessions below still runs every pass. */
             static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
@@ -393,18 +426,20 @@ static void relay_task(void *arg)
         for (int i = 0; i < UDP_SESS_MAX; i++) {
             if (r.car_sock[i] >= 0) live++;
         }
-        relay_stats_udp_slots(relay_stats_shared(), (uint8_t)live);
+        if (r.cfg->video) {
+            relay_stats_video_slots(relay_stats_shared(), (uint8_t)live);
+        } else {
+            relay_stats_udp_slots(relay_stats_shared(), (uint8_t)live);
+        }
     }
 }
 
-esp_err_t relay_udp_start(void)
+esp_err_t relay_udp_start(const relay_udp_cfg_t *cfg)
 {
-    /* Initialised here, before either relay task is created: main.c calls relay_udp_start()
-     * ahead of relay_tcp_start(), and this runs before this file's own xTaskCreate below, so
-     * the shared instance is zeroed and sized before a byte of either relay's traffic can
-     * reach it — no task ever observes it half-initialised. */
-    relay_stats_init(relay_stats_shared());
-    if (xTaskCreate(relay_task, "relay_udp", 4096, NULL, 5, NULL) != pdPASS) {
+    /* relay_stats_init(relay_stats_shared()) moved to main.c: it must run once, before EITHER
+     * instance's task exists, and calling it again here on the second call would zero counters
+     * the first instance had already started publishing. See main.c's own comment. */
+    if (xTaskCreate(relay_task, cfg->name, 4096, (void *)cfg, cfg->priority, NULL) != pdPASS) {
         return ESP_FAIL;
     }
     return ESP_OK;

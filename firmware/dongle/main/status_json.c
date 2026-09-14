@@ -74,7 +74,10 @@ int status_json_render(const status_view_t *v, char *buf, size_t n)
             "\"" DONGLE_KEY_RELAY_TO_PHONE_HZ "\":%u.%u,"
             "\"" DONGLE_KEY_RELAY_UDP_SESSIONS "\":%u,"
             "\"" DONGLE_KEY_RELAY_TCP_CONNECTIONS "\":%u,"
-            "\"" DONGLE_KEY_RELAY_LAST_ERROR "\":%s},"
+            "\"" DONGLE_KEY_RELAY_LAST_ERROR "\":%s,"
+            "\"" DONGLE_KEY_RELAY_VIDEO_SESSIONS "\":%u,"
+            "\"" DONGLE_KEY_RELAY_VIDEO_KBPS "\":%u.%u,"
+            "\"" DONGLE_KEY_RELAY_VIDEO_DROPPED "\":%u},"
         "\"" DONGLE_KEY_GROUP_SYSTEM "\":{"
             "\"" DONGLE_KEY_SYSTEM_UPTIME_S "\":%ld,"
             "\"" DONGLE_KEY_SYSTEM_FREE_HEAP "\":%u}}",
@@ -85,6 +88,7 @@ int status_json_render(const status_view_t *v, char *buf, size_t n)
         v->attempts_used, v->attempts_max,
         v->to_car_x10 / 10u, v->to_car_x10 % 10u, v->to_phone_x10 / 10u, v->to_phone_x10 % 10u,
         v->udp_sessions, v->tcp_connections, last_error,
+        v->video_sessions, v->video_kbps_x10 / 10u, v->video_kbps_x10 % 10u, v->video_dropped,
         v->uptime_s, v->free_heap);
     if (r < 0 || (size_t)r >= n) {
         return -1;

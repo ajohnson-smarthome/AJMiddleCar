@@ -26,6 +26,9 @@ typedef struct {
     uint32_t mark_ms;
     uint16_t to_car_x10;        /* packets per second x10, latched at the last sample */
     uint16_t to_phone_x10;
+    uint32_t total_video_bytes;     /* toward the phone, on the video relay */
+    uint32_t mark_video_bytes;
+    uint16_t video_kbps_x10;        /* kbit/s x10, latched at the last sample */
     /* _Atomic, the three of them, and that is what makes their ORDER mean anything. Two
        readers test last_errno and then subtract from last_fail_ms, and relay_stats_failed
        stores the stamp first so the pair a reader sees is consistent — but as plain ints
@@ -38,8 +41,10 @@ typedef struct {
     _Atomic int      last_errno;    /* 0 when nothing has failed */
     _Atomic uint32_t errno_count;   /* repeats of last_errno, restarted when it changes */
     _Atomic uint32_t last_fail_ms;  /* when the last failure happened; 0 when none has */
+    _Atomic uint32_t video_dropped; /* chunks the admission limit refused since boot */
     uint8_t  udp_used;
     uint8_t  tcp_used;
+    uint8_t  video_used;
 } relay_stats_t;
 
 /* Takes no pool sizes. It carried udp_max and tcp_max until nothing turned out to read them:
@@ -70,6 +75,13 @@ void relay_stats_failed(relay_stats_t *s, int err, uint32_t now_ms);
  * the two passes interleave. */
 void relay_stats_udp_slots(relay_stats_t *s, uint8_t used);
 void relay_stats_tcp_slots(relay_stats_t *s, uint8_t used);
+
+/* The video relay's own bookkeeping — see relay_udp.h's `video` flag. One forwarded chunk,
+ * one refusal (rate_gate turned it away, so the caller never sent it and there is nothing
+ * to attribute to `total_video_bytes`), and the live session count. */
+void relay_stats_video_forwarded(relay_stats_t *s, uint32_t bytes);
+void relay_stats_video_dropped(relay_stats_t *s);
+void relay_stats_video_slots(relay_stats_t *s, uint8_t used);
 
 /* Close the window that began at the previous call and latch both rates. A window of zero
  * length leaves the previous reading in place rather than dividing by zero. */

@@ -6,8 +6,10 @@
 #include "nvs_flash.h"
 
 #include "display.h"
+#include "dongle_contract.inc"
 #include "net_api.h"
 #include "ota_api.h"
+#include "relay_stats.h"
 #include "relay_tcp.h"
 #include "relay_udp.h"
 #include "status_api.h"
@@ -38,10 +40,15 @@ void app_main(void)
      * The station comes up idle and stays idle until the app sends a network over
      * POST /wifi — nothing about the car's network is kept across a reboot (net_api.c). */
     ESP_ERROR_CHECK(wifi_sta_start());
-    /* After wifi_sta_start(): the relay task waits on wifi_sta_gateway() itself, polling
-     * rather than blocking this function, so it only needs the station to exist, not to have
+    /* Both relays' bookkeeping, before either task exists — see relay_stats.h. */
+    relay_stats_init(relay_stats_shared());
+    static const relay_udp_cfg_t rt_relay    = { .port = DONGLE_RELAY_RT_PORT,    .name = "relay_udp",   .priority = 5, .video = false };
+    static const relay_udp_cfg_t video_relay = { .port = DONGLE_RELAY_VIDEO_PORT, .name = "relay_video", .priority = 4, .video = true };
+    /* After wifi_sta_start(): the relay tasks wait on wifi_sta_gateway() themselves, polling
+     * rather than blocking this function, so they only need the station to exist, not to have
      * joined yet. */
-    ESP_ERROR_CHECK(relay_udp_start());
+    ESP_ERROR_CHECK(relay_udp_start(&rt_relay));
+    ESP_ERROR_CHECK(relay_udp_start(&video_relay));
     /* Same reasoning as relay_udp_start() just above: relay_tcp's task waits on
      * wifi_sta_gateway() itself, so this does not need to wait for a join either. */
     ESP_ERROR_CHECK(relay_tcp_start());

@@ -1,7 +1,7 @@
 CC = cc
 CFLAGS = -I../main -Wall -Wextra -Werror -std=c11
 
-all: test_net_cfg test_wifi_state test_udp_sess test_tcp_pending test_relay_stats test_screens test_status_json
+all: test_net_cfg test_wifi_state test_udp_sess test_tcp_pending test_relay_stats test_screens test_status_json test_rate_gate
 
 test_net_cfg: test_net_cfg.c ../main/net_cfg.c ../main/net_cfg.h ../main/dongle_contract.inc
 	$(CC) $(CFLAGS) -o $@ test_net_cfg.c ../main/net_cfg.c
@@ -24,6 +24,9 @@ test_screens: test_screens.c ../main/screens.c ../main/screens.h ../main/dongle_
 test_status_json: test_status_json.c ../main/status_json.c ../main/status_json.h ../main/net_cfg.c ../main/dongle_contract.inc
 	$(CC) $(CFLAGS) -o $@ test_status_json.c ../main/status_json.c ../main/net_cfg.c
 
+test_rate_gate: test_rate_gate.c ../main/rate_gate.c ../main/rate_gate.h
+	$(CC) $(CFLAGS) -o $@ test_rate_gate.c ../main/rate_gate.c $(LDLIBS)
+
 run: all
 	./test_net_cfg
 	./test_wifi_state
@@ -32,6 +35,7 @@ run: all
 	./test_relay_stats
 	./test_screens
 	./test_status_json
+	./test_rate_gate
 
 clean:
-	rm -f test_net_cfg test_wifi_state test_udp_sess test_tcp_pending test_relay_stats test_screens test_status_json
+	rm -f test_net_cfg test_wifi_state test_udp_sess test_tcp_pending test_relay_stats test_screens test_status_json test_rate_gate

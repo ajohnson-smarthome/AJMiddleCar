@@ -74,6 +74,22 @@ static void test_each_relay_records_only_its_own_slots(void)
     check(s.tcp_used == 3, "tcp slots");
 }
 
+static void test_video_bytes_become_kbps_and_drops_count(void)
+{
+    relay_stats_t s;
+    relay_stats_init(&s);
+    relay_stats_video_slots(&s, 1);
+    for (int i = 0; i < 100; i++) relay_stats_video_forwarded(&s, 1412);   /* 141200 B */
+    relay_stats_video_dropped(&s);
+    relay_stats_video_dropped(&s);
+    relay_stats_sample(&s, 1000);                /* window 0..1000 ms: 141200 x 8 / 1000 = 1129.6 kbit/s */
+    if (s.video_kbps_x10 != 11296) { printf("FAIL video_kbps_x10 %u\n", s.video_kbps_x10); failures++; }
+    if (s.video_dropped != 2) { printf("FAIL video_dropped %u\n", (unsigned)s.video_dropped); failures++; }
+    if (s.video_used != 1) { printf("FAIL video_used\n"); failures++; }
+    relay_stats_sample(&s, 2000);                /* nothing more: 0.0 */
+    if (s.video_kbps_x10 != 0) { printf("FAIL second window %u\n", s.video_kbps_x10); failures++; }
+}
+
 /* relay_stats.h says this module exists because on 2026-08-31 the dongle was joined, addressed
  * and reading -27 dBm while every relayed datagram failed with errno 12, and nothing in the
  * system could say so. A latch alone answers a DIFFERENT question — "has forwarding ever
@@ -107,6 +123,7 @@ int main(void)
     test_errno_latches_and_counts_repeats();
     test_a_fault_records_when_it_last_happened();
     test_each_relay_records_only_its_own_slots();
+    test_video_bytes_become_kbps_and_drops_count();
     printf(failures ? "relay_stats: %d FAILED\n" : "relay_stats: ok\n", failures);
     return failures != 0;
 }

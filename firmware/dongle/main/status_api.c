@@ -79,12 +79,15 @@ static esp_err_t status_get(httpd_req_t *req)
         .attempts_used = attempts, .attempts_max = (unsigned)WIFI_JOIN_ATTEMPTS,
         .to_car_x10 = (unsigned)relay->to_car_x10, .to_phone_x10 = (unsigned)relay->to_phone_x10,
         .udp_sessions = (unsigned)relay->udp_used, .tcp_connections = (unsigned)relay->tcp_used,
+        .video_sessions = (unsigned)relay->video_used,
+        .video_kbps_x10 = (unsigned)relay->video_kbps_x10,
+        .video_dropped = (unsigned)relay->video_dropped,
         .last_errno = relay->last_errno, .last_error_message = strerror(relay->last_errno),
         .last_error_count = (unsigned)relay->errno_count, .last_error_age_s = errno_age,
         .uptime_s = (long)(esp_timer_get_time() / 1000000),
         .free_heap = (unsigned)esp_get_free_heap_size(),
     };
-    char body[640];
+    char body[720];
     int n = status_json_render(&v, body, sizeof(body));
     if (n < 0) {
         ESP_LOGE(TAG, "/status does not fit its buffer");
@@ -110,7 +113,7 @@ esp_err_t status_api_start(void)
      * URI handlers at all, being raw sockets on their own ports, and the API guard is an
      * open_fn rather than a handler. Nothing further is pending against this number. */
     cfg.max_uri_handlers = 6;
-    /* The v2 /status frame carries ~1 KB of locals — the view, the 640-byte body, the
+    /* The v2 /status frame carries ~1 KB of locals — the view, the 720-byte body, the
      * renderer's scratch — on top of esp_http_server's own frames, which IDF's default
      * 4096-byte task stack never proved margin for. This server is also the dongle's only
      * OTA path, so headroom here is bought rather than measured. */
