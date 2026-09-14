@@ -11,6 +11,7 @@
 #include "motors.h"
 #include "rt_link.h"
 #include "link.h"
+#include "camera.h"
 
 static const char *TAG = "telemetry";
 
@@ -133,9 +134,9 @@ void telemetry_gather(telemetry_t *out, telem_consumer_t who) {
     out->owner      = link_src_name(link_owner());
     out->bus_ok     = link_bus_ok();
 
-    /* Filled by video_link once it exists (task 6); until then the group says what is
-       true of this build: no camera, nothing sent. */
-    out->video_state   = VIDEO_STATE_OFF;
+    /* Filled by video_link once it exists (task 6); until then this reports only
+       whether the sensor is there, from camera_init's detection at boot. */
+    out->video_state   = camera_present() ? VIDEO_STATE_IDLE : VIDEO_STATE_OFF;
     out->video_fps     = 0;
     out->video_kbps    = 0;
     out->video_dropped = 0;

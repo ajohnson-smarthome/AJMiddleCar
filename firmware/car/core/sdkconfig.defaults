@@ -62,3 +62,25 @@ CONFIG_ESP_HOSTED_HOST_RESET_GPIO=54
 # component's promptless Kconfig default; pinned here so a vendor default change cannot
 # silently remove the only wireless path to the radio (2026-08-23 audit).
 CONFIG_ESP_HOSTED_HOST_FEAT_OTA=y
+
+# Camera: OV5647 on the board's MIPI-CSI. One sensor mode is compiled in — the full-field
+# 1280x960 binning mode — because it is the only one that keeps the fisheye's whole view
+# (docs/superpowers/specs/2026-09-14-fpv-video-design.md, «Что известно о железе»).
+CONFIG_CAMERA_OV5647=y
+CONFIG_CAMERA_OV5647_AUTO_DETECT_MIPI_INTERFACE_SENSOR=y
+CONFIG_CAMERA_OV5647_MIPI_RAW8_800X800_50FPS=n
+CONFIG_CAMERA_OV5647_MIPI_RAW10_1280X960_BINNING_45FPS=y
+CONFIG_CAMERA_OV5647_MIPI_DEFAULT_FMT_RAW10_1280X960_BINNING_45FPS=y
+CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_VIDEO_DEVICE=y
+CONFIG_ESP_VIDEO_ENABLE_ISP_VIDEO_DEVICE=y
+# The pipeline controller is the isp_task (priority 11, fixed in the component): AE/AWB
+# from the ISP's statistics, written back to the ISP and the sensor. Without it a RAW
+# sensor gives a dark green picture.
+CONFIG_ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER=y
+CONFIG_ESP_VIDEO_ENABLE_DVP_VIDEO_DEVICE=n
+CONFIG_ESP_VIDEO_ENABLE_CAMERA_MOTOR_CONTROLLER=n
+# The encoders are driven directly (esp_h264, esp_driver_jpeg), not as V4L2 M2M devices:
+# force_idr is not reachable through /dev/video11.
+CONFIG_ESP_VIDEO_ENABLE_H264_VIDEO_DEVICE=n
+CONFIG_ESP_VIDEO_ENABLE_HW_JPEG_ENC_VIDEO_DEVICE=n
+CONFIG_ESP_VIDEO_ENABLE_HW_JPEG_DEC_VIDEO_DEVICE=n

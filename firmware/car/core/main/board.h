@@ -30,6 +30,12 @@
 // 400 kHz only after the scope on SCL says the edges pass (spec, «Риски / Шина I²C»).
 #define BOARD_SCCB_HZ        100000
 
+// The camera's reset and power-down lines are not on the Pi-style ribbon: the module is
+// powered whenever the board is (pin 11 of J4 is pulled to 3V3 through 10 kΩ on the
+// schematic), and the only reset the firmware has is the sensor's own register over SCCB.
+#define BOARD_CAM_RESET_PIN  (-1)
+#define BOARD_CAM_PWDN_PIN   (-1)
+
 #define BOARD_PWM_HZ         1000
 
 // Two PCA9685 boards on the same bus, one per axle: the front axle's two motors on 0x40, the

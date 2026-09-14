@@ -14,3 +14,14 @@ dependencies:
   # esp_hosted_get_coprocessor_fwversion() — a transitive dependency's headers are not on our
   # include path, and relying on one would break the day the chain changes.
   espressif/esp_hosted: '3.0.6'
+  # The camera stack. esp_video puts the sensor (esp_cam_sensor: OV5647 on MIPI-CSI), the
+  # P4's ISP and the AE/AWB algorithms (esp_ipa — a prebuilt library, pinned and never
+  # patched, like the radio's image) behind V4L2; esp_h264 drives the hardware encoder.
+  # Espressif's CI builds all four on release-v6.0. Exact pins, for the reason
+  # esp_wifi_remote's pin is exact.
+  # esp_video 2.4.1's own manifest wants esp_cam_sensor 2.4.* and esp_h264 1.3.*; these are
+  # the newest inside those specs.
+  espressif/esp_video: '2.4.1'
+  espressif/esp_cam_sensor: '2.4.0'
+  espressif/esp_ipa: '2.3.0'
+  espressif/esp_h264: '1.3.8'

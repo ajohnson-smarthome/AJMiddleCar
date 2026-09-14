@@ -33,6 +33,8 @@
 #include "radio_ota.h"
 #include "radio_flash.h"
 #include "radio_expected.h"
+#include "camera.h"
+#include "snapshot_api.h"
 
 static const char *TAG = "main";
 
@@ -229,6 +231,7 @@ void app_main(void) {
        there on the car is serving and the SDIO link is not ours to drop. */
     radio_gate();
     telemetry_start();                     // 1 Hz RSSI sampler, off the control task
+    ESP_ERROR_CHECK(camera_init());   // detects the sensor; "off" is a state, not a failure
     recovery_init();                       // breadcrumb buffer; the watchdog trips into it
     /* Driving comes up before the API: rt_link carries control, the watchdog and
        telemetry, and none of it depends on the HTTP server being there.
@@ -247,6 +250,8 @@ void app_main(void) {
         ESP_LOGE(TAG, "ota_api_start failed: %s — OTA endpoint is down, this car cannot be updated over the air", esp_err_to_name(err));
     if ((err = cfg_api_start()) != ESP_OK)
         ESP_LOGE(TAG, "cfg_api_start failed: %s — the /config endpoint is down", esp_err_to_name(err));
+    if ((err = snapshot_api_start()) != ESP_OK)
+        ESP_LOGE(TAG, "snapshot_api_start failed: %s — GET /snapshot is down", esp_err_to_name(err));
 
     /* Not ESP_ERROR_CHECKed — this file's own rule, from the mark-valid comment above: nothing
        past that line may panic, because a panic there is a boot loop with no rollback and no

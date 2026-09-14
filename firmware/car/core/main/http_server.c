@@ -26,11 +26,11 @@ httpd_handle_t http_server_get_handle(void) {
 esp_err_t http_server_start(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    // 8 routes: /, GET+POST /config, GET+POST /calibration, POST /calibration/spin,
-    // GET /status, POST /ota — one /config now covers every domain, so this count no
-    // longer moves when contract/car-api.json grows a domain. Above the IDF default of
-    // 8; without the bump registration aborts with HANDLERS_FULL and the car comes up
-    // with no softAP.
+    // 9 routes: /, GET+POST /config, GET+POST /calibration, POST /calibration/spin,
+    // GET /status, POST /ota, GET /snapshot — one /config now covers every domain, so
+    // this count no longer moves when contract/car-api.json grows a domain. Above the
+    // IDF default of 8; without the bump registration aborts with HANDLERS_FULL and the
+    // car comes up with no softAP.
     config.max_uri_handlers = 12;
     // The v2 handlers hold more locals than IDF's default 4096-byte task stack ever
     // proved margin for: status_get builds the identity, the three telemetry groups
