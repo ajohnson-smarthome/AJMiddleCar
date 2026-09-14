@@ -101,6 +101,9 @@ int main(void) {
     assert(rt_session_classify(&s, NULL, true, &bare) == RT_DROP);
     control_frame_t none = { .type = CT_NONE, .has_proto = true, .proto = RT_PROTO, .has_seq = true, .seq = 12 };
     assert(rt_session_classify(&s, NULL, true, &none) == RT_DROP);
+    /* view is hello-shaped but not a hello: on 4210 it is just another non-hello without
+       seq, and the existing rule drops it. */
+    assert(act(&s, NULL, true, "{\"proto\":2,\"type\":\"view\",\"session\":\"7f3a91c2\"}") == RT_DROP);
 
     /* --- goodbye -------------------------------------------------------------- */
     rt_session_command(&s, 100, 3000);

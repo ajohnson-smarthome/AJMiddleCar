@@ -89,6 +89,22 @@ int main(void) {
     bad("{\"proto\":2,\"type\":\"hello\"}");                                        /* no session */
     bad("{\"proto\":2,\"type\":\"hello\",\"hello\":\"7f3a91c2\"}");                 /* the v1 key */
 
+    /* --- view: hello-shaped, on the video port; key is optional and boolean ------- */
+    f = parse("{\"proto\":2,\"type\":\"view\",\"session\":\"7f3a91c2\"}");
+    assert(f.type == CT_VIEW && !f.has_seq && !f.has_axes && !f.has_key && strcmp(f.sid, "7f3a91c2") == 0);
+    f = parse("{\"proto\":2,\"type\":\"view\",\"session\":\"7f3a91c2\",\"key\":true}");
+    assert(f.type == CT_VIEW && f.has_key && f.key);
+    f = parse("{\"proto\":2,\"type\":\"view\",\"session\":\"7f3a91c2\",\"key\":false}");
+    assert(f.has_key && !f.key);
+    bad("{\"proto\":2,\"type\":\"view\"}");                                          /* no session */
+    bad("{\"proto\":2,\"type\":\"view\",\"session\":\"7f3a91c2\",\"key\":1}");       /* not a boolean */
+    bad("{\"proto\":2,\"type\":\"view\",\"session\":\"7f3a91c2\",\"key\":\"true\"}");
+    bad("{\"proto\":2,\"type\":\"view\",\"session\":\"7f3a91c2\",\"key\":true,\"key\":true}");
+    /* key rides only on view: a hello that carries it is still a hello, and the key is kept
+       as data — the classifier does not look at it. */
+    f = parse("{\"proto\":2,\"type\":\"hello\",\"session\":\"7f3a91c2\",\"key\":true}");
+    assert(f.type == CT_HELLO && f.has_key);
+
     /* --- bye ------------------------------------------------------------------ */
     f = parse("{\"proto\":2,\"type\":\"bye\",\"seq\":1235}");
     assert(f.type == CT_BYE && f.has_seq && f.seq == 1235 && !f.has_axes);

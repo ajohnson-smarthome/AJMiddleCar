@@ -10,10 +10,10 @@
 // whose ids differ only past the cut would otherwise look like the same session.
 #define CONTROL_SID_MAX 16
 
-// What a datagram says it is — its `type` word. The three the app sends; the two the car
-// sends (hello_ack, telemetry) are refused here, since a car does not take its own words
-// back as instructions.
-typedef enum { CT_NONE = 0, CT_HELLO, CT_DRIVE, CT_BYE } control_type_t;
+// What a datagram says it is — its `type` word. The four the app sends (view on the
+// video port); the two the car sends (hello_ack, telemetry) are refused here, since a
+// car does not take its own words back as instructions.
+typedef enum { CT_NONE = 0, CT_HELLO, CT_DRIVE, CT_BYE, CT_VIEW } control_type_t;
 
 // One decoded real-time datagram. `type` is what the datagram is; the flags say which
 // optional keys were there. A caller that needs one and finds it absent must drop the
@@ -27,6 +27,8 @@ typedef struct {
     bool     has_axes;              // both axes were present and finite
     float    throttle, turn;
     char     sid[CONTROL_SID_MAX];  // CT_HELLO: NUL-terminated, alphanumeric, non-empty
+    bool     has_key;               // CT_VIEW: the `key` flag was present
+    bool     key;                   // …and asked for a keyframe
 } control_frame_t;
 
 // Parse one datagram of `len` bytes into `out`. Zero-alloc and bounded: nothing is read
@@ -36,11 +38,11 @@ typedef struct {
 // argument rather than being compiled in here).
 //
 // Returns 0 when the datagram is a known type carrying what that type needs — a hello
-// with a session, a drive with seq and both axes, a bye with seq — and every key present
-// parsed cleanly. Returns -1: oversized, unparseable, no type or a type the app does not
-// send, a missing required key, one axis without the other, a non-finite axis, a session
-// id that is empty, over-long or not alphanumeric, or any key that appears twice. `*out`
-// is undefined on -1.
+// with a session, a drive with seq and both axes, a bye with seq, a view with a session
+// (and optionally a boolean key) — and every key present parsed cleanly. Returns -1:
+// oversized, unparseable, no type or a type the app does not send, a missing required
+// key, one axis without the other, a non-finite axis, a session id that is empty,
+// over-long or not alphanumeric, or any key that appears twice. `*out` is undefined on -1.
 //
 // `proto` is parsed when present and never judged: whether the car speaks it is policy,
 // and the classifier in rt_link.h owns it (a foreign hello is still answered).

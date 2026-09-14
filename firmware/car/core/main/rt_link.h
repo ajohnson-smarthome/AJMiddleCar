@@ -194,6 +194,12 @@ uint32_t rt_link_wdt_trips(void);
 // single aligned u32, so it cannot tear, and a reader one adoption behind names a station
 // that was the owner a second ago, which is the worst this can be.
 uint32_t rt_link_owner_ip(void);
+
+// The session owner's sid, NUL-terminated, or "" while nobody owns the session. Copied
+// under a critical section: unlike the address, a sid is sixteen bytes that the rt_link
+// task rewrites on every adoption, and the reader — video_link's task, three priorities
+// below — cannot be allowed to see half of one.
+void rt_link_owner_sid(char out[CONTROL_SID_MAX]);
 #endif /* RT_LINK_HOST_TEST */
 
 #endif // RT_LINK_H

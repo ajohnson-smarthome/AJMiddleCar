@@ -152,6 +152,13 @@ static int parse_u32(const char *p, size_t n, uint32_t *out) {
     return 0;
 }
 
+/* `true` or `false`, and nothing else: JSON's two booleans as bytes. */
+static int parse_bool(const char *p, size_t n, bool *out) {
+    if (n >= 4 && memcmp(p, "true", 4) == 0 && token_ends(p, n, 4))   { *out = true;  return 0; }
+    if (n >= 5 && memcmp(p, "false", 5) == 0 && token_ends(p, n, 5)) { *out = false; return 0; }
+    return -1;
+}
+
 /* The session id is echoed straight back in the hello reply, so it is restricted to
    characters that cannot change the shape of that JSON. A quote or a backslash in an
    id would otherwise let the sender dictate the reply's structure. */
@@ -181,6 +188,7 @@ static int parse_type(const char *p, size_t n, control_type_t *out) {
     if (k == strlen(RT_TYPE_HELLO) && memcmp(p + 1, RT_TYPE_HELLO, k) == 0) { *out = CT_HELLO; return 0; }
     if (k == strlen(RT_TYPE_DRIVE) && memcmp(p + 1, RT_TYPE_DRIVE, k) == 0) { *out = CT_DRIVE; return 0; }
     if (k == strlen(RT_TYPE_BYE)   && memcmp(p + 1, RT_TYPE_BYE, k) == 0)   { *out = CT_BYE;   return 0; }
+    if (k == strlen(RT_TYPE_VIEW)  && memcmp(p + 1, RT_TYPE_VIEW, k) == 0)  { *out = CT_VIEW;  return 0; }
     return -1;
 }
 
@@ -224,6 +232,13 @@ int control_parse_frame(const char *msg, size_t len, size_t max_len, control_fra
         has_session = true;
     }
 
+    r = value_of(msg, len, RT_KEY_KEY, &v, &left);
+    if (r < 0) return -1;
+    if (r == 0) {
+        if (parse_bool(v, left, &f.key) != 0) return -1;
+        f.has_key = true;
+    }
+
     const char *vt = NULL, *vy = NULL;
     size_t left_t = 0, left_y = 0;
     r = value_of(msg, len, RT_KEY_THROTTLE, &vt, &left_t);
@@ -249,6 +264,7 @@ int control_parse_frame(const char *msg, size_t len, size_t max_len, control_fra
         case CT_HELLO: if (!has_session) return -1; break;
         case CT_DRIVE: if (!f.has_seq || !f.has_axes) return -1; break;
         case CT_BYE:   if (!f.has_seq) return -1; break;
+        case CT_VIEW:  if (!has_session) return -1; break;
         default:       return -1;
     }
     *out = f;

@@ -53,6 +53,24 @@ static struct sockaddr_in s_owner;
 static rt_session_t       s_ses;
 static rt_dead_sids_t     s_dead;
 
+/* The published copy of the owner's sid. s_ses.sid belongs to this task; this is the
+   snapshot other tasks may read, rewritten whenever ownership changes. */
+static char s_pub_sid[CONTROL_SID_MAX];
+static portMUX_TYPE s_pub_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void publish_owner(void) {
+    taskENTER_CRITICAL(&s_pub_mux);
+    if (s_ses.have_owner) memcpy(s_pub_sid, s_ses.sid, sizeof(s_pub_sid));
+    else                  s_pub_sid[0] = '\0';
+    taskEXIT_CRITICAL(&s_pub_mux);
+}
+
+void rt_link_owner_sid(char out[CONTROL_SID_MAX]) {
+    taskENTER_CRITICAL(&s_pub_mux);
+    memcpy(out, s_pub_sid, CONTROL_SID_MAX);
+    taskEXIT_CRITICAL(&s_pub_mux);
+}
+
 /* The real effects table — every entry a one-line adapter, so the orderings above it
    are exactly the host-tested ones in rt_glue.h. */
 static bool fx_stop_safe(void *c)    { (void)c; return car_stop(LINK_SRC_SAFE); }
@@ -113,6 +131,7 @@ static void adopt(const struct sockaddr_in *from, const char *sid) {
         ESP_LOGE(TAG, "adopt could not release a leftover SAFE grant");
     }
     log_peer("session adopted from", from);
+    publish_owner();
 }
 
 static void on_bye(void) {
@@ -132,6 +151,7 @@ static void on_bye(void) {
                  link_src_name(link_owner()));
         break;
     }
+    publish_owner();
 }
 
 static void on_command(const control_frame_t *f) {
@@ -205,6 +225,7 @@ static void check_silence(void) {
 
 static void check_idle(void) {
     if (!rt_glue_idle(&s_ses, &s_dead, now_ms(), &FX)) return;
+    publish_owner();
     ESP_LOGI(TAG, "session idle for >%dms — over; the next driver says hello",
              RT_SESSION_IDLE_MS);
 }
