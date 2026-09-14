@@ -353,8 +353,9 @@ A bench route, not part of the app's flow: one JPEG of whatever the camera curre
 - **`off`** — `500 internal`, `"camera off"`. No sensor answered at boot; there is no pipeline
   to start.
 - **`idle`** — the pipeline starts for this request alone (in UYVY — the JPEG block cannot
-  take YUV420 either), a handful of frames are discarded while AE/AWB settle, one is encoded,
-  and the pipeline stops again — all inside the one request, in well under a second. Two more
+  take YUV420 either), frames are discarded for three seconds while AE walks up from its cold
+  start (measured: black at 0 s, settled by ~2.7 s), one is encoded, and the pipeline stops
+  again — all inside the one request, about 3.5 s in all. Two more
   `500 internal` replies can come out of this same path: `"capture failed"` if a frame does not
   arrive (a `camera_acquire` timeout or another capture error) and `"jpeg failed"` if the
   hardware JPEG block itself rejects the frame.

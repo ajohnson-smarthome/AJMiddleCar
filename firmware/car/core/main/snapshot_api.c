@@ -2,6 +2,7 @@
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_http_server.h"
 #include "driver/jpeg_encode.h"
 #include "api_util.h"
@@ -11,10 +12,14 @@
 
 static const char *TAG = "snapshot";
 
-/* Frames to throw away before the one that is kept: the sensor's first frames after
-   standby are dark, and AE/AWB need a few statistics rounds to settle. Ten at 45 fps is
-   ~220 ms, and the whole request stays under the half-second the spec allows. */
-#define SNAPSHOT_WARMUP_FRAMES 10
+/* How long to run the pipeline before the frame that is kept. The sensor's first frames
+   after standby are dark, and AE walks up from its cold start over several statistics
+   rounds: measured from a stream on the bench (2026-09-14), the picture is black at 0 s and
+   settled by ~2.7 s. Ten frames (~220 ms) — the spec's half-second budget — returned a
+   frame of mean brightness 1.8/255, every time. A snapshot is a bench tool, so it waits
+   the three seconds instead of being fast and black. Time, not a frame count: the bound
+   should not move with the sensor mode's frame rate. */
+#define SNAPSHOT_WARMUP_MS 3000
 #define SNAPSHOT_QUALITY 80
 #define SNAPSHOT_OUT_MAX (512 * 1024)
 
@@ -53,7 +58,7 @@ static esp_err_t snapshot_get(httpd_req_t *req) {
        it stopped. `failed:` is the same reply, past the stop. */
     if (err != ESP_OK) goto failed;
 
-    for (int i = 0; i < SNAPSHOT_WARMUP_FRAMES; i++) {
+    for (int64_t t0 = esp_timer_get_time(); esp_timer_get_time() - t0 < SNAPSHOT_WARMUP_MS * 1000LL;) {
         if ((err = camera_acquire(&f)) != ESP_OK) goto out;
         camera_release(&f);
     }

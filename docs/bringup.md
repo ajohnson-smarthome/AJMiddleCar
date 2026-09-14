@@ -138,6 +138,30 @@ are the closing sweep, run once stage 4 itself passes.
 
 _Record anything surprising here — it is the raw material for the next spec._
 
+### The dongle kept an association the car had forgotten (2026-09-14)
+
+First over-the-air update of the car through the dongle, watched from a Mac on the dongle's
+USB: the upload completed, the car rebooted into v1.0+864 (`rolled_back:false`), and from then
+on the relay could not reach it. `wifi.state` stayed `connected`, RSSI kept updating from the
+beacons — and `relay.last_error` counted `errno 12 Not enough space` on every send toward the
+car: the softAP had restarted and forgotten this station, no disconnect event ever came, and
+the radio's transmit buffers filled with frames nobody acknowledged. `POST /wifi` with the
+same network was a no-op by design while the station said `connected`, so the app's
+«Повторить» could not have helped either; only a replug would have. Handing the dongle a
+bogus network and then the real one — a genuine reassociation — brought the relay back
+instantly, and the simulator was driving with live video within seconds.
+
+Fix: `uplink.{c,h}` scores every send toward the car; twenty consecutive failures while the
+station still says `connected` ask it to re-join (`wifi_sta_rejoin`), no more than once per
+ten seconds, and an unchanged `POST /wifi` on that same state re-joins too. A car reboots on
+every update, so this would have hit every OTA from now on.
+
+Also from the same session: the snapshot came out black (mean 1.8/255) because ten frames is
+~220 ms and AE needs ~2.7 s from cold — the warm-up is now three seconds by the clock. And the
+picture itself: the car encodes at 1842 kbit/s, the dongle relays 1322 — about a quarter of
+the bytes vanish between the car's `sendto` and the dongle's `recvfrom`, with `video_dropped`
+at 0 on both sides, so 10–14 % of frames are lost somewhere no counter looks. Open.
+
 ### The AE/AWB library was built for silicon this board is not (2026-09-14)
 
 The first boot of v1.0+862 with the camera ribbon in detected the sensor and panicked in the
