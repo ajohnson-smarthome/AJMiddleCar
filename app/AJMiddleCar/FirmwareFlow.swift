@@ -145,9 +145,19 @@ final class FirmwareFlow: ObservableObject {
     /// device happened to be reachable in that same instant; a car still re-joining through
     /// the dongle was not, and the screen then waited for a tap on a button nothing told the
     /// user to press. Returns when the phase has moved on, or when cancelled.
+    ///
+    /// The flash itself runs in a task of its own, NOT in this one. `FirmwareView` runs this
+    /// from `.task(id: flow.phase)`, and `flash()`'s first act is to move the phase — which
+    /// cancels the task it is running in. The upload survived that (it is a child `Task` of
+    /// its own), but the reboot watch ran cancelled: every sleep returned at once, every
+    /// `/status` threw before opening a connection, and thirty seconds of that ended as
+    /// «Прошито» for an adapter that had come back within twenty (bench, 2026-09-15).
     func flashWhenReachable() async {
         while phase == .downloaded {
-            if isReachable() { await flash(); return }
+            if isReachable() {
+                Task { @MainActor in await self.flash() }
+                return
+            }
             try? await Task.sleep(for: .milliseconds(500))
             if Task.isCancelled { return }
         }
