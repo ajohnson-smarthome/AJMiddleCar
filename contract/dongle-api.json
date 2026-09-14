@@ -80,7 +80,7 @@
         {"name": "video_kbps", "type": "number", "nullable": true,
          "doc": "video toward the phone, kbit/s with one decimal; null from a dongle that predates video"},
         {"name": "video_dropped", "type": "int", "nullable": true,
-         "doc": "video chunks the admission limit discarded since boot; null from a dongle that predates video"}
+         "doc": "video chunks not delivered toward the phone since boot: refused by the admission limit, or admitted and then refused by the USB side; null from a dongle that predates video"}
       ]
     },
     "system": {

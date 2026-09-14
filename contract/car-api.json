@@ -110,7 +110,7 @@
          "doc": "off: no sensor answered at boot; idle: sensor in standby, nobody watching; streaming: encoding for the driver"},
         {"name": "fps", "type": "int", "doc": "frames encoded in the last second"},
         {"name": "kbps", "type": "int", "doc": "kbit sent in the last second"},
-        {"name": "dropped", "type": "int", "doc": "frames not sent since boot: encoder overflow or more than 255 chunks"}
+        {"name": "dropped", "type": "int", "doc": "frames not sent since boot: the sender was still busy with the previous frame, the encoder overflowed, or the frame needed more than 255 chunks"}
       ]
     }
   },

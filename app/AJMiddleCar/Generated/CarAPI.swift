@@ -262,7 +262,7 @@ public struct VideoInfo: Codable, Equatable, Sendable {
     public var fps: Int
     /// kbit sent in the last second
     public var kbps: Int
-    /// frames not sent since boot: encoder overflow or more than 255 chunks
+    /// frames not sent since boot: the sender was still busy with the previous frame, the encoder overflowed, or the frame needed more than 255 chunks
     public var dropped: Int
     public init(state: VideoState, fps: Int, kbps: Int, dropped: Int) { self.state = state; self.fps = fps; self.kbps = kbps; self.dropped = dropped }
 }

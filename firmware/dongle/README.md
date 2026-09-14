@@ -284,14 +284,17 @@ grows from roughly a dozen of our datagrams to roughly 100 KB — for perhaps 60
 RAM, nothing on a board with PSRAM.
 
 **Admission, toward the phone only.** The video relay charges every chunk it forwards against
-`relay.video_max_kbps` (**2500**, `contract/dongle-api.json`) over a **1000 ms** window
-(`rate_gate.c`, pure and host-tested) — not the 100 ms a first draft of the design assumed: a
-keyframe has to fit inside one window whole, or the gate would refuse half of every one of
-them at the top bitrate. The gate caps the *average*; the burst itself is what the wider
+`relay.video_max_kbps` (**2500**, `contract/dongle-api.json`) over a fixed **1000 ms** window
+(`rate_gate.c`, pure and host-tested) — tumbling, not sliding: the count restarts at each
+window's start — and not the 100 ms a first draft of the design assumed: a keyframe has to
+fit inside one window whole, or the gate would refuse half of every one of them at the top
+bitrate. The gate caps the *average*; the burst itself is what the wider
 buffers above absorb, not the window. A chunk the gate refuses is dropped and counted
 (`relay.video_dropped`) here, on purpose, rather than failing silently inside `esp_tinyusb`
 when the NTB pool is full — where a refused datagram could as easily have been a telemetry
-push. The real-time relay is never throttled.
+push. A chunk the gate admits and the USB side still refuses goes into the same counter, not
+into the errno pair `/status` reports as `last_error`: that record is the control channel's.
+The real-time relay is never throttled.
 
 `GET /status`'s `relay` group reports three more fields for this — `video_sessions`,
 `video_kbps`, `video_dropped` — all **nullable**, so a dongle running an older build still

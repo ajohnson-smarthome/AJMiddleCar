@@ -257,8 +257,8 @@ class CarState:
         self._calibration = {}         # corner -> (pair, inverted)
         self._bus_ok = True
         self._tele_seq = 0
-        # Task 13 wires a real encoder in; until then the group says the honest thing —
-        # idle, nothing sent.
+        # The video channel's counters, written by video.py: `idle` and zeros until a
+        # viewer subscribes, then whatever the looped clip is sending.
         self.video_state = "idle"
         self.video_fps = 0
         self.video_kbps = 0
@@ -667,7 +667,7 @@ class CarState:
     # ---- telemetry -------------------------------------------------------------
 
     def status_groups(self, rx_hz):
-        """The link/motors/system groups, built by walking the schema so a field added to
+        """The link/motors/system/video groups, built by walking the schema so a field added to
         the contract and not to the map below raises here rather than going missing on
         the wire.
         """

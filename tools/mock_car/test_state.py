@@ -820,7 +820,7 @@ class TestTelemetry(unittest.TestCase):
             names = [f["name"] for f in GROUPS[g]["fields"]]
             self.assertEqual(list(frame[g]), names, g)
 
-    def test_status_groups_are_the_same_three_without_the_envelope(self):
+    def test_status_groups_are_the_same_four_without_the_envelope(self):
         car = CarState(now=0.0)
         groups = car.status_groups(10)
         self.assertEqual(set(groups), set(TELEMETRY_GROUPS))

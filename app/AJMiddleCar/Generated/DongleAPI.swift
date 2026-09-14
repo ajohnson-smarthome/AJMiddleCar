@@ -167,7 +167,7 @@ public struct DongleRelay: Codable, Equatable, Sendable {
     public var video_sessions: Int?
     /// video toward the phone, kbit/s with one decimal; null from a dongle that predates video
     public var video_kbps: Double?
-    /// video chunks the admission limit discarded since boot; null from a dongle that predates video
+    /// video chunks not delivered toward the phone since boot: refused by the admission limit, or admitted and then refused by the USB side; null from a dongle that predates video
     public var video_dropped: Int?
     public init(to_car_hz: Double, to_phone_hz: Double, udp_sessions: Int, tcp_connections: Int, last_error: DongleRelayError?, video_sessions: Int?, video_kbps: Double?, video_dropped: Int?) { self.to_car_hz = to_car_hz; self.to_phone_hz = to_phone_hz; self.udp_sessions = udp_sessions; self.tcp_connections = tcp_connections; self.last_error = last_error; self.video_sessions = video_sessions; self.video_kbps = video_kbps; self.video_dropped = video_dropped }
 }

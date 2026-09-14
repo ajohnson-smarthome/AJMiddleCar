@@ -100,8 +100,10 @@ GROUPS = {   'device': {   'swift': 'DeviceInfo',
                                    'doc': 'kbit sent in the last second'},
                                {   'name': 'dropped',
                                    'type': 'int',
-                                   'doc': 'frames not sent since boot: encoder overflow or '
-                                          'more than 255 chunks'}]}}
+                                   'doc': 'frames not sent since boot: the sender was still '
+                                          'busy with the previous frame, the encoder '
+                                          'overflowed, or the frame needed more than 255 '
+                                          'chunks'}]}}
 NETWORK = {'ssid': 'AJMiddleCar', 'password': 'drive1234'}
 RT = {'port': 4210, 'max_datagram': 320, 'max_command': 96, 'command_hz': 10, 'telemetry_hz': 5, 'watchdog_ms': 300, 'session_idle_ms': 10000, 'keys': {'proto': 'proto', 'type': 'type', 'session': 'session', 'seq': 'seq', 'throttle': 'throttle', 'turn': 'turn', 'key': 'key'}, 'types': {'hello': 'hello', 'hello_ack': 'hello_ack', 'drive': 'drive', 'bye': 'bye', 'telemetry': 'telemetry', 'view': 'view'}, 'doc': 'Every datagram carries proto and type. session is the session id: producers send 8 hex characters; acceptors take 1-15 alphanumerics. drive and bye carry seq; hello and view do not. view (on the video port) may carry key:true to ask for a keyframe.'}
 TELEMETRY_GROUPS = ['link', 'motors', 'system', 'video']

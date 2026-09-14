@@ -143,9 +143,9 @@ The pure modules have **zero ESP-IDF dependencies** and are host-tested with pla
   `docs/protocol.md`'s video section — the same vectors and the same verdicts as
   `VideoWire.swift` and `video_wire.py`. The receiver is a bitset over chunk indices, never a
   counter, so a duplicate cannot fake a finished frame.
-- `video_sub.{c,h}` — *pure*: the subscription as arithmetic — who may watch (the real-time
-  session's owner, by sid), for how long after the last `view`, and how often `key:true` may
-  force an IDR.
+- `video_sub.h` — *pure*, header-only: the subscription as arithmetic — who may watch (the
+  real-time session's owner, by sid), for how long after the last `view`, and how often
+  `key:true` may force an IDR.
 - `video_link.{c,h}` — the video channel: one UDP socket on `4211`, three tasks below the
   actuator — control (the socket's receive side and the subscription), encode (camera →
   `video_enc` → a two-slot ring, handed off with a release/acquire store rather than a lock),

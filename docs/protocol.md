@@ -375,9 +375,11 @@ cannot drift between them:
   (encoding for the driver).
 - **`fps`** — frames encoded in the last second.
 - **`kbps`** — kbit sent in the last second.
-- **`dropped`** — frames not sent since boot: the encoder's output overflowed, or a frame
-  would have needed more than 255 chunks. Rising while `streaming` means the bitrate or the
-  encoder's QP corridor needs to come down, not that anything is broken.
+- **`dropped`** — frames not sent since boot: the sender had not finished the frames before
+  it when the next one was due (the ring holds two, and a keyframe leaves at one chunk a
+  millisecond), the encoder's output overflowed, or a frame would have needed more than 255
+  chunks. Rising while `streaming` means the bitrate or the encoder's QP corridor
+  needs to come down, not that anything is broken.
 
 ### Configuration — the `video` domain
 
@@ -393,16 +395,18 @@ against the one it picked (`sensor_fps` 45 ÷ 3 = `fps` 15), not a stored value.
 On a device, chunks travel through the dongle's own second `relay_udp` instance, not directly:
 `contract/dongle-api.json` adds `relay.video_port` (**4211**, forwarded exactly like
 `relay.rt_port` — the dongle parses none of it) and `relay.video_max_kbps` (**2500**), the
-ceiling its admission gate enforces toward the phone. The gate's window is **1000 ms**: a
-keyframe (60–100 KB) has to fit inside one window whole, or the gate would refuse half of
-every one of them at the top bitrate. The gate caps the *average*; the burst itself is
-absorbed by wider buffers on the USB side, not by the window. A datagram the gate refuses is
-dropped and counted, never queued.
+ceiling its admission gate enforces toward the phone. The gate's window is a fixed
+**1000 ms** — tumbling, not sliding: the byte count restarts at each window's start rather
+than looking back one second from every datagram. A keyframe (60–100 KB) has to fit inside
+one window whole, or the gate would refuse half of every one of them at the top bitrate. The
+gate caps the *average*; the burst itself is absorbed by wider buffers on the USB side, not
+by the window. A datagram the gate refuses is dropped and counted, never queued.
 
 `GET /status` on the dongle reports three more fields in its `relay` group, all **nullable**
 so a dongle running an older build still parses: `video_sessions` (0..4), `video_kbps` (toward
-the phone, one decimal), `video_dropped` (chunks the gate discarded since boot). `null` here
-means the adapter predates video, not that nothing is happening.
+the phone, one decimal), `video_dropped` (chunks not delivered toward the phone since boot —
+refused by the gate, or admitted and then refused by the USB side). `null` here means the
+adapter predates video, not that nothing is happening.
 
 ## `GET /status` — seven groups
 
