@@ -58,4 +58,8 @@ esp_err_t usb_net_bind_socket(int fd);
 #define USB_NET_ADDR DONGLE_HOST
 #define USB_NET_MASK "255.255.255.0"
 
+/* Frames toward the host that the transmit ring had no room for, or that TinyUSB would not
+ * take within its timeout. Cumulative since boot; a bench figure, not a contract field. */
+uint32_t usb_net_tx_refused(void);
+
 #endif /* USB_NET_H */

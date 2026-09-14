@@ -3,6 +3,10 @@
 #include <string.h>
 
 #include "esp_check.h"
+#include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
@@ -29,15 +33,127 @@ static esp_netif_t *s_netif;
  * accept and on POST /ota's. The name cannot change after attach, so it is read there. */
 static struct ifreq s_iface;
 
-/* lwIP has a frame for the host. This runs on lwIP's linkoutput path, synchronously
- * inside whatever context handed lwIP the packet, and tinyusb_net_send_sync blocks
- * that caller until TinyUSB's task drains the frame or this 100 ms timeout fires — a
- * host that stops reading stalls the whole IP stack for up to 100 ms per packet.
- * That is the accepted cost of a synchronous send, not an oversight. */
+/* Frames for the host queue here and leave from usb_tx_task, never from the caller.
+ *
+ * usb_transmit runs on lwIP's linkoutput path — inside lwIP's own thread for anything a
+ * socket sends — and it used to call tinyusb_net_send_sync right there, with a 100 ms
+ * timeout per frame. The comment on it called that "the accepted cost of a synchronous
+ * send". The bench (2026-09-15) priced it: the whole IP stack — both relays, the HTTP
+ * API, ICMP — moved only as fast as the host drained USB one frame at a time, which capped
+ * the video relay at ~1.5 Mbit/s on a 12 Mbit/s wire, and a synthetic 2 Mbit/s stream
+ * hung the dongle outright (lwIP's thread stuck in the per-frame waits, nothing else
+ * scheduled, a replug to recover).
+ *
+ * So: a ring of frames in PSRAM, filled here in O(copy), drained by a task of its own
+ * that does the waiting. A full ring refuses the frame with ENOBUFS — back-pressure the
+ * caller can see and count (relay_udp.c counts it as video_dropped) — instead of
+ * blocking. The ring is a whole keyframe deep at the car's chunking: 64 × 1.5 KB. */
+#define USB_TX_SLOTS     64
+#define USB_TX_FRAME_MAX 1600           /* an Ethernet frame plus slack; NCM MTU is 1500 */
+#define USB_TX_TASK_PRIO 7              /* above both relays (5, 6): the drain must not starve */
+
+typedef struct {
+    uint16_t len;
+    uint8_t  data[USB_TX_FRAME_MAX];
+} usb_tx_slot_t;
+
+static usb_tx_slot_t *s_tx_ring;                 /* USB_TX_SLOTS, PSRAM */
+static QueueHandle_t  s_tx_free;                 /* slot indices free to fill */
+static QueueHandle_t  s_tx_ready;                /* slot indices filled, in order */
+static uint32_t       s_tx_refused;              /* frames the ring had no room for */
+
 static esp_err_t usb_transmit(void *h, void *buffer, size_t len)
 {
     (void)h;
-    return tinyusb_net_send_sync(buffer, len, NULL, pdMS_TO_TICKS(100));
+    if (len == 0 || len > USB_TX_FRAME_MAX || s_tx_free == NULL) return ESP_ERR_INVALID_ARG;
+    uint8_t idx;
+    if (xQueueReceive(s_tx_free, &idx, 0) != pdTRUE) {
+        s_tx_refused++;
+        errno = ENOBUFS;
+        return ESP_ERR_NO_MEM;
+    }
+    usb_tx_slot_t *slot = &s_tx_ring[idx];
+    memcpy(slot->data, buffer, len);
+    slot->len = (uint16_t)len;
+    xQueueSend(s_tx_ready, &idx, 0);             /* cannot fail: a slot is either free or ready */
+    return ESP_OK;
+}
+
+/* How many frames in a row TinyUSB may refuse or time out before the link is declared
+ * stalled and re-attached. Twenty is two seconds of 100 ms timeouts, or twenty instant
+ * refusals — either way a host that has stopped draining, not a burst it is behind on. */
+#define USB_TX_STALL_AFTER 20
+static uint32_t s_tx_reattached;
+
+/* A stall is refusals AND silence: TinyUSB refusing frames because every transfer block is
+ * in flight is the ordinary shape of a host that is merely slower than the sender (it still
+ * completes blocks, and sends succeed between the refusals); a stalled link completes
+ * nothing, so no send has succeeded for this long. */
+#define USB_TX_STALL_SILENCE_MS 1500
+
+static void usb_tx_task(void *arg)
+{
+    (void)arg;
+    uint8_t idx;
+    uint32_t streak = 0;
+    TickType_t last_ok = xTaskGetTickCount();
+    for (;;) {
+        if (xQueueReceive(s_tx_ready, &idx, portMAX_DELAY) != pdTRUE) continue;
+        usb_tx_slot_t *slot = &s_tx_ring[idx];
+        /* Synchronous is fine HERE: this task has nothing else to do, and TinyUSB copies
+         * the frame into its NTB before the call returns, so the slot is free right after.
+         * The timeout is the one thing that used to stall lwIP; now it stalls this task
+         * alone, and the ring above absorbs the burst meanwhile. A frame the host would
+         * not take in time is dropped, counted, and the next one tried. */
+        esp_err_t err = tinyusb_net_send_sync(slot->data, slot->len, NULL, pdMS_TO_TICKS(100));
+        xQueueSend(s_tx_free, &idx, 0);
+        if (err == ESP_OK) { streak = 0; last_ok = xTaskGetTickCount(); continue; }
+        s_tx_refused++;
+        if (++streak == 1 || streak % 500 == 0) {
+            ESP_LOGW(TAG, "usb send %s (streak %u, refused %u)", esp_err_to_name(err),
+                     (unsigned)streak, (unsigned)s_tx_refused);
+        }
+        if (err == ESP_FAIL) vTaskDelay(1);   /* the pool is full: let a block complete before asking again */
+        if (streak < USB_TX_STALL_AFTER || (xTaskGetTickCount() - last_ok) < pdMS_TO_TICKS(USB_TX_STALL_SILENCE_MS)) continue;
+        /* The bench (2026-09-15) found a state in which the S3 runs on — its screen turning,
+         * its console printing — while nothing crosses the USB wire in either direction until
+         * the cable is pulled: the NCM link stalled on a multi-datagram transfer block. A
+         * device that can only be recovered by hand is not a device; so the link is dropped
+         * and re-offered from here, which the host takes as a replug (it re-enumerates and
+         * asks for an address again; the netif on this side keeps its configuration). */
+        {
+            streak = 0;
+            s_tx_reattached++;
+            ESP_LOGE(TAG, "usb link stalled — re-attaching (%u so far)", (unsigned)s_tx_reattached);
+            tud_disconnect();
+            vTaskDelay(pdMS_TO_TICKS(500));
+            tud_connect();
+            /* Everything queued belongs to the link that died: drop it, or the first sends
+             * after the re-attach — before the host has even selected the data interface —
+             * fail again and re-attach again, for ever. Then wait for the host to come back
+             * and give it a moment to bring the interface up before counting anew. */
+            uint8_t stale;
+            while (xQueueReceive(s_tx_ready, &stale, 0) == pdTRUE) xQueueSend(s_tx_free, &stale, 0);
+            for (int i = 0; i < 50 && !tud_mounted(); i++) vTaskDelay(pdMS_TO_TICKS(100));
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            last_ok = xTaskGetTickCount();
+        }
+    }
+}
+
+uint32_t usb_net_tx_refused(void) { return s_tx_refused; }
+
+static esp_err_t usb_tx_start(void)
+{
+    s_tx_ring = heap_caps_calloc(USB_TX_SLOTS, sizeof(usb_tx_slot_t), MALLOC_CAP_SPIRAM);
+    ESP_RETURN_ON_FALSE(s_tx_ring, ESP_ERR_NO_MEM, TAG, "tx ring");
+    s_tx_free = xQueueCreate(USB_TX_SLOTS, sizeof(uint8_t));
+    s_tx_ready = xQueueCreate(USB_TX_SLOTS, sizeof(uint8_t));
+    ESP_RETURN_ON_FALSE(s_tx_free && s_tx_ready, ESP_ERR_NO_MEM, TAG, "tx queues");
+    for (uint8_t i = 0; i < USB_TX_SLOTS; i++) xQueueSend(s_tx_free, &i, 0);
+    ESP_RETURN_ON_FALSE(xTaskCreate(usb_tx_task, "usb_tx", 3072, NULL, USB_TX_TASK_PRIO, NULL) == pdPASS,
+                        ESP_FAIL, TAG, "tx task");
+    return ESP_OK;
 }
 
 /* lwIP is done with a frame we handed it in on_usb_frame. That frame is our copy. */
@@ -291,6 +407,7 @@ esp_err_t usb_net_start(void)
     ESP_RETURN_ON_ERROR(esp_read_mac(net_cfg.mac_addr, ESP_MAC_WIFI_STA), TAG,
                         "cannot read the MAC");
     ESP_RETURN_ON_ERROR(tinyusb_net_init(&net_cfg), TAG, "cannot init the NCM class");
+    ESP_RETURN_ON_ERROR(usb_tx_start(), TAG, "cannot start the USB transmit queue");
 
     /* The netif's own MAC must differ from the one the host sees on its side of the
      * wire, or both ends answer to the same address. Set the locally-administered bit

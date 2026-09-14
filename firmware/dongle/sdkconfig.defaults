@@ -130,4 +130,13 @@ CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
 # which is how a first draft of this change shipped a smaller mailbox than it removed.
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
 CONFIG_TINYUSB_NCM_IN_NTB_BUFFS_COUNT=6
-CONFIG_TINYUSB_NCM_IN_NTB_BUFF_MAX_SIZE=10240
+# 8128, not 10240 — and never more. The S3's DWC2 core counts packets in 7 bits (GHWCFG3), so
+# one bulk transfer may hold at most 127 × 64 = 8128 bytes; TinyUSB 0.21's DCD programs a
+# transfer block whole, and a block past that limit is consumed by the core without a
+# transfer-complete event — the endpoint stays busy for good, nothing crosses the wire in
+# either direction, and only a bus reset from the host (or a replug) recovers it
+# (hathach/tinyusb#3825, open). A 10240-byte ceiling let six 1.4 KB video chunks glue into an
+# 8792-byte block, which is exactly the block the bench (2026-09-15, NCM driver trace) saw
+# queued and never completed, every time the stream passed ~2 Mbit/s. Capped, the same bench
+# carried 6.3 Mbit/s with 99 % of chunks whole. The OUT side's 3200 is under the limit already.
+CONFIG_TINYUSB_NCM_IN_NTB_BUFF_MAX_SIZE=8128
