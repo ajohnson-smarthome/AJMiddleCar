@@ -86,18 +86,21 @@ CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
 #     It enforces that too — httpd_start returns ESP_ERR_INVALID_ARG when
 #     CONFIG_LWIP_MAX_SOCKETS is smaller.
 #   relay_udp.c (:4210): 1 phone-facing socket + UDP_SESS_MAX(4) car-facing sockets = 5
+#   relay_udp.c (:4211): the video instance of the same task, same arithmetic = 5
 #   relay_tcp.c (:80): 1 listener + RELAY_POOL_SIZE(4) slots x 2 sockets each
 #     (phone_sock + car_sock, held whether a slot is SLOT_CONNECTING or SLOT_ACTIVE) = 9
 #
-# Steady-state worst case: 6 + 5 + 9 = 20, so 24 leaves 4 sockets of headroom. The true
-# instantaneous peak is 21: relay_tcp's handle_accept accepts a connection BEFORE it looks for
-# a free slot, so with the pool already full it briefly holds a twenty-first socket between
+# Steady-state worst case: 6 + 5 + 5 + 9 = 25, so 32 leaves 7 sockets of headroom. The true
+# instantaneous peak is 26: relay_tcp's handle_accept accepts a connection BEFORE it looks for
+# a free slot, so with the pool already full it briefly holds a twenty-sixth socket between
 # accept() and the close() that refuses it. That is deliberate — refusing a full pool by
-# closing beats hanging a client on an unaccepted connection — and 24 covers it. Cheap to raise
-# again if any of the three consumers above grows. (Before task-5's review this value was 16,
-# four short of the 20 above and five short of the peak; an earlier version of this comment put
-# that shortfall at seven, which was wrong twice over.)
-CONFIG_LWIP_MAX_SOCKETS=24
+# closing beats hanging a client on an unaccepted connection — and 32 covers it. Cheap to raise
+# again if any of the four consumers above grows. (Before task-5's review this value was 16,
+# four short of the 20 of that day's total and five short of that day's peak; an earlier
+# version of this comment put that shortfall at seven, which was wrong twice over. Before
+# task-8's review it was 24 — right for three consumers, one relay_udp.c instance short of
+# the fourth this task added.)
+CONFIG_LWIP_MAX_SOCKETS=32
 
 # Room for one whole keyframe on the way to the phone. lwIP's per-socket mailbox and
 # TinyUSB's NCM transfer pool are the two places a burst is dropped silently — sized to

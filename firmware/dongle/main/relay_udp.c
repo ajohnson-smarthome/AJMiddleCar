@@ -37,6 +37,11 @@ static const char *TAG = "relay_udp";
  * even on a channel that has gone completely quiet. */
 #define RELAY_LOOP_MS 1000
 
+/* The gate's job is the AVERAGE toward the phone, not the burst: a keyframe (60-100 KB)
+ * must fit inside one window whole, or the gate would refuse half of every one of them at
+ * the top bitrate. The burst itself is absorbed by the widened lwIP/NCM buffers, not here. */
+#define VIDEO_GATE_WINDOW_MS 1000
+
 typedef struct {
     const relay_udp_cfg_t *cfg;
     udp_sess_table_t sess;
@@ -220,7 +225,8 @@ static void handle_car_datagram(relay_state_t *r, int idx, const char *buf, int 
         /* Rate-limited for the same reason as the phone->car send above. */
         static log_throttle_t s_throttle = LOG_THROTTLE_INIT;
         if (log_throttle_ok(&s_throttle, boot_ms())) {
-            ESP_LOGW(TAG, "car->phone send failed on slot %d: errno %d", idx, errno);
+            ESP_LOGW(TAG, "%s: car->phone send failed on slot %d: errno %d", r->cfg->name,
+                     idx, errno);
         }
     } else if (r->cfg->video) {
         relay_stats_video_forwarded(relay_stats_shared(), (uint32_t)n);
@@ -270,9 +276,8 @@ static void relay_task(void *arg)
     }
     /* The control instance's gate is never consulted (handle_car_datagram checks cfg->video
      * first), but initialising it unconditionally means relay_state_t never carries a field
-     * that is sometimes garbage. 100 ms: fine-grained enough that a burst inside one window
-     * cannot look like sustained overrun to the next one. */
-    rate_gate_init(&r.gate, DONGLE_RELAY_VIDEO_MAX_KBPS, 100);
+     * that is sometimes garbage. See VIDEO_GATE_WINDOW_MS for why the window is 1000 ms. */
+    rate_gate_init(&r.gate, DONGLE_RELAY_VIDEO_MAX_KBPS, VIDEO_GATE_WINDOW_MS);
 
     /* Parsed first, before the gateway is even read: open_car_sock compares against it to
      * refuse a network that advertises the dongle itself as its gateway, and that comparison
@@ -370,8 +375,8 @@ static void relay_task(void *arg)
                 int n = recvfrom(r.phone_sock, r.phone_buf, RELAY_BUF_LEN, 0,
                                   (struct sockaddr *)&from, &flen);
                 if (n == RELAY_BUF_LEN) {
-                    ESP_LOGW(TAG, "phone->car datagram over %d bytes, dropped whole",
-                              RELAY_DATAGRAM_MAX);
+                    ESP_LOGW(TAG, "%s: phone->car datagram over %d bytes, dropped whole",
+                              r.cfg->name, RELAY_DATAGRAM_MAX);
                 } else if (n > 0 && from.sin_family == AF_INET) {
                     handle_phone_datagram(&r, r.phone_buf, n, &from);
                 } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -383,8 +388,8 @@ static void relay_task(void *arg)
                 /* Same non-blocking guarantee as the phone-facing read above. */
                 int n = recv(r.car_sock[i], r.car_buf, RELAY_BUF_LEN, 0);
                 if (n == RELAY_BUF_LEN) {
-                    ESP_LOGW(TAG, "car->phone datagram over %d bytes, dropped whole (slot %d)",
-                              RELAY_DATAGRAM_MAX, i);
+                    ESP_LOGW(TAG, "%s: car->phone datagram over %d bytes, dropped whole (slot %d)",
+                              r.cfg->name, RELAY_DATAGRAM_MAX, i);
                 } else if (n > 0) {
                     handle_car_datagram(&r, i, r.car_buf, n);
                 } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
