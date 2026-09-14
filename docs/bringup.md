@@ -43,6 +43,22 @@ component defaults to — answered itself: the radio comes up, so they do.
    was updated over SDIO from the host. `firmware/car/modem/README.md` now carries both procedures.
 3. Already resolved; no action.
 
+### The camera — open, from `docs/superpowers/specs/2026-09-14-fpv-video-design.md`
+
+Five more, none answerable by building — the same desk/bench split as the six above, and
+stage 1 of the video plan exists to close them.
+
+| # | Assumption | Status |
+|---|---|---|
+| 7 | The sensor is **OV5647** (SCCB `0x36`, chip id `0x5647`) — every 5 MP fisheye/night-vision Pi camera module is | **open** — probe SCCB from the console before the first line of camera code runs; OV5640 would answer at `0x3c` instead |
+| 8 | Whether this particular module is **NoIR** (no IR-cut filter — daytime colours skew pink, a property, not a defect) or carries a mechanical IR-cut plus a photoresistor fed from 3.3 V | **open** — inspect the lens board; a photoresistor changes the current budget too |
+| 9 | A snapshot shows the **whole lens's field of view**, not a crop — `esp_video` does not scale on this silicon, and crops only on silicon ≥ v3.0, which this board is not | **open** — check `GET /snapshot` against what the lens actually sees, right side up |
+| 10 | The bus survives 400 kHz SCCB on top of the two PCA9685 pull-ups, the board's own 2.2 kΩ, and a camera ribbon | **open** — the firmware ships conservatively at **100 kHz** (`BOARD_SCCB_HZ`, `board.h`) until the scope says the edges pass at 400 kHz; raise it only then |
+| 11 | Time from `camera_start` to the first usable frame | **open** — budgeted at ≈0.2–0.3 s (sensor lock-in plus AE/AWB convergence), unmeasured on hardware. Bounded regardless: `camera_start` sets `VIDIOC_S_DQBUF_TIMEOUT` to 500 ms, so a sensor that never delivers a frame ends the caller's request instead of hanging its task |
+
+`GET /snapshot` is stage 1's own test rig for #7–#9: the JPEG it returns is the fastest way to
+see the sensor, its filter and its field of view without an app or a wire in the way.
+
 ## Bench sequence
 
 - [x] **Work out the two Type-C ports.** Both lead to the **same chip** — esptool reports the
@@ -88,6 +104,35 @@ component defaults to — answered itself: the radio comes up, so they do.
       oldest untested behaviour in the family.
 - [ ] **OTA.** Cut a release, let the app's launch gate force-update the board, confirm it boots
       and `fw` reports the new build.
+
+### Video — after `docs/superpowers/specs/2026-09-14-fpv-video-design.md`, once its own stage 4 is done
+
+The order follows the plan's own stages: a snapshot first (stage 1), then a stream to a Mac
+sitting directly on the car's own Wi-Fi with `tools/conformance_video.py` (stage 2 — not
+repeated here, see the plan), then through the dongle measuring `relay.video_kbps` /
+`relay.video_dropped` at 1.5 / 2 / 2.5 Mbit/s (stage 3), then the app (stage 4). These eight
+are the closing sweep, run once stage 4 itself passes.
+
+- [ ] **Snapshot.** `video.state:"idle"`; `GET /snapshot` returns a JPEG showing the whole
+      lens's field of view, right side up.
+- [ ] **Motors alongside the camera.** `motors.bus:"ok"` with the camera on the shared I2C
+      bus; calibration still spins the wheels as before. Attach the SCL scope trace here (see
+      Open assumptions, #10, above).
+- [ ] **Stream through the wire, 60 s at 1.5 Mbit/s.** `tools/conformance_video.py`'s measured
+      loss < 0.5%, `relay.video_dropped` does not grow, `link.rx_hz` holds 10, `link.timeouts`
+      does not grow — all with the capture pipeline actually running.
+- [ ] **Stopwatch in frame.** Ordinary frames arrive ≤ 150 ms after capture; after an induced
+      loss (the mock's `--video-loss-pct`) and a real one (a hand on the antenna), the picture
+      returns ≤ 250 ms.
+- [ ] **Leaving the drive screen.** `video.state` returns to `idle` within ≤ 3 s of leaving the
+      screen, and on the same tick for `bye`; backgrounding the app and returning brings the
+      picture back with no restart.
+- [ ] **Firmware update with the drive screen open.** Confirm it cannot start from that screen
+      at all, and that the capture pipeline is stopped before any flash begins.
+- [ ] **Camera disconnected.** The car boots and drives normally with `video.state:"off"`; the
+      drive screen shows the no-picture indicator.
+- [ ] **Stacks and PSRAM.** High-water marks for the encode task, `isp_task`, and both
+      `relay_udp` instances in the log; PSRAM free ≥ 20 MB while `streaming`.
 
 ## Notes from the bench
 

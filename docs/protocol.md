@@ -200,7 +200,207 @@ A failed push does **not** stop the pushing: a full send buffer is a moment, not
 disconnection. The push stops when the session ends — on `bye`, on eviction, or when the
 session idles out.
 
-## `GET /status` — six groups
+## The video channel — UDP `4211`
+
+The FPV stream: the car's camera, encoded on-board and cut into UDP chunks the phone
+reassembles into H.264 access units. A separate port from the real-time channel, for reasons
+that mirror why `4210` exists at all:
+
+- `4210`'s datagram is capped at 96 bytes and parsed by a zero-alloc parser that is the
+  firmware's highest-priority job; a video-sized datagram landing there would break both the
+  cap and the priority.
+- On the dongle, each port runs its own `relay_udp` instance and its own task — video can be
+  paced and dropped without touching the code that carries `drive`.
+- On the phone it is a different socket and a different module; `RTFrame` and the control path
+  it feeds are untouched.
+
+The rule the whole design answers to: **video must never slow the wheel.** `drive` travels
+phone → dongle → car and shares no queue with video at all. The reverse direction —
+`hello_ack`, telemetry, HTTP replies, and now video — does share real resources: one lwIP
+thread and one USB NTB pool on the dongle (both first-in-first-out by the moment each
+`sendto` happened), and one 20-slot SDIO queue on the car. On every one of those, video is
+what gets rationed: the dongle's video relay is admission-gated toward the phone (below), and
+the car's own sender doses its chunks one per millisecond on a timer rather than bursting a
+keyframe out in one shot. None of that is a substitute for measuring the actual ceiling on the
+bench — see `docs/bringup.md`.
+
+### Wire format — 12-byte header, then the chunk
+
+One compressed frame is cut into chunks of at most `chunk_bytes` (**1400**) bytes, one chunk
+per datagram: a 12-byte header, network byte order, followed by the frame's bytes as they come
+out of the encoder (Annex B) — the only binary message in this project, and the one place the
+v2 rule "`proto` first" is spelled as a single byte rather than a JSON key.
+
+| Offset | Size | Field | Meaning |
+|---|---|---|---|
+| 0 | u8 | `proto` | this wire format's own version, always **1** (`video.wire_proto`) — a separate number from the JSON envelope's `proto:2` above; anything else and the datagram is dropped |
+| 1 | u8 | `flags` | bit 0 set = keyframe (carries SPS/PPS ahead of the frame data); every other bit must be zero |
+| 2 | u8 | `stream` | +1 at every stream start; a receiver that sees it change discards whatever it was assembling and waits for a keyframe |
+| 3 | u8 | reserved | always `0`; a receiver that sees it set drops the datagram |
+| 4 | u16 | `frame` | the encoded-frame counter, from `0` at each stream start, wrapping modulo 2¹⁶ |
+| 6 | u8 | `chunk` | 0-based index of this datagram within the frame |
+| 7 | u8 | `count` | chunks in the whole frame, `1..255` |
+| 8 | u32 | `captured_ms` | the car's own clock at capture — diagnostic and conformance only; the app has no clock shared with the car, so this is not a latency measurement |
+
+**Length invariant:** every chunk but the last is exactly `chunk_bytes` bytes of payload; the
+last is `1..chunk_bytes`. A receiver that does not check this assembles a frame of the wrong
+length out of a corrupt datagram, so all three implementations enforce it strictly, and the
+car obeys it on the way out just as strictly. 1400 was sized like the control datagram's own
+constants, from what actually fits: `1400 + 12 header + 8 UDP + 20 IP + 14 Ethernet = 1454`,
+under 1500 on every hop this project crosses — Wi-Fi, the P4↔C6 SDIO link (1536), and the
+dongle's USB NCM framing. A frame that would need more than 255 chunks (`>357,000` bytes) is
+never sent at all — the encoder counts it as an overflow, the same as any other one, and
+`video.dropped` rises.
+
+### Receiver rules
+
+Three implementations read this header — `video_wire.h` on the car, `VideoWire.swift` on the
+phone, `video_wire.py` in the mock and the conformance tool — and must agree on every one of
+the following, not only on the bytes. The vectors in `video.vectors`
+(`contract/car-api.json`) pin the header codec across all three; these nine rules, exercised
+in `test_video_wire.c` and mirrored in the other two, pin the verdicts the vectors alone
+cannot express — ordering, loss, duplicates, and the length invariant.
+
+1. A header that fails to parse (wrong `proto`, a set reserved byte, an unknown flag bit,
+   `count == 0`, or `chunk >= count`) is rejected; nothing about the receiver's state changes.
+2. Payload length: exactly `chunk_bytes` for every chunk but the last, `1..chunk_bytes` for
+   the last. Anything else is rejected.
+3. A `stream` the receiver has not seen before — including the very first datagram it ever
+   gets — resets it: no frame in progress, no "last" frame remembered, waiting for a keyframe.
+4. A frame is already in progress and a different `frame` arrives: older (compared modulo
+   2¹⁶, RFC 1982) is ignored — one out-of-order datagram must not cost two frames; newer
+   abandons the frame in progress (`dropped` counts up, the receiver goes back to waiting for
+   a keyframe) and begins the new one — this call reports a loss, unless the new frame's very
+   first chunk also happens to complete it as a keyframe, in which case it reports the frame.
+5. No frame in progress, and `frame` is not newer than the last one finished or abandoned:
+   ignored.
+6. `count` or `flags` disagrees with the frame already in progress: that frame is abandoned,
+   reported as a loss.
+7. A chunk index already received is a duplicate: ignored, and does not count toward
+   completion — this is a bitset, not a counter, so a duplicate cannot fake a finished frame.
+8. Every chunk index is in: the frame is assembled. A keyframe clears "waiting for a
+   keyframe"; if the receiver is still waiting, the frame is complete but withheld — nothing
+   decodable has arrived since the last loss; otherwise it is delivered, `count − 1` full
+   chunks plus the last chunk's own length.
+9. A frame whose `count × chunk_bytes` would not fit the receiver's buffer is abandoned the
+   moment it is recognised, reported as a loss — the one case none of the three
+   implementations can wait out.
+
+After any loss, every following frame is withheld, not merely glitched, until the next
+keyframe: the phone's decoder has no reference frame to paper over the gap with and would show
+corruption rather than say so, so the receiver takes that choice away from it — and a withheld
+frame is exactly what asks for a keyframe (below).
+
+### Subscription — `view`
+
+The app subscribes with a datagram of the same shape as `hello`, on the video port:
+
+```json
+{"proto":2,"type":"view","session":"7f3a91c2"}
+{"proto":2,"type":"view","session":"7f3a91c2","key":true}
+```
+
+`view` carries no `seq` — like `hello`, it is a repeat-until-effective message, not a stream
+position, and it is parsed by the same `control_proto` (`CT_VIEW`, read from `type` exactly as
+`hello`/`drive`/`bye` are). A stray `view` landing on `4210` is harmless: the classifier there
+drops anything type-less that is not `hello`.
+
+The car accepts a `view` only when its `session` matches the *real-time* session's current
+owner — `rt_link` publishes that sid for the video channel to read. **sid is the only check.**
+Through the dongle's relay a `view` arrives from the relay's own address and its video
+socket's source port, not from wherever `drive` is coming from, so comparing addresses the way
+`drive` effectively can is not available here — recorded as a deliberate choice, not an
+oversight: whoever knows the sid gets the stream, no worse than `drive` already is on the same
+network and the same password, and a change of address on a live subscription is logged.
+
+The app sends its first `view` immediately after `hello_ack`, again on every reconnect, and
+then every `subscribe_ms` (**1000 ms**) for as long as the drive screen is open.
+**`subscribe_timeout_ms` (3000 ms)** without one and the stream stops — the encoder closes,
+the camera pipeline stops, `video.state` falls back to `idle`. The same happens the instant
+the real-time session itself ends (`bye`, eviction, idling out): one clock, two triggers.
+Leaving the drive screen is simply not sending `view` any more; the stream dies on its own
+within three seconds, which is also why firmware updates do not need to know the video channel
+exists at all — the pipeline is stopped by the time one could reach it.
+
+`key:true` on an accepted `view` asks for an out-of-order keyframe (below); the app repeats it
+on every following `view` until a keyframe actually arrives, since the ask itself can be lost
+just like anything else on this channel. The chunks that follow leave from the exact socket
+that accepted the `view` — the car's video socket is bound, not connected, and answers
+whoever most recently sent it a valid one; the dongle's own video-relay socket is
+`connect()`-ed to `car:4211`, so a chunk arriving there from anywhere else is dropped rather
+than forwarded.
+
+### Keyframes
+
+A planned keyframe goes out every `keyframe_s` (**3 s**) — for a viewer subscribing mid-stream,
+not for recovery: waiting up to three seconds after an ordinary loss is exactly the freeze
+this design exists to avoid. Recovery is on request: a receiver that abandons a frame asks for
+one with `key:true`, and the car forces one with `esp_h264_enc_force_idr()`, rate-limited to
+at most once every `idr_min_ms` (**250 ms**) so a burst of loss events cannot turn into a burst
+of oversized frames. Every keyframe carries its own SPS/PPS, so a receiver starting mid-stream
+— or recovering from a loss — never needs an earlier keyframe to make sense of it.
+
+### `GET /snapshot`
+
+A bench route, not part of the app's flow: one JPEG of whatever the camera currently sees,
+`image/jpeg`, with no video subscription involved.
+
+- **`streaming`** — `409 busy`, `"stream running"`. On this silicon the hardware JPEG block
+  cannot take the stream's YUV420 buffers, and re-encoding a frame through software for a
+  debug endpoint is not worth it. A request that loses the race against a stream that is *just
+  starting* gets the same `409`, without touching the stream that won.
+- **`off`** — `500 internal`, `"camera off"`. No sensor answered at boot; there is no pipeline
+  to start.
+- **`idle`** — the pipeline starts for this request alone (in UYVY — the JPEG block cannot
+  take YUV420 either), a handful of frames are discarded while AE/AWB settle, one is encoded,
+  and the pipeline stops again — all inside the one request, in well under a second.
+
+### Status and telemetry — the `video` group
+
+`video` is the seventh group in `GET /status`, appended after `system`, and the fourth group
+telemetry pushes (`link`, `motors`, `system`, `video`) — the same printer serves both, so it
+cannot drift between them:
+
+```json
+"video": {"state":"idle","fps":0,"kbps":0,"dropped":0}
+```
+
+- **`state`** — `off` (no sensor answered at boot; the car drives without one — there is no
+  runtime retry, so a physically reconnected camera needs a reboot), `idle` (sensor in
+  standby, nobody watching — CSI, ISP and the encoder are all stopped), or `streaming`
+  (encoding for the driver).
+- **`fps`** — frames encoded in the last second.
+- **`kbps`** — kbit sent in the last second.
+- **`dropped`** — frames not sent since boot: the encoder's output overflowed, or a frame
+  would have needed more than 255 chunks. Rising while `streaming` means the bitrate or the
+  encoder's QP corridor needs to come down, not that anything is broken.
+
+### Configuration — the `video` domain
+
+One field, generated into the domain table below along with the other five — `bitrate_kbps`,
+`500..3000`, default `1500`. It is read once, at the next stream start: `video_link` asks for
+it when it opens the encoder, not while one is already running, so a change lands on the next
+viewer rather than mid-frame. `fps` is not a setting: it is a constant of the contract, because
+only a few whole divisors of the sensor's own frame rate make sense, and the firmware is built
+against the one it picked (`sensor_fps` 45 ÷ 3 = `fps` 15), not a stored value.
+
+### Through the dongle — `relay.video_*`
+
+On a device, chunks travel through the dongle's own second `relay_udp` instance, not directly:
+`contract/dongle-api.json` adds `relay.video_port` (**4211**, forwarded exactly like
+`relay.rt_port` — the dongle parses none of it) and `relay.video_max_kbps` (**2500**), the
+ceiling its admission gate enforces toward the phone. The gate's window is **1000 ms**: a
+keyframe (60–100 KB) has to fit inside one window whole, or the gate would refuse half of
+every one of them at the top bitrate. The gate caps the *average*; the burst itself is
+absorbed by wider buffers on the USB side, not by the window. A datagram the gate refuses is
+dropped and counted, never queued.
+
+`GET /status` on the dongle reports three more fields in its `relay` group, all **nullable**
+so a dongle running an older build still parses: `video_sessions` (0..4), `video_kbps` (toward
+the phone, one decimal), `video_dropped` (chunks the gate discarded since boot). `null` here
+means the adapter predates video, not that nothing is happening.
+
+## `GET /status` — seven groups
 
 Still served — for humans, scripts, and the radio report; the app's identity test is the
 `hello_ack` reply, and liveness afterwards comes from telemetry freshness, not from polling
@@ -213,13 +413,15 @@ this.
  "motors": {"bus":"ok","calibrated":true,"owner":"remote"},
  "radio":  {"fw":"3.0.6","expected":"3.0.6","state":"ok"},
  "storage":{"reset_at_boot":false},
- "system": {"uptime_s":812,"free_heap":200000}}
+ "system": {"uptime_s":812,"free_heap":200000},
+ "video":  {"state":"idle","fps":0,"kbps":0,"dropped":0}}
 ```
 
-`device`, `link`, `motors` and `system` are the same groups `hello_ack` and telemetry carry —
-one printer, several call sites, so a rename cannot drift between them. The one difference to
-know: here `link.rx_hz` is a poll-to-poll window (`0` on the first poll after boot, and after a
-gap of 10 s or more), where the push's is continuous.
+`device`, `link`, `motors` and `system` are the same groups `hello_ack` and telemetry carry
+between them, and `video` is the same group telemetry carries too — one printer per group,
+several call sites, so a rename cannot drift between them. The one difference to know: here
+`link.rx_hz` is a poll-to-poll window (`0` on the first poll after boot, and after a gap of
+10 s or more), where the push's is continuous.
 
 `radio` reports the ESP32-C6 co-processor that provides WiFi. `radio.state` is `ok` when the
 C6's firmware equals `radio.expected` (the version this build was made for, derived from the
@@ -255,7 +457,8 @@ persists to NVS immediately, and a POST of unchanged values does not rewrite fla
  "trim":     {"balance_pct":0},
  "recovery": {"enabled":true,"window_ms":5000},
  "wheel":    {"diameter_mm":65,"encoder_ppr":11,"gear_ratio":9.0,"quadrature":4},
- "chassis":  {"track_mm":130,"wheelbase_mm":210}}
+ "chassis":  {"track_mm":130,"wheelbase_mm":210},
+ "video":    {"bitrate_kbps":1500}}
 ```
 
 <!-- generated:endpoints -->

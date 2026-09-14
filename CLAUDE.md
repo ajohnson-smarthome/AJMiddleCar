@@ -14,6 +14,7 @@ Both are alive; they share a protocol and a design language, and their code dive
 | Radio | **ESP32-C6 on the same board**, over SDIO. The P4 has no radio of its own. |
 | PWM driver | **2× PCA9685** on the header's I2C (SDA `GPIO7` pin 3, SCL `GPIO8` pin 5) — `0x40` front axle, `0x60` rear |
 | Motor driver | 4× BTS7960 full H-bridge |
+| Camera | MIPI-CSI, 2-lane, connector `J4`; SCCB shares the header's I2C 0 with both PCA9685 boards (`i2c_bus.c` owns the bus, `BOARD_SCCB_HZ` on the camera, 400 kHz on the PWM boards); sensor assumed **OV5647** (Aitewin 5MP night-vision fisheye) — unconfirmed until the SCCB probe in `docs/bringup.md`; no reset/pwdn pin wired |
 | Framework | ESP-IDF **6.0.2** at `~/esp/esp-idf-v6.0.2` |
 
 **The C6 is a modem, not a brain.** It runs Espressif's `esp_hosted` slave image — a vendor
@@ -66,17 +67,20 @@ because it knows anything about the car — it knows neither the motors nor the 
 ## The contract
 
 `contract/car-api.json` is the source of truth for everything both sides agree on: the
-protocol version, the real-time channel's constants, the six status/telemetry groups
-(`device`, `link`, `motors`, `radio`, `storage`, `system`), the state words each group's enum
-fields take (`motors.owner`, `motors.bus`, `radio.state`), the five config domains with their
-ranges and defaults, and the car's error codes. `tools/gen_contract.py` emits all four
-expressions of it — the firmware's descriptor table (`main/cfg_table.inc`, plus the key,
-type-word and error-code macros the printers in `telemetry.h`, `device_json.h`, `status_api.c`
-and `calib_api.c` build their format strings from), the app's Swift structs
-(`app/AJMiddleCar/Generated/CarAPI.swift`, which now includes the generated `Telemetry` and
-`CarStatus` structs alongside the config ones), the mock's table and validator
-(`tools/mock_car/generated.py`), and the endpoint table inside `docs/protocol.md`. The dongle's
-side of the same idea is `contract/dongle-api.json` and `tools/gen_dongle.py`.
+protocol version, the real-time channel's constants, the video channel's own section (port,
+the 12-byte wire header, timing, the header vectors all three receivers are tested against),
+the seven status/telemetry groups (`device`, `link`, `motors`, `radio`, `storage`, `system`,
+`video`), the state words each group's enum fields take (`motors.owner`, `motors.bus`,
+`radio.state`, `video.state`), the six config domains with their ranges and defaults, and the
+car's error codes. `tools/gen_contract.py` emits all four expressions of it — the firmware's
+descriptor table (`main/cfg_table.inc`, plus the key, type-word and error-code macros the
+printers in `telemetry.h`, `device_json.h`, `status_api.c` and `calib_api.c` build their
+format strings from), the app's Swift structs (`app/AJMiddleCar/Generated/CarAPI.swift`, which
+now includes the generated `Telemetry` and `CarStatus` structs alongside the config ones), the
+mock's table and validator (`tools/mock_car/generated.py`), and the endpoint table inside
+`docs/protocol.md`. The dongle's side of the same idea is `contract/dongle-api.json` and
+`tools/gen_dongle.py`, now carrying `relay.video_port`, `relay.video_max_kbps` and the three
+nullable `relay.video_*` status fields alongside the real-time ones.
 
 Never hand-edit a generated file. Change the schema and re-run the generator;
 `tools/check_contract.sh` fails a tree where the two disagree, and `tools/test-all.sh`
@@ -97,8 +101,9 @@ The pure modules have **zero ESP-IDF dependencies** and are host-tested with pla
   Shoot-through-safe by construction.
 - `control_proto.{c,h}` — *pure*, zero-alloc parser for the 10 Hz control frame. Deliberately
   not cJSON: ten parses a second is ten mallocs a second on the control path. Datagrams are
-  typed — `hello`, `drive`, `bye` — read from the wire's `type` key, not guessed from which
-  other keys showed up.
+  typed — `hello`, `drive`, `bye`, `view` — read from the wire's `type` key, not guessed from
+  which other keys showed up. `view` (the video channel's subscription, below) is a `hello`
+  shape with an optional `key` flag, so it costs this parser nothing new.
 - `car.{c,h}` — clamps, mixes, plans, and offers the duties to the actuator arbiter. Holds the
   mutex around the calibration read, with a bounded 200 ms wait so a stuck holder cannot wedge
   the watchdog.
@@ -108,12 +113,53 @@ The pure modules have **zero ESP-IDF dependencies** and are host-tested with pla
   `recover`, `ota`, `safe`) and the 50 Hz task that is the **sole writer** to the PCA9685.
 - `rt_link.{c,h}` — the UDP real-time channel: session ownership, the sequence gate, the
   control watchdog (300 ms without a command calls `recovery_on_link_lost()`), and the 5 Hz
-  telemetry push. `watchdog.h` keeps only the pure staleness predicate.
+  telemetry push. `watchdog.h` keeps only the pure staleness predicate. `rt_link_owner_sid()`
+  hands the session owner's sid to the video channel, copied under a critical section — the
+  sid is 16 bytes the rt task rewrites on every adoption, and video's reader runs three
+  priorities below it.
 - `recovery.{c,h}` — breadcrumb ring buffer; on link loss a task replays it reversed and negated
   to retrace back into range, aborting the instant a frame arrives.
+- `i2c_bus.{c,h}` — owns the one I2C master on the header's SDA/SCL (`GPIO7`/`GPIO8`): created
+  once at boot, and every device on the wire adds itself to this handle rather than opening a
+  bus of its own, since the driver refuses a second master on one port. Speed is a per-device
+  property (`scl_speed_hz`), so the PWM boards stay at 400 kHz while the camera's SCCB runs
+  `BOARD_SCCB_HZ` on the same wire. `pca9685.c` used to create the bus itself; it now asks this
+  module for the handle, same as the camera does.
+- `camera.{c,h}` — the sensor and the capture pipeline, behind `esp_video` **2.4.1**,
+  `esp_cam_sensor` **2.4.0** and `esp_ipa` **2.3.0** (its AE/AWB, a closed prebuilt library —
+  pinned, never patched, like the radio's image). `esp_video` 2.4.1's own manifest wants
+  `esp_cam_sensor` 2.4.\* and `esp_h264` 1.3.\*, not the newer specs an earlier draft of the
+  design assumed. `camera_init` detects the sensor once at boot (no answer is `off`, not a
+  boot failure — the car still drives); the pipeline itself runs only between `camera_start`
+  and `camera_stop`, which is what lets a firmware update ignore the camera's existence
+  entirely. `camera_acquire` is bounded, not blocking: `camera_start` sets
+  `VIDIOC_S_DQBUF_TIMEOUT` to 500 ms, because `esp_video`'s VFS has no `select()` — a sensor
+  that stops delivering frames ends the caller's request instead of wedging its task.
+- `video_enc.{c,h}` — the hardware H.264 encoder, `esp_h264` **1.3.8**, driven directly rather
+  than through its V4L2 device: `force_idr()` — the whole recovery story — is not reachable
+  through `/dev/video11`. A wide QP corridor, not `esp_video`'s narrow default, is what makes
+  `bitrate_kbps` mean anything.
+- `video_wire.h` — *pure*: the 12-byte wire header, chunking, and the nine reassembly rules in
+  `docs/protocol.md`'s video section — the same vectors and the same verdicts as
+  `VideoWire.swift` and `video_wire.py`. The receiver is a bitset over chunk indices, never a
+  counter, so a duplicate cannot fake a finished frame.
+- `video_sub.{c,h}` — *pure*: the subscription as arithmetic — who may watch (the real-time
+  session's owner, by sid), for how long after the last `view`, and how often `key:true` may
+  force an IDR.
+- `video_link.{c,h}` — the video channel: one UDP socket on `4211`, three tasks below the
+  actuator — control (the socket's receive side and the subscription), encode (camera →
+  `video_enc` → a two-slot ring, handed off with a release/acquire store rather than a lock),
+  and a sender that drains the ring one chunk per millisecond off an `esp_timer`, so a keyframe
+  leaves as a trickle rather than a burst. Nothing here touches the motors.
+- `video_cfg.{c,h}` — the `video` domain of `/config`: the encoder's target bitrate, read once
+  at stream start rather than mid-frame.
+- `snapshot_api.c` — `GET /snapshot`: one JPEG of whatever the camera sees, for the bench, no
+  app or subscription involved. `409` while the stream owns the pipeline (this silicon's
+  hardware JPEG block cannot take the stream's YUV420 buffers), `500` when there is no sensor
+  to ask.
 - `pca9685`, `wifi_ap`, `http_server`, `telemetry`, `calibration`, `wheel`, `dims`,
   `trim`, `cfg_json` and the four `*_api` modules — driver, transport, config, persistence.
-  `cfg_api.c` serves one route, `/config`, for all five domains — GET walks every domain,
+  `cfg_api.c` serves one route, `/config`, for all six domains — GET walks every domain,
   POST validates whatever subset it was sent before applying any of it. `calib_api.c` speaks
   corners by name (`front_left`, `front_right`, `rear_left`, `rear_right`) and `inverted`
   rather than array position and sign; `calibration.c` itself, and what NVS stores, are
@@ -121,6 +167,17 @@ The pure modules have **zero ESP-IDF dependencies** and are host-tested with pla
 
 All configuration persists in NVS as **one JSON string per domain**, with a dirty check so an
 unchanged POST does not rewrite flash.
+
+`esp_video`'s `isp_task` outranks everything above — see Gotchas below.
+
+On the dongle (`firmware/dongle/main/`), `relay_udp.c` is the same ~450 lines run **twice**
+rather than copied: port, task name, priority and counters are parameters
+(`relay_udp_cfg_t`), so the real-time channel (`4210`, priority 5) and video (`4211`, priority
+4) share one implementation. Video's instance is admitted toward the phone by
+`rate_gate.{c,h}` — *pure*, host-tested: bytes per fixed window (**1000 ms**), charged against
+`relay.video_max_kbps`; a datagram over budget is refused and counted
+(`relay.video_dropped`) here, where it is visible, rather than silently in `esp_tinyusb` when
+the NTB pool fills up. The real-time instance is never throttled.
 
 ## Build
 
@@ -138,8 +195,12 @@ The USB port number changes after every reset — re-check with `ls /dev/cu.usbm
 tools/test-all.sh
 ```
 
-That covers the contract (schema, generator, drift), the firmware's pure modules and the
-app's pure Swift. `make -C firmware/car/core/test run` still works on its own for the C half.
+That covers the contract (schema, generator, drift), the firmware's pure modules, the app's
+pure Swift, and — against a mock it starts and stops itself — the REST and real-time
+conformance sweeps plus `tools/conformance_video.py`, which subscribes on the video port,
+reassembles chunks by the same rules as the car and the app, and checks them against the
+contract's `video.vectors`. `make -C firmware/car/core/test run` still works on its own for
+the C half.
 
 **Radio image** (rare): `firmware/car/modem/flash-radio.sh` builds it; `firmware/car/modem/README.md` covers both
 ways to get it onto the C6 — over SDIO from the host, or over its UART header.
@@ -160,11 +221,22 @@ cd tools/mock_car && python3 -m venv .venv && .venv/bin/pip install -r requireme
 nohup .venv/bin/python -u mock_car.py >/tmp/mock.log 2>&1 &
 ```
 
+The mock's video port loops `tools/mock_car/video.py` over `tools/mock_car/sample.h264`
+(Annex B, checked in, ≤400 KB) — `--video-loss-pct`, `--video-reorder-pct` and
+`--video-dup-pct` impair it the same way `--loss-pct` impairs the real-time channel, and
+`tools/test-all.sh` runs `tools/conformance_video.py` against it at 0.3% loss.
+
 `CarHost` is the single source of the address: `127.0.0.1:8080` in the simulator, the dongle's
-`192.168.7.1` on a device (REST `:80` and UDP `:4210` relayed to the car unchanged; the dongle's
-own API on `:8080`). There is no direct path from a device to the car and no argument that
-opens one — the bench escape hatch was retired 2026-09-13. `MOCK_DEVICE=esp32-car` makes the
-mock impersonate the other car, which is how the wrong-car screen is exercised.
+`192.168.7.1` on a device (REST `:80`, UDP `:4210` and UDP `:4211` relayed to the car unchanged;
+the dongle's own API on `:8080`). There is no direct path from a device to the car and no
+argument that opens one — the bench escape hatch was retired 2026-09-13. `MOCK_DEVICE=esp32-car`
+makes the mock impersonate the other car, which is how the wrong-car screen is exercised.
+
+`CarLink.video` (a `VideoLink`) and `VideoView` add the FPV picture to the drive screen: a
+`view` subscription over `CarHost.videoPort`, tied to the same session `CarLink` opens, feeding
+an `AVSampleBufferDisplayLayer` frame by frame. Reassembly runs on `VideoLink`'s own queue, and
+`onFrame` is confined there — never called from the main actor, which only reads the published
+counters back across that same queue.
 
 Pure Swift modules are host-tested with `swiftc` directly — no XCTest runtime needed.
 
@@ -196,6 +268,14 @@ Pure Swift modules are host-tested with `swiftc` directly — no XCTest runtime 
 10. **The radio's version is load-bearing, not cosmetic.** A mismatch costs five seconds of every
     boot (a timed-out RPC), disables SDIO aggregation, and leaves `radio.state` at `mismatch`
     instead of `ok`.
+11. **`esp_video`'s `isp_task` runs at priority 11 — above the actuator (5) and `rt_link` (6),
+    above everything of ours.** Fixed in the component, not a knob in `board.h`. It is created
+    once at boot (`camera_init`) and parks on an empty statistics queue between streams rather
+    than being torn down, so it only competes for CPU while `streaming`; each wake is AE/AWB
+    plus one SCCB write, short by design, but whether it is short enough to stay invisible in
+    `link.rx_hz` and actuator jitter **with the pipeline actually running is an open bench
+    question**, not yet answered (`docs/bringup.md`). If it measures otherwise, the fix is an
+    `esp_video` override with a patched priority, not a car-side workaround.
 
 ## Status
 

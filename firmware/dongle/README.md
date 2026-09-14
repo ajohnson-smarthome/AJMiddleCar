@@ -262,6 +262,41 @@ Dongle error codes: `bad_json`, `missing_field`, `unknown_field`, `wrong_type`, 
 
 `POST /ota` is unchanged in shape: an image in, `{"proto":1,"ok":true}` out, before the reboot.
 
+## The video relay — UDP `4211`
+
+A second, independent instance of the same relay. `relay_udp.c` (~450 lines) is not copied for
+the video port — port, task name, priority and counters are parameters
+(`relay_udp_cfg_t`) — so the real-time relay (`4210`, task priority 5) and the video relay
+(`4211`, priority 4) are one implementation running twice. Same session model as the real-time
+channel (the phone's address + source port, matched to this relay's own `connect()`-ed socket
+to `car:4211`; a `view` once a second keeps the session alive the same way `drive` does), same
+`SO_BINDTODEVICE` to the USB interface, same self-gateway guard, same 1500-byte datagram cap.
+`api_guard` does not apply — this is not HTTP.
+
+**Wider buffers, sized for a whole keyframe, not a whole datagram.** A keyframe (60–100 KB) has
+to cross the USB link as roughly a dozen back-to-back 1400-byte chunks, not one; the real-time
+channel's defaults were sized for isolated small datagrams and would drop most of it.
+`sdkconfig.defaults` widens three numbers for this: `CONFIG_LWIP_UDP_RECVMBOX_SIZE` 6 → **64**
+(datagrams queued per UDP socket) and the USB-bound NTB pool,
+`CONFIG_TINYUSB_NCM_IN_NTB_BUFF_MAX_SIZE` 3200 → **10240** bytes times
+`CONFIG_TINYUSB_NCM_IN_NTB_BUFFS_COUNT` 3 → **6** buffers. Together the queue toward the phone
+grows from roughly a dozen of our datagrams to roughly 100 KB — for perhaps 60 KB of extra
+RAM, nothing on a board with PSRAM.
+
+**Admission, toward the phone only.** The video relay charges every chunk it forwards against
+`relay.video_max_kbps` (**2500**, `contract/dongle-api.json`) over a **1000 ms** window
+(`rate_gate.c`, pure and host-tested) — not the 100 ms a first draft of the design assumed: a
+keyframe has to fit inside one window whole, or the gate would refuse half of every one of
+them at the top bitrate. The gate caps the *average*; the burst itself is what the wider
+buffers above absorb, not the window. A chunk the gate refuses is dropped and counted
+(`relay.video_dropped`) here, on purpose, rather than failing silently inside `esp_tinyusb`
+when the NTB pool is full — where a refused datagram could as easily have been a telemetry
+push. The real-time relay is never throttled.
+
+`GET /status`'s `relay` group reports three more fields for this — `video_sessions`,
+`video_kbps`, `video_dropped` — all **nullable**, so a dongle running an older build still
+parses on a phone that has been updated ahead of it.
+
 ## Build
 
 ```bash

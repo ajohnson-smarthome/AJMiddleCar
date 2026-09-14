@@ -88,6 +88,17 @@ MIPI-CSI/DSI — none of which is used yet, all of which is why this board.
 - **Two cars, one bench** — both cars serve the same API at the same address, so each pult
   checks the car's device identifier and refuses to drive the other one
 
+**FPV**
+- **A picture under the sticks** — the P4's MIPI-CSI camera, hardware H.264 at 1280×960/15
+  fps, chunked onto its own UDP port (`4211`) so a lost or slow video datagram never competes
+  with a `drive` frame for a queue, on the wire or in the dongle's relay
+- **A keyframe on demand** — planned ones every 3 s for a late subscriber, and an immediate one
+  the instant the phone notices a loss, so a dropped packet costs a quarter-second flicker
+  instead of a freeze until the next one
+- **`GET /snapshot`** — one JPEG of whatever the camera currently sees, with no app and no
+  video subscription involved; answers `409` while the stream owns the pipeline and `500` when
+  there is no sensor to ask
+
 **The dongle's panel**
 - Fifteen screens on a 128×64 OLED, one template: a word in 10×20, a rule that is a dashed
   line, a level gauge, a 46-second signal history or the page markers, and up to two rows in
@@ -101,9 +112,10 @@ MIPI-CSI/DSI — none of which is used yet, all of which is why this board.
 
 **Engineering**
 - **The contract is a file** — `contract/car-api.json` is the source of truth for the protocol
-  version, the real-time constants and the five config domains; `tools/gen_contract.py` emits
-  the firmware's descriptor table, the app's Swift structs, the mock's validator and the endpoint
-  table in `docs/protocol.md`, and the tree fails if any of them drift
+  version, the real-time constants, the video channel's own constants and the six config
+  domains; `tools/gen_contract.py` emits the firmware's descriptor table, the app's Swift
+  structs, the mock's validator and the endpoint table in `docs/protocol.md`, and the tree
+  fails if any of them drift
 - **JSON everywhere** — every wire format and every stored setting, one JSON string per domain
   in the car's NVS with a dirty check so unchanged saves do not touch flash. The dongle stores
   nothing: it is told the car's network by the app on every launch and forgets it on reboot
