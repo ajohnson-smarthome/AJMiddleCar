@@ -211,6 +211,17 @@ void app_main(void) {
     dims_init();                           // load car dimensions (NVS or defaults)
     ESP_ERROR_CHECK(video_cfg_init());     // load the encoder's target bitrate (NVS or default)
     ESP_ERROR_CHECK(wifi_ap_start(CAR_AP_SSID, CAR_AP_PASS));
+    /* BEFORE mark-valid, on purpose. camera_init is the one boot-time call into a vendor
+       component this project cannot audit — esp_video's sensor probe and ISP bring-up on a
+       silicon revision it was not necessarily tested on. Every failure it can see is handled
+       (no sensor is `off`, not an error, and the car drives), but a panic inside the component
+       on the first boot of a new image must roll back to the previous one, not boot-loop a car
+       with no cable attached. The call is short — an SCCB probe and a task, no frame buffers —
+       so the window in which a stray reset would revert a good image is milliseconds, nothing
+       like the 5 s radio RPC that put the mark where it is. */
+    esp_err_t err;
+    if ((err = camera_init()) != ESP_OK)
+        ESP_LOGE(TAG, "camera_init failed: %s — no camera this boot", esp_err_to_name(err));
     /* OTA rollback: the property rollback protects is "the car is reachable" — the AP is
        up, so mark the image valid NOW, before the API registrations and before
        status_api_start's radio-version RPC (up to 5 s against a mismatched slave). One
@@ -234,11 +245,7 @@ void app_main(void) {
     telemetry_start();                     // 1 Hz RSSI sampler, off the control task
     /* Post-mark-valid, so nothing from here on may panic — rollback is already waived, and
        a panic is a permanent boot-loop on a car with no cable. Log loudly and keep what
-       runs. camera_init answers ESP_OK on every path today ("off" is a state, not a
-       failure); the idiom is here so the next edit to it cannot turn into a panic. */
-    esp_err_t err;
-    if ((err = camera_init()) != ESP_OK)
-        ESP_LOGE(TAG, "camera_init failed: %s — no camera this boot", esp_err_to_name(err));
+       runs. */
     recovery_init();                       // breadcrumb buffer; the watchdog trips into it
     /* Driving comes up before the API: rt_link carries control, the watchdog and
        telemetry, and none of it depends on the HTTP server being there. */
