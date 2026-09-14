@@ -134,6 +134,10 @@ enum L {
     static func driveWdtTrips(_ n: Int) -> String { s("drive.wdtTrips", n) }
     static var driveBusFail: String { s("drive.busFail") }
     static func driveCtlOther(_ owner: String) -> String { s("drive.ctlOther", owner) }
+    static var videoNoPicture: String { s("video.noPicture") }
+    static var videoStateOff: String { s("video.stateOff") }
+    static var videoStateIdle: String { s("video.stateIdle") }
+    static func videoStats(fps: Int, lost: Int) -> String { s("video.stats", fps, lost) }
     /// The actuator owner, by the generated vocabulary — an unknown value is shown as the car
     /// said it rather than silently dropped.
     static func ctlOwner(_ raw: String) -> String {

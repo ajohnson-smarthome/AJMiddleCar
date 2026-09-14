@@ -3,6 +3,9 @@ import SwiftUI
 struct DriveView: View {
     @ObservedObject var link: CarLink
     @ObservedObject var intent: ControlIntent
+    /// `link.video` observed in its own right: `hasPicture` and `fps` change without the
+    /// link's own published state moving, and the screen must redraw on them.
+    @ObservedObject private var video: VideoLink
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("scheme") private var schemeRaw = Scheme.arcade.rawValue
 
@@ -23,6 +26,7 @@ struct DriveView: View {
     init(link: CarLink, intent: ControlIntent, preview: Bool = false) {
         _link = ObservedObject(wrappedValue: link)
         _intent = ObservedObject(wrappedValue: intent)
+        _video = ObservedObject(wrappedValue: link.video)
         self.preview = preview
     }
 
@@ -74,6 +78,10 @@ struct DriveView: View {
     var body: some View {
         ZStack {
             p.bg.ignoresSafeArea()
+            if !preview {
+                VideoView(link: video).ignoresSafeArea()
+                if !video.hasPicture { noPicture }
+            }
 
             VStack {
                 HStack {
@@ -99,6 +107,7 @@ struct DriveView: View {
                     .padding(.leading, 8)
                     .disabled(showCalib)   // can't bypass mandatory calibration via Settings
                 }
+                .padding(8).background(p.bg.opacity(0.45)).clipShape(RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 18).padding(.top, 8)
                 Spacer()
             }
@@ -108,6 +117,7 @@ struct DriveView: View {
                 DriveDiagram(t: intent.t, y: intent.y, palette: p)
                 PowerBar(value: sides.right, palette: p)
             }
+            .padding(8).background(p.bg.opacity(0.45)).clipShape(RoundedRectangle(cornerRadius: 12))
 
             if scheme == .arcade {
                 HStack {
@@ -139,6 +149,7 @@ struct DriveView: View {
             }
             .padding(.bottom, 16)
         }
+        .onAppear { if !preview { video.setWatching(true) } }
         // Zero the intent, and deliberately do NOT say goodbye here.
         //
         // The plan lists a bye "when the drive screen is dismissed", written for a screen the
@@ -154,7 +165,12 @@ struct DriveView: View {
         // whichever peer says hello next; and OTA outranks RT in the car's own arbitration
         // (`link.h`: `LINK_SRC_OTA > LINK_SRC_RT`), so a streaming pult cannot lock out a flash.
         // The two real departures — the scene leaving `.active`, and teardown — do send it.
-        .onDisappear { if !preview { intent.neutral() } }
+        .onDisappear { if !preview { intent.neutral(); video.setWatching(false) } }
+        .onChange(of: showSettings || showCalib) { _, covered in
+            // A sheet over the drive screen is not the drive screen: no picture behind
+            // settings or the wizard, and no bandwidth spent on it.
+            if !preview { video.setWatching(!covered) }
+        }
         .onReceive(pad.$leftX) { _ in padPush() }
         .onReceive(pad.$leftY) { _ in padPush() }
         .onReceive(pad.$rightY) { _ in padPush() }
@@ -184,9 +200,30 @@ struct DriveView: View {
         }
     }
 
-    // Empty in the normal case: only amber warnings ever appear here.
+    /// Shown over the last frame (the layer keeps it) rather than instead of it: the driver
+    /// still sees where the car was, and the car still obeys the sticks — a lost picture is
+    /// never a stop.
+    private var noPicture: some View {
+        VStack(spacing: 4) {
+            Image(systemName: "video.slash").font(.system(size: 22))
+            Text(L.videoNoPicture).font(.system(size: 13, weight: .semibold))
+            if let state = telemetry?.video.state, state != .streaming {
+                Text(state == .off ? L.videoStateOff : L.videoStateIdle).font(.system(size: 11))
+            }
+        }
+        .foregroundStyle(p.muted)
+        .padding(12)
+        .background(p.panel.opacity(0.85))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    // The picture's numbers lead while there is one; after that only amber warnings ever
+    // appear here, so with no picture and nothing wrong it is empty.
     private var statusBar: some View {
         HStack(spacing: 16) {
+            if video.hasPicture {
+                statusItem("video", L.videoStats(fps: video.fps, lost: video.lostLast10s), p.muted)
+            }
             if let trips = telemetry?.link.timeouts, trips > 0 {
                 statusItem("exclamationmark.triangle", L.driveWdtTrips(trips), p.warn)
             }
@@ -204,6 +241,7 @@ struct DriveView: View {
             }
         }
         .font(.system(size: 10))
+        .padding(8).background(p.bg.opacity(0.45)).clipShape(RoundedRectangle(cornerRadius: 12))
     }
     private func statusItem(_ icon: String, _ text: String, _ color: Color) -> some View {
         HStack(spacing: 4) {

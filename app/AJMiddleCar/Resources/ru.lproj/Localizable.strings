@@ -120,6 +120,10 @@
 "drive.wdtTrips"     = "Обрывов: %d";
 "drive.busFail"      = "Драйвер моторов не отвечает";
 "drive.ctlOther"     = "Управляет: %@";
+"video.noPicture"    = "Нет картинки";
+"video.stateOff"     = "Камера не отвечает";
+"video.stateIdle"    = "Камера ждёт";
+"video.stats"        = "%d к/с · потеряно %d";
 "ctl.idle"           = "никто";
 "ctl.recovering"     = "авто-возврат";
 "ctl.console"        = "консоль";
