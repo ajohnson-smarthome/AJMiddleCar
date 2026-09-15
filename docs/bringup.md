@@ -138,6 +138,41 @@ are the closing sweep, run once stage 4 itself passes.
 
 _Record anything surprising here — it is the raw material for the next spec._
 
+### A quarter of every frame was for nobody, and the sensor is faster than its name (2026-09-15)
+
+v1.0+879, put on both boards by the simulator through the dongle (the whole ladder: adapter
+first, then the car, then the drive screen — under two minutes, no hands). What changed: the
+car encodes the middle 720 rows of its 1280×960 frame (the HUD showed a 16:9 window and
+cropped the rest anyway), every second sensor frame instead of every third, a planned
+keyframe every 10 s instead of 3, and 2500 kbit/s by default. The probe through the dongle
+on the Mac, 30 s, a still room, two runs:
+
+| target | encoder | on the Mac | frames whole | chunks | IDRs |
+|---|---|---|---|---|---|
+| 2500 | 2548 kbit/s | 2563 kbit/s | 673 / 674 | 99.9 % | 3, ~20 chunks each |
+| 3000 | 3161 kbit/s | 3085 kbit/s | 673 / 673 | 100 % | 3 |
+
+Against the last measurement on the old geometry (2.57 Mbit/s with motion, 97 % of frames
+whole, 18 fps): every frame arrives, at a third more pixels per bit, and a keyframe is now
+~28 KB — 60 ms on the wire instead of 180 — and comes a third as often. 3000 carries clean
+too, so the slider has headroom; the default stays 2500 for a moving scene, which this was
+not. `video.dropped` grew by 104 in the first two seconds of the first stream (3114 kbit/s
+while AE walked up from dark and every frame was a big one) and by 0 in the next 60 s: a
+start-up burst, not a steady leak.
+
+Two things learned on the way. **The sensor mode called 45 fps runs at 50**: 674 frames in
+30 s is 22.5 fps at a skip of two, and the per-second counters on both the car and the HUD
+swing 20–27 around it — the contract's `sensor_fps` 45 is the driver's label, not a
+measurement, and `fps` 22 is the floor of the real rate as intended. Nothing depends on the
+difference except the encoder's rate control, which was told 22 and delivered 2548 at a 2500
+target regardless. And **the picture is pink and the window is blown out** — a NoIR sensor
+under the component's stock tuning (`ov5647_default.json`: a colour matrix for a sensor with
+an IR-cut filter, and an AE that weights the whole frame evenly). That is the next lever, and
+it costs the wire nothing: our own IPA profile, plus a focus check on `GET /snapshot`.
+
+Left as they were: the car's pacing (3 ms) and the QP corridor (20..45) — with the smaller
+frames neither was near its limit in either run.
+
 ### The USB ceiling had a number, and the number was 127 packets (2026-09-15, night)
 
 The synthetic stream on the dongle (`CONFIG_DONGLE_VIDEO_BENCH`, a `view` with

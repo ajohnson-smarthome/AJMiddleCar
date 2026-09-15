@@ -23,8 +23,9 @@
 static const char *TAG = "video";
 
 #define CTL_TICK_MS      100                          /* recvfrom timeout: the subscription clock */
-/* Six, not two: at SEND_PERIOD_US a 64-chunk keyframe takes ~130 ms to leave, two encoded
-   frames' worth at 15 fps, and the P-frames right after an IDR are the heavy ones. A ring of
+/* Six, not two: at SEND_PERIOD_US a 60-chunk keyframe (the old 1280x960 one; ~20 chunks
+   since the crop to 720 rows) takes ~180 ms to leave, several encoded frames' worth, and
+   the P-frames right after an IDR are the heavy ones. A ring of
    two dropped the frame behind every keyframe; a ring of three still dropped about one a
    second under motion — and every drop forces an IDR, which is another 130 ms burst, which
    drops another frame: the bench watched the bitrate climb to 2.9 Mbit/s on a 1.5 target
@@ -46,7 +47,8 @@ static const char *TAG = "video";
    3.7 offered against ~4 drained means a run of heavy frames cannot overflow the dongle's
    ring; a 60-chunk keyframe leaves in ~180 ms, which the six-slot ring here absorbs. Bench
    2026-09-16 with the real stream: 1 ms lost 49 %, 4 ms was clean but starved the blocks,
-   2 and 3 ms both 99–100 % whole at 1500–2500 kbit/s; 3 keeps the margin. */
+   2 and 3 ms both 99–100 % whole at 1500–2500 kbit/s; 3 keeps the margin. With the 720-row
+   crop (2026-09-15, bringup.md) a keyframe is ~20 chunks and 2500–3000 kbit/s arrive whole. */
 #define SEND_PERIOD_US   3000
 
 _Static_assert(VIDEO_SENSOR_FPS / FRAME_SKIP == VIDEO_FPS, "fps must be the floor of the sensor rate over a whole skip");
