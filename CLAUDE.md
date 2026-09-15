@@ -149,7 +149,7 @@ The pure modules have **zero ESP-IDF dependencies** and are host-tested with pla
 - `video_link.{c,h}` — the video channel: one UDP socket on `4211`, three tasks below the
   actuator — control (the socket's receive side and the subscription), encode (camera →
   `video_enc` → a two-slot ring, handed off with a release/acquire store rather than a lock),
-  and a sender that drains the ring one chunk per millisecond off an `esp_timer`, so a keyframe
+  and a sender that drains the ring one chunk every 3 ms off an `esp_timer` (the dongle's USB drains ~4 Mbit/s — bringup.md), so a keyframe
   leaves as a trickle rather than a burst. Nothing here touches the motors.
 - `video_cfg.{c,h}` — the `video` domain of `/config`: the encoder's target bitrate, read once
   at stream start rather than mid-frame.

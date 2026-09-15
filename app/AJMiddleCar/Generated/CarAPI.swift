@@ -396,14 +396,14 @@ public extension Chassis {
 
 /// The FPV encoder. Applied at the next stream start, not live.
 public struct Video: Codable, Equatable, Sendable {
-    /// target H.264 bitrate in kbit/s; the adapter's USB is the ceiling — measured at ~1.5 Mbit/s sustained on the bench (2026-09-15), above which chunks are lost, so the default sits under it with room for keyframes
+    /// target H.264 bitrate in kbit/s; the adapter's USB (Full-Speed, one transfer block per host read) drains ~4 Mbit/s at the car's 3 ms chunk pacing, measured 2026-09-16 — 1500 leaves room for keyframes and motion
     public var bitrate_kbps: Int
     public init(bitrate_kbps: Int) { self.bitrate_kbps = bitrate_kbps }
 }
 
 public extension Video {
     static let key = "video"
-    static let `default` = Video(bitrate_kbps: 1000)
+    static let `default` = Video(bitrate_kbps: 1500)
     static let bitrate_kbpsRange: ClosedRange<Int> = 500...3000
     static func pick(from c: CarConfig) -> Video? { c.video }
     static func wrap(_ v: Video) -> CarConfig { CarConfig(video: v) }

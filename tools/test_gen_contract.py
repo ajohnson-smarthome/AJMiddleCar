@@ -458,7 +458,7 @@ class TestSwiftEmitter(unittest.TestCase):
         self.assertIn("public struct Video: Codable, Equatable, Sendable {", self.out)
         self.assertIn("    public var bitrate_kbps: Int", self.lines())
         self.assertIn('    static let key = "video"', self.lines())
-        self.assertIn("    static let `default` = Video(bitrate_kbps: 1000)", self.lines())
+        self.assertIn("    static let `default` = Video(bitrate_kbps: 1500)", self.lines())
         self.assertIn("    static let bitrate_kbpsRange: ClosedRange<Int> = 500...3000", self.lines())
         self.assertIn("    static func pick(from c: CarConfig) -> Video? { c.video }", self.lines())
         self.assertIn("    static func wrap(_ v: Video) -> CarConfig { CarConfig(video: v) }", self.lines())

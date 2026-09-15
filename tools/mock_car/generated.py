@@ -197,17 +197,17 @@ DOMAINS = {   'ramp': {   'nvs_key': 'ramp',
                                             'wheel centres',
                                      'scale': 1}]},
     'video': {   'nvs_key': 'video',
-                 'defaults': {'bitrate_kbps': 1000},
+                 'defaults': {'bitrate_kbps': 1500},
                  'fields': [   {   'name': 'bitrate_kbps',
                                    'type': 'int',
                                    'min': 500,
                                    'max': 3000,
-                                   'default': 1000,
+                                   'default': 1500,
                                    'doc': "target H.264 bitrate in kbit/s; the adapter's USB "
-                                          'is the ceiling — measured at ~1.5 Mbit/s sustained '
-                                          'on the bench (2026-09-15), above which chunks are '
-                                          'lost, so the default sits under it with room for '
-                                          'keyframes',
+                                          '(Full-Speed, one transfer block per host read) '
+                                          "drains ~4 Mbit/s at the car's 3 ms chunk pacing, "
+                                          'measured 2026-09-16 — 1500 leaves room for '
+                                          'keyframes and motion',
                                    'scale': 1}]}}
 
 

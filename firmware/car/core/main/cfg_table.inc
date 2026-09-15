@@ -25,7 +25,7 @@ static const cfg_field_t CFG_DIMS_FIELDS[] = {
     { "wheelbase_mm", CFG_INT, 90, 360, 210, NULL, 0, 1 },
 };
 static const cfg_field_t CFG_VIDEO_FIELDS[] = {
-    { "bitrate_kbps", CFG_INT, 500, 3000, 1000, NULL, 0, 1 },
+    { "bitrate_kbps", CFG_INT, 500, 3000, 1500, NULL, 0, 1 },
 };
 
 static const cfg_domain_t CFG_DOMAINS[] = {

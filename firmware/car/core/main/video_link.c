@@ -30,13 +30,15 @@ static const char *TAG = "video";
    from nothing but that loop. Slots are 256 KB each in PSRAM, of which there are 32 MB. */
 #define RING_SLOTS       6
 #define FRAME_SKIP       (VIDEO_SENSOR_FPS / VIDEO_FPS) /* encode every FRAME_SKIP-th sensor frame */
-/* One chunk every 2 ms — 5.6 Mbit/s while a frame is leaving, against the dongle's USB,
-   which is Full-Speed: 12 Mbit/s on the wire and ~8 usable. At 1 ms (11 Mbit/s) the bench
-   measured 49 % of chunks lost through the dongle and 3 % on the same air received by a
-   laptop, the loss growing with the frame's length — the relay stuck in sendto while USB
-   drained, the socket's mailbox overflowing behind it. The average (≤ 3 Mbit/s by config)
-   is never the problem; the burst is. Cost: a 64-chunk keyframe now takes ~130 ms to leave
-   instead of ~65 — once every 3 s. */
+/* One chunk every 3 ms — 3.7 Mbit/s while a frame is leaving. The dongle's USB is
+   Full-Speed and its host takes one transfer block at a time, ~5 ms between reads plus
+   ~1.2 ms of wire per chunk, so what it drains depends on how many chunks land in each
+   block: about 4 Mbit/s at this spacing, 6 with denser bursts, and a block that overruns
+   the S3's 127-packet limit hangs the link (tinyusb#3825 — capped on the dongle since).
+   3.7 offered against ~4 drained means a run of heavy frames cannot overflow the dongle's
+   ring; a 60-chunk keyframe leaves in ~180 ms, which the six-slot ring here absorbs. Bench
+   2026-09-16 with the real stream: 1 ms lost 49 %, 4 ms was clean but starved the blocks,
+   2 and 3 ms both 99–100 % whole at 1500–2500 kbit/s; 3 keeps the margin. */
 #define SEND_PERIOD_US   3000
 
 _Static_assert(VIDEO_SENSOR_FPS % VIDEO_FPS == 0, "fps must divide the sensor rate");

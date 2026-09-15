@@ -221,9 +221,11 @@ phone → dongle → car and shares no queue with video at all. The reverse dire
 thread and one USB NTB pool on the dongle (both first-in-first-out by the moment each
 `sendto` happened), and one 20-slot SDIO queue on the car. On every one of those, video is
 what gets rationed: the dongle's video relay is admission-gated toward the phone (below), and
-the car's own sender doses its chunks one per millisecond on a timer rather than bursting a
-keyframe out in one shot. None of that is a substitute for measuring the actual ceiling on the
-bench — see `docs/bringup.md`.
+the car's own sender doses its chunks one every 3 ms on a timer rather than bursting a
+keyframe out in one shot. The ceiling was measured on the bench (2026-09-16, `docs/bringup.md`):
+the dongle's USB is Full-Speed and its host takes one transfer block per read, ~5 ms apart,
+so it drains about 4 Mbit/s at this pacing and 6 with denser bursts — the 3 ms figure keeps
+the car under what the dongle drains, whatever the scene does.
 
 ### Wire format — 12-byte header, then the chunk
 
@@ -385,7 +387,7 @@ cannot drift between them:
 ### Configuration — the `video` domain
 
 One field, generated into the domain table below along with the other five — `bitrate_kbps`,
-`500..3000`, default `1000`. It is read once, at the next stream start: `video_link` asks for
+`500..3000`, default `1500`. It is read once, at the next stream start: `video_link` asks for
 it when it opens the encoder, not while one is already running, so a change lands on the next
 viewer rather than mid-frame. `fps` is not a setting: it is a constant of the contract, because
 only a few whole divisors of the sensor's own frame rate make sense, and the firmware is built
@@ -467,7 +469,7 @@ persists to NVS immediately, and a POST of unchanged values does not rewrite fla
  "recovery": {"enabled":true,"window_ms":5000},
  "wheel":    {"diameter_mm":65,"encoder_ppr":11,"gear_ratio":9.0,"quadrature":4},
  "chassis":  {"track_mm":130,"wheelbase_mm":210},
- "video":    {"bitrate_kbps":1000}}
+ "video":    {"bitrate_kbps":1500}}
 ```
 
 <!-- generated:endpoints -->
@@ -483,7 +485,7 @@ persists to NVS immediately, and a POST of unchanged values does not rewrite fla
 | `wheel` | `quadrature` | enum | 1 \| 2 \| 4 | 4 | quadrature edge multiplier |
 | `chassis` | `track_mm` | int | 60..300 | 130 | lateral distance between left and right wheel centres |
 | `chassis` | `wheelbase_mm` | int | 90..360 | 210 | longitudinal distance between front and rear wheel centres |
-| `video` | `bitrate_kbps` | int | 500..3000 | 1000 | target H.264 bitrate in kbit/s; the adapter's USB is the ceiling — measured at ~1.5 Mbit/s sustained on the bench (2026-09-15), above which chunks are lost, so the default sits under it with room for keyframes |
+| `video` | `bitrate_kbps` | int | 500..3000 | 1500 | target H.264 bitrate in kbit/s; the adapter's USB (Full-Speed, one transfer block per host read) drains ~4 Mbit/s at the car's 3 ms chunk pacing, measured 2026-09-16 — 1500 leaves room for keyframes and motion |
 <!-- /generated:endpoints -->
 
 ### What the values mean
