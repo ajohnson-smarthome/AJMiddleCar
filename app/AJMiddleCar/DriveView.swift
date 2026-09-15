@@ -22,12 +22,14 @@ struct DriveView: View {
     @State private var haptics = Haptics()
 
     let preview: Bool   // gallery: render statically, no input plumbing
+    let previewTricksOpen: Bool   // gallery: the tricks card open, which no CLI can tap open
 
-    init(link: CarLink, intent: ControlIntent, preview: Bool = false) {
+    init(link: CarLink, intent: ControlIntent, preview: Bool = false, previewTricksOpen: Bool = false) {
         _link = ObservedObject(wrappedValue: link)
         _intent = ObservedObject(wrappedValue: intent)
         _video = ObservedObject(wrappedValue: link.video)
         self.preview = preview
+        self.previewTricksOpen = previewTricksOpen
     }
 
     private var scheme: Scheme { Scheme(rawValue: schemeRaw) ?? .arcade }
@@ -75,23 +77,48 @@ struct DriveView: View {
         ControlModel.sides(t: intent.t, y: intent.y)
     }
 
+    // The picture is the screen; everything else keeps to its edges. The layout is
+    // `DriveLayout`'s — the design's numbers, host-tested — and nothing here sits in the middle
+    // of the picture with a scrim behind it: the two gradients from the top and bottom edges are
+    // the only tint, and the instruments read against them.
     var body: some View {
-        ZStack {
-            p.bg.ignoresSafeArea()
-            if !preview {
-                VideoView(link: video).ignoresSafeArea()
-                if !video.hasPicture { noPicture }
-            }
+        GeometryReader { geo in
+            let lay = DriveLayout(
+                screen: CGSize(width: geo.size.width + geo.safeAreaInsets.leading + geo.safeAreaInsets.trailing,
+                               height: geo.size.height + geo.safeAreaInsets.top + geo.safeAreaInsets.bottom),
+                insets: .init(top: geo.safeAreaInsets.top, leading: geo.safeAreaInsets.leading,
+                              bottom: geo.safeAreaInsets.bottom, trailing: geo.safeAreaInsets.trailing))
+            ZStack {
+                p.bg.ignoresSafeArea()
+                if !preview {
+                    // A 16:9 window onto the 4:3 frame: the layer fills it, cropping the top and
+                    // bottom eighths — the fisheye's worst — rather than pillarboxing the middle.
+                    VideoView(link: video)
+                        .frame(width: lay.picture.width, height: lay.picture.height)
+                        .clipped()
+                        .position(x: lay.picture.midX, y: lay.picture.midY)
+                    if !video.hasPicture { noPicture.position(lay.pictureCentre) }
+                    scrim(.top)
+                    scrim(.bottom)
+                }
 
-            VStack {
-                HStack {
-                    HStack(spacing: 7) {
-                        SignalBars(level: linkUp ? signalLevel : 0, color: linkUp ? signalColor : .red)
-                        // One truth: the pill, the bars and the drive screen's existence all
-                        // come from `CarLink`, so the pill cannot say connected while the
-                        // joysticks do nothing.
-                        Text(linkUp ? L.driveConnected : L.driveSearching)
-                            .font(.system(size: 12)).foregroundStyle(p.muted)
+                HStack(alignment: .center) {
+                    HStack(spacing: 12) {
+                        HStack(spacing: 7) {
+                            SignalBars(level: linkUp ? signalLevel : 0, color: linkUp ? signalColor : .red)
+                            // One truth: the label, the bars and the drive screen's existence
+                            // all come from `CarLink`, so it cannot say connected while the
+                            // joysticks do nothing.
+                            Text(linkUp ? L.driveConnected : L.driveSearching)
+                                .font(.system(size: 12)).foregroundStyle(p.text)
+                        }
+                        // The picture's own numbers live next to the link, not in a pill of
+                        // their own. `text` rather than `muted`: over the light theme's haze
+                        // `muted` disappears.
+                        if video.hasPicture {
+                            statusItem("video", L.videoStats(fps: video.fps, lost: video.lostLast10s), p.text)
+                                .font(.system(size: 10)).opacity(0.8)
+                        }
                     }
                     Spacer()
                     SchemeToggle(scheme: $schemeRaw, palette: p)
@@ -107,47 +134,44 @@ struct DriveView: View {
                     .padding(.leading, 8)
                     .disabled(showCalib)   // can't bypass mandatory calibration via Settings
                 }
-                .padding(8).background(p.bg.opacity(0.45)).clipShape(RoundedRectangle(cornerRadius: 12))
-                .padding(.horizontal, 18).padding(.top, 8)
-                Spacer()
-            }
+                .frame(height: 32)
+                .padding(.horizontal, lay.edge).padding(.top, 12)
+                .frame(maxHeight: .infinity, alignment: .top)
 
-            HStack(spacing: 28) {
-                PowerBar(value: sides.left, palette: p)
-                DriveDiagram(t: intent.t, y: intent.y, palette: p)
-                PowerBar(value: sides.right, palette: p)
-            }
-            .padding(8).background(p.bg.opacity(0.45)).clipShape(RoundedRectangle(cornerRadius: 12))
+                // The car on the bottom edge, its rails running up over the picture's floor.
+                HStack(spacing: 28) {
+                    PowerBar(value: sides.left, palette: p)
+                    DriveDiagram(t: intent.t, y: intent.y, palette: p)
+                    PowerBar(value: sides.right, palette: p)
+                }
+                .position(lay.diagram)
 
-            if scheme == .arcade {
-                HStack {
-                    Spacer()
+                // Sticks astride the picture's edges: half on the band, half on the picture's
+                // corner, which a fisheye has already darkened.
+                if scheme == .arcade {
                     JoystickView(palette: p) { x, y in
                         if arcX == 0 && arcY == 0 && (x != 0 || y != 0) { haptics.tick() }
                         arcX = x; arcY = y; push()
                     }
-                    .padding(.trailing, 24)
+                    .position(lay.rightStick)
+                } else {
+                    JoystickView(vertical: true, palette: p) { _, y in leftY = y; push() }.position(lay.leftStick)
+                    JoystickView(vertical: true, palette: p) { _, y in rightY = y; push() }.position(lay.rightStick)
                 }
-                .padding(.bottom, 16)
-                .frame(maxHeight: .infinity, alignment: .bottom)
-            } else {
-                HStack {
-                    JoystickView(vertical: true, palette: p) { _, y in leftY = y; push() }.padding(.leading, 24)
-                    Spacer()
-                    JoystickView(vertical: true, palette: p) { _, y in rightY = y; push() }.padding(.trailing, 24)
-                }
-                .padding(.bottom, 16)
-                .frame(maxHeight: .infinity, alignment: .bottom)
-            }
 
-            VStack(spacing: 6) {
-                Spacer()
                 TricksControl(palette: p, running: intent.runningTrick, startedAt: intent.trickStartedAt,
                               onSelect: { intent.startTrick($0) },
-                              onStop: { intent.stopTrick() })
-                statusBar          // «Обрывов: N» sits directly under the FAB
+                              onStop: { intent.stopTrick() },
+                              debugOpen: previewTricksOpen)
+                .position(lay.tricks)
+
+                // Warnings are the one thing allowed over the picture, and only while there are
+                // any. Under the top row rather than beside it: two at once («драйвер» and
+                // «управляет») are wider than the gap between the link and the scheme toggle.
+                warnings
+                    .padding(.top, 52)
+                    .frame(maxHeight: .infinity, alignment: .top)
             }
-            .padding(.bottom, 16)
         }
         .onAppear { if !preview { video.setWatching(true) } }
         // Zero the intent, and deliberately do NOT say goodbye here.
@@ -217,23 +241,29 @@ struct DriveView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    /// What `statusBar` is about to show — the same conditions its items use. The scrim is
-    /// gated on it: an empty bar with padding and a background is a 16-point dot under the FAB,
-    /// visible over a frozen last frame, which is exactly the no-picture state.
-    private var hasStatus: Bool {
-        video.hasPicture
-            || (telemetry?.link.timeouts ?? 0) > 0
+    /// The tint the instruments read against: a gradient from the edge inward, nothing boxed.
+    private func scrim(_ edge: VerticalEdge) -> some View {
+        let top = edge == .top
+        return LinearGradient(colors: [p.bg.opacity(top ? 0.78 : 0), p.bg.opacity(top ? 0 : 0.82)],
+                              startPoint: .top, endPoint: .bottom)
+            .frame(height: top ? 64 : 130)
+            .frame(maxHeight: .infinity, alignment: top ? .top : .bottom)
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+    }
+
+    /// What `warnings` is about to show — the same conditions its items use. The pill is gated
+    /// on it: an empty one with padding and a background is a 16-point dot over the picture.
+    private var hasWarnings: Bool {
+        (telemetry?.link.timeouts ?? 0) > 0
             || telemetry.map { $0.motors.bus != .ok } ?? false
             || telemetry.map { $0.motors.owner != .remote && $0.motors.owner != .idle } ?? false
     }
 
-    // The picture's numbers lead while there is one; after that only amber warnings ever
-    // appear here, so with no picture and nothing wrong it is empty.
-    private var statusBar: some View {
+    // Only amber, and only while something is wrong: the picture's own numbers moved up next to
+    // the link, so with nothing wrong this is empty and the picture is clear.
+    private var warnings: some View {
         HStack(spacing: 16) {
-            if video.hasPicture {
-                statusItem("video", L.videoStats(fps: video.fps, lost: video.lostLast10s), p.muted)
-            }
             if let trips = telemetry?.link.timeouts, trips > 0 {
                 statusItem("exclamationmark.triangle", L.driveWdtTrips(trips), p.warn)
             }
@@ -251,8 +281,8 @@ struct DriveView: View {
             }
         }
         .font(.system(size: 10))
-        .padding(hasStatus ? 8 : 0)
-        .background(hasStatus ? p.bg.opacity(0.45) : .clear)
+        .padding(hasWarnings ? 8 : 0)
+        .background(hasWarnings ? p.bg.opacity(0.45) : .clear)
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
     private func statusItem(_ icon: String, _ text: String, _ color: Color) -> some View {

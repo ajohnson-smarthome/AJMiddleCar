@@ -243,6 +243,12 @@ an `AVSampleBufferDisplayLayer` frame by frame. Reassembly runs on `VideoLink`'s
 `onFrame` is confined there — never called from the main actor, which only reads the published
 counters back across that same queue.
 
+The drive screen is a HUD: the picture is a 16:9 window onto the 4:3 frame (`resizeAspectFill`,
+the fisheye's top and bottom eighths cropped), and every instrument keeps to its edges — nothing
+sits in the middle of the picture with a scrim behind it. `DriveLayout` (pure, host-tested) is
+where the pieces go, derived from the screen and its safe area, not from one model's numbers;
+`docs/superpowers/specs/2026-09-15-drive-hud-design.md` says why each piece is where it is.
+
 Pure Swift modules are host-tested with `swiftc` directly — no XCTest runtime needed.
 
 ## Gotchas

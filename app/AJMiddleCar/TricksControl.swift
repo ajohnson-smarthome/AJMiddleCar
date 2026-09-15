@@ -1,6 +1,8 @@
 import SwiftUI
 
-/// Bottom-centre tricks control: a ✦ FAB that opens a C4 popover card of tricks.
+/// The tricks control: a ✦ FAB that opens a C4 popover card of tricks to its left — it lives on
+/// the band right of the picture, so the card has nowhere else to go. The card is an overlay:
+/// the control's own frame is the FAB's 46 pt, wherever the parent positions it.
 /// Presentational — the parent owns playback state and passes `running` + `startedAt`.
 /// FAB: idle ✦ (toggle popover) · open ✕ (close) · running ⏹ (stop, with a time-progress ring).
 struct TricksControl: View {
@@ -19,14 +21,14 @@ struct TricksControl: View {
     private var isRunning: Bool { running != nil || debugRingProgress != nil }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            if (open || debugOpen) && !isRunning {
-                card.padding(.bottom, 56)
-                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .bottom)))
+        fab
+            .overlay(alignment: .trailing) {
+                if (open || debugOpen) && !isRunning {
+                    card.padding(.trailing, 56)   // 10 pt clear of the FAB's leading edge
+                        .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .trailing)))
+                }
             }
-            fab
-        }
-        .animation(.easeOut(duration: 0.15), value: open)
+            .animation(.easeOut(duration: 0.15), value: open)
         .onChange(of: running?.id) { _, _ in if running != nil { open = false } }
     }
 
@@ -68,7 +70,7 @@ struct TricksControl: View {
     }
 
     private var card: some View {
-        VStack(spacing: 1) {
+        HStack(spacing: 1) {
             VStack(spacing: 0) {
                 ForEach(Tricks.all) { trick in
                     Button {
@@ -89,8 +91,8 @@ struct TricksControl: View {
             .frame(width: 156)
             .background(RoundedRectangle(cornerRadius: 12).fill(p.panel))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(p.line))
-            // little downward tail toward the FAB
-            Image(systemName: "triangle.fill").rotationEffect(.degrees(180))
+            // little tail pointing right, toward the FAB
+            Image(systemName: "triangle.fill").rotationEffect(.degrees(90))
                 .font(.system(size: 9)).foregroundStyle(p.panel)
         }
     }

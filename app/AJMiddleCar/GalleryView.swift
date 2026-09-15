@@ -136,6 +136,7 @@ struct GalleryView: View {
             ("Drive tank",              AnyView(DriveView(link: mockLink(), intent: intent, preview: true).onAppear { UserDefaults.standard.set(Scheme.tank.rawValue, forKey: "scheme") })),
             ("Drive warning",           AnyView(DriveView(link: mockLink(wdtTrips: 3), intent: intent, preview: true))),
             ("Drive bus/ctl warning",   AnyView(DriveView(link: mockLink(busOk: false, owner: .recovering), intent: intent, preview: true))),
+            ("Drive tricks open",       AnyView(DriveView(link: mockLink(), intent: intent, preview: true, previewTricksOpen: true))),
             ("Settings",                AnyView(NavigationStack { SettingsView(palette: p, link: mockLink()) })),
             ("Calibration spin",        calib(.spin)),
             ("Calibration spinning",    calib(.spinning)),

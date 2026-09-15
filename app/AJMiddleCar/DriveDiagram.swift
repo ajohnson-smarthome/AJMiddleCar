@@ -35,7 +35,8 @@ struct DriveDiagram: View {
             }
         }
         .frame(width: 112, height: 200)
-        .scaleEffect(1.32)   // car size (+10% then +20%)
+        // Drawn at 1:1 since the drive screen put it on the picture's bottom edge (it used to be
+        // scaled ×1.32 in the middle of the screen); the rails still overflow the frame upward.
     }
 
     private func render(_ ctx: inout GraphicsContext, _ size: CGSize, time: Double) {

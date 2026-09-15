@@ -47,7 +47,9 @@ struct VideoView: UIViewRepresentable {
         private weak var link: VideoLink?
 
         func attach(_ layer: AVSampleBufferDisplayLayer, link: VideoLink) {
-            layer.videoGravity = .resizeAspect
+            // Fill, not fit: the drive screen frames this view as a 16:9 window and the 4:3
+            // picture is cropped top and bottom to fill it — see `DriveLayout`.
+            layer.videoGravity = .resizeAspectFill
             renderer = layer.sampleBufferRenderer
             self.link = link
             link.onFrame = { [weak self] frame, isKey in self?.show(frame, isKey: isKey) }
