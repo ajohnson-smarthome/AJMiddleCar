@@ -183,10 +183,12 @@
         "key": "video",
         "nvs_key": "video",
         "swift": "Video",
-        "doc": "The FPV encoder. Applied at the next stream start, not live.",
+        "doc": "The FPV encoder and the video switch. bitrate_kbps applies at the next stream start; enabled applies at once.",
         "fields": [
           {"name": "bitrate_kbps", "type": "int", "min": 500, "max": 3000, "default": 2500,
-           "doc": "target H.264 bitrate in kbit/s; the adapter's USB (Full-Speed, one transfer block per host read) drains ~4 Mbit/s at the car's 3 ms chunk pacing, measured 2026-09-16, and the car's own pacing caps it at 3.7 — 2500 leaves the gap for keyframes and motion"}
+           "doc": "target H.264 bitrate in kbit/s; the adapter's USB (Full-Speed, one transfer block per host read) drains ~4 Mbit/s at the car's 3 ms chunk pacing, measured 2026-09-16, and the car's own pacing caps it at 3.7 — 2500 leaves the gap for keyframes and motion"},
+          {"name": "enabled", "type": "bool", "default": true,
+           "doc": "the car streams video at all; false and it ignores every view, stops a running stream within 100 ms and puts the sensor in standby — the drive screen's video button, remembered on the car"}
         ]
       }
     ]

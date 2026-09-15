@@ -394,16 +394,18 @@ public extension Chassis {
     static func wrap(_ v: Chassis) -> CarConfig { CarConfig(chassis: v) }
 }
 
-/// The FPV encoder. Applied at the next stream start, not live.
+/// The FPV encoder and the video switch. bitrate_kbps applies at the next stream start; enabled applies at once.
 public struct Video: Codable, Equatable, Sendable {
     /// target H.264 bitrate in kbit/s; the adapter's USB (Full-Speed, one transfer block per host read) drains ~4 Mbit/s at the car's 3 ms chunk pacing, measured 2026-09-16, and the car's own pacing caps it at 3.7 — 2500 leaves the gap for keyframes and motion
     public var bitrate_kbps: Int
-    public init(bitrate_kbps: Int) { self.bitrate_kbps = bitrate_kbps }
+    /// the car streams video at all; false and it ignores every view, stops a running stream within 100 ms and puts the sensor in standby — the drive screen's video button, remembered on the car
+    public var enabled: Bool
+    public init(bitrate_kbps: Int, enabled: Bool) { self.bitrate_kbps = bitrate_kbps; self.enabled = enabled }
 }
 
 public extension Video {
     static let key = "video"
-    static let `default` = Video(bitrate_kbps: 2500)
+    static let `default` = Video(bitrate_kbps: 2500, enabled: true)
     static let bitrate_kbpsRange: ClosedRange<Int> = 500...3000
     static func pick(from c: CarConfig) -> Video? { c.video }
     static func wrap(_ v: Video) -> CarConfig { CarConfig(video: v) }

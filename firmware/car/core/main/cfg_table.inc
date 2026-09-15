@@ -26,6 +26,7 @@ static const cfg_field_t CFG_DIMS_FIELDS[] = {
 };
 static const cfg_field_t CFG_VIDEO_FIELDS[] = {
     { "bitrate_kbps", CFG_INT, 500, 3000, 2500, NULL, 0, 1 },
+    { "enabled", CFG_BOOL, 0, 1, 1, NULL, 0, 1 },
 };
 
 static const cfg_domain_t CFG_DOMAINS[] = {
@@ -34,7 +35,7 @@ static const cfg_domain_t CFG_DOMAINS[] = {
     { "recovery", "recover", CFG_RECOVER_FIELDS, 2 },
     { "wheel", "wheel", CFG_WHEEL_FIELDS, 4 },
     { "chassis", "dims", CFG_DIMS_FIELDS, 2 },
-    { "video", "video", CFG_VIDEO_FIELDS, 1 },
+    { "video", "video", CFG_VIDEO_FIELDS, 2 },
 };
 
 #define CFG_CONFIG_PATH "/config"

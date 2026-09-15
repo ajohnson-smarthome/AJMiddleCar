@@ -136,6 +136,20 @@ class TestSchema(unittest.TestCase):
                 pat = rf"(?<![\w.-]){re.escape(str(bound))}(?![\w.])"
                 self.assertRegex(src, pat, f"{key} {name}: bound {bound} not in {file_for_key[key]}")
 
+    def test_video_domain_has_the_switch_and_the_firmware_default_agrees(self):
+        """`enabled` is the video switch (spec 2026-09-15); and the car's own boot default for
+        the bitrate must be the schema's — the descriptor table carries the schema's number,
+        but a car with nothing in NVS starts from VIDEO_CFG_BITRATE_DEFAULT."""
+        video = next(d for d in load()["config"]["domains"] if d["key"] == "video")
+        names = [f["name"] for f in video["fields"]]
+        self.assertEqual(names, ["bitrate_kbps", "enabled"])
+        enabled = video["fields"][1]
+        self.assertEqual((enabled["type"], enabled["default"]), ("bool", True))
+        bitrate = video["fields"][0]
+        src = (ROOT / "firmware" / "car" / "core" / "main" / "video_cfg.h").read_text()
+        self.assertIn(f"#define VIDEO_CFG_BITRATE_DEFAULT {bitrate['default']}", src)
+        self.assertIn("#define VIDEO_CFG_ENABLED_DEFAULT true", src)
+
     def test_calibration_and_errors(self):
         s = load()
         c = s["calibration"]
@@ -237,6 +251,8 @@ class TestDocEmitter(unittest.TestCase):
         self.assertIn("| `wheel` | `gear_ratio` | decimal | 1..300 | 9.0 |", out)
         self.assertIn("| `ramp` | `rise_ms` | int | 0..2000 | 300 |", out)
         self.assertIn("| `recovery` | `enabled` | bool | true \\| false | true |", out)
+        self.assertIn("| `video` | `enabled` | bool | true \\| false | true |", out)
+        self.assertEqual(out.count("| `video` |"), 2)
         self.assertEqual(out.count("| `wheel` |"), 4)
 
     def test_splice_replaces_only_the_marked_region(self):
@@ -470,7 +486,8 @@ class TestSwiftEmitter(unittest.TestCase):
         self.assertIn("public struct Video: Codable, Equatable, Sendable {", self.out)
         self.assertIn("    public var bitrate_kbps: Int", self.lines())
         self.assertIn('    static let key = "video"', self.lines())
-        self.assertIn("    static let `default` = Video(bitrate_kbps: 2500)", self.lines())
+        self.assertIn("    public var enabled: Bool", self.lines())
+        self.assertIn("    static let `default` = Video(bitrate_kbps: 2500, enabled: true)", self.lines())
         self.assertIn("    static let bitrate_kbpsRange: ClosedRange<Int> = 500...3000", self.lines())
         self.assertIn("    static func pick(from c: CarConfig) -> Video? { c.video }", self.lines())
         self.assertIn("    static func wrap(_ v: Video) -> CarConfig { CarConfig(video: v) }", self.lines())

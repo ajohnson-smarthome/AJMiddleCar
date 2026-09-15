@@ -11,7 +11,8 @@
 // encoder, so a change lands on the next stream rather than mid-frame.
 #define VIDEO_CFG_BITRATE_MIN     500
 #define VIDEO_CFG_BITRATE_MAX     3000
-#define VIDEO_CFG_BITRATE_DEFAULT 1500
+#define VIDEO_CFG_BITRATE_DEFAULT 2500
+#define VIDEO_CFG_ENABLED_DEFAULT true
 
 // Load bitrate_kbps from NVS (default VIDEO_CFG_BITRATE_DEFAULT).
 esp_err_t video_cfg_init(void);

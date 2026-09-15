@@ -499,6 +499,7 @@ persists to NVS immediately, and a POST of unchanged values does not rewrite fla
 | `chassis` | `track_mm` | int | 60..300 | 130 | lateral distance between left and right wheel centres |
 | `chassis` | `wheelbase_mm` | int | 90..360 | 210 | longitudinal distance between front and rear wheel centres |
 | `video` | `bitrate_kbps` | int | 500..3000 | 2500 | target H.264 bitrate in kbit/s; the adapter's USB (Full-Speed, one transfer block per host read) drains ~4 Mbit/s at the car's 3 ms chunk pacing, measured 2026-09-16, and the car's own pacing caps it at 3.7 — 2500 leaves the gap for keyframes and motion |
+| `video` | `enabled` | bool | true \| false | true | the car streams video at all; false and it ignores every view, stops a running stream within 100 ms and puts the sensor in standby — the drive screen's video button, remembered on the car |
 <!-- /generated:endpoints -->
 
 ### What the values mean

@@ -197,7 +197,7 @@ DOMAINS = {   'ramp': {   'nvs_key': 'ramp',
                                             'wheel centres',
                                      'scale': 1}]},
     'video': {   'nvs_key': 'video',
-                 'defaults': {'bitrate_kbps': 2500},
+                 'defaults': {'bitrate_kbps': 2500, 'enabled': True},
                  'fields': [   {   'name': 'bitrate_kbps',
                                    'type': 'int',
                                    'min': 500,
@@ -209,6 +209,14 @@ DOMAINS = {   'ramp': {   'nvs_key': 'ramp',
                                           "measured 2026-09-16, and the car's own pacing caps "
                                           'it at 3.7 — 2500 leaves the gap for keyframes and '
                                           'motion',
+                                   'scale': 1},
+                               {   'name': 'enabled',
+                                   'type': 'bool',
+                                   'default': True,
+                                   'doc': 'the car streams video at all; false and it ignores '
+                                          'every view, stops a running stream within 100 ms '
+                                          "and puts the sensor in standby — the drive screen's "
+                                          'video button, remembered on the car',
                                    'scale': 1}]}}
 
 
