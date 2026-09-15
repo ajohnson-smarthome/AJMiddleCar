@@ -1033,11 +1033,18 @@ video, and no views are sent (`docs/superpowers/specs/2026-09-15-video-switch-de
       not one datagram. The bitrate slider under Settings leaves `enabled` as it was.
 ```
 
-- [ ] **Шаг 3: Статус спеки**
+- [ ] **Шаг 3: Статус спеки и одна поправка по итогам реализации**
 
 В `docs/superpowers/specs/2026-09-15-video-switch-design.md` строку `**Статус:**` заменить на:
 `**Статус:** реализовано 2026-09-15 (план `docs/superpowers/plans/2026-09-15-video-switch.md`);
 стенд — см. `docs/bringup.md`.`
+
+Там же в §1 фразу «`POST /config {"video":{"enabled":false}}` (домен целиком или
+подмножество — как у остальных доменов, `cfg_api.c` валидирует всё тело до применения)»
+заменить на: «`POST /config {"video":{"bitrate_kbps":2500,"enabled":false}}` — домен
+**целиком**: `/config` принимает любое подмножество доменов, но каждый присутствующий домен
+должен быть полным (`cfg_api.c` и мок отвечают `missing_field` на `{"video":{"enabled":false}}`
+без битрейта); кнопка в приложении и конформанс шлют домен целиком с текущим битрейтом».
 
 - [ ] **Шаг 4: Коммит**
 
