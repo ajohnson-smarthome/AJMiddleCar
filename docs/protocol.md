@@ -397,14 +397,6 @@ only a few whole divisors of the sensor's own frame rate make sense, and the fir
 against the one it picked (every second sensor frame: `sensor_fps` 45 ÷ 2 = 22.5, carried as
 `fps` 22, the floor), not a stored value.
 
-`enabled` is the video switch. It is a setting, remembered on the car, not a state of the
-camera: `false` and the car ignores every `view`, whoever sends it, ends a running stream on
-the video control task's next tick (≤100 ms, not the 3 s subscribe timeout) and puts the
-sensor in standby; `video.state` reads `idle`, and the app knows *why* from this field, not
-from telemetry. `true` starts nothing by itself — the next `view` does. The drive screen's
-video button is a POST of this field; while it is off the screen is the one from before
-video, and no views are sent (`docs/superpowers/specs/2026-09-15-video-switch-design.md`).
-
 Nor is the picture's size: `width` × `height` (1280 × 720) is what the encoder is given, and
 it is the middle 720 rows of the sensor's 1280 × `sensor_height` (960) frame. The fisheye's
 full field is 4:3, the drive screen shows a 16:9 window onto it, and the rows outside that
@@ -413,6 +405,14 @@ keyframe on pixels nobody saw. The crop is a row offset at the encoder's input o
 (`frame_crop.h`), so it costs nothing, and the viewer's `resizeAspectFill` shows the same
 window it did. `GET /snapshot` is the exception: it is the bench's look at the sensor and
 returns the whole 1280 × 960 frame.
+
+`enabled` is the video switch. It is a setting, remembered on the car, not a state of the
+camera: `false` and the car ignores every `view`, whoever sends it, ends a running stream on
+the video control task's next tick (≤100 ms, not the 3 s subscribe timeout) and puts the
+sensor in standby; `video.state` reads `idle`, and the app knows *why* from this field, not
+from telemetry. `true` starts nothing by itself — the next `view` does. The drive screen's
+video button is a POST of this field; while it is off the screen is the one from before
+video, and no views are sent (`docs/superpowers/specs/2026-09-15-video-switch-design.md`).
 
 ### Through the dongle — `relay.video_*`
 

@@ -110,7 +110,7 @@ see the sensor, its filter and its field of view without an app or a wire in the
 The order follows the plan's own stages: a snapshot first (stage 1), then a stream to a Mac
 sitting directly on the car's own Wi-Fi with `tools/conformance_video.py` (stage 2 — not
 repeated here, see the plan), then through the dongle measuring `relay.video_kbps` /
-`relay.video_dropped` at 1.5 / 2 / 2.5 Mbit/s (stage 3), then the app (stage 4). These eight
+`relay.video_dropped` at 1.5 / 2 / 2.5 Mbit/s (stage 3), then the app (stage 4). These nine
 are the closing sweep, run once stage 4 itself passes.
 
 - [ ] **Snapshot.** `video.state:"idle"`; `GET /snapshot` returns a JPEG showing the whole
