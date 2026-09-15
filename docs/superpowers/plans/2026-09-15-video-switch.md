@@ -25,11 +25,9 @@ plain `cc`); Python 3 (мок, конформанс, unittest); Swift/SwiftUI (h
   `docs/protocol.md`) **никогда не правятся руками** — только схема и `python3
   tools/gen_contract.py`; `tools/check_contract.sh` должен говорить `no drift`.
 - `app/` и `firmware/car/core/` друг на друга не ссылаются; шов — контракт и мок.
-- Файлы `app/AJMiddleCar/DriveView.swift`, `DriveLayout.swift`, `VideoView.swift`,
-  `GalleryView.swift`, `TricksControl.swift`, `DriveDiagram.swift`, `CLAUDE.md` содержат
-  **незакоммиченную работу пользователя (HUD)**. Правки в `DriveView.swift` по этому плану
-  делаются поверх неё и **не коммитятся вместе с чужим**: коммитить только файлы,
-  перечисленные в задаче (`git add <файлы>`), никогда `git add -A`. `CLAUDE.md` не трогать.
+- Коммитить только файлы, перечисленные в задаче (`git add <файлы>`), никогда `git add -A`.
+  `CLAUDE.md` не трогать. (HUD-работа пользователя, которая лежала в `DriveView.swift` и
+  соседях незакоммиченной, закоммичена 5ea8b79 перед задачей 6.)
 - Слова `video.state` не меняются: `off`, `idle`, `streaming`.
 - Кнопка — форма шестерёнки: 40×32, `p.panel`, обводка `p.line`, скругление 10.
 - Переключение экрана — только по подтверждённому ответу машинки (`store.value`), не
@@ -980,19 +978,17 @@ Expected: `== all green ==` (включая `drivemode: ok`).
 /config {"video":{"enabled":false}}` на `127.0.0.1:8080` — экран езды переключится на
 classic; скриншот `xcrun simctl io booted screenshot` + `sips -r -90`.
 
-- [ ] **Шаг 7: Коммит — только свои файлы**
+- [ ] **Шаг 7: Коммит**
+
+HUD-работа пользователя закоммичена раньше (5ea8b79), `DriveView.swift` чист — коммитятся
+три файла целиком:
 
 ```bash
-git add app/AJMiddleCar/L.swift app/AJMiddleCar/Resources/ru.lproj/Localizable.strings
-git add -p app/AJMiddleCar/DriveView.swift    # ТОЛЬКО ханки этой задачи; ханки HUD пользователя — оставить (n)
+git add app/AJMiddleCar/L.swift app/AJMiddleCar/Resources/ru.lproj/Localizable.strings app/AJMiddleCar/DriveView.swift
 git commit -m "feat(app): the video switch on the drive screen — a button by the gear, the old layout while the car's video is off
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ```
-
-Если `git add -p` не разделяет ханки чисто (правки этого плана переплетены с HUD в одном
-`body`), остановиться и сказать пользователю: его HUD-работа должна быть закоммичена раньше
-этой, порядок коммитов — его решение.
 
 ---
 
