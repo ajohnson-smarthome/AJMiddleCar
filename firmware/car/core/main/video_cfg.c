@@ -42,6 +42,23 @@ bool video_cfg_get_enabled(void) {
     return v;
 }
 
+bool video_cfg_set(uint16_t kbps, bool enabled) {
+    if (kbps < VIDEO_CFG_BITRATE_MIN) kbps = VIDEO_CFG_BITRATE_MIN;
+    if (kbps > VIDEO_CFG_BITRATE_MAX) kbps = VIDEO_CFG_BITRATE_MAX;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    s_bitrate = kbps;
+    s_enabled = enabled;
+    xSemaphoreGive(s_lock);
+    return true;
+}
+
+void video_cfg_get(uint16_t *kbps, bool *enabled) {
+    bool locked = xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) == pdTRUE;
+    if (kbps) *kbps = s_bitrate;
+    if (enabled) *enabled = s_enabled;
+    if (locked) xSemaphoreGive(s_lock);
+}
+
 esp_err_t video_cfg_save(void) {
     char buf[56];
     snprintf(buf, sizeof(buf), "{\"bitrate_kbps\":%u,\"enabled\":%s}",
