@@ -18,6 +18,13 @@ struct DriveView: View {
     @State private var lastCalibTrue = Date.distantPast
     @State private var padWasActive = false
 
+    /// The car's `video` domain — the switch lives there, and the screen follows the car's
+    /// answer, never the tap: a tap that did not land leaves the picture as it was.
+    @ObservedObject private var videoCfg = ConfigStore.shared.video
+    /// When the last save failed — the button wears `warn` for 600 ms, and that is all the
+    /// drive screen says about it.
+    @State private var videoToggleFailedAt: Date = .distantPast
+
     @StateObject private var pad = Gamepad()
     @State private var haptics = Haptics()
 
@@ -41,6 +48,53 @@ struct DriveView: View {
                                  rxFps: telemetry?.link.rx_hz, expectedFps: CarContract.commandHz)
     }
     private var signalColor: Color { signalLevel == 0 ? .red : (signalLevel == 1 ? p.warn : p.accent) }
+
+    private var screen: DriveScreenState {
+        DriveModeRule.state(config: videoCfg.value, covered: showSettings || showCalib)
+    }
+
+    /// The video switch: same shape as the gear next to it. The tap posts the whole domain
+    /// (bitrate as the car has it), disabled while the answer is on its way.
+    private var videoButton: some View {
+        let on = videoCfg.value?.enabled ?? false
+        let failed = Date().timeIntervalSince(videoToggleFailedAt) < 0.6
+        return Button {
+            guard let cur = videoCfg.value else { return }
+            Task {
+                if await !videoCfg.save(Video(bitrate_kbps: cur.bitrate_kbps, enabled: !cur.enabled)) {
+                    videoToggleFailedAt = Date()
+                    // A state change is what redraws the button: set the mark, and clear
+                    // it 650 ms later so the stroke goes back to `line` without a tap.
+                    try? await Task.sleep(for: .milliseconds(650))
+                    videoToggleFailedAt = .distantPast
+                }
+            }
+        } label: {
+            Image(systemName: on ? "video" : "video.slash")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(p.text)
+                .frame(width: 40, height: 32)
+                .background(p.panel)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(failed ? p.warn : p.line))
+        }
+        .disabled(videoCfg.value == nil || videoCfg.isBusy)
+        .accessibilityLabel(on ? L.videoOn : L.videoOff)
+    }
+
+    private var gearButton: some View {
+        Button { showSettings = true } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(p.text)
+                .frame(width: 40, height: 32)
+                .background(p.panel)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(p.line))
+        }
+        .padding(.leading, 8)
+        .disabled(showCalib)   // can't bypass mandatory calibration via Settings
+    }
 
     /// The simulator reports a phantom controller that is always "connected", so an idle stick
     /// must not count as input — it would otherwise mask touch and pre-empt a running trick with
@@ -77,11 +131,67 @@ struct DriveView: View {
         ControlModel.sides(t: intent.t, y: intent.y)
     }
 
+    var body: some View {
+        Group {
+            if screen.mode == .hud { hud } else { classic }
+        }
+        .task { await videoCfg.loadIfNeeded() }
+        .onAppear { if !preview { video.setWatching(screen.watching) } }
+        // Zero the intent, and deliberately do NOT say goodbye here.
+        //
+        // The plan lists a bye "when the drive screen is dismissed", written for a screen the
+        // user leaves on purpose. This one has none: it is dismissed only because `link.state`
+        // stopped being `.live` — a second of stale telemetry does it — and `link.stop()` there
+        // would be unrecoverable, because the only callers of `link.start()` are the scene
+        // becoming `.active` and `carRoot.onAppear`, and neither fires again while the app stays
+        // in the foreground on `.ready`. One dropped telemetry frame would end the drive.
+        //
+        // Nothing is lost by leaving it out. The transport keeps streaming `t:0, y:0` at
+        // `commandHz`, which feeds the car's control watchdog and so suppresses the retreat the
+        // bye exists to suppress; ownership is worth nothing to hold onto, because the car adopts
+        // whichever peer says hello next; and OTA outranks RT in the car's own arbitration
+        // (`link.h`: `LINK_SRC_OTA > LINK_SRC_RT`), so a streaming pult cannot lock out a flash.
+        // The two real departures — the scene leaving `.active`, and teardown — do send it.
+        .onDisappear { if !preview { intent.neutral(); video.setWatching(false) } }
+        .onChange(of: screen.watching) { _, watching in
+            // One gate for all three reasons not to watch — a sheet over the screen, the
+            // switch off on the car, the config not read yet (DriveModeRule).
+            if !preview { video.setWatching(watching) }
+        }
+        .onReceive(pad.$leftX) { _ in padPush() }
+        .onReceive(pad.$leftY) { _ in padPush() }
+        .onReceive(pad.$rightY) { _ in padPush() }
+        .onReceive(pad.$connected) { _ in padPush() }
+        .sheet(isPresented: $showSettings) { SettingsView(palette: p, link: link) }
+        .onChange(of: telemetry?.motors.calibrated) { _, cal in
+            if cal == true {
+                showCalib = false                       // calibrated → close
+                lastCalibTrue = Date()
+            } else if cal == false, Date().timeIntervalSince(lastCalibTrue) > 2, !preview {
+                // Mandatory: reopen — but ignore the stale `false` the car still reports for a
+                // frame or two right after a successful save, which would re-open the sheet
+                // mid-dismiss and flicker.
+                showCalib = true
+            }
+        }
+        .sheet(isPresented: $showCalib, onDismiss: {
+            // The wizard is interactiveDismissDisabled, so the only way it closes is its own
+            // dismiss() after a save the car accepted. Treat that as "calibrated": the telemetry
+            // frame already in flight was computed before the write and still says false.
+            lastCalibTrue = Date()
+        }) {
+            NavigationStack {
+                CarDimensionsView(palette: p, wizard: true)  // step 1 → Wheel → Calibration
+            }
+            .interactiveDismissDisabled(true)
+        }
+    }
+
     // The picture is the screen; everything else keeps to its edges. The layout is
     // `DriveLayout`'s — the design's numbers, host-tested — and nothing here sits in the middle
     // of the picture with a scrim behind it: the two gradients from the top and bottom edges are
     // the only tint, and the instruments read against them.
-    var body: some View {
+    private var hud: some View {
         GeometryReader { geo in
             let lay = DriveLayout(
                 screen: CGSize(width: geo.size.width + geo.safeAreaInsets.leading + geo.safeAreaInsets.trailing,
@@ -122,17 +232,8 @@ struct DriveView: View {
                     }
                     Spacer()
                     SchemeToggle(scheme: $schemeRaw, palette: p)
-                    Button { showSettings = true } label: {
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(p.text)
-                            .frame(width: 40, height: 32)
-                            .background(p.panel)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(p.line))
-                    }
-                    .padding(.leading, 8)
-                    .disabled(showCalib)   // can't bypass mandatory calibration via Settings
+                    videoButton.padding(.leading, 8)
+                    gearButton
                 }
                 .frame(height: 32)
                 .padding(.horizontal, lay.edge).padding(.top, 12)
@@ -173,54 +274,67 @@ struct DriveView: View {
                     .frame(maxHeight: .infinity, alignment: .top)
             }
         }
-        .onAppear { if !preview { video.setWatching(true) } }
-        // Zero the intent, and deliberately do NOT say goodbye here.
-        //
-        // The plan lists a bye "when the drive screen is dismissed", written for a screen the
-        // user leaves on purpose. This one has none: it is dismissed only because `link.state`
-        // stopped being `.live` — a second of stale telemetry does it — and `link.stop()` there
-        // would be unrecoverable, because the only callers of `link.start()` are the scene
-        // becoming `.active` and `carRoot.onAppear`, and neither fires again while the app stays
-        // in the foreground on `.ready`. One dropped telemetry frame would end the drive.
-        //
-        // Nothing is lost by leaving it out. The transport keeps streaming `t:0, y:0` at
-        // `commandHz`, which feeds the car's control watchdog and so suppresses the retreat the
-        // bye exists to suppress; ownership is worth nothing to hold onto, because the car adopts
-        // whichever peer says hello next; and OTA outranks RT in the car's own arbitration
-        // (`link.h`: `LINK_SRC_OTA > LINK_SRC_RT`), so a streaming pult cannot lock out a flash.
-        // The two real departures — the scene leaving `.active`, and teardown — do send it.
-        .onDisappear { if !preview { intent.neutral(); video.setWatching(false) } }
-        .onChange(of: showSettings || showCalib) { _, covered in
-            // A sheet over the drive screen is not the drive screen: no picture behind
-            // settings or the wizard, and no bandwidth spent on it.
-            if !preview { video.setWatching(!covered) }
-        }
-        .onReceive(pad.$leftX) { _ in padPush() }
-        .onReceive(pad.$leftY) { _ in padPush() }
-        .onReceive(pad.$rightY) { _ in padPush() }
-        .onReceive(pad.$connected) { _ in padPush() }
-        .sheet(isPresented: $showSettings) { SettingsView(palette: p, link: link) }
-        .onChange(of: telemetry?.motors.calibrated) { _, cal in
-            if cal == true {
-                showCalib = false                       // calibrated → close
-                lastCalibTrue = Date()
-            } else if cal == false, Date().timeIntervalSince(lastCalibTrue) > 2, !preview {
-                // Mandatory: reopen — but ignore the stale `false` the car still reports for a
-                // frame or two right after a successful save, which would re-open the sheet
-                // mid-dismiss and flicker.
-                showCalib = true
+    }
+
+    /// The screen from before video (81b96ae), for when the car's switch is off: diagram in
+    /// the middle, sticks in the corners, tricks and the warnings below. Same components as
+    /// the HUD; only the arrangement is its own.
+    private var classic: some View {
+        ZStack {
+            p.bg.ignoresSafeArea()
+
+            VStack {
+                HStack {
+                    HStack(spacing: 7) {
+                        SignalBars(level: linkUp ? signalLevel : 0, color: linkUp ? signalColor : .red)
+                        Text(linkUp ? L.driveConnected : L.driveSearching)
+                            .font(.system(size: 12)).foregroundStyle(p.muted)
+                    }
+                    Spacer()
+                    SchemeToggle(scheme: $schemeRaw, palette: p)
+                    videoButton.padding(.leading, 8)
+                    gearButton
+                }
+                .padding(.horizontal, 18).padding(.top, 8)
+                Spacer()
             }
-        }
-        .sheet(isPresented: $showCalib, onDismiss: {
-            // The wizard is interactiveDismissDisabled, so the only way it closes is its own
-            // dismiss() after a save the car accepted. Treat that as "calibrated": the telemetry
-            // frame already in flight was computed before the write and still says false.
-            lastCalibTrue = Date()
-        }) {
-            NavigationStack {
-                CarDimensionsView(palette: p, wizard: true)  // step 1 → Wheel → Calibration
+
+            HStack(spacing: 28) {
+                PowerBar(value: sides.left, palette: p)
+                DriveDiagram(t: intent.t, y: intent.y, palette: p)
+                PowerBar(value: sides.right, palette: p)
             }
-            .interactiveDismissDisabled(true)
+
+            if scheme == .arcade {
+                HStack {
+                    Spacer()
+                    JoystickView(palette: p) { x, y in
+                        if arcX == 0 && arcY == 0 && (x != 0 || y != 0) { haptics.tick() }
+                        arcX = x; arcY = y; push()
+                    }
+                    .padding(.trailing, 24)
+                }
+                .padding(.bottom, 16)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+            } else {
+                HStack {
+                    JoystickView(vertical: true, palette: p) { _, y in leftY = y; push() }.padding(.leading, 24)
+                    Spacer()
+                    JoystickView(vertical: true, palette: p) { _, y in rightY = y; push() }.padding(.trailing, 24)
+                }
+                .padding(.bottom, 16)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+            }
+
+            VStack(spacing: 6) {
+                Spacer()
+                TricksControl(palette: p, running: intent.runningTrick, startedAt: intent.trickStartedAt,
+                              onSelect: { intent.startTrick($0) },
+                              onStop: { intent.stopTrick() },
+                              debugOpen: previewTricksOpen)
+                warnings          // amber only, and only while something is wrong — under the FAB, as before video
+            }
+            .padding(.bottom, 16)
         }
     }
 

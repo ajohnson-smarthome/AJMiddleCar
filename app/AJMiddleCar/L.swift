@@ -142,6 +142,8 @@ enum L {
     static var videoStateOff: String { s("video.stateOff") }
     static var videoStateIdle: String { s("video.stateIdle") }
     static func videoStats(fps: Int, lost: Int) -> String { s("video.stats", fps, lost) }
+    static var videoOn: String { s("video.on") }
+    static var videoOff: String { s("video.off") }
     /// The actuator owner, by the generated vocabulary — an unknown value is shown as the car
     /// said it rather than silently dropped.
     static func ctlOwner(_ raw: String) -> String {
