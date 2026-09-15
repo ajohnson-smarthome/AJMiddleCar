@@ -17,7 +17,6 @@ import secrets
 import socket
 import sys
 import time
-import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "mock_car"))
@@ -126,16 +125,20 @@ class VideoConformance:
             """True when the car took it; a refusal or an unreachable REST side is one FAIL."""
             try:
                 status = self.post_config({"video": dict(video_cfg, enabled=on)})
-            except urllib.error.URLError as e:       # HTTPError too: a 404 is the dongle's own API
+            except OSError as e:      # a 404 (the adapter's own API), a refusal, or a hang-up mid-request
                 self.check(False, f"POST /config video.enabled={str(on).lower()} at {self.http}: {e}")
                 return False
             return self.check(status == 200, f"POST video.enabled={str(on).lower()} answered {status}")
 
         # A domain POST replaces the whole domain (cfg_api.c's two-pass rule — a partial
         # object is refused, not merged), so bitrate_kbps rides along unchanged.
+        # OSError, not URLError: urlopen wraps only the request in URLError — a server that
+        # accepts and then closes (the adapter relaying to a car whose HTTP side is down) raises
+        # a raw ConnectionResetError, one that stalls a raw TimeoutError. Both are OSError, and
+        # so is URLError.
         try:
             video_cfg = self.get_config()["video"]
-        except urllib.error.URLError as e:
+        except OSError as e:
             self.check(False, f"GET /config at {self.http}: {e} — the switch leg was not run")
             return seq
         was_on = bool(video_cfg.get("enabled", True))
@@ -192,7 +195,7 @@ class VideoConformance:
             if left_on != was_on:
                 try:
                     self.post_config({"video": video_cfg})
-                except urllib.error.URLError as e:
+                except OSError as e:
                     self.check(False, f"restoring video.enabled={str(was_on).lower()}: {e}")
         return seq
 
@@ -285,7 +288,7 @@ class VideoConformance:
         self.check(rx.bad == 0, f"{rx.bad} datagrams broke the header or length rules")
         self.check(len(streams) <= 1, f"the stream number changed mid-run: {sorted(streams)}")
         self.check(first_frame_at is None or first_frame_at < 2.0,
-                   f"first frame took {first_frame_at:.2f} s (> 2 s)")
+                   f"first frame took {first} (> 2 s)")   # `first`, not a format of None
         self.check(loss_pct < 5.0, f"{loss_pct:.1f}% of frames lost")
         self.check(all(l < 1.0 for l in key_latencies),
                    f"a keyframe took {max(key_latencies, default=0)*1000:.0f} ms to arrive after a request")

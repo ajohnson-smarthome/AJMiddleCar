@@ -136,11 +136,12 @@ are the closing sweep, run once stage 4 itself passes.
 - [ ] **The video switch.** The drive screen's button: the picture goes, the screen is the
       old layout, `video.state` is `idle` within a second, `relay.video_kbps` on the adapter
       reads 0 and the car's log says the sensor stopped; back on, the HUD and a first frame
-      within a second. Off, then reboot the car, then the drive screen: old layout, no
-      stream. `tools/conformance_video.py 192.168.7.1` (the http port defaults to the car's 80
-      through the adapter) — its switch leg is the second-client check: off, not one datagram
-      in two seconds; on, a keyframe within two; it leaves the switch on. The bitrate slider
-      under Settings leaves `enabled` as it was.
+      within a second. With the switch on, `tools/conformance_video.py 192.168.7.1` (the http
+      port defaults to the car's 80 through the adapter) — its switch leg is the second-client
+      check: off, not one datagram in two seconds; on, a keyframe within two; it puts the
+      switch back the way it found it, so run it with the switch on. Then off, reboot the car,
+      the drive screen: old layout, no stream. The bitrate slider under Settings leaves
+      `enabled` as it was.
 
 ## Notes from the bench
 
