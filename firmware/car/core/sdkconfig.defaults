@@ -83,3 +83,13 @@ CONFIG_ESP_VIDEO_ENABLE_DVP_VIDEO_DEVICE=n
 CONFIG_ESP_VIDEO_ENABLE_HW_H264_VIDEO_DEVICE=n
 CONFIG_ESP_VIDEO_ENABLE_HW_JPEG_ENC_VIDEO_DEVICE=n
 CONFIG_ESP_VIDEO_ENABLE_HW_JPEG_DEC_VIDEO_DEVICE=n
+# The ISP's tuning for this particular module, not the component's stock one. The stock
+# ov5647_default.json is written for a sensor behind an IR-cut filter; ours has none (a
+# night-vision module: the sensor sees infrared, and daylight is full of it), so the stock
+# colour matrix and saturation turn skin and fabric magenta and walls cyan. The exposure
+# and white balance themselves are the sensor's own (on-chip AEC/AWB — the driver exposes
+# only an AE target); the JSON governs what the ISP does after: colour matrix, saturation,
+# contrast, gamma, sharpening, denoise. Tuned by snapshot on the bench, docs/bringup.md.
+CONFIG_CAMERA_OV5647_DEFAULT_IPA_JSON_CONFIGURATION_FILE=n
+CONFIG_CAMERA_OV5647_CUSTOMIZED_IPA_JSON_CONFIGURATION_FILE=y
+CONFIG_CAMERA_OV5647_CUSTOMIZED_IPA_JSON_CONFIGURATION_FILE_PATH="main/ov5647_ipa.json"

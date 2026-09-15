@@ -51,8 +51,8 @@ stage 1 of the video plan exists to close them.
 | # | Assumption | Status |
 |---|---|---|
 | 7 | The sensor is **OV5647** (SCCB `0x36`, chip id `0x5647`) — every 5 MP fisheye/night-vision Pi camera module is | **closed 2026-09-14** — the first boot with the ribbon in logged `ov5647: Detected Camera sensor PID=0x5647` and `camera: sensor up on /dev/video0, 1280x960`, over the shared bus at 100 kHz |
-| 8 | Whether this particular module is **NoIR** (no IR-cut filter — daytime colours skew pink, a property, not a defect) or carries a mechanical IR-cut plus a photoresistor fed from 3.3 V | **open** — inspect the lens board; a photoresistor changes the current budget too |
-| 9 | A snapshot shows the **whole lens's field of view**, not a crop — `esp_video` does not scale on this silicon, and crops only on silicon ≥ v3.0, which this board is not | **open** — check `GET /snapshot` against what the lens actually sees, right side up |
+| 8 | Whether this particular module is **NoIR** (no IR-cut filter — daytime colours skew pink, a property, not a defect) or carries a mechanical IR-cut plus a photoresistor fed from 3.3 V | **closed 2026-09-15** — NoIR: no IR-cut on the lens, two IR LED boards of the Waveshare (F) kind, each with its own photoresistor and trim pot, fed 3.3 V through their mounting screws. They were lit in daylight on the bench (threshold at the sensitive end), which is part of why skin and fabric came out magenta |
+| 9 | A snapshot shows the **whole lens's field of view**, not a crop — `esp_video` does not scale on this silicon, and crops only on silicon ≥ v3.0, which this board is not | **closed 2026-09-15** — `GET /snapshot` is the full 1280×960 binned frame, the whole fisheye circle in it |
 | 10 | The bus survives 400 kHz SCCB on top of the two PCA9685 pull-ups, the board's own 2.2 kΩ, and a camera ribbon | **open** — the firmware ships conservatively at **100 kHz** (`BOARD_SCCB_HZ`, `board.h`) until the scope says the edges pass at 400 kHz; raise it only then |
 | 11 | Time from `camera_start` to the first usable frame | **open** — budgeted at ≈0.2–0.3 s (sensor lock-in plus AE/AWB convergence), unmeasured on hardware. Bounded regardless: `camera_start` sets `VIDIOC_S_DQBUF_TIMEOUT` to 500 ms, so a sensor that never delivers a frame ends the caller's request instead of hanging its task |
 
@@ -172,7 +172,39 @@ an IR-cut filter, and an AE that weights the whole frame evenly). That is the ne
 it costs the wire nothing: our own IPA profile, plus a focus check on `GET /snapshot`.
 
 Left as they were: the car's pacing (3 ms) and the QP corridor (20..45) — with the smaller
-frames neither was near its limit in either run.
+frames neither was near its limit in either run. Not so under motion: while the user
+focused the lens with a hand in front of it, `video.dropped` climbed from 104 to 1080 in a
+few minutes — the encoder's bursts outrun the 3 ms pacing and the ring skips frames (fps
+dips, not wire loss). To be measured with the probe and a moving scene, and then decided:
+2 ms pacing, or a tighter QP floor for P-frames.
+
+### Four rounds of the ISP profile, by snapshot (2026-09-15)
+
+The stock `ov5647_default.json` is tuned for a sensor behind an IR-cut filter; this module
+has none, and its IR LEDs were lit in daylight on top. The stock look: walls and ceiling
+cyan, skin and fabric magenta (11 % of the frame «clearly pink» by a crude
+`((R−G)+(B−G))/2 > 12` count), colour noise in every flat area. The exposure and white
+balance are the sensor's own on-chip AEC/AWB — the driver exposes only an AE target — so
+the profile only governs what the ISP does after: colour matrix, saturation, contrast,
+gamma, sharpen, denoise. Rounds, each an OTA through the relay and a `GET /snapshot`:
+
+| round | matrix (of stock) | saturation | contrast | gamma | pink px | saturation (measured) | luma σ |
+|---|---|---|---|---|---|---|---|
+| stock | 100 % | 128 | 134 | 0.72 | 11.1 % | 33 | 43 |
+| 1 | 50 % | 96 | 128 | 0.72 | 1.1 % | 16 | — |
+| 2 | 25 % | 72 | 128 | 0.72 | 0.0 % | 11 | 46 |
+| 3 | 25 % | 72 | 150 | 0.80 | 0.3 % | 12 | 52 (p95 251 — highlights clipping) |
+| **4** | 25 % | 104 | 140 | 0.80 | 2.9 % | 22 | 53 |
+
+Round 2 was clean and the user called it colourless; round 4 is the compromise shipped in
+`main/ov5647_ipa.json` (sharpen 0.30/0.45 instead of 0.425/0.625, denoise level 6 instead
+of 5, throughout). The pink and the colour ride the same knob: without an IR-cut filter the
+IR component of daylight — and of the LEDs — lands in the red channel and no matrix can
+tell it from a pink object. Two things remain: set the LED boards' trim pots so they are
+dark in daylight, then re-shoot and likely give saturation back toward 120; and the night
+branch — a snapshot in the dark, IR on, to see what luma the IR-lit scene settles at and
+whether the profile's low-luma matrix (identity below `ae.luma.avg` 28) is the right
+switch for a grey night picture, or whether it wants a luminance-only matrix there.
 
 ### The USB ceiling had a number, and the number was 127 packets (2026-09-15, night)
 

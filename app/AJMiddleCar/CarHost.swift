@@ -9,7 +9,19 @@ enum CarHost {
     /// update and all. Without it the simulator talks to the mock and skips the dongle half
     /// of the ladder, because there is no dongle to ask. Bench-only, and the reason it is a
     /// launch argument rather than a build: one binary, the mock loop or the real path.
-    static let viaDongle = ProcessInfo.processInfo.arguments.contains("-viaDongle")
+    ///
+    /// Sticky: a launch with `-viaDongle` is remembered, so tapping the icon in the simulator
+    /// afterwards keeps the real path. An icon launch carries no arguments, and without this
+    /// it fell back to the mock at 127.0.0.1 — a «Здороваюсь с машинкой» that never ends,
+    /// while the car and the dongle sat there answering (bench, 2026-09-15). `-viaMock`
+    /// forgets it.
+    static let viaDongle: Bool = {
+        let args = ProcessInfo.processInfo.arguments
+        let remembered = UserDefaults.standard
+        if args.contains("-viaMock") { remembered.set(false, forKey: "viaDongle"); return false }
+        if args.contains("-viaDongle") { remembered.set(true, forKey: "viaDongle"); return true }
+        return remembered.bool(forKey: "viaDongle")
+    }()
     /// The mock binds `0.0.0.0`, so it is reachable both on loopback and on the Mac's LAN
     /// address. `-carHost 192.168.1.20` points the simulator at the latter — a real path to a
     /// mock, with no dongle in it.
