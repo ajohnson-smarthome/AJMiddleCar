@@ -26,13 +26,16 @@ typedef enum {
 
 static inline void video_sub_init(video_sub_t *s) { memset(s, 0, sizeof(*s)); }
 
-// `owner_sid` is rt_link's owner ("" when nobody). *force_idr is set only when the view
-// asked for a keyframe and VIDEO_IDR_MIN_MS has passed since the last one forced — never
-// on VS_START, since a fresh stream begins with an IDR anyway.
+// `owner_sid` is rt_link's owner ("" when nobody). `enabled` is the video switch
+// (`video.enabled` in /config): off, every view is ignored, whoever sends it — the switch is
+// one more reason there is no subscription, not a state of its own. *force_idr is set only
+// when the view asked for a keyframe and VIDEO_IDR_MIN_MS has passed since the last one
+// forced — never on VS_START, since a fresh stream begins with an IDR anyway.
 static inline video_sub_verdict_t video_sub_view(video_sub_t *s, const char *owner_sid,
                                                  const control_frame_t *f, uint32_t now_ms,
-                                                 bool *force_idr) {
+                                                 bool enabled, bool *force_idr) {
     *force_idr = false;
+    if (!enabled) return VS_IGNORE;
     if (f->type != CT_VIEW) return VS_IGNORE;
     if (!f->has_proto || f->proto != RT_PROTO) return VS_IGNORE;
     if (owner_sid == NULL || owner_sid[0] == '\0' || strcmp(owner_sid, f->sid) != 0) return VS_IGNORE;
@@ -52,8 +55,9 @@ static inline video_sub_verdict_t video_sub_view(video_sub_t *s, const char *own
     return VS_REFRESH;
 }
 
-// True when a live subscription should end: the phone stopped asking, or the rt session
-// it was tied to is gone.
+// True when a live subscription should end: the phone stopped asking, or the rt session it
+// was tied to is gone — or the switch went off; the caller folds that into `owner_alive`,
+// which is why a stream ends on the control task's next tick rather than at the timeout.
 static inline bool video_sub_expired(const video_sub_t *s, bool owner_alive, uint32_t now_ms) {
     if (!s->subscribed) return false;
     if (!owner_alive) return true;

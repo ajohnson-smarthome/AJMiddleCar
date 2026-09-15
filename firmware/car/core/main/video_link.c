@@ -216,11 +216,15 @@ static void ctl_task(void *arg) {
         char owner[CONTROL_SID_MAX];
         rt_link_owner_sid(owner);
         uint32_t t = now_ms();
+        /* The switch is read here, once per tick, and nowhere else: a view meets it as one
+           more reason to be ignored, and a running stream meets it as one more way for the
+           subscription to be over — on this tick, not at the 3 s timeout. */
+        bool enabled = video_cfg_get_enabled();
         if (n > 0 && camera_present()) {
             control_frame_t f;
             if (control_parse_frame(buf, (size_t)n, RT_MAX_COMMAND, &f) == 0) {
                 bool idr = false;
-                switch (video_sub_view(&sub, owner, &f, t, &idr)) {
+                switch (video_sub_view(&sub, owner, &f, t, enabled, &idr)) {
                 case VS_START:
                     taskENTER_CRITICAL(&s_mux); s_peer = from; taskEXIT_CRITICAL(&s_mux);
                     /* Harmless on the fresh encoder this usually meets, and load-bearing on
@@ -249,10 +253,11 @@ static void ctl_task(void *arg) {
                 }
             }
         }
-        if (video_sub_expired(&sub, owner[0] != '\0', t)) {
+        if (video_sub_expired(&sub, owner[0] != '\0' && enabled, t)) {
             video_sub_end(&sub);
             s_want = false;
-            ESP_LOGI(TAG, "viewer gone — stream ends");
+            if (enabled) ESP_LOGI(TAG, "viewer gone — stream ends");
+            else         ESP_LOGI(TAG, "video switched off — stream ends");
         }
     }
 }
