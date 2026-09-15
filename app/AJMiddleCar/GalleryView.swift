@@ -72,6 +72,7 @@ struct GalleryView: View {
         ConfigStore.shared.recovery.seed(.default)
         ConfigStore.shared.wheel.seed(.default)
         ConfigStore.shared.chassis.seed(.default)
+        ConfigStore.shared.video.seed(.default)   // the switch on: the drive frames are the HUD
         // One helper, two devices: the whole point of the unification is that these render the
         // same screen with a different object under the chip.
         func fw(_ phase: FwPhase, forced: Bool = false,

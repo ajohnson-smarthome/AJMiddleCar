@@ -147,7 +147,7 @@ struct DriveView: View {
         ZStack {
             if screen.mode == .hud { hud } else { classic }
         }
-        .task { await videoCfg.loadIfNeeded() }
+        .task { if !preview { await videoCfg.loadIfNeeded() } }
         .onChange(of: videoCfg.state, initial: true) { _, st in
             if case .loaded(let v) = st { confirmed = v }
         }
@@ -346,6 +346,7 @@ struct DriveView: View {
                 TricksControl(palette: p, running: intent.runningTrick, startedAt: intent.trickStartedAt,
                               onSelect: { intent.startTrick($0) },
                               onStop: { intent.stopTrick() },
+                              cardEdge: .top,   // the FAB is bottom-centre: the card opens upward, as before video
                               debugOpen: previewTricksOpen)
                 warnings          // amber only, and only while something is wrong — under the FAB, as before video
             }
