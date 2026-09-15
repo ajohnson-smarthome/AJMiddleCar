@@ -4,7 +4,7 @@ LDLIBS = -lm
 # The schema itself, for the two wire values the C generator emits no symbol for.
 CONTRACT = $(abspath ../../../../contract/car-api.json)
 
-all: test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel test_cfg_table test_cfg_value test_calib_wire test_link test_rt_session test_rt_glue test_contract_wire test_radio_ota test_device_json test_video_wire test_video_sub
+all: test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel test_cfg_table test_cfg_value test_calib_wire test_link test_rt_session test_rt_glue test_contract_wire test_radio_ota test_device_json test_video_wire test_video_sub test_frame_crop
 
 test_mixer: test_mixer.c ../main/mixer.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
@@ -68,13 +68,16 @@ test_video_wire: test_video_wire.c ../main/video_wire.h ../main/cfg_table.inc
 test_video_sub: test_video_sub.c ../main/video_sub.h ../main/control_proto.c ../main/cfg_table.inc
 	$(CC) $(CFLAGS) -o $@ test_video_sub.c ../main/control_proto.c $(LDLIBS)
 
+test_frame_crop: test_frame_crop.c ../main/frame_crop.h ../main/cfg_table.inc
+	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
+
 # The lifecycle's side effects over a recording effects table — the impure orderings
 # rt_link.c executes, pinned the way test_state.py pins them on the mock.
 test_rt_glue: test_rt_glue.c ../main/rt_glue.h ../main/rt_link.h ../main/link.h
 	$(CC) $(CFLAGS) -o $@ test_rt_glue.c $(LDLIBS)
 
 run: all
-	./test_mixer && ./test_motors && ./test_control_proto && ./test_watchdog && ./test_calibration && ./test_ramp && ./test_trim && ./test_radio_ota && ./test_telemetry && ./test_recovery && ./test_wheel && ./test_cfg_table && ./test_cfg_value && ./test_calib_wire && ./test_link && ./test_rt_session && ./test_rt_glue && ./test_contract_wire && ./test_device_json && ./test_video_wire && ./test_video_sub
+	./test_mixer && ./test_motors && ./test_control_proto && ./test_watchdog && ./test_calibration && ./test_ramp && ./test_trim && ./test_radio_ota && ./test_telemetry && ./test_recovery && ./test_wheel && ./test_cfg_table && ./test_cfg_value && ./test_calib_wire && ./test_link && ./test_rt_session && ./test_rt_glue && ./test_contract_wire && ./test_device_json && ./test_video_wire && ./test_video_sub && ./test_frame_crop
 
 clean:
-	rm -f test_contract_wire test_rt_session test_rt_glue test_link test_cfg_table test_cfg_value test_calib_wire test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_radio_ota test_telemetry test_recovery test_wheel test_device_json test_video_wire test_video_sub
+	rm -f test_contract_wire test_rt_session test_rt_glue test_link test_cfg_table test_cfg_value test_calib_wire test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_radio_ota test_telemetry test_recovery test_wheel test_device_json test_video_wire test_video_sub test_frame_crop

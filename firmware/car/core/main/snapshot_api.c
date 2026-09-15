@@ -69,7 +69,7 @@ static esp_err_t snapshot_get(httpd_req_t *req) {
     if (!jpg) { camera_release(&f); err = ESP_ERR_NO_MEM; goto out; }
 
     jpeg_encode_cfg_t cfg = {
-        .width = VIDEO_WIDTH, .height = VIDEO_HEIGHT,
+        .width = VIDEO_WIDTH, .height = VIDEO_SENSOR_HEIGHT,   /* the whole frame, not the stream's crop */
         .src_type = JPEG_ENCODE_IN_FORMAT_YUV422,   /* UYVY from the ISP, as Espressif's own example maps it */
         .sub_sample = JPEG_DOWN_SAMPLING_YUV422,
         .image_quality = SNAPSHOT_QUALITY,

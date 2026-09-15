@@ -147,7 +147,7 @@ def emit_c(schema):
         out.append(f'#define KEY_CALIB_{k.upper()} "{v}"')
     vid = schema["video"]
     out.append("")
-    for k in ("port", "width", "height", "fps", "sensor_fps", "chunk_bytes", "header_bytes",
+    for k in ("port", "width", "height", "sensor_height", "fps", "sensor_fps", "chunk_bytes", "header_bytes",
               "wire_proto", "subscribe_ms", "subscribe_timeout_ms", "keyframe_s", "idr_min_ms",
               "rotation"):
         out.append(f"#define VIDEO_{k.upper()} {vid[k]}")

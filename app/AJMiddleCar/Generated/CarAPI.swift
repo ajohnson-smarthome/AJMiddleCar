@@ -16,14 +16,14 @@ public enum CarContract {
     public static let sessionIdleMs = 10000
     public static let videoPort: UInt16 = 4211
     public static let videoWidth = 1280
-    public static let videoHeight = 960
-    public static let videoFps = 15
+    public static let videoHeight = 720
+    public static let videoFps = 22
     public static let videoChunkBytes = 1400
     public static let videoHeaderBytes = 12
     public static let videoWireProto = 1
     public static let videoSubscribeMs = 1000
     public static let videoSubscribeTimeoutMs = 3000
-    public static let videoKeyframeS = 3
+    public static let videoKeyframeS = 10
     public static let videoIdrMinMs = 250
     public static let videoRotation = 0
     public static let videoMirror = false
@@ -396,14 +396,14 @@ public extension Chassis {
 
 /// The FPV encoder. Applied at the next stream start, not live.
 public struct Video: Codable, Equatable, Sendable {
-    /// target H.264 bitrate in kbit/s; the adapter's USB (Full-Speed, one transfer block per host read) drains ~4 Mbit/s at the car's 3 ms chunk pacing, measured 2026-09-16 — 1500 leaves room for keyframes and motion
+    /// target H.264 bitrate in kbit/s; the adapter's USB (Full-Speed, one transfer block per host read) drains ~4 Mbit/s at the car's 3 ms chunk pacing, measured 2026-09-16, and the car's own pacing caps it at 3.7 — 2500 leaves the gap for keyframes and motion
     public var bitrate_kbps: Int
     public init(bitrate_kbps: Int) { self.bitrate_kbps = bitrate_kbps }
 }
 
 public extension Video {
     static let key = "video"
-    static let `default` = Video(bitrate_kbps: 1500)
+    static let `default` = Video(bitrate_kbps: 2500)
     static let bitrate_kbpsRange: ClosedRange<Int> = 500...3000
     static func pick(from c: CarConfig) -> Video? { c.video }
     static func wrap(_ v: Video) -> CarConfig { CarConfig(video: v) }

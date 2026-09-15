@@ -335,9 +335,12 @@ than forwarded.
 
 ### Keyframes
 
-A planned keyframe goes out every `keyframe_s` (**3 s**) — for a viewer subscribing mid-stream,
-not for recovery: waiting up to three seconds after an ordinary loss is exactly the freeze
-this design exists to avoid. Recovery is on request: a receiver that abandons a frame asks for
+A planned keyframe goes out every `keyframe_s` (**10 s**) — for a viewer subscribing mid-stream,
+not for recovery: waiting up to ten seconds after an ordinary loss is exactly the freeze
+this design exists to avoid. It was 3 s until 2026-09-16: a keyframe is the one frame that
+takes 100+ ms to leave at the car's pacing, and every one of them is a visible hitch, so
+they are as rare as the recovery path allows (the encoder's GOP counter tops out at 255
+frames, which at 22 fps is 11 s). Recovery is on request: a receiver that abandons a frame asks for
 one with `key:true`, and the car forces one with `esp_h264_enc_force_idr()`, rate-limited to
 at most once every `idr_min_ms` (**250 ms**) so a burst of loss events cannot turn into a burst
 of oversized frames. Every keyframe carries its own SPS/PPS, so a receiver starting mid-stream
@@ -387,11 +390,21 @@ cannot drift between them:
 ### Configuration — the `video` domain
 
 One field, generated into the domain table below along with the other five — `bitrate_kbps`,
-`500..3000`, default `1500`. It is read once, at the next stream start: `video_link` asks for
+`500..3000`, default `2500`. It is read once, at the next stream start: `video_link` asks for
 it when it opens the encoder, not while one is already running, so a change lands on the next
 viewer rather than mid-frame. `fps` is not a setting: it is a constant of the contract, because
 only a few whole divisors of the sensor's own frame rate make sense, and the firmware is built
-against the one it picked (`sensor_fps` 45 ÷ 3 = `fps` 15), not a stored value.
+against the one it picked (every second sensor frame: `sensor_fps` 45 ÷ 2 = 22.5, carried as
+`fps` 22, the floor), not a stored value.
+
+Nor is the picture's size: `width` × `height` (1280 × 720) is what the encoder is given, and
+it is the middle 720 rows of the sensor's 1280 × `sensor_height` (960) frame. The fisheye's
+full field is 4:3, the drive screen shows a 16:9 window onto it, and the rows outside that
+window were being encoded, paced onto the wire and cropped by the viewer — a quarter of every
+keyframe on pixels nobody saw. The crop is a row offset at the encoder's input on the car
+(`frame_crop.h`), so it costs nothing, and the viewer's `resizeAspectFill` shows the same
+window it did. `GET /snapshot` is the exception: it is the bench's look at the sensor and
+returns the whole 1280 × 960 frame.
 
 ### Through the dongle — `relay.video_*`
 
@@ -469,7 +482,7 @@ persists to NVS immediately, and a POST of unchanged values does not rewrite fla
  "recovery": {"enabled":true,"window_ms":5000},
  "wheel":    {"diameter_mm":65,"encoder_ppr":11,"gear_ratio":9.0,"quadrature":4},
  "chassis":  {"track_mm":130,"wheelbase_mm":210},
- "video":    {"bitrate_kbps":1500}}
+ "video":    {"bitrate_kbps":2500}}
 ```
 
 <!-- generated:endpoints -->
@@ -485,7 +498,7 @@ persists to NVS immediately, and a POST of unchanged values does not rewrite fla
 | `wheel` | `quadrature` | enum | 1 \| 2 \| 4 | 4 | quadrature edge multiplier |
 | `chassis` | `track_mm` | int | 60..300 | 130 | lateral distance between left and right wheel centres |
 | `chassis` | `wheelbase_mm` | int | 90..360 | 210 | longitudinal distance between front and rear wheel centres |
-| `video` | `bitrate_kbps` | int | 500..3000 | 1500 | target H.264 bitrate in kbit/s; the adapter's USB (Full-Speed, one transfer block per host read) drains ~4 Mbit/s at the car's 3 ms chunk pacing, measured 2026-09-16 — 1500 leaves room for keyframes and motion |
+| `video` | `bitrate_kbps` | int | 500..3000 | 2500 | target H.264 bitrate in kbit/s; the adapter's USB (Full-Speed, one transfer block per host read) drains ~4 Mbit/s at the car's 3 ms chunk pacing, measured 2026-09-16, and the car's own pacing caps it at 3.7 — 2500 leaves the gap for keyframes and motion |
 <!-- /generated:endpoints -->
 
 ### What the values mean

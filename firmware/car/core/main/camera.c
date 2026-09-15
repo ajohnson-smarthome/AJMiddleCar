@@ -54,7 +54,7 @@ esp_err_t camera_init(void) {
         return ESP_OK;
     }
     s_present = true;
-    ESP_LOGI(TAG, "sensor up on %s, %dx%d", ESP_VIDEO_MIPI_CSI_DEVICE_NAME, VIDEO_WIDTH, VIDEO_HEIGHT);
+    ESP_LOGI(TAG, "sensor up on %s, %dx%d", ESP_VIDEO_MIPI_CSI_DEVICE_NAME, VIDEO_WIDTH, VIDEO_SENSOR_HEIGHT);
     return ESP_OK;
 }
 
@@ -62,7 +62,7 @@ bool camera_present(void) { return s_present; }
 bool camera_running(void) { return s_fd >= 0; }
 
 size_t camera_frame_bytes(camera_fmt_t fmt) {
-    size_t px = (size_t)VIDEO_WIDTH * VIDEO_HEIGHT;
+    size_t px = (size_t)VIDEO_WIDTH * VIDEO_SENSOR_HEIGHT;
     return fmt == CAMERA_FMT_YUV420 ? px * 3 / 2 : px * 2;
 }
 
@@ -97,7 +97,7 @@ static esp_err_t start_locked(camera_fmt_t fmt) {
     struct v4l2_format format = {
         .type = type,
         .fmt.pix.width = VIDEO_WIDTH,
-        .fmt.pix.height = VIDEO_HEIGHT,
+        .fmt.pix.height = VIDEO_SENSOR_HEIGHT,   /* the whole frame; the stream crops it (frame_crop.h) */
         .fmt.pix.pixelformat = fmt == CAMERA_FMT_YUV420 ? V4L2_PIX_FMT_YUV420 : V4L2_PIX_FMT_UYVY,
     };
     if (ioctl(fd, VIDIOC_S_FMT, &format) != 0) { close(fd); ESP_LOGE(TAG, "S_FMT"); return ESP_FAIL; }

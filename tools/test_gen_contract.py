@@ -152,13 +152,24 @@ class TestSchema(unittest.TestCase):
     def test_video_section(self):
         v = load()["video"]
         self.assertEqual((v["port"], v["width"], v["height"], v["fps"], v["sensor_fps"]),
-                         (4211, 1280, 960, 15, 45))
-        self.assertEqual(v["sensor_fps"] % v["fps"], 0, "fps must divide the sensor rate")
+                         (4211, 1280, 720, 22, 45))
+        # The wire carries the middle of the sensor's frame: the HUD shows a 16:9 window and
+        # the rows outside it would be encoded only to be cropped. The crop is a row offset
+        # in the ISP's packed 4:2:0 layout, so the margin must be whole and even on each side.
+        self.assertEqual(v["sensor_height"], 960)
+        self.assertLessEqual(v["height"], v["sensor_height"])
+        self.assertEqual((v["sensor_height"] - v["height"]) % 4, 0, "the crop margin splits into two even halves")
+        self.assertEqual(v["height"] % 16, 0, "the encoder works in 16-pixel macroblocks")
+        # The car encodes every Nth sensor frame; `fps` is the nominal rate the app and the
+        # encoder's rate control are told, the floor of the real one (45/2 = 22.5 -> 22).
+        skip = v["sensor_fps"] // v["fps"]
+        self.assertEqual(v["sensor_fps"] // skip, v["fps"], "fps must be the floor of sensor_fps / skip")
+        self.assertLessEqual(v["fps"] * v["keyframe_s"], 255, "the hardware encoder's GOP is at most 255")
         self.assertEqual((v["chunk_bytes"], v["header_bytes"], v["wire_proto"]), (1400, 12, 1))
         self.assertLess(v["chunk_bytes"] + v["header_bytes"] + 8 + 20 + 14, 1500)
         self.assertEqual((v["subscribe_ms"], v["subscribe_timeout_ms"]), (1000, 3000))
         self.assertGreater(v["subscribe_timeout_ms"], 2 * v["subscribe_ms"])
-        self.assertEqual((v["keyframe_s"], v["idr_min_ms"]), (3, 250))
+        self.assertEqual((v["keyframe_s"], v["idr_min_ms"]), (10, 250))
         self.assertIn(v["rotation"], (0, 180))
         self.assertIsInstance(v["mirror"], bool)
         self.assertNotEqual(v["port"], load()["rt"]["port"])
@@ -379,11 +390,12 @@ class TestCEmitter(unittest.TestCase):
         self.assertNotIn("CTL_", self.out)
 
     def test_video_symbols(self):
-        for line in ("#define VIDEO_PORT 4211", "#define VIDEO_WIDTH 1280", "#define VIDEO_HEIGHT 960",
-                     "#define VIDEO_FPS 15", "#define VIDEO_SENSOR_FPS 45", "#define VIDEO_CHUNK_BYTES 1400",
+        for line in ("#define VIDEO_PORT 4211", "#define VIDEO_WIDTH 1280", "#define VIDEO_HEIGHT 720",
+                     "#define VIDEO_SENSOR_HEIGHT 960",
+                     "#define VIDEO_FPS 22", "#define VIDEO_SENSOR_FPS 45", "#define VIDEO_CHUNK_BYTES 1400",
                      "#define VIDEO_HEADER_BYTES 12", "#define VIDEO_WIRE_PROTO 1",
                      "#define VIDEO_SUBSCRIBE_MS 1000", "#define VIDEO_SUBSCRIBE_TIMEOUT_MS 3000",
-                     "#define VIDEO_KEYFRAME_S 3", "#define VIDEO_IDR_MIN_MS 250",
+                     "#define VIDEO_KEYFRAME_S 10", "#define VIDEO_IDR_MIN_MS 250",
                      "#define VIDEO_ROTATION 0", "#define VIDEO_MIRROR 0",
                      '#define PATH_SNAPSHOT "/snapshot"', '#define KEY_GROUP_VIDEO "video"',
                      '#define VIDEO_STATE_STREAMING "streaming"', "#define VIDEO_STATE_COUNT 3",
@@ -458,7 +470,7 @@ class TestSwiftEmitter(unittest.TestCase):
         self.assertIn("public struct Video: Codable, Equatable, Sendable {", self.out)
         self.assertIn("    public var bitrate_kbps: Int", self.lines())
         self.assertIn('    static let key = "video"', self.lines())
-        self.assertIn("    static let `default` = Video(bitrate_kbps: 1500)", self.lines())
+        self.assertIn("    static let `default` = Video(bitrate_kbps: 2500)", self.lines())
         self.assertIn("    static let bitrate_kbpsRange: ClosedRange<Int> = 500...3000", self.lines())
         self.assertIn("    static func pick(from c: CarConfig) -> Video? { c.video }", self.lines())
         self.assertIn("    static func wrap(_ v: Video) -> CarConfig { CarConfig(video: v) }", self.lines())

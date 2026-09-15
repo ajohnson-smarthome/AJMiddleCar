@@ -24,7 +24,7 @@ bool camera_present(void);
 // accepts — not planar I420. UYVY is for the JPEG block, which on rev 1.3 takes no 4:2:0.
 typedef enum { CAMERA_FMT_YUV420, CAMERA_FMT_UYVY } camera_fmt_t;
 
-// Bytes per frame at VIDEO_WIDTH x VIDEO_HEIGHT in the given format.
+// Bytes per frame at VIDEO_WIDTH x VIDEO_SENSOR_HEIGHT — the sensor's whole frame — in the given format.
 size_t camera_frame_bytes(camera_fmt_t fmt);
 
 // Start the pipeline in `fmt` (ESP_ERR_INVALID_STATE if running or absent), stop it.

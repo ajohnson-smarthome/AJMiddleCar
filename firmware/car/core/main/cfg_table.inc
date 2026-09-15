@@ -25,7 +25,7 @@ static const cfg_field_t CFG_DIMS_FIELDS[] = {
     { "wheelbase_mm", CFG_INT, 90, 360, 210, NULL, 0, 1 },
 };
 static const cfg_field_t CFG_VIDEO_FIELDS[] = {
-    { "bitrate_kbps", CFG_INT, 500, 3000, 1500, NULL, 0, 1 },
+    { "bitrate_kbps", CFG_INT, 500, 3000, 2500, NULL, 0, 1 },
 };
 
 static const cfg_domain_t CFG_DOMAINS[] = {
@@ -160,15 +160,16 @@ static const cfg_domain_t CFG_DOMAINS[] = {
 
 #define VIDEO_PORT 4211
 #define VIDEO_WIDTH 1280
-#define VIDEO_HEIGHT 960
-#define VIDEO_FPS 15
+#define VIDEO_HEIGHT 720
+#define VIDEO_SENSOR_HEIGHT 960
+#define VIDEO_FPS 22
 #define VIDEO_SENSOR_FPS 45
 #define VIDEO_CHUNK_BYTES 1400
 #define VIDEO_HEADER_BYTES 12
 #define VIDEO_WIRE_PROTO 1
 #define VIDEO_SUBSCRIBE_MS 1000
 #define VIDEO_SUBSCRIBE_TIMEOUT_MS 3000
-#define VIDEO_KEYFRAME_S 3
+#define VIDEO_KEYFRAME_S 10
 #define VIDEO_IDR_MIN_MS 250
 #define VIDEO_ROTATION 0
 #define VIDEO_MIRROR 0

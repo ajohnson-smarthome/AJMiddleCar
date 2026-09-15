@@ -13,6 +13,7 @@
 #include "camera.h"
 #include "contract.h"
 #include "control_proto.h"
+#include "frame_crop.h"
 #include "rt_link.h"
 #include "video_cfg.h"
 #include "video_enc.h"
@@ -29,7 +30,14 @@ static const char *TAG = "video";
    drops another frame: the bench watched the bitrate climb to 2.9 Mbit/s on a 1.5 target
    from nothing but that loop. Slots are 256 KB each in PSRAM, of which there are 32 MB. */
 #define RING_SLOTS       6
-#define FRAME_SKIP       (VIDEO_SENSOR_FPS / VIDEO_FPS) /* encode every FRAME_SKIP-th sensor frame */
+/* Encode every FRAME_SKIP-th sensor frame. The contract's fps is the nominal rate — the
+   floor of the real one, 45/2 = 22.5 told to the app and the encoder's rate control as 22 —
+   so the skip is the integer quotient and the assert below is that it lands on that floor
+   (a 30 in the contract would silently become 45 otherwise). */
+#define FRAME_SKIP       (VIDEO_SENSOR_FPS / VIDEO_FPS)
+/* The encoder sees the middle VIDEO_HEIGHT rows of the sensor's frame — frame_crop.h. */
+#define CROP_OFFSET      frame_crop_offset(VIDEO_WIDTH, VIDEO_SENSOR_HEIGHT, VIDEO_HEIGHT)
+#define CROP_BYTES       frame_crop_bytes(VIDEO_WIDTH, VIDEO_HEIGHT)
 /* One chunk every 3 ms — 3.7 Mbit/s while a frame is leaving. The dongle's USB is
    Full-Speed and its host takes one transfer block at a time, ~5 ms between reads plus
    ~1.2 ms of wire per chunk, so what it drains depends on how many chunks land in each
@@ -41,7 +49,9 @@ static const char *TAG = "video";
    2 and 3 ms both 99–100 % whole at 1500–2500 kbit/s; 3 keeps the margin. */
 #define SEND_PERIOD_US   3000
 
-_Static_assert(VIDEO_SENSOR_FPS % VIDEO_FPS == 0, "fps must divide the sensor rate");
+_Static_assert(VIDEO_SENSOR_FPS / FRAME_SKIP == VIDEO_FPS, "fps must be the floor of the sensor rate over a whole skip");
+_Static_assert(VIDEO_FPS * VIDEO_KEYFRAME_S <= 255, "the hardware encoder's GOP is at most 255");
+_Static_assert(VIDEO_HEIGHT <= VIDEO_SENSOR_HEIGHT, "the wire picture is a crop of the sensor's frame");
 
 /* ---- shared state ---------------------------------------------------------------- */
 static int s_sock = -1;
@@ -170,7 +180,7 @@ static void enc_task(void *arg) {
             }
             if (s_force_idr) { s_force_idr = false; video_enc_force_idr(); }
             size_t len = 0; bool key = false;
-            esp_err_t err = video_enc_encode(f.data, f.len, f.captured_ms, slot->buf, VIDEO_ENC_OUT_MAX, &len, &key);
+            esp_err_t err = video_enc_encode(f.data + CROP_OFFSET, CROP_BYTES, f.captured_ms, slot->buf, VIDEO_ENC_OUT_MAX, &len, &key);
             camera_release(&f);
             if (err != ESP_OK || vw_chunk_count(len) == 0) {
                 s_dropped++;

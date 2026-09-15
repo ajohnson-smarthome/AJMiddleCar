@@ -185,8 +185,8 @@
         "swift": "Video",
         "doc": "The FPV encoder. Applied at the next stream start, not live.",
         "fields": [
-          {"name": "bitrate_kbps", "type": "int", "min": 500, "max": 3000, "default": 1500,
-           "doc": "target H.264 bitrate in kbit/s; the adapter's USB (Full-Speed, one transfer block per host read) drains ~4 Mbit/s at the car's 3 ms chunk pacing, measured 2026-09-16 — 1500 leaves room for keyframes and motion"}
+          {"name": "bitrate_kbps", "type": "int", "min": 500, "max": 3000, "default": 2500,
+           "doc": "target H.264 bitrate in kbit/s; the adapter's USB (Full-Speed, one transfer block per host read) drains ~4 Mbit/s at the car's 3 ms chunk pacing, measured 2026-09-16, and the car's own pacing caps it at 3.7 — 2500 leaves the gap for keyframes and motion"}
         ]
       }
     ]
@@ -210,19 +210,20 @@
   "video": {
     "port": 4211,
     "width": 1280,
-    "height": 960,
-    "fps": 15,
+    "height": 720,
+    "sensor_height": 960,
+    "fps": 22,
     "sensor_fps": 45,
     "chunk_bytes": 1400,
     "header_bytes": 12,
     "wire_proto": 1,
     "subscribe_ms": 1000,
     "subscribe_timeout_ms": 3000,
-    "keyframe_s": 3,
+    "keyframe_s": 10,
     "idr_min_ms": 250,
     "rotation": 0,
     "mirror": false,
-    "doc": "The FPV stream: H.264 Annex B chunks on UDP `port`, one chunk per datagram. Header, big-endian: u8 proto (wire_proto), u8 flags (bit0 keyframe), u8 stream (+1 per stream start), u8 reserved (0), u16 frame (from 0 per stream, modulo 2^16), u8 chunk, u8 count, u32 captured_ms. Every chunk but the last is exactly chunk_bytes. The phone subscribes with a `view` datagram on the same port every subscribe_ms; subscribe_timeout_ms without one stops the stream. keyframe_s is the planned IDR period; a `view` with key:true forces one, at most every idr_min_ms. rotation/mirror are applied by the viewer.",
+    "doc": "The FPV stream: H.264 Annex B chunks on UDP `port`, one chunk per datagram. Header, big-endian: u8 proto (wire_proto), u8 flags (bit0 keyframe), u8 stream (+1 per stream start), u8 reserved (0), u16 frame (from 0 per stream, modulo 2^16), u8 chunk, u8 count, u32 captured_ms. Every chunk but the last is exactly chunk_bytes. width x height is the encoded picture: the middle `height` rows of the sensor's `sensor_height`-row frame (the fisheye's top and bottom, which the viewer would crop anyway, are never encoded). fps is nominal — the car encodes every sensor_fps/fps-th sensor frame (rounded down), so 22 is really 22.5. The phone subscribes with a `view` datagram on the same port every subscribe_ms; subscribe_timeout_ms without one stops the stream. keyframe_s is the planned IDR period; a `view` with key:true forces one, at most every idr_min_ms. rotation/mirror are applied by the viewer.",
     "vectors": [
       {"name": "keyframe, first chunk",
        "header": {"proto": 1, "flags": 1, "stream": 3, "frame": 7, "chunk": 0, "count": 30, "captured_ms": 812345},
