@@ -138,7 +138,7 @@ are the closing sweep, run once stage 4 itself passes.
 
 _Record anything surprising here — it is the raw material for the next spec._
 
-### A quarter of every frame was for nobody, and the sensor is faster than its name (2026-09-15)
+### A quarter of every frame was for nobody (2026-09-15)
 
 v1.0+879, put on both boards by the simulator through the dongle (the whole ladder: adapter
 first, then the car, then the drive screen — under two minutes, no hands). What changed: the
@@ -160,12 +160,13 @@ not. `video.dropped` grew by 104 in the first two seconds of the first stream (3
 while AE walked up from dark and every frame was a big one) and by 0 in the next 60 s: a
 start-up burst, not a steady leak.
 
-Two things learned on the way. **The sensor mode called 45 fps runs at 50**: 674 frames in
-30 s is 22.5 fps at a skip of two, and the per-second counters on both the car and the HUD
-swing 20–27 around it — the contract's `sensor_fps` 45 is the driver's label, not a
-measurement, and `fps` 22 is the floor of the real rate as intended. Nothing depends on the
-difference except the encoder's rate control, which was told 22 and delivered 2548 at a 2500
-target regardless. And **the picture is pink and the window is blown out** — a NoIR sensor
+Two things learned on the way. **The per-second counters are not a frame rate**: 674
+frames in 30 s is 22.47 fps — the sensor's 45 over a skip of two, exactly as the mode table
+says (88.33 MHz over 1796 × 1093) — while the one-second counts on both the car and the HUD
+swing 20–27 around it, because a second's window catches whatever the ring happened to
+release. (An earlier draft of this note read the 25 on the HUD as a 50 fps sensor; the
+30-second count is the measurement, the counter is not.) And **the picture is pink and the
+window is blown out** — a NoIR sensor
 under the component's stock tuning (`ov5647_default.json`: a colour matrix for a sensor with
 an IR-cut filter, and an AE that weights the whole frame evenly). That is the next lever, and
 it costs the wire nothing: our own IPA profile, plus a focus check on `GET /snapshot`.
