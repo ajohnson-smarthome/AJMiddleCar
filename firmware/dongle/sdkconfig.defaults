@@ -122,6 +122,11 @@ CONFIG_LWIP_MAX_SOCKETS=32
 # ~100 KB between them, so the car's pacing (one chunk per millisecond) is the only limit
 # that matters. ~60 KB of RAM; the S3 has PSRAM to spare.
 CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
+# A 1 kHz tick. Everything this device does is relaying at millisecond pace: select() timeouts
+# in the relays, the USB transmit task's wait for a free transfer block (~6 ms apart), the
+# rate gate's clock. At IDF's default 100 Hz a one-tick wait is 10 ms, and the USB path
+# measured 3.9 Mbit/s where the same link carries 6 with the tick at 1 ms (bench, 2026-09-16).
+CONFIG_FREERTOS_HZ=1000
 # The tcpip thread's own mailbox sits in front of the socket's: every received frame passes
 # through it first, and at one datagram per millisecond IDF's default of 32 is thirty-two
 # milliseconds of the tcpip thread being busy elsewhere (USB, the other relay) before frames

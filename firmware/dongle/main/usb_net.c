@@ -90,6 +90,8 @@ static uint32_t s_tx_reattached;
  * completes blocks, and sends succeed between the refusals); a stalled link completes
  * nothing, so no send has succeeded for this long. */
 #define USB_TX_STALL_SILENCE_MS 1500
+/* How long one frame may wait for a free transfer block before it is dropped. */
+#define USB_TX_RETRY_MS 50
 
 static void usb_tx_task(void *arg)
 {
@@ -105,7 +107,18 @@ static void usb_tx_task(void *arg)
          * The timeout is the one thing that used to stall lwIP; now it stalls this task
          * alone, and the ring above absorbs the burst meanwhile. A frame the host would
          * not take in time is dropped, counted, and the next one tried. */
-        esp_err_t err = tinyusb_net_send_sync(slot->data, slot->len, NULL, pdMS_TO_TICKS(100));
+        /* ESP_FAIL is "every transfer block is in flight" — the ordinary state of a host that
+         * drains a block every ~6 ms while frames arrive faster. The frame is kept and asked
+         * again a millisecond later (the tick is 1 kHz for exactly this), up to
+         * USB_TX_RETRY_MS in all, before it is given up: the ring behind this task holds the
+         * burst meanwhile. A first version dropped the frame on the first refusal and slept
+         * a 10 ms tick — and measured 3.9 Mbit/s where the same link carries 6. */
+        esp_err_t err = ESP_FAIL;
+        for (int tries = 0; tries < USB_TX_RETRY_MS; tries++) {
+            err = tinyusb_net_send_sync(slot->data, slot->len, NULL, pdMS_TO_TICKS(100));
+            if (err != ESP_FAIL) break;
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
         xQueueSend(s_tx_free, &idx, 0);
         if (err == ESP_OK) { streak = 0; last_ok = xTaskGetTickCount(); continue; }
         s_tx_refused++;
@@ -113,7 +126,6 @@ static void usb_tx_task(void *arg)
             ESP_LOGW(TAG, "usb send %s (streak %u, refused %u)", esp_err_to_name(err),
                      (unsigned)streak, (unsigned)s_tx_refused);
         }
-        if (err == ESP_FAIL) vTaskDelay(1);   /* the pool is full: let a block complete before asking again */
         if (streak < USB_TX_STALL_AFTER || (xTaskGetTickCount() - last_ok) < pdMS_TO_TICKS(USB_TX_STALL_SILENCE_MS)) continue;
         /* The bench (2026-09-15) found a state in which the S3 runs on — its screen turning,
          * its console printing — while nothing crosses the USB wire in either direction until
