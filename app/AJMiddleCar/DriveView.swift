@@ -18,12 +18,17 @@ struct DriveView: View {
     @State private var lastCalibTrue = Date.distantPast
     @State private var padWasActive = false
 
-    /// The car's `video` domain — the switch lives there, and the screen follows the car's
-    /// answer, never the tap: a tap that did not land leaves the picture as it was.
+    /// The car's `video` domain — the switch lives there.
     @ObservedObject private var videoCfg = ConfigStore.shared.video
-    /// When the last save failed — the button wears `warn` for 600 ms, and that is all the
-    /// drive screen says about it.
-    @State private var videoToggleFailedAt: Date = .distantPast
+    /// The switch as the car last confirmed it — deliberately not `videoCfg.value`: the store
+    /// shows what it is *sending* while a save is in flight and nothing at all after a failed
+    /// one, and the screen must move on the car's answer alone (spec §3): a tap that did not
+    /// land leaves the picture as it was, and never strands the driver on the old layout with
+    /// a dead button while the car still streams. Fed from the store's `.loaded` state only.
+    @State private var confirmed: Video?
+    /// The last save failed — the button wears `warn` for 600 ms, and that is all the drive
+    /// screen says about it.
+    @State private var videoToggleFailed = false
 
     @StateObject private var pad = Gamepad()
     @State private var haptics = Haptics()
@@ -35,6 +40,9 @@ struct DriveView: View {
         _link = ObservedObject(wrappedValue: link)
         _intent = ObservedObject(wrappedValue: intent)
         _video = ObservedObject(wrappedValue: link.video)
+        // Seeded here, not only on appear: the domain is prefetched when the car is met, so
+        // the first body already draws the right layout rather than classic for a frame.
+        if case .loaded(let v) = ConfigStore.shared.video.state { _confirmed = State(initialValue: v) }
         self.preview = preview
         self.previewTricksOpen = previewTricksOpen
     }
@@ -50,23 +58,24 @@ struct DriveView: View {
     private var signalColor: Color { signalLevel == 0 ? .red : (signalLevel == 1 ? p.warn : p.accent) }
 
     private var screen: DriveScreenState {
-        DriveModeRule.state(config: videoCfg.value, covered: showSettings || showCalib)
+        DriveModeRule.state(config: confirmed, covered: showSettings || showCalib)
     }
 
     /// The video switch: same shape as the gear next to it. The tap posts the whole domain
     /// (bitrate as the car has it), disabled while the answer is on its way.
     private var videoButton: some View {
-        let on = videoCfg.value?.enabled ?? false
-        let failed = Date().timeIntervalSince(videoToggleFailedAt) < 0.6
+        let on = confirmed?.enabled ?? false
         return Button {
-            guard let cur = videoCfg.value else { return }
+            guard let cur = confirmed else { return }
             Task {
                 if await !videoCfg.save(Video(bitrate_kbps: cur.bitrate_kbps, enabled: !cur.enabled)) {
-                    videoToggleFailedAt = Date()
-                    // A state change is what redraws the button: set the mark, and clear
-                    // it 650 ms later so the stroke goes back to `line` without a tap.
+                    videoToggleFailed = true
+                    // The store is `.failed` now and would refuse a retry; re-read the car's
+                    // truth behind the flash. `confirmed` moves only if the GET lands — if it
+                    // fails too, the last answer stands and the button stays live for a retry.
+                    Task { await videoCfg.reload() }
                     try? await Task.sleep(for: .milliseconds(650))
-                    videoToggleFailedAt = .distantPast
+                    videoToggleFailed = false
                 }
             }
         } label: {
@@ -76,9 +85,9 @@ struct DriveView: View {
                 .frame(width: 40, height: 32)
                 .background(p.panel)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(failed ? p.warn : p.line))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(videoToggleFailed ? p.warn : p.line))
         }
-        .disabled(videoCfg.value == nil || videoCfg.isBusy)
+        .disabled(confirmed == nil || videoCfg.isBusy)
         .accessibilityLabel(on ? L.videoOn : L.videoOff)
     }
 
@@ -132,10 +141,16 @@ struct DriveView: View {
     }
 
     var body: some View {
-        Group {
+        // A `ZStack`, not a `Group`: the branch swap must not be this view disappearing and
+        // reappearing, or a tap on the video button would fire `.onDisappear` — and stop a
+        // running trick — for a layout change.
+        ZStack {
             if screen.mode == .hud { hud } else { classic }
         }
         .task { await videoCfg.loadIfNeeded() }
+        .onChange(of: videoCfg.state, initial: true) { _, st in
+            if case .loaded(let v) = st { confirmed = v }
+        }
         .onAppear { if !preview { video.setWatching(screen.watching) } }
         // Zero the intent, and deliberately do NOT say goodbye here.
         //

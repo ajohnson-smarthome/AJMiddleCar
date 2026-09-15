@@ -87,10 +87,12 @@ final class ConfigStore {
     let chassis = ConfigDomainStore<Chassis>()
     let video = ConfigDomainStore<Video>()
 
-    /// Warm the two domains the drive screen needs before the user can press anything that
-    /// depends on them.
+    /// Warm the domains the drive screen needs before the user can press anything that
+    /// depends on them — the two the tricks compute with, and the video switch, so the drive
+    /// screen knows which layout to draw before it appears.
     func prefetchDriveGeometry() {
         Task { await wheel.loadIfNeeded() }
         Task { await chassis.loadIfNeeded() }
+        Task { await video.loadIfNeeded() }
     }
 }
