@@ -398,7 +398,7 @@ public extension Chassis {
 public struct Video: Codable, Equatable, Sendable {
     /// target H.264 bitrate in kbit/s; the adapter's USB (Full-Speed, one transfer block per host read) drains ~4 Mbit/s at the car's 3 ms chunk pacing, measured 2026-09-16, and the car's own pacing caps it at 3.7 — 2500 leaves the gap for keyframes and motion
     public var bitrate_kbps: Int
-    /// the car streams video at all; false and it ignores every view, stops a running stream within 100 ms and puts the sensor in standby — the drive screen's video button, remembered on the car
+    /// the car streams video at all; false and it ignores every view, ends a running subscription on the video control task's next tick (≤100 ms; the encoder and the sensor follow within a frame) and puts the sensor in standby — the drive screen's video button, remembered on the car
     public var enabled: Bool
     public init(bitrate_kbps: Int, enabled: Bool) { self.bitrate_kbps = bitrate_kbps; self.enabled = enabled }
 }

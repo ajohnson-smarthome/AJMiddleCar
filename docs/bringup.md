@@ -137,8 +137,10 @@ are the closing sweep, run once stage 4 itself passes.
       old layout, `video.state` is `idle` within a second, `relay.video_kbps` on the adapter
       reads 0 and the car's log says the sensor stopped; back on, the HUD and a first frame
       within a second. Off, then reboot the car, then the drive screen: old layout, no
-      stream. A probe from the Mac (`tools/conformance_video.py 192.168.7.1`) while off:
-      not one datagram. The bitrate slider under Settings leaves `enabled` as it was.
+      stream. `tools/conformance_video.py 192.168.7.1` (the http port defaults to the car's 80
+      through the adapter) — its switch leg is the second-client check: off, not one datagram
+      in two seconds; on, a keyframe within two; it leaves the switch on. The bitrate slider
+      under Settings leaves `enabled` as it was.
 
 ## Notes from the bench
 

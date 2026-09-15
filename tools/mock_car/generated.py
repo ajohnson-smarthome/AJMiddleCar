@@ -214,8 +214,10 @@ DOMAINS = {   'ramp': {   'nvs_key': 'ramp',
                                    'type': 'bool',
                                    'default': True,
                                    'doc': 'the car streams video at all; false and it ignores '
-                                          'every view, stops a running stream within 100 ms '
-                                          "and puts the sensor in standby — the drive screen's "
+                                          'every view, ends a running subscription on the '
+                                          "video control task's next tick (≤100 ms; the "
+                                          'encoder and the sensor follow within a frame) and '
+                                          "puts the sensor in standby — the drive screen's "
                                           'video button, remembered on the car',
                                    'scale': 1}]}}
 

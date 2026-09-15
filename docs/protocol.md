@@ -389,13 +389,13 @@ cannot drift between them:
 
 ### Configuration — the `video` domain
 
-Two fields, generated into the domain table below along with the other five — `bitrate_kbps`,
-`500..3000`, default `2500`. It is read once, at the next stream start: `video_link` asks for
-it when it opens the encoder, not while one is already running, so a change lands on the next
-viewer rather than mid-frame. `fps` is not a setting: it is a constant of the contract, because
-only a few whole divisors of the sensor's own frame rate make sense, and the firmware is built
-against the one it picked (every second sensor frame: `sensor_fps` 45 ÷ 2 = 22.5, carried as
-`fps` 22, the floor), not a stored value.
+Two fields, generated into the domain table below along with the other five — `bitrate_kbps`
+and `enabled`. The bitrate, `500..3000`, default `2500`, is read once, at the next stream
+start: `video_link` asks for it when it opens the encoder, not while one is already running,
+so a change lands on the next viewer rather than mid-frame. `fps` is not a setting: it is a
+constant of the contract, because only a few whole divisors of the sensor's own frame rate
+make sense, and the firmware is built against the one it picked (every second sensor frame:
+`sensor_fps` 45 ÷ 2 = 22.5, carried as `fps` 22, the floor), not a stored value.
 
 Nor is the picture's size: `width` × `height` (1280 × 720) is what the encoder is given, and
 it is the middle 720 rows of the sensor's 1280 × `sensor_height` (960) frame. The fisheye's
@@ -411,8 +411,9 @@ camera: `false` and the car ignores every `view`, whoever sends it, ends a runni
 the video control task's next tick (≤100 ms, not the 3 s subscribe timeout) and puts the
 sensor in standby; `video.state` reads `idle`, and the app knows *why* from this field, not
 from telemetry. `true` starts nothing by itself — the next `view` does. The drive screen's
-video button is a POST of this field; while it is off the screen is the one from before
-video, and no views are sent (`docs/superpowers/specs/2026-09-15-video-switch-design.md`).
+video button posts the whole domain with this field flipped — `/config` takes any subset of
+domains, each complete; while it is off the screen is the one from before video, and no views
+are sent (`docs/superpowers/specs/2026-09-15-video-switch-design.md`).
 
 ### Through the dongle — `relay.video_*`
 
@@ -507,7 +508,7 @@ persists to NVS immediately, and a POST of unchanged values does not rewrite fla
 | `chassis` | `track_mm` | int | 60..300 | 130 | lateral distance between left and right wheel centres |
 | `chassis` | `wheelbase_mm` | int | 90..360 | 210 | longitudinal distance between front and rear wheel centres |
 | `video` | `bitrate_kbps` | int | 500..3000 | 2500 | target H.264 bitrate in kbit/s; the adapter's USB (Full-Speed, one transfer block per host read) drains ~4 Mbit/s at the car's 3 ms chunk pacing, measured 2026-09-16, and the car's own pacing caps it at 3.7 — 2500 leaves the gap for keyframes and motion |
-| `video` | `enabled` | bool | true \| false | true | the car streams video at all; false and it ignores every view, stops a running stream within 100 ms and puts the sensor in standby — the drive screen's video button, remembered on the car |
+| `video` | `enabled` | bool | true \| false | true | the car streams video at all; false and it ignores every view, ends a running subscription on the video control task's next tick (≤100 ms; the encoder and the sensor follow within a frame) and puts the sensor in standby — the drive screen's video button, remembered on the car |
 <!-- /generated:endpoints -->
 
 ### What the values mean

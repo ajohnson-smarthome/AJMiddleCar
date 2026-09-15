@@ -17,6 +17,7 @@ import secrets
 import socket
 import sys
 import time
+import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "mock_car"))
@@ -89,15 +90,20 @@ class VideoConformance:
         with urllib.request.urlopen(self.http + "/config", timeout=5) as r:
             return json.loads(r.read())
 
-    def check_switch(self, rt, v, view, seq):
+    def check_switch(self, rt, v, view, view_key, seq):
         """`video.enabled` off: two seconds of views, not one datagram. On: a frame, an IDR,
         within two seconds. The stream the run just watched ends within a tick, not at the
         subscribe timeout — a datagram after 0.5 s is a car that ignores the switch. The rt
         session is kept alive at command_hz throughout (the car's watchdog is 300 ms), and
-        views go every subscribe_ms as the phone would send them."""
+        views go every subscribe_ms as the phone would send them.
+
+        Every REST failure is a FAIL and an early return, never an exception: the bye after
+        this leg must go out whatever the car's HTTP side did. The switch is put back to what
+        it was even on Ctrl-C between the two POSTs — a run must not leave the car dark."""
         drive_period = 1.0 / RT["command_hz"]
         view_period = VIDEO["subscribe_ms"] / 1000
         next_drive = next_view = 0.0
+        ask_key = False       # a chunk went missing in the "on" leg — view with key until an IDR lands
 
         def keepalive():
             nonlocal seq, next_drive, next_view
@@ -113,48 +119,81 @@ class VideoConformance:
                 except (socket.timeout, BlockingIOError):
                     pass
             if now >= next_view:
-                v.sendto(view, self.video_addr)
+                v.sendto(view_key if ask_key else view, self.video_addr)
                 next_view = now + view_period
+
+        def post_switch(on):
+            """True when the car took it; a refusal or an unreachable REST side is one FAIL."""
+            try:
+                status = self.post_config({"video": dict(video_cfg, enabled=on)})
+            except urllib.error.URLError as e:       # HTTPError too: a 404 is the dongle's own API
+                self.check(False, f"POST /config video.enabled={str(on).lower()} at {self.http}: {e}")
+                return False
+            return self.check(status == 200, f"POST video.enabled={str(on).lower()} answered {status}")
 
         # A domain POST replaces the whole domain (cfg_api.c's two-pass rule — a partial
         # object is refused, not merged), so bitrate_kbps rides along unchanged.
-        video_cfg = self.get_config()["video"]
-        self.check(self.post_config({"video": dict(video_cfg, enabled=False)}) == 200,
-                   "POST video.enabled=false")
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < 0.5:          # the tick the car is allowed to end the stream in
-            keepalive()
-            try:
-                v.recvfrom(HDR + VIDEO["chunk_bytes"] + 64)
-            except socket.timeout:
-                pass
-        heard = 0
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < 2.0:
-            keepalive()
-            try:
-                v.recvfrom(HDR + VIDEO["chunk_bytes"] + 64)
-                heard += 1
-            except socket.timeout:
-                pass
-        self.check(heard == 0, f"switched off, but {heard} datagram(s) still arrived")
+        try:
+            video_cfg = self.get_config()["video"]
+        except urllib.error.URLError as e:
+            self.check(False, f"GET /config at {self.http}: {e} — the switch leg was not run")
+            return seq
+        was_on = bool(video_cfg.get("enabled", True))
+        left_on = was_on
+        try:
+            if not post_switch(False):
+                return seq
+            left_on = False
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < 0.5:          # the tick the car is allowed to end the stream in
+                keepalive()
+                try:
+                    v.recvfrom(HDR + VIDEO["chunk_bytes"] + 64)
+                except socket.timeout:
+                    pass
+            heard = 0
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < 2.0:
+                keepalive()
+                try:
+                    v.recvfrom(HDR + VIDEO["chunk_bytes"] + 64)
+                    heard += 1
+                except socket.timeout:
+                    pass
+            self.check(heard == 0, f"switched off, but {heard} datagram(s) still arrived")
 
-        self.check(self.post_config({"video": dict(video_cfg, enabled=True)}) == 200,
-                   "POST video.enabled=true")
-        rx = Receiver()
-        got_idr = False
-        next_view = 0.0                                # the first view goes at once
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < 2.0 and not got_idr:
-            keepalive()
-            try:
-                data, _ = v.recvfrom(HDR + VIDEO["chunk_bytes"] + 64)
-            except socket.timeout:
-                continue
-            ev, frame = rx.feed(data)
-            if ev == Receiver.FRAME and 5 in nal_types(frame):
-                got_idr = True
-        self.check(got_idr, "switched back on, but no keyframe within 2 s")
+            if not post_switch(True):
+                return seq
+            left_on = True
+            rx = Receiver()
+            got_idr = False
+            next_view = 0.0                                # the first view goes at once
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < 2.0 and not got_idr:
+                keepalive()
+                try:
+                    data, _ = v.recvfrom(HDR + VIDEO["chunk_bytes"] + 64)
+                except socket.timeout:
+                    continue
+                ev, frame = rx.feed(data)
+                if ev == Receiver.LOSS:
+                    # The first frame of the new stream is the IDR; one chunk of it gone and
+                    # nothing decodes until the next one — planned 10 s out on the car. Ask,
+                    # and keep asking every view, exactly as the main loop does.
+                    if not ask_key:
+                        ask_key = True
+                        v.sendto(view_key, self.video_addr)
+                        if self.verbose:
+                            print("    loss after the switch — asked for a keyframe")
+                elif ev == Receiver.FRAME and 5 in nal_types(frame):
+                    got_idr = True
+            self.check(got_idr, "switched back on, but no keyframe within 2 s")
+        finally:
+            if left_on != was_on:
+                try:
+                    self.post_config({"video": video_cfg})
+                except urllib.error.URLError as e:
+                    self.check(False, f"restoring video.enabled={str(was_on).lower()}: {e}")
         return seq
 
     def run(self):
@@ -225,11 +264,14 @@ class VideoConformance:
                 if self.verbose:
                     print(f"    frame {frames}: {len(frame)} B, nal {types}")
 
-        seq = self.check_switch(rt, v, view, seq)
-        rt.sendto(enc({K["proto"]: PROTO, K["type"]: T["bye"], K["seq"]: seq + 1}), self.rt_addr)
+        # The window the figures are over ends here: the switch leg below runs its own clock
+        # and counts nothing into these, so it must not stretch the divisor either.
+        elapsed = time.monotonic() - t0
         if sink:
             sink.close()
-        elapsed = time.monotonic() - t0
+
+        seq = self.check_switch(rt, v, view, view_key, seq)
+        rt.sendto(enc({K["proto"]: PROTO, K["type"]: T["bye"], K["seq"]: seq + 1}), self.rt_addr)
         fps = frames / elapsed
         kbps = bytes_rx * 8 / elapsed / 1000
         loss_pct = 100.0 * rx.dropped / max(1, frames + rx.dropped)
@@ -260,11 +302,16 @@ def main():
     p.add_argument("host", help="the car (192.168.4.1 on its Wi-Fi, 192.168.7.1 through the dongle) or the mock (127.0.0.1)")
     p.add_argument("--rt-port", type=int, default=RT["port"])
     p.add_argument("--video-port", type=int, default=VIDEO["port"])
-    p.add_argument("--http-port", type=int, default=8080, help="the car's REST port (the mock's --port)")
+    p.add_argument("--http-port", type=int, default=None,
+                   help="the REST port with /config: default 80 (the car's, also through the adapter, "
+                        "whose own API on 8080 has no /config), or 8080 (the mock's --port) when "
+                        "the host is loopback")
     p.add_argument("--seconds", type=float, default=20.0)
     p.add_argument("--out", help="write the Annex B stream here (ffplay opens it)")
     p.add_argument("-v", "--verbose", action="store_true")
     a = p.parse_args()
+    if a.http_port is None:
+        a.http_port = 8080 if a.host in ("127.0.0.1", "localhost", "::1") else 80
     sys.exit(VideoConformance(a.host, a.rt_port, a.video_port, a.http_port, a.seconds, a.out, a.verbose).run())
 
 
