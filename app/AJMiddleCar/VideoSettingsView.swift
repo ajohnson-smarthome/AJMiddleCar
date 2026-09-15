@@ -35,7 +35,11 @@ struct VideoSettingsView: View {
                     get: { Double(kbps) },
                     set: { kbps = Int($0 / 100) * 100 }
                 ), in: Double(Video.bitrate_kbpsRange.lowerBound)...Double(Video.bitrate_kbpsRange.upperBound)) { editing in
-                    if !editing { Task { await store.save(Video(bitrate_kbps: kbps)) } }
+                    // The whole domain goes back: the bitrate from the slider, the switch as
+                    // the car has it (spec 2026-09-15-video-switch, §3).
+                    if !editing, let cur = store.value {
+                        Task { await store.save(Video(bitrate_kbps: kbps, enabled: cur.enabled)) }
+                    }
                 }
                 .tint(p.accent)
                 .frame(width: 220)
