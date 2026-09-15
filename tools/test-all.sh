@@ -86,7 +86,7 @@ else
     # this tool's ~3 s hello-retry budget — a run started right after would see
     # "unreachable" instead of the fresh post-reboot handshake.
     python3 tools/conformance_rt.py "127.0.0.1:$RT_PORT"
-    python3 tools/conformance_video.py 127.0.0.1 --rt-port "$RT_PORT" --video-port "$VIDEO_PORT" --seconds 6
+    python3 tools/conformance_video.py 127.0.0.1 --rt-port "$RT_PORT" --video-port "$VIDEO_PORT" --http-port "$PORT" --seconds 6
     kill "$MOCK_PID" 2>/dev/null || true
     wait "$MOCK_PID" 2>/dev/null || true
     rm -f "$LOG"

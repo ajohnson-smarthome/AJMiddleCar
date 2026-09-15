@@ -6,6 +6,9 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from video import VideoLink, access_units   # noqa: E402
+import json
+from generated import PROTO, RT   # noqa: E402
+K, T = RT["keys"], RT["types"]
 
 SC = b"\x00\x00\x00\x01"
 SPS, PPS, SEI = b"\x67\x42\x00\x1f", b"\x68\xce\x38\x80", b"\x06\x05\x01"
@@ -56,6 +59,7 @@ class _FakeCar:
     video_state = "idle"
     video_fps = 0
     video_kbps = 0
+    config = {"video": {"bitrate_kbps": 2500, "enabled": True}}
 
 
 class StopClearsHeldDatagram(unittest.TestCase):
@@ -71,6 +75,37 @@ class StopClearsHeldDatagram(unittest.TestCase):
         v._held = b"stale datagram from the ended stream"
         v._stop("test stop")
         self.assertIsNone(v._held)
+
+
+def _view(sid="sid"):
+    return json.dumps({K["proto"]: PROTO, K["type"]: T["view"], K["session"]: sid}).encode()
+
+
+class TheSwitch(unittest.TestCase):
+    """`video.enabled` false: a view opens nothing, and a stream that is running ends on the
+    next tick — the car's rule, so the conformance sweep can tell a car that ignores the
+    switch from one that honours it."""
+
+    def test_off_ignores_the_owners_view(self):
+        car = _FakeCar()
+        car.config = {"video": {"bitrate_kbps": 2500, "enabled": False}}
+        v = VideoLink(car, _FakeLink(), SC + SPS + SC + PPS + SC + IDR, loop=_FakeLoop())
+        v.transport = _FakeTransport()
+        v.datagram_received(_view(), ("127.0.0.1", 40000))
+        self.assertIsNone(v.peer)
+        self.assertEqual(car.video_state, "idle")
+
+    def test_switching_off_mid_stream_ends_it(self):
+        car = _FakeCar()
+        car.config = {"video": {"bitrate_kbps": 2500, "enabled": True}}
+        v = VideoLink(car, _FakeLink(), SC + SPS + SC + PPS + SC + IDR, loop=_FakeLoop())
+        v.transport = _FakeTransport()
+        v.datagram_received(_view(), ("127.0.0.1", 40000))
+        self.assertIsNotNone(v.peer)
+        car.config["video"]["enabled"] = False
+        self.assertTrue(v.tick(0.0))          # one tick of run(): stopped
+        self.assertIsNone(v.peer)
+        self.assertEqual(car.video_state, "idle")
 
 
 if __name__ == "__main__":

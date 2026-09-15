@@ -55,6 +55,10 @@ def access_units(annexb):
     return units
 
 
+def timeout_s():
+    return VIDEO["subscribe_timeout_ms"] / 1000
+
+
 class VideoLink(asyncio.DatagramProtocol):
     def __init__(self, car, link, sample, loss_pct=0.0, reorder_pct=0.0, dup_pct=0.0, seed=1,
                  verbose=False, loop=None):
@@ -93,6 +97,8 @@ class VideoLink(asyncio.DatagramProtocol):
             return
         if self.link.session is None or f[K["session"]] != self.link.session:
             return
+        if not self.car.config["video"]["enabled"]:
+            return                          # the switch: a view opens nothing, whoever sends it
         now = self.loop.time()
         if self.peer is None:
             self.stream = (self.stream + 1) & 0xFF
@@ -144,37 +150,44 @@ class VideoLink(asyncio.DatagramProtocol):
         j = bisect.bisect_right(self._idr_indices, pos) - 1
         return self._idr_indices[j] if j >= 0 else self._idr_indices[-1]
 
+    def tick(self, now):
+        """One period of the sender. Returns True when there was nothing to send: no viewer,
+        or the stream just ended (session over, viewer gone, switch off)."""
+        if self.peer is None:
+            return True
+        if self.link.session is None:
+            self._stop("session over")
+            return True
+        if not self.car.config["video"]["enabled"]:
+            self._stop("video switched off")   # the car's rule: within one tick, not the timeout
+            return True
+        if now - self.last_view > timeout_s():
+            self._stop("viewer gone")
+            return True
+        if self.want_key:
+            # R3: repeat the last IDR encountered, in place — `pos` does not move, so the
+            # clip resumes from exactly where it was on the next tick.
+            self.want_key = False
+            idr_idx = self._last_idr_at_or_before(self.pos)
+            au, key = self.units[idr_idx][0], True
+        else:
+            au, key = self.units[self.pos]
+            self.pos = (self.pos + 1) % len(self.units)
+        for d in chunks(au, self.stream, self.frame, key, int(now * 1000) & 0xFFFFFFFF):
+            self._emit(d)
+        self.frame = (self.frame + 1) & 0xFFFF
+        self._sent_frames += 1
+        if now - self._sec_at >= 1.0:
+            self.car.video_fps = self._sent_frames
+            self.car.video_kbps = int(self._sent_bytes * 8 / 1000 / (now - self._sec_at))
+            self._sent_frames = self._sent_bytes = 0
+            self._sec_at = now
+        return False
+
     async def run(self):
         period = 1.0 / VIDEO["fps"]
         next_at = self.loop.time()
-        timeout = VIDEO["subscribe_timeout_ms"] / 1000
         while True:
             next_at += period
             await asyncio.sleep(max(0.0, next_at - self.loop.time()))
-            now = self.loop.time()
-            if self.peer is None:
-                continue
-            if self.link.session is None:
-                self._stop("session over")
-                continue
-            if now - self.last_view > timeout:
-                self._stop("viewer gone")
-                continue
-            if self.want_key:
-                # R3: repeat the last IDR encountered, in place — `pos` does not move, so the
-                # clip resumes from exactly where it was on the next tick.
-                self.want_key = False
-                idr_idx = self._last_idr_at_or_before(self.pos)
-                au, key = self.units[idr_idx][0], True
-            else:
-                au, key = self.units[self.pos]
-                self.pos = (self.pos + 1) % len(self.units)
-            for d in chunks(au, self.stream, self.frame, key, int(now * 1000) & 0xFFFFFFFF):
-                self._emit(d)
-            self.frame = (self.frame + 1) & 0xFFFF
-            self._sent_frames += 1
-            if now - self._sec_at >= 1.0:
-                self.car.video_fps = self._sent_frames
-                self.car.video_kbps = int(self._sent_bytes * 8 / 1000 / (now - self._sec_at))
-                self._sent_frames = self._sent_bytes = 0
-                self._sec_at = now
+            self.tick(self.loop.time())
