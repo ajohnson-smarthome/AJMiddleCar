@@ -133,6 +133,12 @@ are the closing sweep, run once stage 4 itself passes.
       drive screen shows the no-picture indicator.
 - [ ] **Stacks and PSRAM.** High-water marks for the encode task, `isp_task`, and both
       `relay_udp` instances in the log; PSRAM free ≥ 20 MB while `streaming`.
+- [ ] **The video switch.** The drive screen's button: the picture goes, the screen is the
+      old layout, `video.state` is `idle` within a second, `relay.video_kbps` on the adapter
+      reads 0 and the car's log says the sensor stopped; back on, the HUD and a first frame
+      within a second. Off, then reboot the car, then the drive screen: old layout, no
+      stream. A probe from the Mac (`tools/conformance_video.py 192.168.7.1`) while off:
+      not one datagram. The bitrate slider under Settings leaves `enabled` as it was.
 
 ## Notes from the bench
 
