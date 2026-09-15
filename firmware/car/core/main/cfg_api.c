@@ -38,8 +38,10 @@ typedef struct {
 static void ramp_get_v(int32_t *o) { o[0] = ramp_get_ms(); }
 static bool ramp_set_v(const int32_t *v) { return ramp_set_ms((uint16_t)v[0]); }
 
-static void video_get_v(int32_t *o) { o[0] = video_cfg_get_bitrate(); }
-static bool video_set_v(const int32_t *v) { return video_cfg_set_bitrate((uint16_t)v[0]); }
+static void video_get_v(int32_t *o) { o[0] = video_cfg_get_bitrate(); o[1] = video_cfg_get_enabled() ? 1 : 0; }
+static bool video_set_v(const int32_t *v) {
+    return video_cfg_set_bitrate((uint16_t)v[0]) && video_cfg_set_enabled(v[1] != 0);
+}
 
 static void trim_get_v(int32_t *o) { o[0] = car_get_trim(); }
 static bool trim_set_v(const int32_t *v) { car_set_trim((int8_t)v[0]); return true; }
