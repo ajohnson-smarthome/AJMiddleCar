@@ -38,7 +38,9 @@
 | `AppFlow.swift` | `carProbed(fw:)`; в цикле опроса адаптера — два условия `reply.carriesIdentity` (шаг «адаптер найден» и запуск поиска релиза); в `readStatus` — текст лога «body decoded as neither v2 nor a v1 identity»; комментарии про мостик | оба условия — `if case .status = reply`; лог — «body is not a /status document (N bytes)» |
 | `AJMiddleCarApp.swift` | `.onChange(of: link.probedFw) { _, fw in flow.carProbed(fw: fw) }` | |
 | `FirmwareFlow.swift` | в `forCar(link:)`: `runningFw: { link?.fw ?? link?.probedFw }`, `isReachable: { UpdateRules.carReachable(live:probedFw:) }`; комментарий о зонде над ними | `runningFw: { [weak link] in link?.fw }`, `isReachable: { [weak link] in link?.isLive ?? false }` |
+| `FirmwareFlow.swift` (`DongleState.refresh`) | версия адаптера во время его обновления читается через `LegacyIdentity.parse` — «на обеих сторонах перезагрузки», старой и новой раскладке | `if case .status(let s) = DongleReply.decode(data)` → `s.device.fw`; обе стороны перезагрузки теперь одной раскладки |
 | `UpdateRules.swift` | `carReachable(live:probedFw:)` — без `probedFw` вырождается в `live` | функции нет; «машинка готова принять `POST /ota`» = `isLive`, что и читает `FirmwareFlow` |
+| `DongleLink.swift` (`DongleStep.waiting`, doc) | фраза «Also the answer for a v1 dongle before any release is known…» | |
 | `DongleClient.swift` | в комментарии к `statusData()` — «…or, failing that, as a v1 identity — the one piece of the old format this app still understands» | «the raw `/status` body, for `DongleReply.decode`» |
 | `CarError.swift` | в комментарии к `apiCode` — «nil for a v1 body or…» | «nil for a body without the envelope or…» |
 
