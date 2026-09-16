@@ -296,9 +296,9 @@ final class UpdateClient: NSObject, ObservableObject {
         } catch is CancellationError {
             return .cancelled
         } catch let CarError.http(status, body) {
-            // The v2 envelope: `error` is an object, and `message` is the car's own words
-            // (`too_small`, `not_firmware`, `busy`). Reading it as a v1 string found nothing and
-            // captioned every rejection with the bare status code.
+            // The contract's envelope: `error` is an object, and `message` is the car's own
+            // words (`too_small`, `not_firmware`, `busy`). Reading it as a bare string found
+            // nothing and captioned every rejection with the status code alone.
             let msg = (try? JSONDecoder().decode(CarAPIError.self, from: body))?.error.message
             return .failed(msg ?? "HTTP \(status)")
         } catch {

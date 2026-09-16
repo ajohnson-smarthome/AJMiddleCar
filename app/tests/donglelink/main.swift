@@ -269,7 +269,7 @@ check(DongleLink.next(reply: steady, latestTag: latest, expectedSSID: carSSID) !
       "a different expectedSSID changes the answer for the same status")
 
 // -- a v1-shaped body is a fault, not an identity ------------------------------------------
-// The v1→v2 bridge (`LegacyIdentity`) was removed on 2026-09-16, once no board in the field
+// The v1→v2 bridge was removed on 2026-09-16, once no board in the field
 // spoke v1. A `/status` body in the old top-level `device`/`fw` spelling is now just a body
 // this build cannot read — the adapter-fault screen, by design — and these checks are what
 // fail if someone brings the bridge back quietly.

@@ -76,7 +76,7 @@ class TestWireShapes(unittest.TestCase):
                     b'{"proto":2,"type":"hello","session":""}',
                     b'{"proto":2,"type":"hello","session":"' + b"x" * 70 + b'"}',
                     b'{"proto":2,"type":"hello"}',                        # no session
-                    b'{"proto":2,"type":"hello","hello":"7f3a91c2"}'):    # the v1 key
+                    b'{"proto":2,"type":"hello","hello":"7f3a91c2"}'):    # a key the format does not have
             self.assertIsNone(parse_frame(bad), bad)
         good = parse_frame(b'{"proto":2,"type":"hello","session":"7f3a91c2"}')
         self.assertEqual(good, {"type": "hello", "proto": 2, "session": "7f3a91c2"})
