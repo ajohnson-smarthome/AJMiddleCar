@@ -283,11 +283,10 @@ private final class DongleState {
     var reachable = false
 
     func refresh(from dongle: DongleClient) async {
-        // `LegacyIdentity` reads both sides of the OTA it is watching through: the dongle may
-        // still answer the OLD shape until the reboot that lands the new one, and the new
-        // shape from the instant after. Either way, its `device`/`fw` is read the same.
-        if let data = try? await dongle.statusData(), let id = LegacyIdentity.parse(data) {
-            fw = id.fw
+        // Read the way the launch ladder reads it (`DongleReply.decode`): the adapter answers
+        // the whole document or nothing, on both sides of the reboot this watch runs through.
+        if let data = try? await dongle.statusData(), case .status(let s) = DongleReply.decode(data) {
+            fw = s.device.fw
             reachable = true
         } else {
             reachable = false
