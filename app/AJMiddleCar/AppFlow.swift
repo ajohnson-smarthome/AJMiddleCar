@@ -157,12 +157,10 @@ final class AppFlow: ObservableObject {
     /// for.
     private static let maxDongleJoinAttempts = 1
 
-    /// Whether `dongleGate()` has handed over this session. `retry()` — the button on the car
-    /// gate's failure screens — re-runs the car gate alone while this holds: the adapter was
-    /// checked, updated and joined seconds ago, and walking it through «Ищу адаптер»,
-    /// «Проверяю адаптер» and GitHub again for a car-side failure told the user nothing and
-    /// cost them the whole ladder. `dongleReturned()` clears it, because a dongle that went
-    /// away comes back knowing nothing.
+    /// Whether `dongleGate()` has handed over this session. Set once, by `startupCheck()` right
+    /// after that hand-over — its only caller is the root's `.task`, so there is no second run
+    /// to guard against now that the car's own gate is gone. `dongleReturned()` cycles it around
+    /// its own re-run: cleared before `dongleGate()` runs again, set once more after.
     private var dongleHandedOver = false
 
     /// Guards against a second `startupCheck()` running while one is already in flight — a
