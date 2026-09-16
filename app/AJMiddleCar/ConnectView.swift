@@ -16,9 +16,6 @@ import Network
 struct ConnectView: View {
     enum Situation: Equatable {
         case searching
-        /// Step 1 of the startup ladder: nothing has answered at the adapter's address yet.
-        /// Shows the adapter faint — the same drawing the next step makes solid, which is what
-        /// turns the pair into one movement forward rather than two unrelated pictures.
         /// The newest release could not be established, so nothing may proceed. No button: the
         /// gate loop is still asking and clears this itself the moment the network returns.
         case releaseOffline
@@ -26,6 +23,9 @@ struct ConnectView: View {
         /// tag, because the only person who can act on this is the one who publishes releases,
         /// and the tag is what tells them which one to look at.
         case releaseMissing(tag: String, device: UpdateRules.Device)
+        /// Step 1 of the startup ladder: nothing has answered at the adapter's address yet.
+        /// Shows the adapter faint — the same drawing the next step makes solid, which is what
+        /// turns the pair into one movement forward rather than two unrelated pictures.
         case findingAdapter
         /// Step 3: asking GitHub for the newest release — the one tag both boards are compared
         /// against. Had no screen at all before — `dongleGate()` did this silently, so a launch

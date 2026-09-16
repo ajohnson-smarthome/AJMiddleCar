@@ -1,12 +1,13 @@
 import Foundation
 
-/// The launch gate, in the order the spec states it: is a dongle there → update the dongle if
-/// it is behind → tell it which network to join if it has not been told → internet → fetch/cache
-/// the car's firmware → wait for the car → force the update if the car is behind → hand over.
+/// The launch gate, in the order the spec states it: is a dongle there → learn the newest
+/// release (once, for both boards) → update the dongle if it is behind → tell it which network
+/// to join if it has not been told → wait for the car's hello → force the update if the car is
+/// behind → hand over. Against the mock there is no dongle, so the release step runs on its own.
 ///
 /// The dongle half and the car half are two different questions answered by two different pure
 /// modules — `DongleLink` for "what does the dongle need next", `GateRule`/`UpdateRules` for the
-/// car's own offline fallback and forced-update comparison — but they share one `Phase` and one
+/// forced-update comparison — but they share one `Phase`, one `latestTag` and one
 /// `startupCheck()` entry point, because from the user's seat this has always been a single gate,
 /// not two gates that happen to run back to back.
 ///
@@ -488,11 +489,11 @@ final class AppFlow: ObservableObject {
         (error as? CarError)?.logDescription ?? String(describing: error)
     }
 
-    /// The user asked whether a newer release exists yet — `FirmwareView`'s rolled-back car
-    /// screen keeps the same offer beside its skip. Two halves, both required: re-open the
-    /// release fetch (a tag fetched before the rollback screen appeared is exactly the tag that
-    /// cannot help), and record what was on offer at the time so `DongleLink` can tell a
-    /// genuinely newer image from the one that just rolled back.
+    /// The user asked whether a newer release exists yet — the one button on the adapter's
+    /// rolled-back screen (`ConnectView.Situation.dongleRolledBack`). Two halves, both required:
+    /// re-open the release fetch (a tag fetched before the rollback screen appeared is exactly
+    /// the tag that cannot help), and record what was on offer at the time so `DongleLink` can
+    /// tell a genuinely newer image from the one that just rolled back.
     func recheckDongleRollback() {
         rollbackChoice = .recheck(from: latestTag)
         // Clearing the tag is what makes the next poll re-ask GitHub: `fetchRelease` runs while

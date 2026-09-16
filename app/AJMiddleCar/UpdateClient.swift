@@ -92,9 +92,9 @@ final class UpdateClient: NSObject, ObservableObject {
     /// the per-device rename moved the car's file out from under Application
     /// Support/`firmware-latest.bin` — where every phone that had already migrated once was
     /// holding it. That file went invisible, and the forced update read the consequences:
-    /// `FirmwareFlow.flashPlan` saw no cached image and downloaded the release again on every
-    /// forced flash. One migration, both old paths, is what keeps the cache the launch already
-    /// paid for.
+    /// `UpdateRules.flashPlan` (from `FirmwareFlow.download()`) saw no cached image and
+    /// downloaded the release again on every forced flash. One migration, both old paths, is
+    /// what keeps the cache an earlier flash already paid for.
     static func migrateCacheIfNeeded() {
         let fm = FileManager.default
         let new = cachedBinURL              // also creates Application Support, if it is new
@@ -115,8 +115,8 @@ final class UpdateClient: NSObject, ObservableObject {
     }
 
     /// The other half of that rename: the build and tag the cached file is described BY. A file
-    /// without them is not a usable cache — `GateRule.canProceedOffline` wants both — so moving
-    /// one without the other would have fixed nothing.
+    /// without them is not a usable cache — `UpdateRules.flashPlan` wants both the file and its
+    /// build — so moving one without the other would have fixed nothing.
     ///
     /// Mirrored rather than moved, and only where the per-device key is unset: an older build
     /// of this app run again on the same phone still reads the unsuffixed keys, and a newer

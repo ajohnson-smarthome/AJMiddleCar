@@ -114,10 +114,10 @@ final class FirmwareFlow: ObservableObject {
             return
         }
         guard let r = release else { return }
-        // The same decision the launch gate makes (`flashPlan`, pure and host-tested): an image
-        // of exactly this build that is already on disk is used, not fetched again. Before
-        // this, a forced car update re-downloaded the 2 MB the gate had cached seconds earlier
-        // and sat on «Скачивание 100 %» for the whole second fetch.
+        // `flashPlan`, pure and host-tested: an image of exactly this build that is already on
+        // disk — from an earlier forced flash, or the settings screen — is used, not fetched
+        // again. Before this, a forced car update re-downloaded the 2 MB it already held and sat
+        // on «Скачивание 100 %» for the whole second fetch.
         switch UpdateRules.flashPlan(for: device, release: (tag: r.tag, assetURL: r.assetURL),
                                      cachedBuild: UpdateClient.cachedBuild(for: device),
                                      hasCachedFile: UpdateClient.hasCachedFile(for: device)) {

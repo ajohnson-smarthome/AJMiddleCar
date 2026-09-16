@@ -86,12 +86,11 @@ public enum DongleStep: Equatable {
 public enum RollbackChoice: Equatable {
     /// Nothing said yet: report the rollback and stop there.
     case unanswered
-    /// "Check again" — the affordance `FirmwareView`'s own rolled-back car screen keeps beside
-    /// its skip (`fw.retry`). One look at whatever the release feed now says, measured from the
-    /// tag that was on offer when it was asked (`nil` when nothing was known then: offline, no
-    /// cache). A release NEWER than that is a different image and is offered; the same one is
-    /// not re-flashed into the same rollback. The flow consumes this after one decision — one
-    /// look per ask, not a standing permission.
+    /// "Check again" — the one button on the adapter's rolled-back screen (`fw.retry`). One look
+    /// at whatever the release feed now says, measured from the tag that was on offer when it was
+    /// asked (`nil` when nothing was known then: offline, no cache). A release NEWER than that is
+    /// a different image and is offered; the same one is not re-flashed into the same rollback.
+    /// The flow consumes this after one decision — one look per ask, not a standing permission.
     case recheck(from: String?)
 }
 
@@ -148,8 +147,8 @@ public enum DongleLink {
     ///   - reply: What the last read of `/status` produced — a decoded document, or one of the
     ///     three ways it can fail to be one. See `DongleReply`: the flow classifies, this
     ///     decides, and neither collapses "nothing answered" into "answered badly".
-    ///   - latestTag: The latest release tag this phone knows about (possibly from an offline
-    ///     cache — see `GateRule`), fed straight into `UpdateRules.mustUpdate`, which already
+    ///   - latestTag: The latest release tag this phone knows about (`AppFlow.latestTag`,
+    ///     learned once per launch), fed straight into `UpdateRules.mustUpdate`, which already
     ///     answers either device from the same comparison since one release tags both images
     ///     identically.
     ///   - expectedSSID: The car's own network name (`CarContract.ssid`), the one value this
