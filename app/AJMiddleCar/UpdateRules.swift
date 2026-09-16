@@ -147,18 +147,6 @@ enum UpdateRules {
         return latest > car
     }
 
-    /// Whether the car can take a `POST /ota` right now — what the flash button waits for.
-    ///
-    /// A live v2 session is the ordinary proof. The v1 bridge is the other: a car that never
-    /// answers a v2 hello has no session and is never live, and the `/status` probe's identity
-    /// (`CarLink.probedFw`) is the only sign it is there at all. The upload itself is a plain
-    /// HTTP POST through the relay and needs no session — so gating it on one meant a forced
-    /// update of a v1 car downloaded the image and then waited forever. Found on the first live
-    /// run of the bridge, 2026-09-14.
-    static func carReachable(live: Bool, probedFw: String?) -> Bool {
-        live || probedFw != nil
-    }
-
     /// How long the reboot watch waits for `device` to answer with a version after a flash.
     ///
     /// The car's first boot after an update is the long one: the radio gate (an RPC of up to

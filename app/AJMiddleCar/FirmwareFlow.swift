@@ -234,24 +234,14 @@ final class FirmwareFlow: ObservableObject {
 
 extension FirmwareFlow {
     /// The car, reached through the relay. Its version and liveness arrive by themselves on the
-    /// telemetry stream, so `refresh` has nothing to do.
-    ///
-    /// `runningFw` reads the handshake's `fw` first and the v1 bridge's `probedFw` behind it. A
-    /// v1 car never answers a v2 hello, so `fw` stays nil and `probedFw` is the ONLY version the
-    /// app has for it — and without it the forced screen showed no current version, the
-    /// offline-cache branch of `check()` had no build to compare against, and the reboot watch
-    /// captured `oldFw == nil` and could never reach `.done`. The order matters the other way
-    /// too: `.sessionOpened` sets `fw` and clears `probedFw` in the same breath, so once the
-    /// flashed car answers as v2 the first read is the new version, not the stale probe.
-    ///
-    /// `isReachable` reads the same two answers, for the same reason: a v1 car is never live,
-    /// and the flash button that waited for `isLive` alone never unlocked for it
-    /// (`UpdateRules.carReachable`).
+    /// telemetry stream, so `refresh` has nothing to do. `runningFw` is the handshake's `fw`;
+    /// `isReachable` is the live session — a `POST /ota` goes through the relay as plain HTTP
+    /// and needs no session itself, but a car that is not answering hellos is not there to take
+    /// one either.
     static func forCar(link: CarLink) -> FirmwareFlow {
         FirmwareFlow(device: .car,
-                     runningFw: { [weak link] in link?.fw ?? link?.probedFw },
-                     isReachable: { [weak link] in
-                         UpdateRules.carReachable(live: link?.isLive ?? false, probedFw: link?.probedFw) },
+                     runningFw: { [weak link] in link?.fw },
+                     isReachable: { [weak link] in link?.isLive ?? false },
                      progressPublishedByClient: true,
                      push: { url, client, _ in await client.upload(url) })
     }

@@ -163,16 +163,6 @@ check(UpdateRules.flashPlan(for: .dongle, release: nil, cachedBuild: 100, hasCac
 
 if failures == 0 { print("test_update: OK") } else { exit(1) }
 
-// -- the v1 bridge: what unlocks the flash button for the car -------------------------
-// A v1 car never answers a v2 hello, so the link is never live — the `/status` probe's
-// identity is the only proof the car is there. Found on the first live run (2026-09-14):
-// the forced update downloaded the image and then waited forever for a session.
-check(UpdateRules.carReachable(live: true, probedFw: nil), "a live v2 session is reachable")
-check(UpdateRules.carReachable(live: false, probedFw: "v1.0+784"),
-      "a v1 car that answered the probe is reachable")
-check(!UpdateRules.carReachable(live: false, probedFw: nil),
-      "no session and no probe answer is not")
-
 // -- the reboot watch's window is the device's, not one number for both -------------------
 // The car's first boot after an update is the long one: the radio gate (an RPC of up to 5 s
 // against a mismatched slave), the camera probe, the dongle noticing the softAP forgot it and

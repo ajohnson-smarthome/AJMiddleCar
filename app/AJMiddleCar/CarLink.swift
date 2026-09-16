@@ -34,12 +34,6 @@ final class CarLink: ObservableObject {
     /// The newest numbers we ever saw, live or not. `state` is the truth about the link; this is
     /// for screens that legitimately show the last known reading (uptime, firmware, trips).
     @Published private(set) var lastTelemetry: Telemetry?
-    /// The v1 bridge (spec: "The flag day, and the two bridges across it"). A v1 car drops a v2
-    /// hello unanswered, so its version cannot reach the update gate through the handshake. When
-    /// hellos go unanswered, `/status` is read once through the relay and its identity — v1 or v2
-    /// spelling — is published here for `AppFlow.carProbed`, which may force an update but never
-    /// declares the car ready. Cleared the moment a real session opens.
-    @Published private(set) var probedFw: String?
     /// Owned here because the subscription is tied to the session: the link knows when one
     /// opens and with which sid.
     let video = VideoLink()
@@ -65,14 +59,6 @@ final class CarLink: ObservableObject {
     /// generation check remains the authoritative guard against a stale response landing
     /// after a newer session already asked again, cancellation or not.
     private var radioFetchGen = 0
-    private var probe: Task<Void, Never>?
-    private var lastProbeAt: ContinuousClock.Instant?
-    /// A v2 car answers a hello within tens of milliseconds and the transport repeats it every
-    /// 200 ms, so a car that has said nothing after this long is not going to: it is a v1 car,
-    /// and every further tenth of a second is spent on «Здороваюсь с машинкой» for a car that
-    /// has already been found. Was 2 s.
-    private static let probeAfter: Duration = .milliseconds(700)
-    private static let probeSpacing: Duration = .seconds(5)
     private var pathSub: AnyCancellable?
     /// Lifecycle operations run strictly in call order. `start()` and `requestStop()` enqueue
     /// synchronously on the main actor, so the order the scene handler calls them in is the
@@ -116,7 +102,6 @@ final class CarLink: ObservableObject {
         // `pathState` before the pump this enqueues starts.
         path?.refresh()
         enqueue { [weak self] in await self?.beginPumping() }
-        scheduleProbe()
     }
 
     /// Leaving the app is a goodbye said in words — the car is told to stop rather than left
@@ -160,7 +145,6 @@ final class CarLink: ObservableObject {
         pump?.cancel(); pump = nil
         decay?.cancel(); decay = nil
         radioFetch?.cancel(); radioFetch = nil
-        probe?.cancel()
         // Bounded: a goodbye stuck on a dead path (the dongle's interface gone while the socket
         // was still `.waiting`) must not dam the lifecycle chain forever — every later start/stop
         // queues behind an unbounded await otherwise. 300 ms covers 3 sends at 10 Hz spacing with
@@ -221,8 +205,6 @@ final class CarLink: ObservableObject {
     private func handle(_ event: CarTransport.Event) {
         switch event {
         case .sessionOpened(let info, let sid):
-            probe?.cancel()
-            probedFw = nil
             self.device = info.id
             lastTelemetrySeq = nil
             if info.id == CarContract.device {
@@ -259,7 +241,6 @@ final class CarLink: ObservableObject {
             lastFrame = nil
             lastTelemetrySeq = nil
             video.sessionClosed()
-            scheduleProbe()
         }
     }
 
@@ -332,26 +313,6 @@ final class CarLink: ObservableObject {
     /// FirmwareView calls this on appear: the radio line is that screen's reason to exist,
     /// and an OTA just behind us may have changed the answer.
     func refreshRadio() { fetchRadio() }
-
-    private func scheduleProbe() {
-        probe?.cancel()
-        probe = Task { [weak self, transport] in
-            try? await Task.sleep(for: Self.probeAfter)
-            guard !Task.isCancelled, let self, case .none = self.session else { return }
-            if let last = self.lastProbeAt, ContinuousClock.now - last < Self.probeSpacing { return }
-            self.lastProbeAt = ContinuousClock.now
-            // Cleared before the ask, not just left to be overwritten: `probedFw` drives
-            // `carProbed(fw:)` through `onChange`, which fires only on a value change. Without
-            // this, a second probe that reads back the SAME fw (a v1 car still there after
-            // `dongleReturned()` dropped the gate back to `.awaitingCar`) would publish nothing
-            // and the forced update would never re-fire.
-            self.probedFw = nil
-            guard let data = try? await transport.get(CarContract.statusPath, timeout: 2),
-                  let id = LegacyIdentity.parse(data), id.device == CarContract.device,
-                  !Task.isCancelled else { return }
-            self.probedFw = id.fw
-        }
-    }
 
     #if DEBUG
     /// One screen's worth of link, for the gallery. Nothing runs behind it.

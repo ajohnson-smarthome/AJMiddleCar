@@ -588,17 +588,6 @@ final class AppFlow: ObservableObject {
         setPhase(next)
     }
 
-    /// The v1 bridge's half of the gate: an identity read from `/status` because the hello went
-    /// unanswered. It may FORCE an update — that is its whole purpose — but never declares the
-    /// car ready, since no session exists to drive over.
-    func carProbed(fw: String?) {
-        guard let fw, phase == .awaitingCar || phase == .ready else { return }
-        if !GateRule.mayDrive(deviceBuild: UpdateClient.buildNumber(fw),
-                              latestBuild: UpdateClient.buildNumber(latestTag)) {
-            setPhase(.updateRequired)
-        }
-    }
-
     /// Forced FirmwareView signals completion.
     func updateFinished() { if phase == .updateRequired { setPhase(.ready) } }
 
