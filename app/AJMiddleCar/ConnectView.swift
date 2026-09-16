@@ -21,26 +21,19 @@ struct ConnectView: View {
         /// turns the pair into one movement forward rather than two unrelated pictures.
         /// The newest release could not be established, so nothing may proceed. No button: the
         /// gate loop is still asking and clears this itself the moment the network returns.
-        case offline
-        /// A release exists and carries no image for the adapter. Carries the tag, because the
-        /// only person who can act on this is the one who publishes releases, and the tag is
-        /// what tells them which one to look at.
-        case noRelease(tag: String)
+        case releaseOffline
+        /// A release exists and carries no image for `device` (or no build number). Carries the
+        /// tag, because the only person who can act on this is the one who publishes releases,
+        /// and the tag is what tells them which one to look at.
+        case releaseMissing(tag: String, device: UpdateRules.Device)
         case findingAdapter
-        /// Step 3: the adapter is ours and healthy; asking GitHub whether it is current. Had no
-        /// screen at all before — `dongleGate()` did this silently, so a launch that stopped
-        /// here looked like a launch that had stopped for no reason.
-        case adapterUpdateCheck
+        /// Step 3: asking GitHub for the newest release — the one tag both boards are compared
+        /// against. Had no screen at all before — `dongleGate()` did this silently, so a launch
+        /// that stopped here looked like a launch that had stopped for no reason.
+        case releaseCheck
         /// Step 4: the radio is scanning and has not seen the car's network yet. Distinct from
         /// `.dongleConfiguring`, which is the association that follows — see `WifiState`.
         case findingCar
-        /// Step 6: asking GitHub about the car's own firmware — over the internet, not over the
-        /// link to the car. Nothing has spoken to the car at this point; `carGate()` only fetches
-        /// the release and, if needed, downloads it. The car's own version arrives one screen
-        /// later, in its reply to the hello, which is why this step must not claim a connection:
-        /// saying "связь есть" here and then greeting the car on the next screen is what made the
-        /// sequence read backwards.
-        case carUpdateCheck
         /// The first frame of a launch: the dongle has been asked and has not answered yet.
         /// Its own line, because `.searching`'s says the CAR is not answering — an assertion
         /// about a device nothing has spoken to yet, made before the adapter in front of it
@@ -139,10 +132,10 @@ struct ConnectView: View {
         case .checkingDongle:
             DeviceScene(palette: p, rings: .wait(),
                         chip: (glyph: "cpu", tint: p.accent)) { AdapterBody(palette: p) }
-        case .offline:
+        case .releaseOffline:
             DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
                         chip: (glyph: "wifi.exclamationmark", tint: p.warn)) { AdapterBody(palette: p) }
-        case .noRelease:
+        case .releaseMissing:
             // A cross, not a warning triangle: there is nothing wrong with the adapter, there is
             // simply no image to compare it against.
             DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
@@ -153,12 +146,9 @@ struct ConnectView: View {
             // was performing.
             DeviceScene(palette: p, rings: .wait(),
                         chip: (glyph: "exclamationmark", tint: p.warn)) { AdapterBody(palette: p) }
-        case .adapterUpdateCheck:
+        case .releaseCheck:
             DeviceScene(palette: p, rings: .inward,
                         chip: (glyph: "arrow.down", tint: p.accent)) { AdapterBody(palette: p) }
-        case .carUpdateCheck:
-            DeviceScene(palette: p, rings: .inward,
-                        chip: (glyph: "arrow.down", tint: p.accent)) { CarBody(palette: p) }
         case .sendingNetwork:
             // The adapter alone, solid, rings turning inward: something is being handed to it.
             // Not the link scene — there is no link yet, and no car in the frame that nobody
@@ -176,12 +166,11 @@ struct ConnectView: View {
     private var title: String {
         switch situation {
         case .searching: return L.connectTitle
-        case .offline: return L.gateNoInternetTitle
-        case .noRelease: return L.gateNoReleaseTitle
+        case .releaseOffline: return L.gateNoInternetTitle
+        case .releaseMissing: return L.gateNoReleaseTitle
         case .findingAdapter: return L.dongleFindingTitle
-        case .adapterUpdateCheck: return L.dongleUpdCheckTitle
+        case .releaseCheck: return L.dongleUpdCheckTitle
         case .findingCar: return L.carFindingTitle
-        case .carUpdateCheck: return L.carUpdCheckTitle
         case .checkingDongle: return L.dongleCheckingTitle
         case .noDongle: return L.linkNoDongleTitle
         case .localNetworkDenied: return L.linkDeniedTitle
@@ -197,12 +186,11 @@ struct ConnectView: View {
     private var message: String {
         switch situation {
         case .searching: return L.connectBody
-        case .offline: return L.dongleOfflineSub
-        case .noRelease(let tag): return L.gateNoReleaseSub(tag)
+        case .releaseOffline: return L.dongleOfflineSub
+        case .releaseMissing(let tag, _): return L.gateNoReleaseSub(tag)
         case .findingAdapter: return L.dongleFindingSub
-        case .adapterUpdateCheck: return L.dongleUpdCheckSub
+        case .releaseCheck: return L.dongleUpdCheckSub
         case .findingCar: return L.carFindingSub
-        case .carUpdateCheck: return L.carUpdCheckSub
         case .checkingDongle: return L.dongleCheckingSub
         case .noDongle: return L.linkNoDongleSub
         case .localNetworkDenied: return L.linkDeniedSub
@@ -248,8 +236,7 @@ struct ConnectView: View {
             }
         case .searching, .checkingDongle, .noDongle, .sendingNetwork, .dongleConfiguring,
              .dongleFault, .wrongDongle,
-             .findingAdapter, .adapterUpdateCheck, .findingCar, .carUpdateCheck, .offline,
-             .noRelease:
+             .findingAdapter, .releaseCheck, .findingCar, .releaseOffline, .releaseMissing:
             EmptyView()
         }
     }

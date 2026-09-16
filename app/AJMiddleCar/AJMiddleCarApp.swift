@@ -105,14 +105,14 @@ struct RootView: View {
             ConnectView(situation: .noDongle(.notAvailable))
         case .dongleChecking:
             ConnectView(situation: .checkingDongle)
-        case .dongleUpdateCheck:
-            ConnectView(situation: .adapterUpdateCheck)
+        case .releaseCheck:
+            ConnectView(situation: .releaseCheck)
         case .carFinding:
             ConnectView(situation: .findingCar)
-        case .dongleOffline:
-            ConnectView(situation: .offline)
-        case .dongleNoRelease(let tag):
-            ConnectView(situation: .noRelease(tag: tag))
+        case .releaseOffline:
+            ConnectView(situation: .releaseOffline)
+        case .releaseMissing(let tag, let device):
+            ConnectView(situation: .releaseMissing(tag: tag, device: device))
         case .dongleFault:
             ConnectView(situation: .dongleFault)
         case .dongleDenied:
@@ -136,15 +136,6 @@ struct RootView: View {
             ConnectView(situation: .dongleConfiguring)
         case .dongleJoinFailed:
             ConnectView(situation: .dongleJoinFailed, onRetryJoin: { flow.retryDongleJoin() })
-        // Step 6 of the ladder: the car's own release check, which now says what it is doing
-        // and to whom. `UpdateCheckView` keeps the two states that are not a step — a download
-        // with a progress bar, and a failure with a button.
-        case .checkInternet, .checkUpdate:
-            ConnectView(situation: .carUpdateCheck)
-        case .downloading, .checkFailed:
-            UpdateCheckView(palette: p, phase: flow.shown, client: flow.client) { flow.retry() }
-        case .noInternet:
-            NoInternetView(palette: p) { flow.retry() }
         case .updateRequired:
             FirmwareView(palette: p, flow: .forCar(link: link), forced: true,
                          onDone: { flow.updateFinished() })

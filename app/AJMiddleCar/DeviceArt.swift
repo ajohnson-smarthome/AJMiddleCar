@@ -51,8 +51,9 @@ enum RingMode: Equatable {
 struct DeviceRingsView: View {
     let mode: RingMode
     let palette: Palette
-    /// Almost always the accent. `NoInternetView` wants them warm, and used to draw a whole
-    /// second set of rings — and a second car — for want of this one parameter.
+    /// Almost always the accent. The offline hold (`ConnectView`'s `.releaseOffline`) wants them
+    /// warm; the screen that preceded it used to draw a whole second set of rings — and a second
+    /// car — for want of this one parameter.
     var tint: Color? = nil
     private var ink: Color { tint ?? palette.accent }
 

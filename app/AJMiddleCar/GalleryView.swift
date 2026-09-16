@@ -25,8 +25,8 @@ struct GalleryView: View {
         ZStack {
             p.bg.ignoresSafeArea()
             // .id forces SwiftUI to tear down + recreate on every switch — otherwise same-type frames
-            // (FirmwareView/UpdateCheckView/CalibrationView) reuse @State and the .task/.onAppear that
-            // seeds debugPhase/debugState never re-runs, so they'd all show one stale state.
+            // (FirmwareView/CalibrationView) reuse @State and the .task/.onAppear that seeds
+            // debugPhase/debugState never re-runs, so they'd all show one stale state.
             frames[index].view.id(index)
             HStack(spacing: 0) {
                 Color.clear.contentShape(Rectangle())
@@ -93,9 +93,8 @@ struct GalleryView: View {
             // The startup ladder, in the order a launch walks it. Steps 2 and 5 are the two
             // rows above and below this block — they already had frames.
             ("Step 1 finding adapter",  AnyView(ConnectView(situation: .findingAdapter))),
-            ("Step 3 adapter update",   AnyView(ConnectView(situation: .adapterUpdateCheck))),
+            ("Step 3 release check",    AnyView(ConnectView(situation: .releaseCheck))),
             ("Step 4 finding car",      AnyView(ConnectView(situation: .findingCar))),
-            ("Step 6 car update",       AnyView(ConnectView(situation: .carUpdateCheck))),
             ("No dongle",               AnyView(ConnectView(situation: .noDongle(.notAvailable)))),
             ("Local network denied",    AnyView(ConnectView(situation: .localNetworkDenied))),
             ("Dongle sending network",  AnyView(ConnectView(situation: .sendingNetwork))),
@@ -104,15 +103,11 @@ struct GalleryView: View {
             ("Dongle rolled back",      AnyView(ConnectView(situation: .dongleRolledBack,
                                                               onRecheckRollback: {}))),
             ("Dongle fault",            AnyView(ConnectView(situation: .dongleFault))),
-            ("Offline, cannot verify",  AnyView(ConnectView(situation: .offline))),
-            ("No release for adapter",  AnyView(ConnectView(situation: .noRelease(tag: "v1.0+483")))),
+            ("Offline, cannot verify",  AnyView(ConnectView(situation: .releaseOffline))),
+            ("No release for adapter",  AnyView(ConnectView(situation: .releaseMissing(tag: "v1.0+483", device: .dongle)))),
             ("Wrong dongle",            AnyView(ConnectView(situation: .wrongDongle("some-other-adapter")))),
-            ("NoInternet",              AnyView(NoInternetView(palette: p, onRetry: {}))),
             ("WrongCar",                AnyView(WrongCarView(palette: p, kind: .foreignDevice("esp32-car"), onRetry: {}))),
             ("WrongProto",              AnyView(WrongCarView(palette: p, kind: .protoMismatch(theirs: CarContract.proto + 1), onRetry: {}))),
-            ("UpdateCheck checking",    AnyView(UpdateCheckView(palette: p, phase: .checkUpdate, client: UpdateClient(), onRetry: {}))),
-            ("UpdateCheck downloading", AnyView(UpdateCheckView(palette: p, phase: .downloading, client: { let c = UpdateClient(); c.downloadProgress = 0.45; return c }(), onRetry: {}))),
-            ("UpdateCheck failed",      AnyView(UpdateCheckView(palette: p, phase: .checkFailed, client: UpdateClient(), onRetry: {}))),
             ("Firmware checking",       fw(.checking)),
             ("Firmware upToDate",       fw(.upToDate)),
             ("Firmware available",      fw(.available)),

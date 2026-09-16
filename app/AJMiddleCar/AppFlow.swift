@@ -28,24 +28,24 @@ final class AppFlow: ObservableObject {
         /// by nature — the reply is already in hand when this is set — which is exactly why
         /// `PhasePacer` exists: without it this step would never be legible.
         case dongleChecking
-        /// Step 3. Asking GitHub whether the adapter's own firmware is current. Had no phase at
-        /// all before, so this wait happened behind whatever screen preceded it.
-        case dongleUpdateCheck
+        /// Step 3. Asking GitHub for the newest release — once per launch, for both boards: one
+        /// release tags both images, so the tag learned here is what the adapter is compared
+        /// against now and the car after its hello. Had no phase at all before, so this wait
+        /// happened behind whatever screen preceded it.
+        case releaseCheck
         /// Step 4. The adapter's radio is scanning and has not seen the car's network yet —
         /// `DongleStep.searchingCar`. Distinct from `.dongleConfiguring`, which is the
         /// association that follows: this one usually means the car is switched off.
         case carFinding
-        /// The adapter's newest release could not be established — no internet, or a release
-        /// with no build number in it. A hold, not a failure: `dongleGate()` keeps asking, so
-        /// this clears itself the moment the network returns. That is also why it is not
-        /// `.noInternet`, whose screen offers a Retry: while this loop is running `retry()` is
-        /// refused by `gateRunning`, and a button that does nothing is worse than no button.
-        case dongleOffline
-        /// A release exists and carries no image for the adapter, so its version cannot be
-        /// established and the gate will not hand over. Not the user's to fix — only publishing
-        /// a release with the adapter's image clears it — which is why the screen says that
+        /// The newest release could not be established: GitHub did not answer. A hold, not a
+        /// failure — the gate keeps asking (`fetchRelease`), so this clears itself the moment
+        /// the network returns, which is why the screen has no button.
+        case releaseOffline
+        /// A release exists and carries no image for `device`, or no build number, so nothing
+        /// can be compared against it and the gate will not proceed. Not the user's to fix —
+        /// only publishing a usable release clears it — which is why the screen says that
         /// instead of blaming the network.
-        case dongleNoRelease(tag: String)
+        case releaseMissing(tag: String, device: UpdateRules.Device)
         /// Something answered at the dongle's address and it was not usable — an HTTP error, a
         /// truncated stream, a body that would not decode. Deliberately not `.dongleAbsent`:
         /// the one instruction that screen gives is the one thing already done.
@@ -93,7 +93,6 @@ final class AppFlow: ObservableObject {
         /// dongle's `failed` and the re-ask that will put it straight back into `searching` was
         /// a verdict the app itself overturned a second and a half later.
         case dongleJoinFailed
-        case checkInternet, noInternet, checkUpdate, checkFailed, downloading
         /// The gate has passed; the car has not identified itself yet. What is on screen while
         /// this lasts comes from `CarLink` — searching, wrong car, no dongle, denied.
         case awaitingCar
@@ -109,12 +108,11 @@ final class AppFlow: ObservableObject {
         var opensLink: Bool {
             switch self {
             case .updateRequired, .awaitingCar, .ready: return true
-            case .checkDongle, .dongleAbsent, .dongleChecking, .dongleUpdateCheck, .carFinding,
-                 .dongleOffline, .dongleNoRelease,
+            case .checkDongle, .dongleAbsent, .dongleChecking, .releaseCheck, .carFinding,
+                 .releaseOffline, .releaseMissing,
                  .dongleFault, .dongleDenied, .dongleWrong,
                  .dongleUpdating, .dongleRolledBack,
-                 .dongleSendingNet, .dongleConfiguring, .dongleJoinFailed,
-                 .checkInternet, .noInternet, .checkUpdate, .checkFailed, .downloading: return false
+                 .dongleSendingNet, .dongleConfiguring, .dongleJoinFailed: return false
             }
         }
     }
@@ -127,6 +125,10 @@ final class AppFlow: ObservableObject {
     private var shownAt = Date()
     private var queued: [Phase] = []
     private var pacing = false
+    /// The newest release's tag — one for both boards, learned once per launch by
+    /// `fetchRelease` (inside `dongleGate()`, or on its own in `releaseGate()` when there is no
+    /// adapter). `DongleLink.next` compares the adapter against it; `carIdentified` the car.
+    /// Cleared by `recheckDongleRollback()`, which is what makes the next poll ask again.
     @Published var latestTag: String?
     let client = UpdateClient()
     /// Shared with `FirmwareView`, which now runs the adapter's update through the same screen
@@ -177,11 +179,6 @@ final class AppFlow: ObservableObject {
     /// does not clear on its own, and the app is the dongle's only OTA path.
     private var rollbackChoice: RollbackChoice = .unanswered
 
-    /// The dongle's release and the tag `DongleLink` compares against — fetched once, lazily,
-    /// the first time `/status` answers, and held on the flow rather than inside `dongleGate()`
-    /// so `recheckDongleRollback()` can reopen the fetch (that is what "check again" means).
-    private var dongleRelease: UpdateClient.Release?
-    private var dongleLatestTag: String?
     /// Whether `/status` has ever answered this launch — the trigger for step 2, and nothing
     /// else.
     private var sawDongle = false
@@ -197,15 +194,66 @@ final class AppFlow: ObservableObject {
         guard !gateRunning else { return }
         gateRunning = true
         defer { gateRunning = false }
+        UpdateClient.migrateCacheIfNeeded()
         // The dongle half runs wherever there is a dongle to ask: every device, and a simulator
         // launched with `-viaDongle` (CarHost) — the adapter on the Mac's USB, the simulator as
-        // the phone. Against the mock there is no dongle and the spec is explicit that nothing
-        // stands in for one, so the ladder starts at the car's own gate.
-        if CarHost.viaDongle && !dongleHandedOver {
-            await dongleGate()
-            dongleHandedOver = true
+        // the phone. It learns the newest release on the way (step 3). Against the mock there
+        // is no dongle and nothing stands in for one, so the release step runs on its own; the
+        // car itself is met on the far side of `.awaitingCar`, in its reply to the hello.
+        if CarHost.viaDongle {
+            if !dongleHandedOver {
+                await dongleGate()
+                dongleHandedOver = true
+            }
+        } else {
+            await releaseGate()
         }
-        await carGate()
+        setPhase(.awaitingCar)
+    }
+
+    /// Step 3, one attempt: ask GitHub for the newest release and adopt its tag. The release is
+    /// one for both boards — one tag, two images — so this runs once per launch, and both the
+    /// adapter's comparison (`DongleLink.next`) and the car's (`carIdentified`) read the tag it
+    /// leaves in `latestTag`. `device` only says which image's presence to insist on.
+    ///
+    /// Returns true once `latestTag` is set. Otherwise sets the holding phase — `.releaseOffline`
+    /// when GitHub could not be reached, `.releaseMissing` when the release carries no image for
+    /// `device` or no build number — and returns false; the caller sleeps a poll interval and
+    /// asks again. Announces `.releaseCheck` only when not already holding: re-announcing on
+    /// every failed poll made "checking" and the hold alternate — with `PhasePacer` guaranteeing
+    /// each screen its 400 ms, that is a strobe rather than a sequence.
+    private func fetchRelease(for device: UpdateRules.Device) async -> Bool {
+        var holding = phase == .releaseOffline
+        if case .releaseMissing = phase { holding = true }
+        if !holding { setPhase(.releaseCheck) }
+        switch await client.latestReleaseLookup(for: device) {
+        case .found(let rel):
+            // The tag is only adopted once it can be compared against. Setting it first and
+            // validating after left an unusable tag in place, and the next poll then skipped
+            // this whole block and drove on it.
+            guard GateRule.canVerify(latestBuild: UpdateClient.buildNumber(rel.tag)) else {
+                setPhase(.releaseMissing(tag: rel.tag, device: device))
+                return false
+            }
+            latestTag = rel.tag
+            return true
+        case .noImage(let tag):
+            setPhase(.releaseMissing(tag: tag, device: device))
+            return false
+        case .unreachable:
+            setPhase(.releaseOffline)
+            return false
+        }
+    }
+
+    /// The release step on its own, for a launch with no adapter to find it behind (the mock).
+    /// Same step, same screens, same holds as inside `dongleGate()`; `.car` because there is no
+    /// adapter whose image the release would have to carry.
+    private func releaseGate() async {
+        while latestTag == nil {
+            if await fetchRelease(for: .car) { return }
+            try? await Task.sleep(for: Self.donglePollInterval)
+        }
     }
 
     /// The dongle's interface came back after going away.
@@ -218,11 +266,10 @@ final class AppFlow: ObservableObject {
     /// join logic. This is that path, and it is the only hole in an otherwise complete unplug
     /// story.
     ///
-    /// Only the dongle half re-runs. The car's own gate already answered this session and
-    /// `latestTag` is still held, so re-running it would re-probe GitHub and could strand a
-    /// live session on `.noInternet` over a cable that was out for two seconds. Handing back to
-    /// `.awaitingCar` is enough: `carIdentified` restores `.ready`/`.updateRequired` on the
-    /// next hello, which is where the phase was before the wire went.
+    /// Only the dongle half re-runs, and `latestTag` is still held, so the release is not asked
+    /// again. Handing back to `.awaitingCar` is enough: `carIdentified` restores
+    /// `.ready`/`.updateRequired` on the next hello, which is where the phase was before the
+    /// wire went.
     func dongleReturned() async {
         guard CarHost.viaDongle else { return }
         // Nothing to re-ask if the gate never handed over in the first place — a flap during the
@@ -239,12 +286,10 @@ final class AppFlow: ObservableObject {
     }
 
     /// Poll the dongle until it reports `.readyForCar`, acting on whatever `DongleLink` says is
-    /// next at each step, and return. What follows is the caller's: `startupCheck()` hands over
-    /// to `carGate()`, and `dongleReturned()` — a re-entry after the wire came back — does not,
-    /// because the car's gate has already answered. One release tags both images identically
-    /// (`UpdateRules.Device`), so the tag fetched here for the dongle's own comparison is a
-    /// separate call from the one `carGate()` makes for the car's — decoupled on purpose, so
-    /// neither device's gate reads a tag fetched for the other's asset URL.
+    /// next at each step, and return. What follows is the caller's: both `startupCheck()` and
+    /// `dongleReturned()` — a re-entry after the wire came back — move on to `.awaitingCar`.
+    /// The newest release is learned here, once, for both boards (`fetchRelease`): one release
+    /// tags both images, and the car is compared against the same tag after its hello.
     private func dongleGate() async {
         // Fetched once, lazily, the first time `/status` actually answers — not up front. The
         // spec's own order is "check whether a dongle is there... if it is, check for a newer
@@ -264,44 +309,17 @@ final class AppFlow: ObservableObject {
                 sawDongle = true
                 setPhase(.dongleChecking)
             }
-            // Step 3, and a gate rather than a formality: the adapter's newest release must be
-            // established before anything is decided about it. Retried on every poll until it
-            // is — a launch that could not reach GitHub must not proceed on the assumption that
+            // Step 3, and a gate rather than a formality: the newest release must be established
+            // before anything is decided about the adapter. Retried on every poll until it is —
+            // a launch that could not reach GitHub must not proceed on the assumption that
             // nothing has changed, which is exactly what it used to do.
-            if case .status = reply, dongleLatestTag == nil {
-                // Announce the check only when not already holding on a failure of it. This loop
-                // re-asks every poll, and re-announcing each time made "checking" and the hold
-                // alternate — with `PhasePacer` guaranteeing each screen its 400 ms, that is a
-                // strobe rather than a sequence, which is exactly the complaint this whole
-                // redesign began from.
-                var holding = phase == .dongleOffline
-                if case .dongleNoRelease = phase { holding = true }
-                if !holding {
-                    setPhase(.dongleUpdateCheck)      // step 3
-                }
-                switch await client.latestReleaseLookup(for: .dongle) {
-                case .found(let rel):
-                    dongleRelease = rel
-                    // The tag is only adopted once it can be compared against. Setting it first
-                    // and validating after left an unusable tag in place, and the next poll then
-                    // skipped this whole block and drove on it.
-                    guard GateRule.canVerify(latestBuild: UpdateClient.buildNumber(rel.tag)) else {
-                        setPhase(.dongleNoRelease(tag: rel.tag))
-                        try? await Task.sleep(for: Self.donglePollInterval)
-                        continue
-                    }
-                    dongleLatestTag = rel.tag
-                case .noImage(let tag):
-                    setPhase(.dongleNoRelease(tag: tag))
-                    try? await Task.sleep(for: Self.donglePollInterval)
-                    continue
-                case .unreachable:
-                    setPhase(.dongleOffline)
+            if case .status = reply, latestTag == nil {
+                if !(await fetchRelease(for: .dongle)) {
                     try? await Task.sleep(for: Self.donglePollInterval)
                     continue
                 }
             }
-            switch DongleLink.next(reply: reply, latestTag: dongleLatestTag,
+            switch DongleLink.next(reply: reply, latestTag: latestTag,
                                    expectedSSID: CarContract.ssid, rollback: rollbackChoice) {
             case .plugIn:
                 // A dongle that is gone is a dongle that will come back knowing nothing: it
@@ -472,21 +490,16 @@ final class AppFlow: ObservableObject {
         (error as? CarError)?.logDescription ?? String(describing: error)
     }
 
-    /// The user chose to proceed on the dongle's current, reverted firmware rather than being
-    /// stuck on `.dongleRolledBack` forever (the car's own forced-update gate keeps the same
-    /// escape hatch — `FirmwareView`'s skip button). Read by `dongleGate()`'s very next poll,
-    /// which is at most `donglePollInterval` away.
-
     /// The user asked whether a newer release exists yet — `FirmwareView`'s rolled-back car
     /// screen keeps the same offer beside its skip. Two halves, both required: re-open the
     /// release fetch (a tag fetched before the rollback screen appeared is exactly the tag that
     /// cannot help), and record what was on offer at the time so `DongleLink` can tell a
     /// genuinely newer image from the one that just rolled back.
     func recheckDongleRollback() {
-        rollbackChoice = .recheck(from: dongleLatestTag)
-        // Clearing the tag is what makes the next poll re-ask GitHub: the fetch is guarded on
-        // `dongleLatestTag == nil`, so this is the recheck actually happening.
-        dongleLatestTag = nil
+        rollbackChoice = .recheck(from: latestTag)
+        // Clearing the tag is what makes the next poll re-ask GitHub: `fetchRelease` runs while
+        // `latestTag == nil`, so this is the recheck actually happening.
+        latestTag = nil
     }
 
     /// A recheck is one look, not a standing permission — spent as soon as `DongleLink` has
@@ -510,61 +523,6 @@ final class AppFlow: ObservableObject {
     /// trusting whatever the screen concluded.
     func dongleUpdateFinished() { setPhase(.dongleChecking) }
 
-
-    /// The car's own pre-connect gate (internet probe → latest release → download if needed).
-    /// It used to be `startupCheck()` itself. Reached once `dongleGate()` says there is a car
-    /// to talk to — or straight away against the mock. Its failure screens carry a button that
-    /// re-runs this gate alone (`retry`, `dongleHandedOver`). The decision of what to fetch is
-    /// `UpdateRules.flashPlan`/`needsDownload`, pure and host-tested; `FirmwareFlow.download`
-    /// makes the same decision from the same cache, so the image this gate fetches is the one
-    /// the forced update then flashes, not a second copy of it.
-    private func carGate() async {
-        UpdateClient.migrateCacheIfNeeded()
-        setPhase(.checkInternet)
-        // No fallback any more. A cached image says what this phone downloaded once, not what
-        // the newest release is now, and letting it stand in for a check was the whole leak.
-        guard await UpdateClient.internetReachable() else {
-            setPhase(.noInternet)
-            return
-        }
-        setPhase(.checkUpdate)
-        // The car's half tells the two apart too, though only one of them has ever fired: the
-        // car's image has been in every release. Both land on `.checkFailed`, which carries a
-        // Retry — this gate returns rather than looping, so a button is the way back.
-        let lookup = await client.latestReleaseLookup()
-        guard case .found(let rel) = lookup else {
-            setPhase(.checkFailed)
-            return
-        }
-        latestTag = rel.tag
-        let latestBuild = UpdateClient.buildNumber(rel.tag)
-        // A release whose tag carries no build number is not a verification either: there is
-        // nothing to compare against, and "could not tell" must never read as "current".
-        guard GateRule.canVerify(latestBuild: latestBuild) else {
-            setPhase(.checkFailed)
-            return
-        }
-        if UpdateClient.needsDownload(latestBuild: latestBuild,
-                                      cachedBuild: UpdateClient.cachedBuild,
-                                      hasCachedFile: UpdateClient.hasCachedFile) {
-            setPhase(.downloading)
-            let t0 = Date()
-            let recordAs = latestBuild.map { (build: $0, tag: rel.tag) }
-            guard await client.download(rel.assetURL, recordAs: recordAs) != nil else {
-                // The two failure paths above fall back to the cache; a failed download of a
-                // NEWER release must not strand a phone that still holds the previous one.
-                setPhase(.checkFailed)
-                return
-            }
-            await UpdateClient.holdAtLeast(UpdateClient.downloadMinDisplay, since: t0)
-        }
-        setPhase(.awaitingCar)
-    }
-
-    /// GitHub unreachable or unusable: a cached image is enough to drive — and enough to
-    /// force with. Seeding `latestTag` from the cache is what keeps the forced gate armed
-    /// offline (decision 4a); without it `mustUpdate` compared against nil and every car,
-    /// pre-versioning ones included, drove unforced whenever the launch had no internet.
     /// The car said who it is, in its hello reply. Re-evaluated every time, not once: a car that
     /// reboots into a different build after an OTA is the same question asked again.
     ///
@@ -590,6 +548,4 @@ final class AppFlow: ObservableObject {
 
     /// Forced FirmwareView signals completion.
     func updateFinished() { if phase == .updateRequired { setPhase(.ready) } }
-
-    func retry() { Task { await startupCheck() } }
 }
