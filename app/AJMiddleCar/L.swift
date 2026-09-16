@@ -20,7 +20,7 @@ enum L {
     static var linkDeniedSub: String { s("link.deniedSub") }
     static var dongleSendingNetTitle: String { s("dongle.sendingNetTitle") }
     static var dongleSendingNetSub: String { s("dongle.sendingNetSub") }
-    static var dongleOfflineSub: String { s("dongle.offlineSub") }
+    static var gateOfflineSub: String { s("gate.offlineSub") }
     static var fwWaitingSub: String { s("fw.waitingSub") }
     static var dongleConfiguringTitle: String { s("dongle.configuringTitle") }
     static var dongleConfiguringSub: String { s("dongle.configuringSub") }
@@ -30,12 +30,12 @@ enum L {
     static var dongleRolledBackSub: String { s("dongle.rolledBackSub") }
     static var settingsFirmwareCar: String { s("settings.firmwareCar") }
     static var settingsFirmwareDongle: String { s("settings.firmwareDongle") }
-    static var gateNoReleaseTitle: String { s("gate.noReleaseTitle") }
-    static func gateNoReleaseSub(_ tag: String) -> String { s("gate.noReleaseSub", tag) }
+    static func gateNoReleaseTitle(_ d: UpdateRules.Device) -> String { s("gate.noReleaseTitle.\(d.rawValue)") }
+    static func gateNoReleaseSub(_ d: UpdateRules.Device, _ tag: String) -> String { s("gate.noReleaseSub.\(d.rawValue)", tag) }
     static var dongleFindingTitle: String { s("dongle.findingTitle") }
     static var dongleFindingSub: String { s("dongle.findingSub") }
-    static var dongleUpdCheckTitle: String { s("dongle.updCheckTitle") }
-    static var dongleUpdCheckSub: String { s("dongle.updCheckSub") }
+    static var gateReleaseCheckTitle: String { s("gate.releaseCheckTitle") }
+    static var gateReleaseCheckSub: String { s("gate.releaseCheckSub") }
     static var carFindingTitle: String { s("car.findingTitle") }
     static var carFindingSub: String { s("car.findingSub") }
     static var dongleCheckingTitle: String { s("dongle.checkingTitle") }

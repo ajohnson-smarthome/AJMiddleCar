@@ -138,7 +138,7 @@
 "ctl.update"         = "прошивка";
 "ctl.safe_stop"      = "стоп";
 "gate.noInternetTitle"     = "Нет интернета";
-"dongle.offlineSub"        = "Чтобы проверить прошивку адаптера, нужен интернет. Как только он появится, продолжу сам.";
+"gate.offlineSub"          = "Чтобы проверить прошивки, нужен интернет. Как только он появится, продолжу сам.";
 "gate.updateTitle"         = "Требуется обновление";
 "gate.updateSub"           = "Прошивка устарела — обнови, чтобы продолжить.";
 "wheel.title"         = "Колесо и моторы";
@@ -185,21 +185,20 @@
 "wrongProto.hint"    = "Обнови прошивку машинки (или приложение) — версии должны совпадать.";
 
 /* The startup ladder. Each subtitle opens by confirming the step before it succeeded — that is
-   what makes six similar screens read as progress instead of as one screen flickering. */
+   what makes a run of similar screens read as progress instead of as one screen flickering. */
 "dongle.findingTitle"     = "Ищу адаптер";
 "dongle.findingSub"       = "Спрашиваю USB-адаптер, на месте ли он.";
-"dongle.updCheckTitle"    = "Проверяю обновления адаптера";
-"dongle.updCheckSub"      = "Адаптер исправен. Смотрю, не вышла ли для него новая прошивка — обновлю до поездки, а не посреди неё.";
+"gate.releaseCheckTitle"  = "Проверяю обновления";
+"gate.releaseCheckSub"    = "Смотрю, какой выпуск последний. Обеим платам нужна одна и та же версия — обновлю до поездки, а не посреди неё.";
 "car.findingTitle"        = "Ищу машинку";
 "car.findingSub"          = "Адаптер готов. Он осматривает эфир: включена ли машинка и видно ли её сеть.";
 
-/* Its own line, not the generic fw.failTitle: three different screens said "Не удалось"
-   and left the user to work out which of them had. */
-
 /* Not a network problem and not the user's to fix: a release exists and has no adapter image
    in it. Naming the tag is what makes it actionable for the one person who can publish one. */
-"gate.noReleaseTitle"    = "Нет выпуска для адаптера";
-"gate.noReleaseSub"      = "В последнем выпуске (%@) нет прошивки адаптера, поэтому сверить его версию не с чем. Пока такой выпуск не опубликован, ехать нельзя.";
+"gate.noReleaseTitle.dongle" = "Нет выпуска для адаптера";
+"gate.noReleaseTitle.car"    = "Нет выпуска для машинки";
+"gate.noReleaseSub.dongle"   = "В последнем выпуске (%@) нет прошивки адаптера, поэтому сверить его версию не с чем. Пока такой выпуск не опубликован, ехать нельзя.";
+"gate.noReleaseSub.car"      = "В последнем выпуске (%@) нет прошивки машинки, поэтому сверить её версию не с чем. Пока такой выпуск не опубликован, ехать нельзя.";
 
 "settings.firmwareCar"    = "Прошивка машинки";
 "settings.firmwareDongle" = "Прошивка адаптера";

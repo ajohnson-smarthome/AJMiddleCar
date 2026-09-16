@@ -167,9 +167,9 @@ struct ConnectView: View {
         switch situation {
         case .searching: return L.connectTitle
         case .releaseOffline: return L.gateNoInternetTitle
-        case .releaseMissing: return L.gateNoReleaseTitle
+        case .releaseMissing(_, let device): return L.gateNoReleaseTitle(device)
         case .findingAdapter: return L.dongleFindingTitle
-        case .releaseCheck: return L.dongleUpdCheckTitle
+        case .releaseCheck: return L.gateReleaseCheckTitle
         case .findingCar: return L.carFindingTitle
         case .checkingDongle: return L.dongleCheckingTitle
         case .noDongle: return L.linkNoDongleTitle
@@ -186,10 +186,10 @@ struct ConnectView: View {
     private var message: String {
         switch situation {
         case .searching: return L.connectBody
-        case .releaseOffline: return L.dongleOfflineSub
-        case .releaseMissing(let tag, _): return L.gateNoReleaseSub(tag)
+        case .releaseOffline: return L.gateOfflineSub
+        case .releaseMissing(let tag, let device): return L.gateNoReleaseSub(device, tag)
         case .findingAdapter: return L.dongleFindingSub
-        case .releaseCheck: return L.dongleUpdCheckSub
+        case .releaseCheck: return L.gateReleaseCheckSub
         case .findingCar: return L.carFindingSub
         case .checkingDongle: return L.dongleCheckingSub
         case .noDongle: return L.linkNoDongleSub
