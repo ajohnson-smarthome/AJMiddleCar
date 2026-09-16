@@ -12,7 +12,8 @@ import Foundation
 ///
 /// The sequence, in the order the spec states it: presence, then identity, then the dongle's
 /// own update, then whether it has been told the RIGHT network, then the join, then — once
-/// `.readyForCar` — the car's own existing gate takes over unchanged.
+/// `.readyForCar` — the app waits for the car itself: its version arrives with its hello and
+/// is compared against the same release tag.
 public enum DongleStep: Equatable {
     /// Nothing answered at the dongle's address — not "an error", just the step that tells the
     /// user to plug one in. `DongleReply.silent` is exactly this: the pure module owns

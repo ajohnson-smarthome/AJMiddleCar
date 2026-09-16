@@ -50,44 +50,7 @@ final class UpdateClient: NSObject, ObservableObject {
         UpdateRules.mustUpdate(carFw: carFw, latestTag: latestTag)
     }
 
-    // MARK: - Internet reachability + firmware cache
-
-    /// Lightweight reachability probe to GitHub (distinguishes "no internet" from "API failed").
-    static func internetReachable() async -> Bool {
-        guard let url = URL(string: "https://api.github.com") else { return false }
-        // Waits for a usable path rather than failing on the first one it is handed.
-        //
-        // This is no longer defending against the car's own Wi-Fi. Joined to the car's access
-        // point, iOS used to keep Wi-Fi in the general path for about forty seconds before
-        // deciding it had no internet and demoting it — measured on the bench, see
-        // docs/superpowers/specs/2026-08-21-wifi-pinned-networking.md — so a fast one-shot
-        // probe launched inside that window went out over the car's dead Wi-Fi, timed out, and
-        // dead-ended the launch gate on a phone whose cellular data was working the whole time.
-        // With the dongle, that scenario cannot happen: the phone never joins the car's access
-        // point at all, so its own Wi-Fi, with a real route to the internet, stays in the
-        // general path throughout (`CarNet.swift`). What is left to wait out is ordinary: a
-        // cold launch's network establishment (association, DNS) can still cost a couple of
-        // seconds on a phone that is genuinely online, and a probe that gives up too fast reads
-        // that as "no internet" for nothing.
-        //
-        // The 10 s / 25 s below are carried over unchanged from the old measurement and were
-        // never re-sized against "a couple of seconds" — they are not tuned to today's scenario,
-        // they are a safe ceiling for it: this only ever delays declaring "no internet" while a
-        // path comes up, never causes a false one, so an oversized budget costs nothing but a
-        // slower failure on a phone that truly has none.
-        let cfg = URLSessionConfiguration.ephemeral
-        cfg.waitsForConnectivity = true
-        cfg.timeoutIntervalForRequest = 10
-        cfg.timeoutIntervalForResource = 25
-        let session = URLSession(configuration: cfg)
-        defer { session.finishTasksAndInvalidate() }
-
-        var req = URLRequest(url: url); req.httpMethod = "HEAD"
-        if let (_, resp) = try? await session.data(for: req) {
-            return (resp as? HTTPURLResponse) != nil
-        }
-        return false
-    }
+    // MARK: - Firmware cache
 
     /// Storage keys, per device — suffixed with `UpdateRules.Device.rawValue` so caching one
     /// device's build/tag can never be read back, or overwrite, the other's. The bare,
@@ -128,11 +91,10 @@ final class UpdateClient: NSObject, ObservableObject {
     /// BOTH old locations, which is the fix. This knew only `Caches/firmware-latest.bin` while
     /// the per-device rename moved the car's file out from under Application
     /// Support/`firmware-latest.bin` — where every phone that had already migrated once was
-    /// holding it. That file went invisible, and `GateRule` reads the consequences: no cached
-    /// file means `canProceedOffline` is false, so a launch with no internet lands on
-    /// `.noInternet` where it used to proceed, and `latestTag` stays nil, so the forced update
-    /// gate silently never fires. Those are the two failures that decision exists to prevent,
-    /// and nothing shows them until someone launches offline.
+    /// holding it. That file went invisible, and the forced update read the consequences:
+    /// `FirmwareFlow.flashPlan` saw no cached image and downloaded the release again on every
+    /// forced flash. One migration, both old paths, is what keeps the cache the launch already
+    /// paid for.
     static func migrateCacheIfNeeded() {
         let fm = FileManager.default
         let new = cachedBinURL              // also creates Application Support, if it is new
@@ -179,7 +141,6 @@ final class UpdateClient: NSObject, ObservableObject {
     static func cachedBuild(for device: UpdateRules.Device) -> Int? {
         let v = UserDefaults.standard.integer(forKey: kBuild(device)); return v == 0 ? nil : v
     }
-    static var cachedBuild: Int? { cachedBuild(for: .car) }
 
     static func cachedTag(for device: UpdateRules.Device) -> String? {
         UserDefaults.standard.string(forKey: kTag(device))
@@ -189,7 +150,6 @@ final class UpdateClient: NSObject, ObservableObject {
     static func hasCachedFile(for device: UpdateRules.Device) -> Bool {
         FileManager.default.fileExists(atPath: cachedBinURL(for: device).path)
     }
-    static var hasCachedFile: Bool { hasCachedFile(for: .car) }
 
     static func recordCache(build: Int, tag: String, for device: UpdateRules.Device = .car) {
         UserDefaults.standard.set(build, forKey: kBuild(device))

@@ -1,6 +1,6 @@
 # Один гейт релиза — машинка проверяется так же, как адаптер
 
-**Статус:** спека, 2026-09-16.
+**Статус:** реализовано 2026-09-16 (план `docs/superpowers/plans/2026-09-16-one-release-gate.md`).
 **Опирается на:** `docs/superpowers/specs/2026-06-14-forced-update-gate-design.md` (гейт
 принудительного обновления машинки — то, что здесь перестраивается);
 `docs/superpowers/specs/2026-09-16-v1-removal-design.md` (версия машинки приходит только с
@@ -113,7 +113,7 @@ private func fetchRelease(for device: UpdateRules.Device) async -> Bool
 | `ConnectView.swift` | ситуация `.carUpdateCheck` (S15) | нет; `.adapterUpdateCheck` → `.releaseCheck`, `.offline` → `.releaseOffline`, `.noRelease(tag:)` → `.releaseMissing(tag:device:)` |
 | `NoInternetView.swift` (S16), `UpdateCheckView.swift` (S18/S19) | файлы целиком | удалены; `DeviceArt.swift` — комментарий про `NoInternetView` |
 | `L.swift`, `Localizable.strings` | `gate.noInternetTitle/Sub`, `gate.checkFailedTitle/Sub`, `carUpdCheckTitle/Sub` | удалены; `gate.noReleaseTitle/Sub`, `dongle.updCheckTitle/Sub`, `dongle.offlineSub` — новые слова, §4 |
-| `UpdateClient.swift` | `internetReachable()`, `needsDownload(…)`-обёртка, статические `cachedBuild`/`hasCachedFile` без `for:` (машинные умолчания, читал только `carGate`) | удалены; `for device:` варианты остаются (их читает `FirmwareFlow`); `cachedBinURL` без `for:` остаётся — его читает `migrateCacheIfNeeded` |
+| `UpdateClient.swift` | `internetReachable()`, статические `cachedBuild`/`hasCachedFile` без `for:` (машинные умолчания, читал только `carGate`) | удалены; `needsDownload`-обёртка остаётся — её читает XCTest-цель (`AJMiddleCarTests/ControlModelTests.swift`); `for device:` варианты остаются (их читает `FirmwareFlow`); `cachedBinURL` без `for:` остаётся — его читает `migrateCacheIfNeeded` |
 | `GalleryView.swift` | кадры «Step 6 car update», «NoInternet», «UpdateCheck checking / downloading / failed» | удалены (5 кадров) |
 
 `GateRule` (`mayDrive`, `canVerify`), `UpdateRules` (`needsDownload`, `flashPlan`, `mustUpdate`,
