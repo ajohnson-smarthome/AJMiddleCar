@@ -174,12 +174,24 @@ final class UpdateClient: NSObject, ObservableObject {
         case unreachable
     }
 
+    /// The lookup's own session, bounded: `URLSession.shared` would wait the default 60 s on a
+    /// GitHub that accepts the connection and never answers, and the launch gate sits on
+    /// «Проверяю обновления» for all of it. The gate re-asks every `donglePollInterval` anyway,
+    /// so a fast `.unreachable` costs nothing — the two figures are the ones the retired
+    /// reachability probe used, and were never a false "no internet" on a phone that had one.
+    private static let lookupSession: URLSession = {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 10
+        cfg.timeoutIntervalForResource = 25
+        return URLSession(configuration: cfg)
+    }()
+
     func latestReleaseLookup(for device: UpdateRules.Device = .car) async -> ReleaseLookup {
         guard let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest") else {
             return .unreachable
         }
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, _) = try await Self.lookupSession.data(from: url)
             guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tag = j["tag_name"] as? String,
                   let assets = j["assets"] as? [[String: Any]] else { return .unreachable }

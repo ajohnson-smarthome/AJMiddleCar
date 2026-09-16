@@ -85,7 +85,15 @@ struct RootView: View {
                 // asked returned for good when it handed over. Without this, a dongle replugged
                 // after the car was switched off answers "failed" to nobody at all.
                 if old.isNoDongle, !new.isNoDongle {
-                    Task { await flow.dongleReturned() }
+                    Task {
+                        await flow.dongleReturned()
+                        // Same race as the launch's own `.task` above: a hello that landed
+                        // while the gate was still re-asking the dongle was refused by
+                        // `carIdentified`'s phase guard, and nothing asks again after the
+                        // hand-back — the radar over a live link, until the next telemetry
+                        // frame happened to change `link.fw`.
+                        flow.carIdentified(fw: link.fw)
+                    }
                 }
             }
     }

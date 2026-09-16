@@ -105,6 +105,7 @@ struct GalleryView: View {
             ("Dongle fault",            AnyView(ConnectView(situation: .dongleFault))),
             ("Offline, cannot verify",  AnyView(ConnectView(situation: .releaseOffline))),
             ("No release for adapter",  AnyView(ConnectView(situation: .releaseMissing(tag: "v1.0+483", device: .dongle)))),
+            ("No release for car",      AnyView(ConnectView(situation: .releaseMissing(tag: "v1.0+483", device: .car)))),
             ("Wrong dongle",            AnyView(ConnectView(situation: .wrongDongle("some-other-adapter")))),
             ("WrongCar",                AnyView(WrongCarView(palette: p, kind: .foreignDevice("esp32-car"), onRetry: {}))),
             ("WrongProto",              AnyView(WrongCarView(palette: p, kind: .protoMismatch(theirs: CarContract.proto + 1), onRetry: {}))),
