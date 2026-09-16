@@ -23,4 +23,12 @@
  * rates down with it. */
 esp_err_t display_hal_setup(u8g2_t *u8g2);
 
+/* One bounded question to the panel: does anything acknowledge its address? At most
+ * XFER_TIMEOUT_MS on a wedged bus, nothing on a healthy one. For display_early(), which runs
+ * before everything else in app_main and must not spend the init sequence's dozens of
+ * transfers — each with its own timeout — finding out that no panel is wired. ESP_OK when the
+ * panel answered; the failure is not logged here, because the task's own transfers will say
+ * so with the throttle they already have. */
+esp_err_t display_hal_probe(void);
+
 #endif /* DISPLAY_HAL_H */

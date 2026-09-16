@@ -154,6 +154,16 @@ _Static_assert(ROW_ASCENT + ROW_DESCENT <= ROWS_BOTTOM - (SIG_HIST_BASE + 1) + 1
 #define RSSI_NO_LINK (-100)
 
 static u8g2_t s_u8g2;
+/* True once display_early() has set the HAL up and the panel answered its probe: display_start()
+ * then starts the task on the lit panel instead of setting up again. False when the probe
+ * failed — or display_early() never ran — and display_start() does the setup itself, as it
+ * always did, with the task's own throttled logging to say whether the panel is there. */
+static bool   s_hal_ready;
+/* Whether display_hal_setup() has run, and what it said. It creates the I2C bus and may run
+ * exactly once per boot — a second call on the same pins is refused by the driver — so the
+ * two entry points share the answer rather than each asking. */
+static bool      s_hal_setup_done;
+static esp_err_t s_hal_setup_err;
 
 /* Ruling F5: the ring is arithmetic and belongs to the pure module, but the clock that fills
  * it belongs to the task. Nothing else may push into it. */
@@ -163,7 +173,8 @@ static screens_history_t s_history;
  * point of use in view_build(), where the temptation to reach for the lookup lives. */
 static esp_netif_t *s_sta_netif;
 
-static int64_t s_start_us;
+static int64_t s_start_us;      /* the splash's clock: the first frame, from display_early() when it ran */
+static int64_t s_rate_open_us;  /* when display_start() opened the first rate window */
 static int     s_page = SCREENS_PAGE_STATE;
 static int64_t s_press_us;      /* the last short press's release: the page timeout counts from it */
 static int64_t s_down_us;       /* when the current hold began; meaningful while s_button_down */
@@ -181,6 +192,13 @@ static uint8_t s_reset_pct;
  * boot. This flag is what makes display_start's "only the reference pages become unreachable"
  * true rather than aspirational. */
 static bool    s_button_ok;
+
+/* display_reboot() sets the first; the task draws «Перезапуск» from then on and nothing else,
+ * and sets the second once that frame has gone to the glass — what display_reboot() waits for.
+ * Both plain flags written from one task and read from another: a set-once boolean each, which
+ * an aligned byte store is on this target, and the reader tolerates seeing it late by a pass. */
+static volatile bool s_rebooting;
+static volatile bool s_reboot_drawn;
 
 /* The frame the panel is actually showing, so an identical one need not be sent again.
  *
@@ -508,7 +526,14 @@ static void poll_button(int64_t now_us)
                itself before erasing (nvs_flash.h says so), and nothing below this line runs
                long enough to miss it: the restart is immediate. Drawn full first, so the last
                frame the glass holds is the gauge at 100 rather than the one before it. */
-            s_reset_pct = 100;
+            /* This IS the display task, so the goodbye frame goes straight to the glass here:
+               «Перезапуск», not the gauge — the erase and the restart follow within
+               milliseconds, and a full gauge left on the panel through the reboot would look
+               like a hold that never let go. */
+            screen_t bye;
+            screens_reboot(&bye);
+            s_rebooting = true;
+            draw(&bye, 0, now_us);
             ESP_LOGW(TAG, "BOOT held %d s — erasing NVS and restarting",
                      (int)(HOLD_ERASE_US / 1000000));
             esp_err_t err = nvs_flash_erase();
@@ -551,8 +576,9 @@ static void display_task(void *arg)
     /* Seeded from the moment display_start() opened the first rate window, not from this
      * task's first pass. That is what keeps the first second from closing early — a window a
      * few milliseconds wide, divided into whatever the relays had forwarded — without a
-     * special case for it. */
-    int64_t last_second_us = s_start_us;
+     * special case for it. (s_start_us is the splash's clock and can be older, from
+     * display_early(); the rate window is the one display_start() opened just now.) */
+    int64_t last_second_us = s_rate_open_us;
 
     for (;;) {
         int64_t now_us = esp_timer_get_time();
@@ -574,7 +600,11 @@ static void display_task(void *arg)
         if (second) screens_history_push(&s_history, v.rssi != 0 ? v.rssi : RSSI_NO_LINK);
 
         screen_t s;
-        if (now_us - s_start_us < SPLASH_US) {
+        if (s_rebooting) {
+            /* Above everything: the restart that asked for this frame is milliseconds away,
+               and the frame's whole job is to be the last one. */
+            screens_reboot(&s);
+        } else if (now_us - s_start_us < SPLASH_US) {
             /* The splash is the one screen that is not a report. For two seconds the device
              * introduces itself, and the design's point about it is that "if it appears, power,
              * I2C and the firmware itself are alive" — which is only true if it appears
@@ -602,6 +632,7 @@ static void display_task(void *arg)
             hist_mark = (uint16_t)(((uint16_t)s_history.count << 8) | s_history.next);
         }
         draw(&s, hist_mark, now_us);
+        if (s_rebooting) s_reboot_drawn = true;
 
         /* vTaskDelayUntil, so a slow pass — an I2C bus holding the line, say — costs cadence
          * and not drift. What it cannot do is give back the time a slow pass already spent,
@@ -610,11 +641,41 @@ static void display_task(void *arg)
     }
 }
 
+void display_early(void)
+{
+    /* The splash's clock starts here, at the first frame, not when the task starts: the
+     * person sees the introduction for two seconds from when it appears, and the state screen
+     * follows on time whatever the rest of app_main took. */
+    s_start_us = esp_timer_get_time();
+
+    s_hal_setup_err = display_hal_setup(&s_u8g2);
+    s_hal_setup_done = true;
+    if (s_hal_setup_err != ESP_OK) return;   /* logged by the HAL; the panel stays dark */
+    if (display_hal_probe() != ESP_OK) {
+        /* Nothing acknowledged the address. One timeout spent, not the init sequence's
+         * dozens: the task will drive the bus later with the throttle it already has, and
+         * a panel plugged in after boot comes up on its five-second refresh. */
+        ESP_LOGW(TAG, "panel did not answer at boot — the splash is skipped, the task will keep trying");
+        return;
+    }
+    u8g2_InitDisplay(&s_u8g2);
+    u8g2_SetPowerSave(&s_u8g2, 0);
+    s_hal_ready = true;
+
+    /* The same intro view the task shows for SPLASH_US — see display_task — drawn once. The
+     * task's first pass finds this frame already on the glass and does not resend it. */
+    dongle_view_t intro = { .host_attached = true, .fw = esp_app_get_description()->version };
+    screen_t s;
+    screens_for(&intro, &s);
+    draw(&s, 0, s_start_us);
+}
+
 esp_err_t display_start(void)
 {
     screens_history_init(&s_history);
-    s_start_us = esp_timer_get_time();
-    s_press_us = s_start_us;
+    int64_t now_us = esp_timer_get_time();
+    if (s_start_us == 0) s_start_us = now_us;   /* display_early() never ran: the splash counts from here */
+    s_press_us = now_us;
 
     /* Once, here, and never again from the task — see view_build(). Not fatal if it comes back
      * NULL: only the address page loses its two rows. */
@@ -629,7 +690,8 @@ esp_err_t display_start(void)
      * the whole uptime and publish that as a current rate — an average dressed as a reading.
      * The rate this latches is honest: the relays wait on a gateway and the station has not
      * joined at this point in app_main, so nothing has been forwarded yet. */
-    relay_stats_sample(relay_stats_shared(), (uint32_t)(s_start_us / 1000));
+    relay_stats_sample(relay_stats_shared(), (uint32_t)(now_us / 1000));
+    s_rate_open_us = now_us;
 
     gpio_config_t btn = {
         .pin_bit_mask = 1ULL << BOARD_BOOT_GPIO,
@@ -647,14 +709,21 @@ esp_err_t display_start(void)
                       "cannot be paged to", (int)BOARD_BOOT_GPIO, esp_err_to_name(err));
     }
 
-    err = display_hal_setup(&s_u8g2);
-    if (err == ESP_OK) {
-        u8g2_InitDisplay(&s_u8g2);
-        u8g2_SetPowerSave(&s_u8g2, 0);
+    if (!s_hal_ready) {
+        /* display_early() did not get the panel lit — no answer at its address, or it was
+         * never called. Set up here as before; an error is logged by display_hal and not
+         * returned. The task starts either way: drawing into u8g2's RAM buffer costs nothing
+         * when the bus discards it, and this task also carries relay_stats_sample() — a panel
+         * nobody wired must not take /status's packet rates with it. */
+        if (!s_hal_setup_done) {
+            s_hal_setup_err = display_hal_setup(&s_u8g2);
+            s_hal_setup_done = true;
+        }
+        if (s_hal_setup_err == ESP_OK) {   /* the bus exists; only the probe failed, or this is the first setup */
+            u8g2_InitDisplay(&s_u8g2);
+            u8g2_SetPowerSave(&s_u8g2, 0);
+        }
     }
-    /* An error is logged by display_hal and not returned. The task starts either way: drawing
-     * into u8g2's RAM buffer costs nothing when the bus discards it, and this task also carries
-     * relay_stats_sample() — a panel nobody wired must not take /status's packet rates with it. */
 
     /* Priority 2, below the relays' 5: a redraw must never preempt a task that is forwarding a
      * control datagram. Everything this task does is memory, one I2C burst and a screen nobody
@@ -665,4 +734,14 @@ esp_err_t display_start(void)
         return ESP_FAIL;
     }
     return ESP_OK;
+}
+
+void display_reboot(void)
+{
+    s_rebooting = true;
+    /* Two passes of the task at most: one may already be mid-pass with its frame chosen. The
+     * caller is about to restart, so a wait this long costs nothing it would not have spent. */
+    for (int i = 0; i < 2 * PERIOD_MS / 10 + 5 && !s_reboot_drawn; i++) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
 }

@@ -234,3 +234,9 @@ esp_err_t display_hal_setup(u8g2_t *u8g2)
 
     return ESP_OK;
 }
+
+esp_err_t display_hal_probe(void)
+{
+    if (s_bus == NULL) return ESP_ERR_INVALID_STATE;
+    return i2c_master_probe(s_bus, BOARD_OLED_ADDR, XFER_TIMEOUT_MS);
+}

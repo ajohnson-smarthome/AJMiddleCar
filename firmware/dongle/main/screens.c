@@ -355,6 +355,19 @@ void screens_reset(uint8_t pct, screen_t *out)
     out->gauge_pct = pct > 100 ? 100 : pct;
 }
 
+/* --- screens_reboot: the frame a restart leaves behind ------------------------------------ */
+
+void screens_reboot(screen_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->id = SCREEN_REBOOT;
+    /* «Перезапуск», ten glyphs, rather than «Перезагрузка» at twelve: the headline budget is
+     * twelve exactly, and a word that fills the panel edge to edge reads as cut. No rows: the
+     * frame's whole job is to not be the frame before it. */
+    put_head(out, "Перезапуск");
+    out->gauge = GAUGE_NONE;
+}
+
 /* --- the signal page: diagnostics page 0 ------------------------------------------------ */
 
 /* Page 0. One row, not two: the history strip is drawn where the first row would be (display.c

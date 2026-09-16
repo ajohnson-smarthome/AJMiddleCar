@@ -587,9 +587,25 @@ static void test_the_reset_screen_counts_down_on_the_rule(void)
     check(s.gauge_pct == 100, "and clamps at full");
 }
 
+/* The frame a deliberate restart leaves on the glass. The SSD1306 keeps its RAM across the
+ * MCU's reset, so without this the last frame — «Сброс» at 100, «Обновление» at 100 % — stays
+ * put through the whole reboot and the person cannot tell a device that restarted from one
+ * that hung. One word, nothing else: it is the one frame that says "not what it was". */
+static void test_the_reboot_screen_is_a_single_word(void)
+{
+    screen_t s;
+    screens_reboot(&s);
+    check(s.id == SCREEN_REBOOT, "its own screen");
+    check(strcmp(s.head, "Перезапуск") == 0, "one word, the thing that is happening");
+    check(s.row[0][0] == '\0' && s.row[1][0] == '\0', "no rows: nothing to read but the word");
+    check(s.gauge == GAUGE_NONE, "a plain rule — nothing is being measured");
+    check_fits(&s);
+}
+
 int main(void)
 {
     test_every_headline_fits_twelve_characters();
+    test_the_reboot_screen_is_a_single_word();
     test_no_host_wins_over_every_network_state();
     test_rollback_outranks_the_network();
     test_update_outranks_rollback();

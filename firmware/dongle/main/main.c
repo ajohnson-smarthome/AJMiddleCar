@@ -20,6 +20,11 @@ static const char *TAG = "dongle";
 
 void app_main(void)
 {
+    /* First, before anything that can fail loudly: the panel lit and the splash on it, so the
+     * glass is not dark for the second the rest of this function takes — see display.h. Bounded
+     * to one probe when no panel answers, and never an error. */
+    display_early();
+
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());

@@ -13,6 +13,7 @@
 #include "freertos/task.h"
 
 #include "api_util.h"
+#include "display.h"
 #include "dongle_contract.inc"
 
 static const char *TAG = "ota_api";
@@ -155,6 +156,7 @@ static esp_err_t ota_post(httpd_req_t *req)
        a failure. */
     if (api_reply_ok(req) != ESP_OK) ESP_LOGW(TAG, "resp send failed, rebooting anyway");
     ESP_LOGI(TAG, "OTA done - rebooting");
+    display_reboot();   /* «Перезапуск» on the glass, not «Обновление» at 100 % through the reboot */
     vTaskDelay(pdMS_TO_TICKS(500));
     esp_restart();
     return ESP_OK;

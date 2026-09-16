@@ -64,6 +64,9 @@ typedef enum {
     SCREEN_NO_HOST,        /* no USB host attached — nothing to say about a network either */
     SCREEN_DIAG,           /* reached only by pressing BOOT — five pages, the signal first */
     SCREEN_RESET,          /* BOOT held past the short-press window: the erase countdown */
+    SCREEN_REBOOT,         /* the last frame before a deliberate restart: the erase firing, an
+                              OTA committed — so the glass does not keep the previous frame
+                              through the reboot and pass it off as the present */
 } screen_id_t;
 
 typedef enum {
@@ -167,6 +170,13 @@ uint8_t screens_diag_pages(void);
  * how far along the hold is — the level gauge is the countdown — and clamps at 100. Pure:
  * what the hold does and when it fires belong to display.c, which owns the button. */
 void screens_reset(uint8_t pct, screen_t *out);
+
+/* The frame a deliberate restart leaves behind. The SSD1306 holds its RAM across the MCU's
+ * reset, so whatever was on the glass when esp_restart() ran stays there until the next image
+ * draws — «Сброс» at full, «Обновление» at 100 % — and a device that restarted looks exactly
+ * like one that hung. One word and an empty rule, drawn by whoever is about to restart, so the
+ * sequence a person sees is what happened: this, then the splash. */
+void screens_reboot(screen_t *out);
 
 /* Where the BOOT button has paged to. SCREENS_PAGE_STATE means "showing the state screen",
  * which is both the resting place and where the five-second timeout returns to; 0..diag_pages-1
