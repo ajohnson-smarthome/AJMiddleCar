@@ -2,11 +2,9 @@
 // DongleReply.of(_:) — the pure decisions behind "find the dongle, update it, point it at the
 // car, then drive". Run with swiftc; no XCTest, no simulator.
 //
-// `sources` lists DongleLink.swift, LegacyIdentity.swift, UpdateRules.swift AND CarError.swift:
-// DongleLink calls UpdateRules.mustUpdate directly (its declared Task 4 dependency), reads a
-// v1 dongle's identity through LegacyIdentity (the v1 bridge), and DongleReply.of classifies
-// the transport's own error vocabulary — all three have to be on the compile line for this to
-// link at all.
+// `sources` lists DongleLink.swift, UpdateRules.swift AND CarError.swift: DongleLink calls
+// UpdateRules.mustUpdate directly, and DongleReply.of classifies the transport's own error
+// vocabulary — both have to be on the compile line for this to link at all.
 import Foundation
 
 var failures = 0
@@ -270,40 +268,15 @@ check(DongleLink.next(reply: steady, latestTag: latest, expectedSSID: carSSID) !
       DongleLink.next(reply: steady, latestTag: latest, expectedSSID: "someOtherNetwork"),
       "a different expectedSSID changes the answer for the same status")
 
-// -- the v1 bridge: an old dongle is recognised by its legacy identity and updated ---------
+// -- a v1-shaped body is a fault, not an identity ------------------------------------------
+// The v1→v2 bridge (`LegacyIdentity`) was removed on 2026-09-16, once no board in the field
+// spoke v1. A `/status` body in the old top-level `device`/`fw` spelling is now just a body
+// this build cannot read — the adapter-fault screen, by design — and these checks are what
+// fail if someone brings the bridge back quietly.
 let v1 = #"{"device":"ajdongle","fw":"\#(behind)","idf":"v6.0.2","usb":"up","rollback":false,"net":{"ssid":"","state":"idle","rssi":0}}"#
-check(DongleLink.next(reply: DongleReply.decode(Data(v1.utf8)), latestTag: latest, expectedSSID: carSSID) == .updating,
-      "a v1 dongle behind the release is updated, not declared faulty")
-let v1other = v1.replacingOccurrences(of: "ajdongle", with: "someones-adapter")
-check(DongleLink.next(reply: DongleReply.decode(Data(v1other.utf8)), latestTag: latest, expectedSSID: carSSID)
-        == .wrongDongle(device: "someones-adapter"), "a foreign v1 adapter is named, not flashed")
-let v1current = v1.replacingOccurrences(of: behind, with: current)
-check(DongleLink.next(reply: DongleReply.decode(Data(v1current.utf8)), latestTag: latest, expectedSSID: carSSID) == .faulty,
-      "a v1 dongle that is not behind cannot be driven from — the release it matches is v1")
+check(DongleReply.decode(Data(v1.utf8)).isFaulty, "a v1-shaped body decodes as faulty, not as an identity")
+check(DongleLink.next(reply: DongleReply.decode(Data(v1.utf8)), latestTag: latest, expectedSSID: carSSID) == .faulty,
+      "a v1-shaped body is the adapter-fault step, not an update")
 check(DongleReply.decode(Data("junk".utf8)).isFaulty, "junk decodes as faulty")
-
-// -- the v1 bridge before any release is known: not faulty, not decided -------------------
-// The flow fetches the release lazily, after the first reply that names a device, and until
-// that fetch lands `latestTag` is nil. `mustUpdate(_, nil)` is false by construction, and an
-// implementation that reads "not behind" as "faulty" here declared every v1 dongle broken on
-// the very poll that should have started its update — and, with the fetch never triggered,
-// on every poll after. Nothing has failed: the only honest step is the wait.
-let v1noTag = DongleLink.next(reply: DongleReply.decode(Data(v1.utf8)), latestTag: nil, expectedSSID: carSSID)
-check(v1noTag != .faulty, "a v1 dongle with no release known yet is not declared faulty")
-check(v1noTag == .waiting, "a v1 dongle with no release known yet waits for the lookup")
-// And the same body, once the tag arrives, is the update — the two halves of one poll.
-check(DongleLink.next(reply: DongleReply.decode(Data(v1.utf8)), latestTag: latest, expectedSSID: carSSID) == .updating,
-      "the same v1 dongle is updated the moment a newer release is known")
-
-// -- what triggers the release lookup: an identity, in either spelling --------------------
-// The flow's rule, pinned at the pure seam: the lookup runs when a reply names a device, and
-// a v1 identity names one exactly as a v2 document does. An implementation that keyed the
-// fetch on "decoded as v2" left the v1 dongle with nothing to be compared against.
-check(DongleReply.decode(Data(v1.utf8)).carriesIdentity, "a v1 identity triggers the release lookup")
-check(reply(fw: current, rollback: false, ssid: "", state: "idle").carriesIdentity,
-      "a v2 document triggers the release lookup")
-check(!DongleReply.silent.carriesIdentity, "silence names nobody")
-check(!DongleReply.faulty.carriesIdentity, "a bad answer names nobody")
-check(!DongleReply.denied.carriesIdentity, "a denial names nobody")
 
 if failures == 0 { print("test_donglelink: OK") } else { exit(1) }

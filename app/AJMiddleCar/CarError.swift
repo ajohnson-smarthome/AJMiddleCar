@@ -43,7 +43,7 @@ enum CarError: Error, Equatable {
     }
 
     /// The contract's error code inside an HTTP error body, when the device sent the envelope.
-    /// For logs and for a view that wants to name the reason; nil for a v1 body or a plain
+    /// For logs and for a view that wants to name the reason; nil for a body without the envelope or a plain
     /// HTTP error from something that is not our firmware.
     var apiCode: String? {
         guard case .http(_, let body) = self else { return nil }

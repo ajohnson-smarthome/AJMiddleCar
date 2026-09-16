@@ -39,8 +39,7 @@ import Network
 final class DongleClient {
     init() {}
 
-    /// The raw `/status` body: `DongleReply.decode` reads it as v2 or, failing that, as a v1
-    /// identity — the one piece of the old format this app still understands.
+    /// The raw `/status` body, for `DongleReply.decode` — the flow classifies it, not this.
     func statusData() async throws -> Data {
         try await get(DongleContract.statusPath)
     }
