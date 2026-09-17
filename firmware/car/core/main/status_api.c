@@ -80,22 +80,31 @@ static const char *radio_state_word(void) {
     return s_radio_ok ? RADIO_STATE_OK : RADIO_STATE_MISMATCH;
 }
 
+/* GET /version — identity and version, the document the app reads before anything else
+ * and the only one whose shape is frozen. Sent raw, not through api_reply_json: that
+ * envelope prepends proto, and /version spells its own. */
+static esp_err_t version_get(httpd_req_t *req) {
+    char body[160];
+    int n = version_json(body, sizeof(body), esp_app_get_description()->version,
+                         status_api_rolled_back());
+    if (n < 0) {
+        ESP_LOGE(TAG, "/version could not render");
+        return api_reply_error(req, "500 Internal Server Error", ERR_INTERNAL, "", "version too long");
+    }
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, body, n);
+}
+
 static esp_err_t status_get(httpd_req_t *req) {
     telemetry_t t;
     telemetry_gather(&t, TELEM_STATUS);
-    char device[160];
-    if (device_group_json(device, sizeof(device), esp_app_get_description()->version,
-                          status_api_rolled_back()) < 0) {
-        ESP_LOGE(TAG, "/status could not render the device group");
-        return api_reply_error(req, "500 Internal Server Error", ERR_INTERNAL, "", "identity too long");
-    }
     char groups[384];
     if (telemetry_groups(groups, sizeof(groups), &t) < 0) {
         ESP_LOGE(TAG, "/status could not render its telemetry groups");
         return api_reply_error(req, "500 Internal Server Error", ERR_INTERNAL, "", "telemetry unavailable");
     }
     /* telemetry_groups prints link, motors, system, video. The schema's status order is
-       device, link, motors, radio, storage, system, video — so the tail from the system
+       link, motors, radio, storage, system, video — so the tail from the system
        member on is split off, radio/storage go in before it, and video rides with it.
        Splitting on the system group's opening key keeps all four groups spelled by the
        one printer telemetry uses. */
@@ -110,13 +119,13 @@ static esp_err_t status_get(httpd_req_t *req) {
     else               snprintf(radio_fw, sizeof(radio_fw), "null");
     char members[API_MEMBERS_MAX];
     int n = snprintf(members, sizeof(members),
-                     "%s,%s,"
+                     "%s,"
                      "\"" KEY_GROUP_RADIO "\":{\"" KEY_RADIO_FW "\":%s,"
                          "\"" KEY_RADIO_EXPECTED "\":\"" RADIO_EXPECTED_FW "\","
                          "\"" KEY_RADIO_STATE "\":\"%s\"},"
                      "\"" KEY_GROUP_STORAGE "\":{\"" KEY_STORAGE_RESET_AT_BOOT "\":%s},"
                      "%s",
-                     device, groups, radio_fw, radio_state_word(),
+                     groups, radio_fw, radio_state_word(),
                      s_nvs_wiped ? "true" : "false", sys);
     if (n < 0 || n >= (int)sizeof(members)) {
         ESP_LOGE(TAG, "/status does not fit its buffer");
@@ -132,6 +141,8 @@ esp_err_t status_api_start(void) {
     status_api_rolled_back();
     httpd_uri_t u = { .uri = PATH_STATUS, .method = HTTP_GET, .handler = status_get };
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &u), TAG, "reg " PATH_STATUS);
+    httpd_uri_t v = { .uri = PATH_VERSION, .method = HTTP_GET, .handler = version_get };
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &v), TAG, "reg " PATH_VERSION);
     ESP_LOGI(TAG, "status endpoint registered");
     return ESP_OK;
 }

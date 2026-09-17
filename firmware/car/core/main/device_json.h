@@ -8,9 +8,10 @@
 #include "contract.h"
 #include "identity.h"
 
-/* The `device` group — who is answering — printed once, for the hello reply and for
- * /status. One printer, so the two cannot spell the identity differently and present
- * on the phone as "wrong car". Pure: host-tested in test_device_json.c. */
+/* The `device` group — who is answering — printed once, for the hello reply; /status no
+ * longer carries it, /version has its own printer below. One printer, so the two cannot
+ * spell the identity differently and present on the phone as "wrong car". Pure: host-tested
+ * in test_device_json.c. */
 
 /* The number after '+' in a version like "v1.0+784", or -1 when there is none. The app
  * compares this integer against the release it knows; the tag parse used to be its job. */
@@ -34,6 +35,21 @@ static inline int device_group_json(char *buf, size_t n, const char *fw, bool ro
         "\"" KEY_DEVICE_FW "\":\"%s\",\"" KEY_DEVICE_BUILD "\":%d,"
         "\"" KEY_DEVICE_ROLLED_BACK "\":%s}",
         fw, fw_build_number(fw), rolled_back ? "true" : "false");
+    if (r < 0 || r >= (int)n) return -1;
+    return r;
+}
+
+/* GET /version — the whole document, braces included: who this board is and what it runs.
+ * The one shape that never changes (contract `version`): five keys, this order, nothing
+ * else — anything more belongs in /status. Returns the length, or -1 when it does not fit. */
+static inline int version_json(char *buf, size_t n, const char *fw, bool rolled_back) {
+    int r = snprintf(buf, n,
+        "{\"" KEY_VERSION_DEVICE "\":\"" CAR_DEVICE_ID "\","
+        "\"" KEY_VERSION_FW "\":\"%s\","
+        "\"" KEY_VERSION_BUILD "\":%d,"
+        "\"" KEY_VERSION_PROTO "\":%d,"
+        "\"" KEY_VERSION_ROLLED_BACK "\":%s}",
+        fw, fw_build_number(fw), RT_PROTO, rolled_back ? "true" : "false");
     if (r < 0 || r >= (int)n) return -1;
     return r;
 }
