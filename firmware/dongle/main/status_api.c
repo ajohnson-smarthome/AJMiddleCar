@@ -48,6 +48,20 @@ bool status_api_rolled_back(void)
     return s_rollback;
 }
 
+/* GET /version — identity and version, read by the app before anything else and the only
+ * document whose shape is frozen. */
+static esp_err_t version_get(httpd_req_t *req)
+{
+    char body[160];
+    int n = version_json_render(esp_app_get_description()->version, s_rollback, body, sizeof(body));
+    if (n < 0) {
+        ESP_LOGE(TAG, "/version does not fit its buffer");
+        return api_reply_error(req, "500 Internal Server Error", DONGLE_ERR_INTERNAL, "", "version too long");
+    }
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, body, n);
+}
+
 static esp_err_t status_get(httpd_req_t *req)
 {
     const esp_app_desc_t *app = esp_app_get_description();
@@ -71,7 +85,7 @@ static esp_err_t status_get(httpd_req_t *req)
     }
 
     status_view_t v = {
-        .fw = app->version, .idf = app->idf_ver, .rolled_back = s_rollback,
+        .idf = app->idf_ver,
         .usb_state = usb_net_host_attached() ? DONGLE_USB_STATE_UP : DONGLE_USB_STATE_DOWN,
         .ssid = configured ? cfg.ssid : "", .configured = configured,
         .wifi_state = wifi_state, .connected = connected,
@@ -107,11 +121,11 @@ esp_err_t status_api_start(void)
      * never move — the dongle is the new thing in the system, so the dongle takes the unusual
      * port. */
     cfg.server_port = DONGLE_PORT;
-    /* Three are registered: GET /status here, POST /wifi (net_api.c), POST /ota
-     * (ota_api.c). Six is deliberate headroom, so adding an endpoint is not also a config
-     * change — and it is the whole story now rather than a placeholder: the relays added no
-     * URI handlers at all, being raw sockets on their own ports, and the API guard is an
-     * open_fn rather than a handler. Nothing further is pending against this number. */
+    /* Four are registered: GET /status and GET /version here, POST /wifi (net_api.c),
+     * POST /ota (ota_api.c). Six is deliberate headroom, so adding an endpoint is not also a
+     * config change — and it is the whole story now rather than a placeholder: the relays
+     * added no URI handlers at all, being raw sockets on their own ports, and the API guard
+     * is an open_fn rather than a handler. Nothing further is pending against this number. */
     cfg.max_uri_handlers = 6;
     /* The v2 /status frame carries ~1 KB of locals — the view, the 720-byte body, the
      * renderer's scratch — on top of esp_http_server's own frames, which IDF's default
@@ -186,6 +200,14 @@ esp_err_t status_api_start(void)
     };
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &status_uri), TAG,
                         "cannot register GET /status");
+
+    static const httpd_uri_t version_uri = {
+        .uri = DONGLE_PATH_VERSION,
+        .method = HTTP_GET,
+        .handler = version_get,
+    };
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &version_uri), TAG,
+                        "cannot register GET /version");
 
     ESP_LOGI(TAG, "http://%s:%d" DONGLE_PATH_STATUS, USB_NET_ADDR, DONGLE_PORT);
     return ESP_OK;

@@ -5,7 +5,7 @@
 
 static status_view_t sample(void) {
     status_view_t v = {
-        .fw = "v1.0+789", .idf = "v6.0.2", .rolled_back = false,
+        .idf = "v6.0.2",
         .usb_state = DONGLE_USB_STATE_UP,
         .ssid = "AJMiddleCar", .configured = true, .wifi_state = DONGLE_WIFI_STATE_CONNECTED,
         .connected = true, .rssi_dbm = -53, .channel = 1,
@@ -26,14 +26,13 @@ int main(void) {
     assert(n > 0 && n == (int)strlen(buf));
     assert(strcmp(buf,
         "{\"proto\":1,"
-        "\"device\":{\"id\":\"ajdongle\",\"fw\":\"v1.0+789\",\"build\":789,\"rolled_back\":false,\"idf\":\"v6.0.2\"},"
         "\"usb\":{\"state\":\"up\"},"
         "\"wifi\":{\"ssid\":\"AJMiddleCar\",\"configured\":true,\"state\":\"connected\","
                   "\"rssi_dbm\":-53,\"channel\":1,\"attempts\":{\"used\":0,\"max\":5}},"
         "\"relay\":{\"to_car_hz\":10.0,\"to_phone_hz\":5.0,\"udp_sessions\":1,\"tcp_connections\":2,"
                    "\"last_error\":{\"errno\":118,\"message\":\"No route to host\",\"count\":3,\"age_s\":41},"
                    "\"video_sessions\":1,\"video_kbps\":1487.2,\"video_dropped\":3},"
-        "\"system\":{\"uptime_s\":412,\"free_heap\":8551152}}") == 0);
+        "\"system\":{\"uptime_s\":412,\"free_heap\":8551152,\"idf\":\"v6.0.2\"}}") == 0);
 
     /* Not connected: the readings that need a link are null, not 0. Never failed: no
        error object at all. Nothing sent: an empty ssid and configured false. */
@@ -52,11 +51,6 @@ int main(void) {
     n = status_json_render(&v, buf, sizeof(buf));
     assert(n > 0 && strstr(buf, "\"ssid\":\"Say \\\"hi\\\"\""));
 
-    /* rolled_back and a version without a build number */
-    v.rolled_back = true; v.fw = "v1.0";
-    n = status_json_render(&v, buf, sizeof(buf));
-    assert(n > 0 && strstr(buf, "\"build\":-1,\"rolled_back\":true"));
-
     /* Worst case fits: 32 quote bytes in the SSID, every counter wide. */
     char wide_ssid[33]; memset(wide_ssid, '"', 32); wide_ssid[32] = '\0';
     v = sample(); v.ssid = wide_ssid; v.rssi_dbm = -128; v.channel = 14;
@@ -70,6 +64,16 @@ int main(void) {
     printf("test_status_json: widest body is %d bytes\n", n);
 
     assert(status_json_render(&v, buf, 64) == -1);
+
+    /* GET /version: flat, five keys, frozen. */
+    char ver[160];
+    n = version_json_render("v1.0+879", false, ver, sizeof(ver));
+    assert(n > 0 && n == (int)strlen(ver));
+    assert(strcmp(ver, "{\"device\":\"ajdongle\",\"fw\":\"v1.0+879\",\"build\":879,"
+                       "\"proto\":1,\"rolled_back\":false}") == 0);
+    n = version_json_render("v1.0", true, ver, sizeof(ver));
+    assert(n > 0 && strstr(ver, "\"build\":-1,\"proto\":1,\"rolled_back\":true}"));
+    assert(version_json_render("v1.0+879", false, ver, 30) == -1);
     printf("test_status_json: all passed\n");
     return 0;
 }

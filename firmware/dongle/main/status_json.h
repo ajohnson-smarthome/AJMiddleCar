@@ -12,9 +12,7 @@
  *
  * Pure: no ESP-IDF, no cJSON. Compiled with plain cc in the test Makefile. */
 typedef struct {
-    const char *fw;                 /* esp_app_desc_t.version */
-    const char *idf;
-    bool        rolled_back;
+    const char *idf;                /* esp_app_desc_t.idf_ver; printed under system */
     const char *usb_state;          /* DONGLE_USB_STATE_* */
     const char *ssid;               /* raw; escaped here */
     bool        configured;
@@ -43,5 +41,10 @@ typedef struct {
  * length, or -1 when it does not fit — a truncated document parses as something else or
  * nothing, and the caller answers 500 rather than sending what fits. */
 int status_json_render(const status_view_t *v, char *buf, size_t n);
+
+/* GET /version — the whole document, braces included. The one shape that never changes
+ * (contract `version`): device, fw, build, proto, rolled_back — nothing else. Returns the
+ * length, or -1 when it does not fit. */
+int version_json_render(const char *fw, bool rolled_back, char *buf, size_t n);
 
 #endif /* STATUS_JSON_H */

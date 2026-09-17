@@ -53,12 +53,6 @@ int status_json_render(const status_view_t *v, char *buf, size_t n)
     }
     int r = snprintf(buf, n,
         "{\"" DONGLE_KEY_PROTO "\":%d,"
-        "\"" DONGLE_KEY_GROUP_DEVICE "\":{"
-            "\"" DONGLE_KEY_DEVICE_ID "\":\"" DONGLE_DEVICE "\","
-            "\"" DONGLE_KEY_DEVICE_FW "\":\"%s\","
-            "\"" DONGLE_KEY_DEVICE_BUILD "\":%d,"
-            "\"" DONGLE_KEY_DEVICE_ROLLED_BACK "\":%s,"
-            "\"" DONGLE_KEY_DEVICE_IDF "\":\"%s\"},"
         "\"" DONGLE_KEY_GROUP_USB "\":{\"" DONGLE_KEY_USB_STATE "\":\"%s\"},"
         "\"" DONGLE_KEY_GROUP_WIFI "\":{"
             "\"" DONGLE_KEY_WIFI_SSID "\":\"%s\","
@@ -80,16 +74,31 @@ int status_json_render(const status_view_t *v, char *buf, size_t n)
             "\"" DONGLE_KEY_RELAY_VIDEO_DROPPED "\":%u},"
         "\"" DONGLE_KEY_GROUP_SYSTEM "\":{"
             "\"" DONGLE_KEY_SYSTEM_UPTIME_S "\":%ld,"
-            "\"" DONGLE_KEY_SYSTEM_FREE_HEAP "\":%u}}",
+            "\"" DONGLE_KEY_SYSTEM_FREE_HEAP "\":%u,"
+            "\"" DONGLE_KEY_SYSTEM_IDF "\":\"%s\"}}",
         DONGLE_PROTO,
-        v->fw, build_number(v->fw), v->rolled_back ? "true" : "false", v->idf,
         v->usb_state,
         ssid_esc, v->configured ? "true" : "false", v->wifi_state, rssi, channel,
         v->attempts_used, v->attempts_max,
         v->to_car_x10 / 10u, v->to_car_x10 % 10u, v->to_phone_x10 / 10u, v->to_phone_x10 % 10u,
         v->udp_sessions, v->tcp_connections, last_error,
         v->video_sessions, v->video_kbps_x10 / 10u, v->video_kbps_x10 % 10u, v->video_dropped,
-        v->uptime_s, v->free_heap);
+        v->uptime_s, v->free_heap, v->idf);
+    if (r < 0 || (size_t)r >= n) {
+        return -1;
+    }
+    return r;
+}
+
+int version_json_render(const char *fw, bool rolled_back, char *buf, size_t n)
+{
+    int r = snprintf(buf, n,
+        "{\"" DONGLE_KEY_VERSION_DEVICE "\":\"" DONGLE_DEVICE "\","
+        "\"" DONGLE_KEY_VERSION_FW "\":\"%s\","
+        "\"" DONGLE_KEY_VERSION_BUILD "\":%d,"
+        "\"" DONGLE_KEY_VERSION_PROTO "\":%d,"
+        "\"" DONGLE_KEY_VERSION_ROLLED_BACK "\":%s}",
+        fw, build_number(fw), DONGLE_PROTO, rolled_back ? "true" : "false");
     if (r < 0 || (size_t)r >= n) {
         return -1;
     }
