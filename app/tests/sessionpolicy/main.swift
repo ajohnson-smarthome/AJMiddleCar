@@ -44,7 +44,4 @@ check(SessionPolicy.backoffBase(attempt: 10, pathBlocked: false, everAdopted: fa
 check(SessionPolicy.backoffBase(attempt: 10, pathBlocked: true, everAdopted: false) == 5.0,
       "a blocked path earns the full cap — waiting there costs nothing")
 
-// -- the identity hold is long enough to read, and one place owns the number. --------------
-check(SessionPolicy.identityHoldSeconds == 10, "the wrong-car hold is ten seconds")
-
 if failures == 0 { print("test_sessionpolicy: OK") } else { exit(1) }

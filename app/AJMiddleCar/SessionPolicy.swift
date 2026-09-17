@@ -34,8 +34,4 @@ enum SessionPolicy {
         let ceiling = (everAdopted || pathBlocked) ? cap : discoveryCap
         return min(ceiling, base * pow(2, Double(max(0, attempt - 1))))
     }
-
-    /// How long a session holds after the car identified itself as someone else's — long enough
-    /// that the wrong-car screen is not a flicker between radar sweeps.
-    static let identityHoldSeconds: Double = 10
 }

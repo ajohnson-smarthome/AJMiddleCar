@@ -155,23 +155,11 @@ final class CarLink: ObservableObject {
         // The `.sessionClosed` this stop emits lands in a stream the cancelled pump no longer
         // reads, so the session's end is applied here by hand — the video subscription's too.
         video.sessionClosed()
-        // Backgrounding is not a verdict on who the car is. Leaving `.active` — which a Control
-        // Center pull-down alone does — used to clear `.foreign`, so the wrong-car screen flipped
-        // to the radar until the next hello reply landed.
-        session = session.survivingSessionEnd
-        recompute()
-    }
-
-    /// The wrong-car screen's retry: forget what the car said about itself and look again.
-    /// Nothing else clears it, on purpose — it is not a transient failure to retry silently
-    /// behind a radar sweep.
-    func retryAfterWrongCar() {
+        // Backgrounding is not a verdict on who the car is; identity is no longer judged here at
+        // all — the gate's `/version` check (S23) is the one identity gate — so a stop just
+        // forgets the session outright.
         session = .none
-        device = nil
         recompute()
-        // The transport is mid-hold on the session that discovered the identity; abort it so
-        // the next hello goes out now, not after the remainder of the ten seconds.
-        Task { [transport] in await transport.retryNow() }
     }
 
     private func consume(events: AsyncStream<CarTransport.Event>, frames: AsyncStream<Telemetry>) async {
@@ -202,28 +190,13 @@ final class CarLink: ObservableObject {
         case .sessionOpened(let info, let sid):
             self.device = info.id
             lastTelemetrySeq = nil
-            if info.id == CarContract.device {
-                // The firmware version is published only for our own car. It feeds the launch
-                // gate, and a foreign car's build number there can force an OTA onto a car
-                // that is not ours — routing straight around the wrong-car screen.
-                self.fw = info.fw
-                session = .adopted(device: info.id, fw: info.fw)
-                fetchRadio()
-                // The car is reachable exactly now. Prefetching from `onAppear` ran while the
-                // gate was still talking to GitHub, so both GETs timed out and every trick
-                // spent the session on the fallback geometry the `/dims` work replaced.
-                config?.prefetchDriveGeometry()
-                video.session(sid: sid)
-            } else {
-                self.fw = nil
-                session = .foreign(device: info.id)
-                video.sessionClosed()
-            }
+            self.fw = info.fw
+            session = .adopted(device: info.id, fw: info.fw)
+            fetchRadio()
+            config?.prefetchDriveGeometry()
+            video.session(sid: sid)
         case .sessionClosed:
-            // A foreign identity survives the session that discovered it: the transport reopens
-            // every few seconds and would otherwise flicker the screen naming the problem back
-            // to a radar.
-            session = session.survivingSessionEnd
+            session = .none
             telemetry = nil
             lastFrame = nil
             lastTelemetrySeq = nil

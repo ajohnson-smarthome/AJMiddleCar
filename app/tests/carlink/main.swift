@@ -35,23 +35,12 @@ check(!compose(.dongleUp, .none, nil, nil).isNoDongle, "and neither does merely 
 check(!compose(.localNetworkDenied, adopted, fresh, 0.1).isNoDongle,
       "nor a denial — replugging the cable is not what fixes that one")
 check(compose(.localNetworkDenied, adopted, fresh, 0.1) == .localNetworkDenied, "denial wins")
-check(compose(.localNetworkDenied, .foreign(device: "esp32-car"), nil, nil) == .localNetworkDenied,
-      "denial outranks a foreign car")
-
-// Identity outranks liveness: a car that answers with someone else's name is never driven.
-check(compose(.dongleUp, .foreign(device: "esp32-car"), fresh, 0.1) == .wrongCar(device: "esp32-car"),
-      "wrong car, however fresh")
-
-// What survives a session ending. Two callers ask this — the session closing under the transport,
-// and `stop(graceful:)` when the scene leaves `.active` — a foreign identity is not a transient
-// failure to retry behind a radar sweep, so it must survive both.
-check(SessionState.foreign(device: "esp32-car").survivingSessionEnd == .foreign(device: "esp32-car"),
-      "a foreign identity survives the session that found it")
-check(adopted.survivingSessionEnd == .none, "an adopted session does not")
-check(SessionState.none.survivingSessionEnd == .none, "nor does nothing at all")
-// Which is the whole point: the survivor keeps its own screen across the restart.
-check(compose(.dongleUp, SessionState.foreign(device: "esp32-car").survivingSessionEnd, nil, nil)
-        == .wrongCar(device: "esp32-car"), "the wrong-car screen holds across a session end")
+// Identity is no longer judged in the live session — the gate's /version check (S23) is the one
+// identity gate. A hello from any car adopts the session; a foreign car is driven, not screened
+// (a mid-session swap on a colliding SSID is the accepted residual — spec wrong-car-runtime-out).
+let foreignAdopted = SessionState.adopted(device: "esp32-car", fw: "v1.0+1")
+check(compose(.dongleUp, foreignAdopted, fresh, 0.1) == .live(fresh),
+      "any hello adopts: a foreign car is live, not a wrong-car screen")
 
 // The staleness threshold is a frame count against the contract's telemetry rate, not a duration
 // picked here — and it is deliberately generous. A gap that costs one screen swap and back is

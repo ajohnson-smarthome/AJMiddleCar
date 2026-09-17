@@ -78,21 +78,19 @@ struct RootView: View {
             .onChange(of: link.state) { _, new in
                 switch new {
                 case .noDongle, .localNetworkDenied: flow.restart(from: .dongle)
-                case .wrongCar:                       flow.restart(from: .car)
-                case .live:                           flow.carIdentified(fw: link.fw)
-                case .searching:                      break
+                case .live:                          flow.carIdentified(fw: link.fw)
+                case .searching:                     break
                 }
             }
             // Every hand-over to the car re-asks its identity with whatever the link already
             // holds: a hello that landed while the ladder was still deciding was refused by
             // `carIdentified`'s phase guard, and nothing else would ask again — the launch, an
             // adapter that came back, and a forced update that finished all hand over here.
-            // `retryAfterWrongCar()` clears the hold on a foreign id — used to run from
-            // `WrongCarView`'s own retry, now from here since that screen no longer renders once
-            // the ladder has handed over.
+            // The wrong-car guard was here too — cleared through the transport's hold — but that
+            // guard is gone: identity is no longer judged in the live session, the gate's
+            // `/version` check is the one identity gate.
             .onChange(of: flow.phase) { _, phase in
                 if phase == .awaitingCar {
-                    link.retryAfterWrongCar()
                     if link.isLive { flow.carIdentified(fw: link.fw) }
                 }
             }
@@ -125,10 +123,10 @@ struct RootView: View {
     }
 
     /// Past the ladder, the screen is whatever `CarLink` currently is, except where the ladder is
-    /// already back in charge: `.noDongle`, `.localNetworkDenied` and `.wrongCar` all restarted
-    /// it through a guard the instant they fired (`.onChange(of: link.state)` above), so
-    /// `flow.phase` has already left `.awaitingCar`/`.ready` by the time this would render one of
-    /// them — this is a one-frame fallback for that gap, not a second opinion.
+    /// already back in charge: `.noDongle` and `.localNetworkDenied` both restarted it through a
+    /// guard the instant they fired (`.onChange(of: link.state)` above), so `flow.phase` has
+    /// already left `.awaitingCar`/`.ready` by the time this would render one of them — this is a
+    /// one-frame fallback for that gap, not a second opinion.
     @ViewBuilder private var carRoot: some View {
         switch link.state {
         case .live:

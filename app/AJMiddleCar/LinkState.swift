@@ -19,26 +19,6 @@ enum PathState: Equatable {
 enum SessionState: Equatable {
     case none
     case adopted(device: String, fw: String)
-    /// A car answered, but it is not ours. Both cars are a softAP serving the same API at the
-    /// same address: whichever one the dongle is joined to is the one that answers here.
-    case foreign(device: String)
-
-    /// What is still true after the session that discovered it has ended.
-    ///
-    /// An identity the car told us about itself — someone else's name — is not a transient
-    /// failure to retry behind a radar sweep: the transport reopens every second or two, and
-    /// re-deciding it from scratch each time flickers the screen that names the problem back to
-    /// the radar the user has no reason to watch. Only the retry button clears it.
-    ///
-    /// It is one function because it has two callers — the session ending and the app being
-    /// stopped — and the version of this that lived twice as an `if case` got one case added to
-    /// one copy and not the other.
-    var survivingSessionEnd: SessionState {
-        switch self {
-        case .foreign: return self
-        case .none, .adopted: return .none
-        }
-    }
 }
 
 /// The one liveness truth. Everything on screen — the status pill, the signal bars, the searching
@@ -47,15 +27,11 @@ enum Link: Equatable {
     case noDongle(NWPath.UnsatisfiedReason)
     case localNetworkDenied
     case searching
-    case wrongCar(device: String)
     case live(Telemetry)
 
     var isLive: Bool { if case .live = self { return true }; return false }
     /// Whether the interface itself is gone — asked as a transition (`was`, `is no longer`) by
     /// the root view, which turns it into "the wire came back" and re-enters the dongle gate.
-    /// A predicate rather than two `if case`s at the call site for the reason
-    /// `SessionState.survivingSessionEnd` is one function: the copy that gets forgotten is the
-    /// second one.
     var isNoDongle: Bool { if case .noDongle = self { return true }; return false }
     var telemetry: Telemetry? { if case .live(let t) = self { return t }; return nil }
 }
@@ -88,9 +64,6 @@ enum LinkRule {
         case .noDongle(let reason): return .noDongle(reason)
         case .dongleUp: break
         }
-        // Identity beats liveness: a car that answers with someone else's name must not be
-        // driven, however fresh its telemetry is.
-        if case .foreign(let device) = session { return .wrongCar(device: device) }
         guard case .adopted = session else { return .searching }
         guard let telemetry, let age, age < staleAfter else { return .searching }
         return .live(telemetry)

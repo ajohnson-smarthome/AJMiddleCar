@@ -16,8 +16,9 @@ actor CarTransport {
     static let shared = CarTransport()
 
     enum Event: Sendable {
-        /// The car answered our hello. Its identity may be someone else's — the caller decides —
-        /// and the sid the video channel subscribes with.
+        /// The car answered our hello. Its identity may be someone else's — this layer no longer
+        /// judges that, the gate's `/version` check does — plus the sid the video channel
+        /// subscribes with.
         case sessionOpened(DeviceInfo, sid: String)
         case sessionClosed
     }
@@ -64,9 +65,6 @@ actor CarTransport {
     /// Whether any session has ever been adopted, which is what separates "searching for a car
     /// that is not switched on yet" from "the link we had went away".
     private var everAdopted = false
-    /// The wrong-car hold. Stored so the retry button can abort it: without that the transport
-    /// sleeps out its ten seconds while the user watches a radar that claims to be retrying.
-    private var identityHold: Task<Void, Error>?
 
     /// Session lifecycle, lossless. Its rate is bounded by the session loop itself — a
     /// handful of events per reconnect — so `.unbounded` cannot grow. What must never happen
@@ -133,24 +131,6 @@ actor CarTransport {
         }
     }
 
-    /// Hold the session after a car identified itself as undriveable — long enough that the
-    /// screen naming the problem is not a flicker between radar sweeps, but abortable the
-    /// moment the user asks for another look.
-    private func holdIdentity() async {
-        let hold = Task { try await Task.sleep(for: .seconds(SessionPolicy.identityHoldSeconds)) }
-        identityHold = hold
-        // Outer cancellation (stop()) must not wait out the unstructured hold.
-        await withTaskCancellationHandler {
-            _ = try? await hold.value
-        } onCancel: {
-            hold.cancel()
-        }
-        identityHold = nil
-    }
-
-    /// The retry button on the wrong-car screen.
-    func retryNow() { identityHold?.cancel() }
-
     private func tearDown() {
         conn?.cancel()
         conn = nil
@@ -215,15 +195,6 @@ actor CarTransport {
 
         guard let identity = try await handshake(sid: sid) else { throw CarError.refused }
         emit(.sessionOpened(identity, sid: sid))
-
-        guard identity.id == CarContract.device else {
-            // Not our car. A single command frame here would drive it, so instead of streaming
-            // we say goodbye — the other car drops ownership and stops — and hold the session
-            // long enough that the wrong-car screen is not a flicker.
-            await sayGoodbye(on: socket)
-            await holdIdentity()
-            throw CarError.malformed("foreign device \(identity.id)")
-        }
 
         sessionAdopted = true
         everAdopted = true
