@@ -165,6 +165,12 @@ final class AppFlow: ObservableObject {
     private func stage(_ board: Board) async -> StageExit {
         if board.identity.device == .car, CarHost.viaDongle { carReach = CarReach() }
         var sawChecking = false
+        // A board that answered its /version last poll is considered reached and is not
+        // re-reached (§2.2): re-reach only at stage entry and after the board goes silent. This
+        // keeps the car stage from issuing a /status round-trip on every poll of a held screen,
+        // and stops a transient /status blip from flickering a held screen back to "checking the
+        // adapter".
+        var reached = false
         while true {
             if let w = wantRung { wantRung = nil; return .jump(w) }
             // Parked: FirmwareView owns the board during a forced update. Poll nothing — the car's
@@ -173,8 +179,14 @@ final class AppFlow: ObservableObject {
             if case .stage(let d, .updating) = phase, d == board.identity.device {
                 await pollPause(); continue
             }
-            let reach = await board.reach()
+            let reach: Reach = reached ? .reached : await board.reach()
             let version: VersionReply? = reach == .reached ? await readCarOrDongleVersion(board) : nil
+            if let version {
+                // Silence is the one reply that re-arms reach — the board may have gone away (a
+                // reboot, or the adapter dropping the car's network). A present-but-bad answer
+                // (.faulty/.denied) still means we reached it.
+                if case .silent = version { reached = false } else { reached = true }
+            }
             if reach == .reached, let version, !sawChecking, answered(version) {
                 sawChecking = true
                 setPhase(.stage(board.identity.device, .checking))
@@ -182,6 +194,11 @@ final class AppFlow: ObservableObject {
             switch StageRule.decide(reach: reach, version: version, board: board.identity,
                                     latestTag: latestTag, rollback: rollbackChoice) {
             case .lost:
+                // Pace the hand-back: a board reached through another one whose reach faults
+                // (e.g. the adapter answers /version but its /status is persistently bad) would
+                // otherwise spin this loop at request speed. The guard-driven fall-back is the
+                // `wantRung` return at the loop top, which stays prompt.
+                await pollPause()
                 return .jump(board.reachedThrough ?? max(0, currentRung - 1))
             case .needRelease:
                 _ = await fetchRelease(for: board.identity.device)   // sets latestTag or a hold phase
