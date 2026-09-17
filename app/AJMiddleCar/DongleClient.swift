@@ -1,7 +1,7 @@
 import Foundation
 import Network
 
-/// The dongle's own small API: `GET /status`, `POST /wifi`, `POST /ota` on
+/// The dongle's own small API: `GET /version`, `GET /status`, `POST /wifi`, `POST /ota` on
 /// `DongleContract.host` : `.port`. This is unrelated to the car's API even though both live in
 /// this app — it is the dongle answering for itself, before or regardless of whatever it is
 /// relaying. Modelled on `CalibClient.swift`: the same shape, just a different address and a

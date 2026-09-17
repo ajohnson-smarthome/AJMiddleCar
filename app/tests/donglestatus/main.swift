@@ -6,9 +6,9 @@ func check(_ ok: Bool, _ what: String) {
     if !ok { print("FAIL: \(what)"); failures += 1 }
 }
 
-let full = #"{"proto":1,"device":{"id":"ajdongle","fw":"v1.0+789","build":789,"rolled_back":false,"idf":"v6.0.2"},"usb":{"state":"up"},"wifi":{"ssid":"AJMiddleCar","configured":true,"state":"connected","rssi_dbm":-53,"channel":1,"attempts":{"used":0,"max":5}},"relay":{"to_car_hz":10.0,"to_phone_hz":5.0,"udp_sessions":1,"tcp_connections":2,"last_error":{"errno":118,"message":"No route to host","count":3,"age_s":41}},"system":{"uptime_s":412,"free_heap":8551152}}"#
+let full = #"{"proto":1,"usb":{"state":"up"},"wifi":{"ssid":"AJMiddleCar","configured":true,"state":"connected","rssi_dbm":-53,"channel":1,"attempts":{"used":0,"max":5}},"relay":{"to_car_hz":10.0,"to_phone_hz":5.0,"udp_sessions":1,"tcp_connections":2,"last_error":{"errno":118,"message":"No route to host","count":3,"age_s":41}},"system":{"uptime_s":412,"free_heap":8551152,"idf":"v6.0.2"}}"#
 let s = try! JSONDecoder().decode(DongleStatus.self, from: Data(full.utf8))
-check(s.proto == 1 && s.device.id == "ajdongle" && s.device.build == 789 && s.device.idf == "v6.0.2", "device")
+check(s.proto == 1 && s.system.idf == "v6.0.2", "proto and idf")
 check(s.usb.state == .up, "usb")
 check(s.wifi.ssid == "AJMiddleCar" && s.wifi.configured && s.wifi.state == .connected, "wifi")
 check(s.wifi.rssi_dbm == -53 && s.wifi.channel == 1 && s.wifi.attempts == DongleWifiAttempts(used: 0, max: 5), "wifi readings")
@@ -16,17 +16,17 @@ check(s.relay.to_car_hz == 10.0 && s.relay.udp_sessions == 1, "relay")
 check(s.relay.last_error == DongleRelayError(errno: 118, message: "No route to host", count: 3, age_s: 41), "last error")
 check(s.system.uptime_s == 412 && s.system.free_heap == 8551152, "system")
 
-let idle = #"{"proto":1,"device":{"id":"ajdongle","fw":"v1.0+789","build":789,"rolled_back":true,"idf":"v6.0.2"},"usb":{"state":"up"},"wifi":{"ssid":"","configured":false,"state":"idle","rssi_dbm":null,"channel":null,"attempts":{"used":0,"max":5}},"relay":{"to_car_hz":0.0,"to_phone_hz":0.0,"udp_sessions":0,"tcp_connections":0,"last_error":null},"system":{"uptime_s":3,"free_heap":1}}"#
+let idle = #"{"proto":1,"usb":{"state":"up"},"wifi":{"ssid":"","configured":false,"state":"idle","rssi_dbm":null,"channel":null,"attempts":{"used":0,"max":5}},"relay":{"to_car_hz":0.0,"to_phone_hz":0.0,"udp_sessions":0,"tcp_connections":0,"last_error":null},"system":{"uptime_s":3,"free_heap":1,"idf":"v6.0.2"}}"#
 let i = try! JSONDecoder().decode(DongleStatus.self, from: Data(idle.utf8))
 check(i.wifi.rssi_dbm == nil && i.wifi.channel == nil && i.relay.last_error == nil, "nulls decode as nil")
-check(i.device.rolled_back && !i.wifi.configured && i.wifi.state == .idle, "idle after boot")
+check(!i.wifi.configured && i.wifi.state == .idle, "idle after boot")
 
 // A state word this build does not know is kept, not a decode failure.
 let odd = full.replacingOccurrences(of: #""state":"connected""#, with: #""state":"dreaming""#)
 check((try? JSONDecoder().decode(DongleStatus.self, from: Data(odd.utf8)))?.wifi.state == .unknown("dreaming"),
       "unknown wifi state")
 // A document missing a group is not a status.
-let short = #"{"proto":1,"device":{"id":"ajdongle","fw":"v1.0+789","build":789,"rolled_back":false,"idf":"v6.0.2"}}"#
+let short = #"{"proto":1,"usb":{"state":"up"}}"#
 check((try? JSONDecoder().decode(DongleStatus.self, from: Data(short.utf8))) == nil, "a short document throws")
 
 // The POST /wifi reply and the error envelope.

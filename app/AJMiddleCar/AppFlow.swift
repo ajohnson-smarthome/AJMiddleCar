@@ -111,6 +111,9 @@ final class AppFlow: ObservableObject {
         /// The gate has passed; the car has not identified itself yet. What is on screen while
         /// this lasts comes from `CarLink` — searching, wrong car, no dongle, denied.
         case awaitingCar
+        /// The car is behind the release — decided by `carGate()` from `/version`, before any
+        /// hello, or by `carIdentified` from a later hello. `FirmwareView` runs the update over
+        /// HTTP; no session is opened for it.
         case updateRequired
         /// The gate is satisfied. `CarLink` decides whether that means the drive screen.
         case ready
@@ -246,9 +249,10 @@ final class AppFlow: ObservableObject {
     }
 
     /// Step 3, one attempt: ask GitHub for the newest release and adopt its tag. The release is
-    /// one for both boards — one tag, two images — so this runs once per launch, and both the
-    /// adapter's comparison (`DongleLink.next`) and the car's (`carIdentified`) read the tag it
-    /// leaves in `latestTag`. `device` only says which image's presence to insist on.
+    /// one for both boards — one tag, two images — so this runs once per launch, and both
+    /// gates' `VersionRule.step` calls read the tag it leaves in `latestTag`, and so does
+    /// `carIdentified` on every telemetry frame. `device` only says which image's presence to
+    /// insist on.
     ///
     /// Returns true once `latestTag` is set. Otherwise sets the holding phase — `.releaseOffline`
     /// when GitHub could not be reached, `.releaseMissing` when the release carries no image for
@@ -457,7 +461,9 @@ final class AppFlow: ObservableObject {
     /// is on the adapter's network (the adapter said `connected`) but not answering HTTP yet — a
     /// reboot, a slow AP — so it is a hold, not "plug it in". Returns once the car is ours,
     /// current and speaking our protocol; every other outcome is a phase this loop keeps
-    /// re-deciding from the next read.
+    /// re-deciding from the next read. Returns false — handing back to the adapter's gate — when
+    /// the car goes silent through the relay and the adapter reports it is no longer joined to
+    /// the car's network.
     private func carGate() async -> Bool {
         while true {
             if phase == .updateRequired {
@@ -666,8 +672,8 @@ final class AppFlow: ObservableObject {
     /// The user asked `dongleGate()` to try updating the dongle again after it gave up —
     /// the very next `.updating` step gets a fresh budget.
     /// `FirmwareView` is done with the adapter — updated, or failed and dismissed. Handing the
-    /// phase back to the check is what makes the gate re-decide from a fresh `/status` instead of
-    /// trusting whatever the screen concluded.
+    /// phase back to the check is what makes the gate re-decide from a fresh `/version` instead
+    /// of trusting whatever the screen concluded.
     func dongleUpdateFinished() { setPhase(.dongleChecking) }
 
     /// The car said who it is, in its hello reply. Re-evaluated every time, not once: a car that

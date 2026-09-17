@@ -72,9 +72,9 @@ final class FirmwareFlow: ObservableObject {
     // ── check ────────────────────────────────────────────────────────────
     func check() async {
         phase = .checking
-        // Ask the device where it stands before comparing anything against it. The car answers
-        // from `CarLink` and this is free; the adapter has to be asked, and without this the
-        // first check would compare a release against a version nobody had read yet.
+        // Ask the device where it stands before comparing anything against it. Both boards
+        // answer from `/version`, and without this the first check would compare a release
+        // against a version nobody had read yet.
         await refresh()
         offlineCache = false
         // A rollback from an earlier bounce must not decorate a later, unrelated failure with
@@ -233,27 +233,26 @@ final class FirmwareFlow: ObservableObject {
 // MARK: - The two devices
 
 extension FirmwareFlow {
-    /// The car, reached through the relay. Its version and liveness arrive by themselves on the
-    /// telemetry stream, so `refresh` has nothing to do. `runningFw` is the handshake's `fw`;
-    /// `isReachable` is the live session — a `POST /ota` goes through the relay as plain HTTP
-    /// and needs no session itself, but a car that is not answering hellos is not there to take
-    /// one either.
-    static func forCar(link: CarLink) -> FirmwareFlow {
-        FirmwareFlow(device: .car,
-                     runningFw: { [weak link] in link?.fw },
-                     isReachable: { [weak link] in link?.isLive ?? false },
-                     progressPublishedByClient: true,
-                     push: { url, client, _ in await client.upload(url) })
+    /// The car, reached through the relay: `/version` for what it runs and whether it answers,
+    /// `POST /ota` for the image. No session is involved on either leg — which is what lets a
+    /// car speaking an older protocol be updated at all.
+    static func forCar() -> FirmwareFlow {
+        let state = VersionState { try await CarTransport.shared.get(CarContract.versionPath, timeout: 2) }
+        return FirmwareFlow(device: .car,
+                            runningFw: { state.fw },
+                            isReachable: { state.reachable },
+                            refresh: { await state.refresh() },
+                            progressPublishedByClient: true,
+                            push: { url, client, _ in await client.upload(url) })
     }
 
-    /// The adapter, reached over USB. Nothing pushes its state at us, so every question costs a
-    /// `/version` — which is why `refresh` exists at all.
+    /// The adapter, reached over USB. Same shape; only the client differs.
     static func forDongle(client dongle: DongleClient) -> FirmwareFlow {
-        let state = DongleState()
+        let state = VersionState { try await dongle.versionData() }
         return FirmwareFlow(device: .dongle,
                             runningFw: { state.fw },
                             isReachable: { state.reachable },
-                            refresh: { await state.refresh(from: dongle) },
+                            refresh: { await state.refresh() },
                             push: { url, _, progress in
             guard let data = try? Data(contentsOf: url) else { return .failed(nil) }
             do {
@@ -264,28 +263,27 @@ extension FirmwareFlow {
             } catch is CancellationError {
                 return .cancelled
             } catch {
-                // The adapter's own words when it gave any; nil when nothing answered, which the
-                // screen renders as the generic failure rather than quoting silence.
                 return .failed((error as? CarError).map { String(describing: $0) })
             }
         })
     }
 }
 
-/// The adapter's last known answer, refreshed on demand.
-///
-/// A class rather than captured `var`s because the flow's four closures all have to see the same
-/// value, and because the reboot watch reads it every 500 ms from a task that outlives whichever
-/// call started it.
+/// A board's last `/version` answer, refreshed on demand. A class rather than captured `var`s
+/// because the flow's closures all have to see the same value, and because the reboot watch
+/// reads it every 500 ms from a task that outlives whichever call started it.
 @MainActor
-private final class DongleState {
+private final class VersionState {
+    private let read: () async throws -> Data
     var fw: String?
     var reachable = false
+    init(read: @escaping () async throws -> Data) { self.read = read }
 
-    func refresh(from dongle: DongleClient) async {
-        // Read the way the launch ladder reads it (`VersionReply.decode`): the adapter answers
-        // the whole document or nothing, on both sides of the reboot this watch runs through.
-        if let data = try? await dongle.versionData(), case .version(let v) = VersionReply.decode(data) {
+    func refresh() async {
+        // The frozen document, on both sides of the reboot this watch runs through: a 404 or a
+        // stale-format answer would be a board older than this app, which the gate has already
+        // sent through an update — so anything but the document is "not reachable yet".
+        if let data = try? await read(), case .version(let v) = VersionReply.decode(data) {
             fw = v.fw
             reachable = true
         } else {

@@ -47,10 +47,6 @@ struct RootView: View {
             .persistentSystemOverlays(.hidden)
             .task {
                 await flow.startupCheck()
-                // The car may have identified itself while the gate was still talking to
-                // GitHub; `onChange` would have missed a value that arrived before the phase
-                // was ready to hear it.
-                flow.carIdentified(fw: link.fw)
             }
             .onChange(of: scenePhase) { oldPhase, newPhase in
                 switch newPhase {
@@ -87,14 +83,15 @@ struct RootView: View {
                 if old.isNoDongle, !new.isNoDongle {
                     Task {
                         await flow.dongleReturned()
-                        // Same race as the launch's own `.task` above: a hello that landed
-                        // while the gate was still re-asking the dongle was refused by
-                        // `carIdentified`'s phase guard, and nothing asks again after the
-                        // hand-back — the radar over a live link, until the next telemetry
-                        // frame happened to change `link.fw`.
-                        flow.carIdentified(fw: link.fw)
                     }
                 }
+            }
+            // Every hand-over to the car re-asks its identity with whatever the link already
+            // holds: a hello that landed while a gate was still deciding was refused by
+            // `carIdentified`'s phase guard, and nothing else would ask again — the launch,
+            // an adapter that came back, and a forced update that finished all hand over here.
+            .onChange(of: flow.phase) { _, phase in
+                if phase == .awaitingCar { flow.carIdentified(fw: link.fw) }
             }
     }
 
@@ -157,7 +154,7 @@ struct RootView: View {
             ConnectView(situation: .appBehind(device: device, proto: proto))
         case .updateRequired:
             // HTTP only — see `Phase.opensLink`: no session is opened behind the forced update.
-            FirmwareView(palette: p, flow: .forCar(link: link), forced: true,
+            FirmwareView(palette: p, flow: .forCar(), forced: true,
                          onDone: { flow.updateFinished() })
         case .awaitingCar, .ready:
             // The link opens when the gate hands over, not at launch: until then there is

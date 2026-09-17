@@ -26,11 +26,6 @@ final class CarLink: ObservableObject {
     /// The radio co-processor's firmware, from `/status`. Not carried by telemetry and not part
     /// of the app image, so a pinned-version mismatch is invisible unless it is surfaced.
     @Published private(set) var radio: RadioStatus?
-    /// The car's report that the bootloader reverted the last update (decision 1): the hello
-    /// reply's `device.rolled_back`, set the instant a session opens rather than waiting on a
-    /// separate `/status` fetch. Reset on every adoption so a pre-reboot value cannot leak
-    /// forward.
-    @Published private(set) var rollback: Bool?
     /// The newest numbers we ever saw, live or not. `state` is the truth about the link; this is
     /// for screens that legitimately show the last known reading (uptime, firmware, trips).
     @Published private(set) var lastTelemetry: Telemetry?
@@ -213,9 +208,6 @@ final class CarLink: ObservableObject {
                 // that is not ours — routing straight around the wrong-car screen.
                 self.fw = info.fw
                 session = .adopted(device: info.id, fw: info.fw)
-                // The bootloader's verdict on the last update rides with the handshake now;
-                // /status is fetched only for the radio.
-                rollback = info.rolled_back
                 fetchRadio()
                 // The car is reachable exactly now. Prefetching from `onAppear` ran while the
                 // gate was still talking to GitHub, so both GETs timed out and every trick
@@ -276,13 +268,12 @@ final class CarLink: ObservableObject {
     /// `/status` is one GET against a single-request server that is busy with the geometry
     /// prefetch fired in the same instant — one miss must not hide a radio mismatch for the
     /// whole session. Four tries, backing off; if every try fails the status becomes
-    /// `.unavailable` rather than silence. `rollback` no longer comes from here — the
-    /// bootloader's verdict rides with the handshake now (`.sessionOpened`'s `DeviceInfo`) — so
-    /// this fetch exists only for the radio. Every write is guarded by `radioFetchGen`: a fetch
-    /// superseded by a newer `.sessionOpened` (e.g. the reconnect right after an OTA reboot)
-    /// must not let its in-flight response — which cancellation now usually aborts, but can
-    /// still lose the race to a response already in flight — overwrite the newer session's
-    /// fresh values.
+    /// `.unavailable` rather than silence. This fetch exists only for the radio — the
+    /// bootloader's verdict rides with `/version` now, not with this. Every write is guarded by
+    /// `radioFetchGen`: a fetch superseded by a newer `.sessionOpened` (e.g. the reconnect right
+    /// after an OTA reboot) must not let its in-flight response — which cancellation now usually
+    /// aborts, but can still lose the race to a response already in flight — overwrite the newer
+    /// session's fresh values.
     private func fetchRadio() {
         radioFetch?.cancel()
         radioFetchGen += 1

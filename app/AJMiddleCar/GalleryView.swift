@@ -77,8 +77,7 @@ struct GalleryView: View {
         // same screen with a different object under the chip.
         func fw(_ phase: FwPhase, forced: Bool = false,
                 device: UpdateRules.Device = .car) -> AnyView {
-            let link = mockLink()
-            let flow = device == .car ? FirmwareFlow.forCar(link: link)
+            let flow = device == .car ? FirmwareFlow.forCar()
                                       : FirmwareFlow.forDongle(client: DongleClient())
             return AnyView(NavigationStack {
                 FirmwareView(palette: p, flow: flow, forced: forced, debugPhase: phase)
