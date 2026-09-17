@@ -782,37 +782,3 @@ final class AppFlow: ObservableObject {
         }
     }
 }
-
-/// What one read of the adapter's `/status` produced. Read only after `VersionRule` said `.ok`
-/// — the document's shape depends on the protocol `/version` just vouched for — so this is the
-/// flow's own classification of the network half, not a second identity check. The transport
-/// vocabulary is `VersionReply.of`'s; a 404 here is a fault, not an older board: a board old
-/// enough to lack `/version` never reaches this read.
-private enum DongleStatusReply {
-    /// A `/status` document this build could decode.
-    case status(DongleStatus)
-    /// Nothing answered: no cable, a refused connection, a deadline that expired with no bytes.
-    case silent
-    /// Something answered and it was not usable: an HTTP error status, a truncated stream, or a
-    /// body that did not decode. Whatever else is true, a device is there and talking.
-    case faulty
-    /// iOS refused to let the request leave the phone at all: local-network access is denied.
-    case denied
-
-    /// Read a `/status` body as a document, else as a fault.
-    static func decode(_ data: Data) -> DongleStatusReply {
-        if let s = try? JSONDecoder().decode(DongleStatus.self, from: data) { return .status(s) }
-        return .faulty
-    }
-
-    /// Classify what `DongleClient.statusData()` threw — `VersionReply.of`'s rule, with its
-    /// one `/version`-specific verdict (404 → `.absent`) folded into `.faulty`.
-    static func of(_ error: Error) -> DongleStatusReply {
-        switch VersionReply.of(error) {
-        case .version: return .faulty      // `of` never returns a document; kept for exhaustiveness
-        case .absent, .faulty: return .faulty
-        case .silent: return .silent
-        case .denied: return .denied
-        }
-    }
-}
