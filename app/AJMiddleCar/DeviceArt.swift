@@ -3,7 +3,7 @@ import SwiftUI
 /// The visual vocabulary every device screen is built from.
 ///
 /// Before this file there were two of everything. `FirmwareCarView` drew the car from SwiftUI
-/// shapes with rings at diameters 56/80/104; `ConnectCarView` drew a second car into a `Canvas`
+/// shapes with rings at diameters 56/80/104; `ConnectRadarView` draws a second body into a `Canvas`
 /// with rings at radii 46/60/74. Same object, same idea, two sizes and two implementations — and
 /// the startup sequence, which crosses between them, made the mismatch visible: the car changed
 /// size as the screen changed, which reads as a jolt rather than as progress.

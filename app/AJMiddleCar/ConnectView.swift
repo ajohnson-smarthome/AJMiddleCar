@@ -69,7 +69,7 @@ struct ConnectView: View {
             stageScene(d, step)
         // Everything left is a search of the air, which is the one thing the sweep means.
         case .searching:
-            ConnectCarView(palette: p)
+            ConnectRadarView(palette: p) { CarBody(palette: p) }
         }
     }
 
@@ -83,7 +83,12 @@ struct ConnectView: View {
 
     @ViewBuilder private func stageScene(_ d: UpdateRules.Device, _ step: GateStep) -> some View {
         switch step {
-        case .seeking where d == .dongle, .absent:
+        case .seeking where d == .dongle:
+            // S1 «Ищу адаптер» — the same radar sweep as S13 «Ищу машинку»: one "searching for
+            // presence" look for both. The adapter is on USB rather than the air, but visually
+            // this is the search step; `.absent` (S2) stays static below to read as "gave up".
+            ConnectRadarView(palette: p) { AdapterBody(palette: p) }
+        case .absent:
             DeviceScene(palette: p, rings: .wait(), presence: 0.34) { AdapterBody(palette: p) }
         case .seeking, .checking:            // car .seeking and either board's .checking: found, being asked
             DeviceScene(palette: p, rings: .wait(), chip: (glyph: "cpu", tint: p.accent)) { stageBody(d) }
@@ -100,7 +105,7 @@ struct ConnectView: View {
         case .sendingNetwork:
             DeviceScene(palette: p, rings: .inward, chip: (glyph: "wifi", tint: p.accent)) { AdapterBody(palette: p) }
         case .searching:
-            ConnectCarView(palette: p)
+            ConnectRadarView(palette: p) { CarBody(palette: p) }
         case .joining:
             LinkScene(palette: p)
         case .joinFailed:
@@ -188,16 +193,26 @@ struct ConnectView: View {
 /// The car is a sibling layer rather than something this file paints, which also gets the
 /// occlusion for free: an opaque body over the beam is what makes the sweep read as passing
 /// *under* the car instead of across it.
-struct ConnectCarView: View {
-    let palette: Palette
-    /// One turn. The period is load-bearing for the whole screen's feel, and it is the number
-    /// every other timing here is derived from.
-    private static let period: Double = 2.6
+/// The radar sweep's fixed geometry — hoisted out of `ConnectRadarView` because a generic
+/// type cannot hold static stored properties.
+private enum RadarArt {
+    /// One turn. Load-bearing for the whole screen's feel; every other timing derives from it.
+    static let period: Double = 2.6
     /// Where the returns sit: bearing in radians, range in points. Fixed rather than random —
     /// a radar whose echoes wander is a lava lamp, not an instrument.
-    private static let blips: [(a: Double, r: Double)] =
-        [(-0.6, 54), (2.1, 68), (3.6, 41), (5.2, 70)]
+    static let blips: [(a: Double, r: Double)] = [(-0.6, 54), (2.1, 68), (3.6, 41), (5.2, 70)]
+}
 
+struct ConnectRadarView<Device: View>: View {
+    let palette: Palette
+    /// The device drawn as the brightest radar return — `CarBody` for S13/S25, `AdapterBody`
+    /// for S1. The sweep and the returns are identical; only the object being searched for
+    /// differs.
+    @ViewBuilder let device: () -> Device
+    init(palette: Palette, @ViewBuilder device: @escaping () -> Device) {
+        self.palette = palette
+        self.device = device
+    }
     var body: some View {
         ZStack {
             TimelineView(.animation) { tl in
@@ -205,10 +220,10 @@ struct ConnectCarView: View {
                 ZStack {
                     Canvas { ctx, size in sweep(&ctx, size, time: t) }
                         .frame(width: DeviceArt.stage.width, height: DeviceArt.stage.height)
-                    // The car is a return like any other: bright just after the beam has passed
-                    // over it, fading until the next turn. A target lit constantly would say the
-                    // search is already over, which is the opposite of what this screen means.
-                    CarBody(palette: palette).opacity(carWash(time: t))
+                    // The device is a return like any other: bright just after the beam has
+                    // passed over it, fading until the next turn. A target lit constantly would
+                    // say the search is already over, the opposite of what this screen means.
+                    device().opacity(carWash(time: t))
                 }
             }
         }
@@ -219,10 +234,10 @@ struct ConnectCarView: View {
     /// How lit the car is: a function of the angle between the beam and the car's own bearing,
     /// so it is exactly as impossible for the two to drift apart as it is for the returns.
     private func carWash(time: Double) -> Double {
-        let head = -(time * 360 / Self.period).truncatingRemainder(dividingBy: 360) * .pi / 180
+        let head = -(time * 360 / RadarArt.period).truncatingRemainder(dividingBy: 360) * .pi / 180
         var delta = (head + .pi / 2).truncatingRemainder(dividingBy: 2 * .pi)
         if delta < 0 { delta += 2 * .pi }
-        return 0.30 + 0.62 * exp(-2.2 * (delta / (2 * .pi) * Self.period))
+        return 0.30 + 0.62 * exp(-2.2 * (delta / (2 * .pi) * RadarArt.period))
     }
 
     private func sweep(_ ctx: inout GraphicsContext, _ size: CGSize, time: Double) {
@@ -238,7 +253,7 @@ struct ConnectCarView: View {
         // exponentially over 120°, which is what a sweep actually looks like and what makes the
         // direction of travel readable without any other cue. A flat sector reads as a rotating
         // slice of pie — it was the single biggest thing making this screen look cheap.
-        let head = -(time * 360 / Self.period).truncatingRemainder(dividingBy: 360)
+        let head = -(time * 360 / RadarArt.period).truncatingRemainder(dividingBy: 360)
         let arc = 1.0 / 3.0
         var stops: [Gradient.Stop] = (0...8).map { i in
             let f = Double(i) / 8
@@ -257,10 +272,10 @@ struct ConnectCarView: View {
         // rest of the turn. Brightness comes from the angle between the beam and the target, so
         // the flare and the sweep cannot drift out of step the way two timers would.
         let headRad = head * .pi / 180
-        for b in Self.blips {
+        for b in RadarArt.blips {
             var delta = (headRad - b.a).truncatingRemainder(dividingBy: 2 * .pi)
             if delta < 0 { delta += 2 * .pi }
-            let lum = exp(-1.5 * (delta / (2 * .pi) * Self.period))
+            let lum = exp(-1.5 * (delta / (2 * .pi) * RadarArt.period))
             guard lum > 0.02 else { continue }
             let p = CGPoint(x: c.x + cos(b.a) * b.r, y: c.y + sin(b.a) * b.r)
             ctx.fill(Path(ellipseIn: CGRect(x: p.x - 2.2, y: p.y - 2.2, width: 4.4, height: 4.4)),
