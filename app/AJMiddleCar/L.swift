@@ -9,9 +9,6 @@ enum L {
     static var connectTitle: String { s("connect.title") }
     static var wrongCarTitle: String { s("wrongCar.title") }
     static func wrongCarSub(_ found: String, _ ours: String) -> String { s("wrongCar.sub", found, ours) }
-    static var wrongProtoTitle: String { s("wrongProto.title") }
-    static func wrongProtoSub(_ theirs: Int, _ ours: Int) -> String { s("wrongProto.sub", theirs, ours) }
-    static var wrongProtoHint: String { s("wrongProto.hint") }
     static var wrongCarHint: String { s("wrongCar.hint") }
     static var connectBody: String { s("connect.body") }
     static var linkNoDongleTitle: String { s("link.noDongleTitle") }

@@ -189,9 +189,6 @@
 "wrongCar.title"     = "Это другая машинка";
 "wrongCar.sub"       = "Сеть принадлежит машинке «%@». Этот пульт управляет только машинкой «%@» — её настройки и калибровка чужой не подойдут.";
 "wrongCar.hint"      = "Проверь, что USB-адаптер подключён к нужной машинке, и повтори.";
-"wrongProto.title"   = "Другая версия протокола";
-"wrongProto.sub"     = "Машинка отвечает по протоколу %d, а это приложение говорит на %d.";
-"wrongProto.hint"    = "Обнови прошивку машинки (или приложение) — версии должны совпадать.";
 
 /* The startup ladder. Each subtitle opens by confirming the step before it succeeded — that is
    what makes a run of similar screens read as progress instead of as one screen flickering. */

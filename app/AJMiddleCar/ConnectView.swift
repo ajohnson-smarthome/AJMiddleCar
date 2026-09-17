@@ -23,71 +23,16 @@ struct ConnectView: View {
         /// tag, because the only person who can act on this is the one who publishes releases,
         /// and the tag is what tells them which one to look at.
         case releaseMissing(tag: String, device: UpdateRules.Device)
-        /// Step 1 of the startup ladder: nothing has answered at the adapter's address yet.
-        /// Shows the adapter faint — the same drawing the next step makes solid, which is what
-        /// turns the pair into one movement forward rather than two unrelated pictures.
-        case findingAdapter
         /// Step 3: asking GitHub for the newest release — the one tag both boards are compared
         /// against. Had no screen at all before — `dongleGate()` did this silently, so a launch
         /// that stopped here looked like a launch that had stopped for no reason.
         case releaseCheck
-        /// Step 4: the radio is scanning and has not seen the car's network yet. Distinct from
-        /// `.dongleConfiguring`, which is the association that follows — see `WifiState`.
-        case findingCar
-        /// The first frame of a launch: the dongle has been asked and has not answered yet.
-        /// Its own line, because `.searching`'s says the CAR is not answering — an assertion
-        /// about a device nothing has spoken to yet, made before the adapter in front of it
-        /// has even been found.
-        case checkingDongle
-        case noDongle(NWPath.UnsatisfiedReason)
-        case localNetworkDenied
-        /// Something answered at the dongle's address and it was not usable — an HTTP error, a
-        /// truncated stream, a body that would not decode (`VersionStep.faulty`). The radar
-        /// stays: the flow keeps polling and one bad answer is often a dongle mid-boot.
-        case dongleFault
-        /// A USB-Ethernet adapter answered and it is not ours — its `/version` names a `device`
-        /// other than `DongleContract.device`. The dongle's analogue of `WrongCarView`, and like
-        /// it, it names what answered rather than leaving the user to guess.
-        case wrongDongle(String)
-        /// The dongle is current and is being told the car's network — for the first time, or
-        /// again because it was pointed at some other one (`DongleStep.sendCredentials`). Its
-        /// own situation, because the join screen's words claimed a car nobody had looked for
-        /// yet: at this step the adapter has not searched at all.
-        case sendingNetwork
-        /// The dongle is pointed at the car's own network and its radio is joining it
-        /// (`DongleStep.waiting`: `joining`, or a state this build does not know).
-        case dongleConfiguring
-        /// The dongle will not reach the car on its own: the join budget ran out, or its state
-        /// machine never left `idle`. `AppFlow` asks the radio to try again a bounded number of
-        /// times and then holds here, so this screen carries `onRetryJoin` — without it, the
-        /// hold would be a dead end and the retries would have to run forever to avoid one.
-        case dongleJoinFailed
-        /// The board's bootloader reverted its last update. Standing until the user answers —
-        /// the flag itself does not clear on its own, so without an answer this would be a
-        /// locked room rather than a message. One answer: `onRecheckRollback` asks whether a
-        /// newer release exists yet (the only path back to an update, since the app is the
-        /// board's only OTA path). S10 is `.dongle`, S31 is `.car`.
-        case rolledBack(device: UpdateRules.Device)
-        /// The car's step 2: its `/version` is being asked through the relay. Mirrors
-        /// `.checkingDongle`, with the car in the frame.
-        case checkingCar
-        /// A board that is newer than this app: current against the release, but speaking a
-        /// protocol this build does not. No button — nothing the app can do but say so.
-        case appBehind(device: UpdateRules.Device, proto: Int)
         /// One rung of the launch ladder, the board and the step. The single situation the runner
-        /// emits; every board-prefixed situation below is being folded into it.
+        /// emits.
         case stage(UpdateRules.Device, GateStep)
     }
 
     var situation: Situation = .searching
-    /// `.rolledBack` only, and the screen's only button: the option to drive on the reverted
-    /// firmware is gone. This asks whether a newer release exists yet — a board's rollback flag
-    /// clears only when a later OTA succeeds, and this app is the only thing that can perform
-    /// one.
-    var onRecheckRollback: (() -> Void)? = nil
-    /// `.dongleJoinFailed` only. The same offer as `onRetryDongleUpdate`, for the other bounded
-    /// wait — asking again now, and with a fresh budget.
-    var onRetryJoin: (() -> Void)? = nil
     /// `.stage` with a `.wrongDevice`, `.rolledBack` or `.joinFailed` step — the one button those
     /// carry. `wakePoll` / `recheckRollback` / `retryJoin` respectively; wired by `RootView`.
     var onRetry: (() -> Void)? = nil
@@ -103,60 +48,12 @@ struct ConnectView: View {
     }
 
     /// The radar sweep reads as "still looking, will resolve on its own" — true of every
-    /// situation here except the ones that hand control to a button (`.rolledBack`,
-    /// `.wrongDongle`): none of them retries itself, so none should look
-    /// like it will. They borrow `WrongCarView`'s static failed-car image instead, the same way
-    /// `WrongCarView` does. `.dongleJoinFailed` keeps the sweep: its retries are bounded but
-    /// real, and while they are running the screen is telling the truth.
+    /// situation here except the ones that hand control to a button (`.stage`'s `.rolledBack`,
+    /// `.wrongDevice`, `.joinFailed`): none of them retries itself, so none should look like it
+    /// will — see `stageScene` for those. `.stage(_, .joining)` keeps the sweep: its retries are
+    /// bounded but real, and while they are running the screen is telling the truth.
     @ViewBuilder private var leftPanel: some View {
         switch situation {
-        // `.wrongDongle` joins them: nothing about it resolves by waiting either — the fix is a
-        // different cable, and the sweep would promise otherwise.
-        // Every one of these is about the ADAPTER, and every one of them used to draw the car
-        // with an exclamation mark — not carelessly, but because until the adapter existed in
-        // this vocabulary the car was the only object there was. The glyphs differ because the
-        // situations do: a foreign adapter is a question, a failed update is a fault, and a
-        // rollback is a reversal. The rings are `.deco` — present but motionless: what promises
-        // work is movement, not the rings themselves, and an object alone in the frame reads as
-        // an oversight rather than as stillness. `FirmwareCarView` uses the same mode for the
-        // same reason, on states that are resting rather than working.
-        case .wrongDongle:
-            DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
-                        chip: (glyph: "questionmark", tint: p.warn)) { AdapterBody(palette: p) }
-        case .rolledBack(let device):
-            DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
-                        chip: (glyph: "arrow.uturn.backward", tint: p.warn)) {
-                if device == .car { CarBody(palette: p) } else { AdapterBody(palette: p) }
-            }
-        case .appBehind(let device, _):
-            // Not a fault of the board's: it is ahead, not behind. The chip says "a version
-            // turned over", and the rings stay still — waiting will not change the app.
-            DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
-                        chip: (glyph: "exclamationmark.arrow.circlepath", tint: p.warn)) {
-                if device == .car { CarBody(palette: p) } else { AdapterBody(palette: p) }
-            }
-        case .localNetworkDenied:
-            // The one state in the whole sequence that does not pass on its own: iOS refused to
-            // let the request leave the phone, and no amount of waiting changes that. It used to
-            // sweep a radar over it, promising exactly the work that is not happening.
-            DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
-                        chip: (glyph: "lock", tint: p.warn)) { AdapterBody(palette: p) }
-        case .dongleJoinFailed:
-            // Both devices present and nothing travelling between them. The radar used to sit
-            // here; now that step 4 owns it, "looking for the car" and "could not reach it"
-            // would have been the same picture.
-            LinkScene(palette: p, failed: true)
-        // The adapter's own three steps. Only two dials move across them: the body goes from
-        // faint to solid when it is found, and the rings turn inward when something is arriving.
-        case .findingAdapter, .noDongle:
-            DeviceScene(palette: p, rings: .wait(), presence: 0.34) { AdapterBody(palette: p) }
-        case .checkingDongle:
-            DeviceScene(palette: p, rings: .wait(),
-                        chip: (glyph: "cpu", tint: p.accent)) { AdapterBody(palette: p) }
-        case .checkingCar:
-            // The adapter's step 2, with the car in the frame: found, being asked.
-            DeviceScene(palette: p, rings: .wait(),
-                        chip: (glyph: "cpu", tint: p.accent)) { CarBody(palette: p) }
         case .releaseOffline:
             DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
                         chip: (glyph: "wifi.exclamationmark", tint: p.warn)) { AdapterBody(palette: p) }
@@ -165,27 +62,13 @@ struct ConnectView: View {
             // simply no image to compare it against.
             DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
                         chip: (glyph: "xmark", tint: p.warn)) { AdapterBody(palette: p) }
-        case .dongleFault:
-            // Answering, but wrongly: the adapter is present, so it is drawn present, and the
-            // chip carries the fault. The radar used to sit here and promised a search nobody
-            // was performing.
-            DeviceScene(palette: p, rings: .wait(),
-                        chip: (glyph: "exclamationmark", tint: p.warn)) { AdapterBody(palette: p) }
         case .releaseCheck:
             DeviceScene(palette: p, rings: .inward,
                         chip: (glyph: "arrow.down", tint: p.accent)) { AdapterBody(palette: p) }
-        case .sendingNetwork:
-            // The adapter alone, solid, rings turning inward: something is being handed to it.
-            // Not the link scene — there is no link yet, and no car in the frame that nobody
-            // has found.
-            DeviceScene(palette: p, rings: .inward,
-                        chip: (glyph: "wifi", tint: p.accent)) { AdapterBody(palette: p) }
-        case .dongleConfiguring:
-            LinkScene(palette: p)
         case .stage(let d, let step):
             stageScene(d, step)
         // Everything left is a search of the air, which is the one thing the sweep means.
-        case .searching, .findingCar:
+        case .searching:
             ConnectCarView(palette: p)
         }
     }
@@ -233,20 +116,7 @@ struct ConnectView: View {
         case .searching: return L.connectTitle
         case .releaseOffline: return L.gateNoInternetTitle
         case .releaseMissing(_, let device): return L.gateNoReleaseTitle(device)
-        case .findingAdapter: return L.dongleFindingTitle
         case .releaseCheck: return L.gateReleaseCheckTitle
-        case .findingCar: return L.carFindingTitle
-        case .checkingDongle: return L.dongleCheckingTitle
-        case .noDongle: return L.linkNoDongleTitle
-        case .localNetworkDenied: return L.linkDeniedTitle
-        case .dongleFault: return L.dongleFaultTitle
-        case .wrongDongle: return L.dongleWrongTitle
-        case .sendingNetwork: return L.dongleSendingNetTitle
-        case .dongleConfiguring: return L.dongleConfiguringTitle
-        case .dongleJoinFailed: return L.dongleJoinFailedTitle
-        case .rolledBack(let device): return L.rolledBackTitle(device)
-        case .checkingCar: return L.carCheckingTitle
-        case .appBehind: return L.appBehindTitle
         case .stage(let d, let step): return L.stageTitle(step, d)
         }
     }
@@ -256,21 +126,7 @@ struct ConnectView: View {
         case .searching: return L.connectBody
         case .releaseOffline: return L.gateOfflineSub
         case .releaseMissing(let tag, let device): return L.gateNoReleaseSub(device, tag)
-        case .findingAdapter: return L.dongleFindingSub
         case .releaseCheck: return L.gateReleaseCheckSub
-        case .findingCar: return L.carFindingSub
-        case .checkingDongle: return L.dongleCheckingSub
-        case .noDongle: return L.linkNoDongleSub
-        case .localNetworkDenied: return L.linkDeniedSub
-        case .dongleFault: return L.dongleFaultSub
-        case .wrongDongle(let device): return L.dongleWrongSub(device)
-        case .sendingNetwork: return L.dongleSendingNetSub
-        case .dongleConfiguring: return L.dongleConfiguringSub
-        case .dongleJoinFailed: return L.dongleJoinFailedSub
-        case .rolledBack(let device): return L.rolledBackSub(device)
-        case .checkingCar: return L.carCheckingSub
-        case .appBehind(let device, let proto):
-            return L.appBehindSub(device, proto, device == .car ? CarContract.proto : DongleContract.proto)
         case .stage(let d, let step): return L.stageSub(step, d)
         }
     }
@@ -285,29 +141,17 @@ struct ConnectView: View {
         }
     }
 
-    /// The one button each situation can offer, if any. `.localNetworkDenied` opens Settings;
-    /// `.rolledBack` and `.dongleJoinFailed` are the two escapes from a gate that will not
-    /// clear on its own — see their `Situation` doc comments for why each needs one at all.
+    /// The one button each situation can offer, if any. `.stage`'s `.denied` step opens Settings;
+    /// its `.wrongDevice`, `.rolledBack` and `.joinFailed` steps are escapes from a gate that
+    /// will not clear on its own — see `GateStep`'s doc comments for why each needs one at all.
     @ViewBuilder private var actionButton: some View {
         switch situation {
-        case .localNetworkDenied:
-            // `openSettingsURLString` opens *this app's* pane by definition — which is precisely
-            // where the Local Network switch lives, so it is offered where it helps and not
-            // where it would only look like a button.
-            pillButton(L.openSettings, tint: p.accent) {
-                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
-            }
-        case .rolledBack:
-            if let onRecheckRollback {
-                pillButton(L.fwRetry, tint: p.warn, action: onRecheckRollback)
-            }
-        case .dongleJoinFailed:
-            if let onRetryJoin {
-                pillButton(L.fwRetry, tint: p.warn, action: onRetryJoin)
-            }
         case .stage(_, let step):
             switch step {
             case .denied:
+                // `openSettingsURLString` opens *this app's* pane by definition — which is
+                // precisely where the Local Network switch lives, so it is offered where it
+                // helps and not where it would only look like a button.
                 pillButton(L.openSettings, tint: p.accent) {
                     if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                 }
@@ -316,10 +160,7 @@ struct ConnectView: View {
             default:
                 EmptyView()
             }
-        case .searching, .checkingDongle, .noDongle, .sendingNetwork, .dongleConfiguring,
-             .dongleFault, .wrongDongle,
-             .findingAdapter, .releaseCheck, .findingCar, .releaseOffline, .releaseMissing,
-             .checkingCar, .appBehind:
+        case .searching, .releaseCheck, .releaseOffline, .releaseMissing:
             EmptyView()
         }
     }
