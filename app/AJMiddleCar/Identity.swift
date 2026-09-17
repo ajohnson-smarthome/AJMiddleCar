@@ -13,7 +13,8 @@ public struct DeviceVersion: Codable, Equatable {
     /// The number after `+` in `fw`, parsed by the firmware; -1 when `fw` carries none.
     public let build: Int
     /// The protocol number of everything else this board serves — the car's `car-api.proto`,
-    /// the adapter's `dongle-api.proto`. Not ours → the board is newer than this app.
+    /// the adapter's `dongle-api.proto`. A format tag on the wire: decoded but no longer read by
+    /// the app — compatibility rests on the release (spec 2026-09-17-proto-out-of-app).
     public let proto: Int
     /// The bootloader reverted the last update; sticky until the next successful OTA.
     public let rolled_back: Bool

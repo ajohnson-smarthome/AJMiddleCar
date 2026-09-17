@@ -45,7 +45,7 @@ check(step(doc(fw: current, rolledBack: true), rollback: .recheck(from: "v1.0+15
 check(step(doc(fw: behind)) == .updating, "behind the release: update")
 check(step(doc(fw: "v1.0")) == .updating, "a build without a number is behind")
 check(step(doc(fw: current)) == .ok, "current: ok")
-check(step(doc(fw: ahead)) == .ok, "ahead of the release, same proto: ok — a dev build from a cable")
+check(step(doc(fw: ahead)) == .ok, "ahead of the release: ok — a dev build from a cable")
 
 check(step(doc(fw: current, proto: 2)) == .ok, "current build, any proto: ok — proto is not a gate input anymore")
 
