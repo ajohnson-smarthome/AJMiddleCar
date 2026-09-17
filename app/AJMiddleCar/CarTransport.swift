@@ -19,9 +19,6 @@ actor CarTransport {
         /// The car answered our hello. Its identity may be someone else's — the caller decides —
         /// and the sid the video channel subscribes with.
         case sessionOpened(DeviceInfo, sid: String)
-        /// A car answered in a protocol version this app does not speak. Reported by name: the
-        /// car replies to a mismatched hello precisely so this is sayable.
-        case protoMismatch(theirs: Int)
         case sessionClosed
     }
 
@@ -67,9 +64,8 @@ actor CarTransport {
     /// Whether any session has ever been adopted, which is what separates "searching for a car
     /// that is not switched on yet" from "the link we had went away".
     private var everAdopted = false
-    /// The wrong-car / wrong-proto hold. Stored so the retry button can abort it: without
-    /// that the transport sleeps out its ten seconds while the user watches a radar that
-    /// claims to be retrying.
+    /// The wrong-car hold. Stored so the retry button can abort it: without that the transport
+    /// sleeps out its ten seconds while the user watches a radar that claims to be retrying.
     private var identityHold: Task<Void, Error>?
 
     /// Session lifecycle, lossless. Its rate is bounded by the session loop itself — a
@@ -152,7 +148,7 @@ actor CarTransport {
         identityHold = nil
     }
 
-    /// The retry button on the wrong-car and wrong-protocol screens.
+    /// The retry button on the wrong-car screen.
     func retryNow() { identityHold?.cancel() }
 
     private func tearDown() {
@@ -217,19 +213,7 @@ actor CarTransport {
         conn = socket
         lastRx = ContinuousClock.now
 
-        let identity: DeviceInfo
-        switch try await handshake(sid: sid) {
-        case .identity(let found):
-            identity = found
-        case .protoMismatch(let theirs):
-            // A car we cannot speak to is still a car: say goodbye so it drops ownership and
-            // stops, then hold the session long enough that the screen naming the mismatch is
-            // not a flicker between radar sweeps.
-            emit(.protoMismatch(theirs: theirs))
-            await sayGoodbye(on: socket)
-            await holdIdentity()
-            throw CarError.malformed("protocol \(theirs), not \(CarContract.proto)")
-        }
+        guard let identity = try await handshake(sid: sid) else { throw CarError.refused }
         emit(.sessionOpened(identity, sid: sid))
 
         guard identity.id == CarContract.device else {
@@ -254,18 +238,11 @@ actor CarTransport {
 
     // MARK: - session phases
 
-    /// What a hello exchange produced. A protocol mismatch is an answer, not a failure — the car
-    /// deliberately replies to a hello it cannot serve so that the app can name the problem.
-    private enum Handshake {
-        case identity(DeviceInfo)
-        case protoMismatch(theirs: Int)
-    }
-
     /// Hello at ~5 Hz until the car answers. The reply carries the car's identity, so identity
     /// arrives on the first exchange over the channel that then carries telemetry — rather than
     /// from a separate `/status` probe that cancelled itself after one success.
-    private func handshake(sid: String) async throws -> Handshake {
-        try await withThrowingTaskGroup(of: Handshake?.self) { group in
+    private func handshake(sid: String) async throws -> DeviceInfo? {
+        try await withThrowingTaskGroup(of: DeviceInfo?.self) { group in
             group.addTask { try await self.helloLoop(sid: sid); return nil }
             group.addTask { try await self.awaitHello(sid: sid) }
             group.addTask { try await self.stallGuard(); return nil }
@@ -287,18 +264,14 @@ actor CarTransport {
         }
     }
 
-    private func awaitHello(sid: String) async throws -> Handshake? {
+    private func awaitHello(sid: String) async throws -> DeviceInfo? {
         while !Task.isCancelled {
             guard let text = try await receiveOne() else { continue }
             // A reply for another session id is a leftover from the previous socket; ignoring it
             // is what makes ownership non-resumable rather than accidentally inherited.
             switch SessionPolicy.handshakeOutcome(RTFrame.parse(text), sid: sid) {
-            case .identity(let device):
-                return .identity(device)
-            case .protoMismatch(let theirs):
-                return .protoMismatch(theirs: theirs)
-            case .ignore:
-                continue
+            case .identity(let device): return device
+            case .ignore: continue
             }
         }
         return nil

@@ -156,15 +156,15 @@ final class CarLink: ObservableObject {
         // reads, so the session's end is applied here by hand — the video subscription's too.
         video.sessionClosed()
         // Backgrounding is not a verdict on who the car is. Leaving `.active` — which a Control
-        // Center pull-down alone does — used to clear `.protoMismatch`, so the screen naming the
-        // mismatch flipped to the radar until the next hello reply landed.
+        // Center pull-down alone does — used to clear `.foreign`, so the wrong-car screen flipped
+        // to the radar until the next hello reply landed.
         session = session.survivingSessionEnd
         recompute()
     }
 
-    /// The wrong-car and wrong-protocol screens' retry: forget what the car said about itself and
-    /// look again. Nothing else clears either, on purpose — neither is a transient failure to
-    /// retry silently behind a radar sweep.
+    /// The wrong-car screen's retry: forget what the car said about itself and look again.
+    /// Nothing else clears it, on purpose — it is not a transient failure to retry silently
+    /// behind a radar sweep.
     func retryAfterWrongCar() {
         session = .none
         device = nil
@@ -219,15 +219,10 @@ final class CarLink: ObservableObject {
                 session = .foreign(device: info.id)
                 video.sessionClosed()
             }
-        case .protoMismatch(let theirs):
-            self.fw = nil
-            self.device = nil
-            session = .protoMismatch(theirs: theirs)
-            video.sessionClosed()
         case .sessionClosed:
-            // A foreign identity — or a protocol we cannot speak — survives the session that
-            // discovered it: the transport reopens every few seconds and would otherwise
-            // flicker the screen naming the problem back to a radar.
+            // A foreign identity survives the session that discovered it: the transport reopens
+            // every few seconds and would otherwise flicker the screen naming the problem back
+            // to a radar.
             session = session.survivingSessionEnd
             telemetry = nil
             lastFrame = nil

@@ -49,9 +49,11 @@ if case .helloReply(let sid, let device)? = RTFrame.parse(ack) {
 } else { check(false, "hello_ack parses") }
 
 check(RTFrame.parse(#"{"proto":3,"type":"hello_ack","session":"7f3a91c2","device":{"id":"ajmiddlecar","fw":"v9","build":9,"rolled_back":false}}"#)
-        == .protoMismatch(sid: "7f3a91c2", theirs: 3), "a foreign proto is reported by name")
-check(RTFrame.parse(#"{"type":"hello_ack","session":"7f3a91c2"}"#) == .protoMismatch(sid: "7f3a91c2", theirs: 0),
-      "no proto reads as proto 0")
+        == .helloReply(sid: "7f3a91c2", device: DeviceInfo(id: "ajmiddlecar", fw: "v9", build: 9, rolled_back: false)),
+      "a foreign proto is ignored — hello_ack parses as identity")
+check(RTFrame.parse(#"{"type":"hello_ack","session":"7f3a91c2","device":{"id":"ajmiddlecar","fw":"v9","build":9,"rolled_back":false}}"#)
+        == .helloReply(sid: "7f3a91c2", device: DeviceInfo(id: "ajmiddlecar", fw: "v9", build: 9, rolled_back: false)),
+      "no proto at all still parses as identity")
 check(RTFrame.parse(#"{"proto":2,"type":"hello_ack","session":"7f3a91c2"}"#) == nil,
       "an ack without its device group is not an identity")
 // The v1 reply, as an old car would send it: not an ack at all — it has no type.
@@ -69,8 +71,9 @@ if case .telemetry(let t)? = RTFrame.parse(#"{"proto":2,"type":"telemetry","seq"
     check(t.motors.bus == .down, "bus down")
     check(t.motors.owner == .unknown("hover"), "an owner word this build does not know is kept, not dropped")
 } else { check(false, "telemetry with nulls parses") }
-check(RTFrame.parse(#"{"proto":1,"type":"telemetry","seq":1,"link":{"rx_hz":0,"rssi_dbm":null,"timeouts":0},"motors":{"bus":"ok","calibrated":true,"owner":"idle"},"system":{"uptime_s":1,"free_heap":1}}"#) == nil,
-      "telemetry in a foreign proto is dropped")
+if case .telemetry(let t)? = RTFrame.parse(#"{"proto":1,"type":"telemetry","seq":1,"link":{"rx_hz":0,"rssi_dbm":null,"timeouts":0},"motors":{"bus":"ok","calibrated":true,"owner":"idle"},"system":{"uptime_s":1,"free_heap":1},"video":{"state":"idle","fps":0,"kbps":0,"dropped":0}}"#) {
+    check(t.seq == 1, "telemetry in a foreign proto still parses — proto is not judged here")
+} else { check(false, "telemetry in a foreign proto still parses") }
 check(RTFrame.parse(#"{"proto":2,"type":"telemetry","seq":1}"#) == nil, "telemetry without its groups is dropped")
 check(RTFrame.parse(#"{"proto":2,"type":"drive","seq":1,"throttle":0,"turn":0}"#) == nil, "our own datagram types are not inbound")
 check(RTFrame.parse("not json") == nil, "junk")

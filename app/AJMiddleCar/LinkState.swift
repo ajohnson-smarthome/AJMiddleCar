@@ -22,24 +22,20 @@ enum SessionState: Equatable {
     /// A car answered, but it is not ours. Both cars are a softAP serving the same API at the
     /// same address: whichever one the dongle is joined to is the one that answers here.
     case foreign(device: String)
-    /// A car answered our hello naming a protocol version this app does not speak. The car
-    /// answers a mismatched hello on purpose so this state can exist rather than a silent radar.
-    case protoMismatch(theirs: Int)
 
     /// What is still true after the session that discovered it has ended.
     ///
-    /// An identity the car told us about itself — someone else's name, or a protocol this build
-    /// cannot speak — is not a transient failure to retry behind a radar sweep: the transport
-    /// reopens every second or two, and re-deciding it from scratch each time flickers the screen
-    /// that names the problem back to the radar the user has no reason to watch. Only the retry
-    /// button clears them.
+    /// An identity the car told us about itself — someone else's name — is not a transient
+    /// failure to retry behind a radar sweep: the transport reopens every second or two, and
+    /// re-deciding it from scratch each time flickers the screen that names the problem back to
+    /// the radar the user has no reason to watch. Only the retry button clears it.
     ///
     /// It is one function because it has two callers — the session ending and the app being
-    /// stopped — and the version of this that lived twice as an `if case` got `.protoMismatch`
-    /// added to one copy and not the other.
+    /// stopped — and the version of this that lived twice as an `if case` got one case added to
+    /// one copy and not the other.
     var survivingSessionEnd: SessionState {
         switch self {
-        case .foreign, .protoMismatch: return self
+        case .foreign: return self
         case .none, .adopted: return .none
         }
     }
@@ -52,9 +48,6 @@ enum Link: Equatable {
     case localNetworkDenied
     case searching
     case wrongCar(device: String)
-    /// The car is there and talking, in a language from another build. Only a flash fixes it, so
-    /// it is a screen that says so, not a retry loop.
-    case wrongProto(theirs: Int)
     case live(Telemetry)
 
     var isLive: Bool { if case .live = self { return true }; return false }
@@ -95,10 +88,9 @@ enum LinkRule {
         case .noDongle(let reason): return .noDongle(reason)
         case .dongleUp: break
         }
-        // Identity beats liveness: a car that answers with someone else's name — or in another
-        // protocol version — must not be driven, however fresh its telemetry is.
+        // Identity beats liveness: a car that answers with someone else's name must not be
+        // driven, however fresh its telemetry is.
         if case .foreign(let device) = session { return .wrongCar(device: device) }
-        if case .protoMismatch(let theirs) = session { return .wrongProto(theirs: theirs) }
         guard case .adopted = session else { return .searching }
         guard let telemetry, let age, age < staleAfter else { return .searching }
         return .live(telemetry)

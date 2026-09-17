@@ -16,10 +16,11 @@ check(SessionPolicy.handshakeOutcome(RTFrame.parse(ack(sid)), sid: sid) == .iden
       "our sid's reply is the identity")
 check(SessionPolicy.handshakeOutcome(RTFrame.parse(ack("deadbeef")), sid: sid) == .ignore,
       "another sid's reply is ignored — ownership is not resumable")
-check(SessionPolicy.handshakeOutcome(RTFrame.parse(ack(sid, proto: 3)), sid: sid) == .protoMismatch(theirs: 3),
-      "a proto mismatch for our sid is reported, not ignored")
+check(SessionPolicy.handshakeOutcome(RTFrame.parse(ack(sid, proto: 3)), sid: sid)
+        == .identity(DeviceInfo(id: "ajmiddlecar", fw: "v1.0+517", build: 517, rolled_back: false)),
+      "a foreign proto is still our car by identity — proto is not judged here")
 check(SessionPolicy.handshakeOutcome(RTFrame.parse(ack("deadbeef", proto: 3)), sid: sid) == .ignore,
-      "a proto mismatch for another sid is a leftover too")
+      "another sid's reply is a leftover regardless of its proto")
 let telemetry = Telemetry(proto: 2, seq: 1,
                           link: LinkInfo(rx_hz: 0, rssi_dbm: nil, timeouts: 0),
                           motors: MotorsInfo(bus: .ok, calibrated: true, owner: .idle),

@@ -73,9 +73,6 @@ enum RTFrame {
     enum Inbound: Equatable {
         /// The car adopted us. Its identity arrives here, the same `device` group `/status` carries.
         case helloReply(sid: String, device: DeviceInfo)
-        /// A car answered our hello speaking a protocol this app does not. Reported rather than
-        /// dropped, so the app can say so instead of searching forever.
-        case protoMismatch(sid: String, theirs: Int)
         case telemetry(Telemetry)
     }
 
@@ -88,18 +85,14 @@ enum RTFrame {
         guard let data = text.data(using: .utf8),
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = j[CarContract.typeField] as? String else { return nil }
-        let theirs = j[CarContract.protoField] as? Int ?? 0
         switch type {
         case RTType.helloAck:
-            guard let sid = j[CarContract.sessionField] as? String else { return nil }
-            // Parsing an unknown protocol as if it were ours is how a version mismatch turns into
-            // an unexplainable bug; swallowing it is how it turns into an endless radar.
-            guard theirs == CarContract.proto else { return .protoMismatch(sid: sid, theirs: theirs) }
-            guard let ack = try? JSONDecoder().decode(HelloAck.self, from: data) else { return nil }
+            guard let sid = j[CarContract.sessionField] as? String,
+                  let ack = try? JSONDecoder().decode(HelloAck.self, from: data) else { return nil }
+            // proto is on the wire but not judged here — see spec 2026-09-17-proto-out-of-app.
             return .helloReply(sid: sid, device: ack.device)
         case RTType.telemetry:
-            guard theirs == CarContract.proto,
-                  let t = try? JSONDecoder().decode(Telemetry.self, from: data) else { return nil }
+            guard let t = try? JSONDecoder().decode(Telemetry.self, from: data) else { return nil }
             return .telemetry(t)
         default:
             return nil

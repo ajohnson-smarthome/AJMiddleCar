@@ -9,7 +9,6 @@ enum SessionPolicy {
     /// non-resumable rather than accidentally inherited.
     enum HandshakeOutcome: Equatable {
         case identity(DeviceInfo)
-        case protoMismatch(theirs: Int)
         case ignore
     }
 
@@ -17,8 +16,6 @@ enum SessionPolicy {
         switch inbound {
         case .helloReply(let replySid, let device) where replySid == sid:
             return .identity(device)
-        case .protoMismatch(let replySid, let theirs) where replySid == sid:
-            return .protoMismatch(theirs: theirs)
         default:
             return .ignore
         }
@@ -38,8 +35,7 @@ enum SessionPolicy {
         return min(ceiling, base * pow(2, Double(max(0, attempt - 1))))
     }
 
-    /// How long a session holds after the car identified itself as undriveable (wrong car,
-    /// wrong protocol) — long enough that the screen naming the problem is not a flicker
-    /// between radar sweeps.
+    /// How long a session holds after the car identified itself as someone else's — long enough
+    /// that the wrong-car screen is not a flicker between radar sweeps.
     static let identityHoldSeconds: Double = 10
 }

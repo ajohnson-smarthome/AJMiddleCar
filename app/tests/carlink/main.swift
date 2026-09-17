@@ -42,29 +42,14 @@ check(compose(.localNetworkDenied, .foreign(device: "esp32-car"), nil, nil) == .
 check(compose(.dongleUp, .foreign(device: "esp32-car"), fresh, 0.1) == .wrongCar(device: "esp32-car"),
       "wrong car, however fresh")
 
-// Nor is one that answers in a protocol version this build does not speak — and it gets a screen
-// that says so rather than the radar it would otherwise sweep forever.
-check(compose(.dongleUp, .protoMismatch(theirs: CarContract.proto + 1), fresh, 0.1)
-        == .wrongProto(theirs: CarContract.proto + 1), "a protocol mismatch is its own state")
-check(compose(.dongleUp, .protoMismatch(theirs: 2), nil, nil) == .wrongProto(theirs: 2),
-      "reported before any telemetry, which is when it happens")
-check(compose(.localNetworkDenied, .protoMismatch(theirs: 2), nil, nil) == .localNetworkDenied,
-      "the path still outranks it")
-check(!compose(.dongleUp, .protoMismatch(theirs: 2), fresh, 0.1).isLive, "and it is never live")
-
 // What survives a session ending. Two callers ask this — the session closing under the transport,
-// and `stop(graceful:)` when the scene leaves `.active` — and when it lived twice as an `if case`,
-// `.protoMismatch` was added to one copy and not the other: a Control Center pull-down flipped the
-// wrong-protocol screen back to the radar until the next hello reply landed.
+// and `stop(graceful:)` when the scene leaves `.active` — a foreign identity is not a transient
+// failure to retry behind a radar sweep, so it must survive both.
 check(SessionState.foreign(device: "esp32-car").survivingSessionEnd == .foreign(device: "esp32-car"),
       "a foreign identity survives the session that found it")
-check(SessionState.protoMismatch(theirs: 2).survivingSessionEnd == .protoMismatch(theirs: 2),
-      "and so does a protocol mismatch — a backgrounded app must not forget it")
 check(adopted.survivingSessionEnd == .none, "an adopted session does not")
 check(SessionState.none.survivingSessionEnd == .none, "nor does nothing at all")
-// Which is the whole point: both survivors keep their own screen across the restart.
-check(compose(.dongleUp, SessionState.protoMismatch(theirs: 2).survivingSessionEnd, nil, nil)
-        == .wrongProto(theirs: 2), "the wrong-protocol screen holds across a session end")
+// Which is the whole point: the survivor keeps its own screen across the restart.
 check(compose(.dongleUp, SessionState.foreign(device: "esp32-car").survivingSessionEnd, nil, nil)
         == .wrongCar(device: "esp32-car"), "the wrong-car screen holds across a session end")
 
