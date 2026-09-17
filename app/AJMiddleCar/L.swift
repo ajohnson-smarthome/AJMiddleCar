@@ -30,6 +30,8 @@ enum L {
     static func rolledBackSub(_ d: UpdateRules.Device) -> String { s("rolledBackSub.\(d.rawValue)") }
     static var carCheckingTitle: String { s("car.checkingTitle") }
     static var carCheckingSub: String { s("car.checkingSub") }
+    static var carFaultTitle: String { s("car.faultTitle") }
+    static var carFaultSub: String { s("car.faultSub") }
     static var appBehindTitle: String { s("appBehind.title") }
     static func appBehindSub(_ d: UpdateRules.Device, _ theirs: Int, _ ours: Int) -> String { s("appBehindSub.\(d.rawValue)", theirs, ours) }
     static var settingsFirmwareCar: String { s("settings.firmwareCar") }
@@ -194,5 +196,45 @@ enum L {
         if sec < 3600 { return s("uptime.min", sec / 60) }
         if sec < 86400 { return s("uptime.hourMin", sec / 3600, (sec % 3600) / 60) }
         return s("uptime.day", sec / 86400)
+    }
+
+    /// The one board-ladder step's title, chosen by device — today's copy, word for word.
+    static func stageTitle(_ step: GateStep, _ d: UpdateRules.Device) -> String {
+        switch step {
+        case .seeking:       return d == .car ? carCheckingTitle : dongleFindingTitle
+        case .absent:        return linkNoDongleTitle
+        case .checking:      return d == .car ? carCheckingTitle : dongleCheckingTitle
+        case .fault:         return d == .car ? carFaultTitle : dongleFaultTitle
+        case .denied:        return linkDeniedTitle
+        case .wrongDevice:   return d == .car ? wrongCarTitle : dongleWrongTitle
+        case .rolledBack:    return rolledBackTitle(d)
+        case .updating:      return gateUpdateTitle          // rendered by FirmwareView, not here
+        case .appBehind:     return appBehindTitle
+        case .sendingNetwork:return dongleSendingNetTitle
+        case .searching:     return carFindingTitle
+        case .joining:       return dongleConfiguringTitle
+        case .joinFailed:    return dongleJoinFailedTitle
+        }
+    }
+    /// The step's subtitle, chosen by device.
+    static func stageSub(_ step: GateStep, _ d: UpdateRules.Device) -> String {
+        switch step {
+        case .seeking:       return d == .car ? carCheckingSub : dongleFindingSub
+        case .absent:        return linkNoDongleSub
+        case .checking:      return d == .car ? carCheckingSub : dongleCheckingSub
+        case .fault:         return d == .car ? carFaultSub : dongleFaultSub
+        case .denied:        return linkDeniedSub
+        case .wrongDevice(let found):
+            return d == .car ? wrongCarSub(found, CarContract.device) + "\n\n" + wrongCarHint
+                             : dongleWrongSub(found)
+        case .rolledBack:    return rolledBackSub(d)
+        case .updating:      return gateUpdateSub
+        case .appBehind(let proto):
+            return appBehindSub(d, proto, d == .car ? CarContract.proto : DongleContract.proto)
+        case .sendingNetwork:return dongleSendingNetSub
+        case .searching:     return carFindingSub
+        case .joining:       return dongleConfiguringSub
+        case .joinFailed:    return dongleJoinFailedSub
+        }
     }
 }

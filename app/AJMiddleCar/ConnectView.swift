@@ -74,6 +74,9 @@ struct ConnectView: View {
         /// A board that is newer than this app: current against the release, but speaking a
         /// protocol this build does not. No button — nothing the app can do but say so.
         case appBehind(device: UpdateRules.Device, proto: Int)
+        /// One rung of the launch ladder, the board and the step. The single situation the runner
+        /// emits; every board-prefixed situation below is being folded into it.
+        case stage(UpdateRules.Device, GateStep)
     }
 
     var situation: Situation = .searching
@@ -85,6 +88,9 @@ struct ConnectView: View {
     /// `.dongleJoinFailed` only. The same offer as `onRetryDongleUpdate`, for the other bounded
     /// wait — asking again now, and with a fresh budget.
     var onRetryJoin: (() -> Void)? = nil
+    /// `.stage` with a `.wrongDevice`, `.rolledBack` or `.joinFailed` step — the one button those
+    /// carry. `wakePoll` / `recheckRollback` / `retryJoin` respectively; wired by `RootView`.
+    var onRetry: (() -> Void)? = nil
     @Environment(\.colorScheme) private var colorScheme
     private var p: Palette { Theme.current(colorScheme) }
 
@@ -176,9 +182,49 @@ struct ConnectView: View {
                         chip: (glyph: "wifi", tint: p.accent)) { AdapterBody(palette: p) }
         case .dongleConfiguring:
             LinkScene(palette: p)
+        case .stage(let d, let step):
+            stageScene(d, step)
         // Everything left is a search of the air, which is the one thing the sweep means.
         case .searching, .findingCar:
             ConnectCarView(palette: p)
+        }
+    }
+
+    /// `stageScene`'s device drawing, shared by every step that shows "found, in the frame" —
+    /// hoisted out of `stageScene` because a local function marked `@ViewBuilder` nested inside
+    /// another `@ViewBuilder` function does not compile on this toolchain ("closure containing a
+    /// declaration cannot be used with result builder 'ViewBuilder'").
+    @ViewBuilder private func stageBody(_ d: UpdateRules.Device) -> some View {
+        if d == .car { CarBody(palette: p) } else { AdapterBody(palette: p) }
+    }
+
+    @ViewBuilder private func stageScene(_ d: UpdateRules.Device, _ step: GateStep) -> some View {
+        switch step {
+        case .seeking where d == .dongle, .absent:
+            DeviceScene(palette: p, rings: .wait(), presence: 0.34) { AdapterBody(palette: p) }
+        case .seeking, .checking:            // car .seeking and either board's .checking: found, being asked
+            DeviceScene(palette: p, rings: .wait(), chip: (glyph: "cpu", tint: p.accent)) { stageBody(d) }
+        case .fault:
+            DeviceScene(palette: p, rings: .wait(), chip: (glyph: "exclamationmark", tint: p.warn)) { stageBody(d) }
+        case .denied:
+            DeviceScene(palette: p, rings: .deco, ringTint: p.warn, chip: (glyph: "lock", tint: p.warn)) { stageBody(d) }
+        case .wrongDevice:
+            DeviceScene(palette: p, rings: .deco, ringTint: p.warn, chip: (glyph: "questionmark", tint: p.warn)) { stageBody(d) }
+        case .rolledBack:
+            DeviceScene(palette: p, rings: .deco, ringTint: p.warn, chip: (glyph: "arrow.uturn.backward", tint: p.warn)) { stageBody(d) }
+        case .appBehind:
+            DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
+                        chip: (glyph: "exclamationmark.arrow.circlepath", tint: p.warn)) { stageBody(d) }
+        case .updating:                      // never reached: FirmwareView renders .updating
+            DeviceScene(palette: p, rings: .wait(), chip: (glyph: "arrow.down", tint: p.accent)) { stageBody(d) }
+        case .sendingNetwork:
+            DeviceScene(palette: p, rings: .inward, chip: (glyph: "wifi", tint: p.accent)) { AdapterBody(palette: p) }
+        case .searching:
+            ConnectCarView(palette: p)
+        case .joining:
+            LinkScene(palette: p)
+        case .joinFailed:
+            LinkScene(palette: p, failed: true)
         }
     }
 
@@ -201,6 +247,7 @@ struct ConnectView: View {
         case .rolledBack(let device): return L.rolledBackTitle(device)
         case .checkingCar: return L.carCheckingTitle
         case .appBehind: return L.appBehindTitle
+        case .stage(let d, let step): return L.stageTitle(step, d)
         }
     }
 
@@ -224,6 +271,7 @@ struct ConnectView: View {
         case .checkingCar: return L.carCheckingSub
         case .appBehind(let device, let proto):
             return L.appBehindSub(device, proto, device == .car ? CarContract.proto : DongleContract.proto)
+        case .stage(let d, let step): return L.stageSub(step, d)
         }
     }
 
@@ -256,6 +304,17 @@ struct ConnectView: View {
         case .dongleJoinFailed:
             if let onRetryJoin {
                 pillButton(L.fwRetry, tint: p.warn, action: onRetryJoin)
+            }
+        case .stage(_, let step):
+            switch step {
+            case .denied:
+                pillButton(L.openSettings, tint: p.accent) {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                }
+            case .wrongDevice, .rolledBack, .joinFailed:
+                if let onRetry { pillButton(L.fwRetry, tint: p.warn, action: onRetry) }
+            default:
+                EmptyView()
             }
         case .searching, .checkingDongle, .noDongle, .sendingNetwork, .dongleConfiguring,
              .dongleFault, .wrongDongle,
