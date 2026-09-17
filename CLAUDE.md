@@ -210,6 +210,15 @@ ways to get it onto the C6 — over SDIO from the host, or over its UART header.
 
 SwiftUI, XcodeGen, landscape-locked, Russian-localised, warm light/dark themes.
 
+Запуск — это лестница плат: массив `[адаптер, машинка]` (или `[машинка]` без адаптера) и одна
+стадия `reach → /version → выпуск → правило → шаг` (`StageRule`, чистая, хост-тест
+`app/tests/stagerule`). До машинки добираются через адаптер — `CarReach` (`app/tests/carreach`),
+сетевой автомат с бюджетом попыток. `AppFlow` — проводка: фазы `Phase.stage(device, GateStep)`,
+раннер `runLadder`/`restart`/`updateFinished`. Стражи связи после гейта (провод пропал, чужой
+hello, чужой proto) не рисуют своих экранов, а перезапускают лестницу с нужной ступени
+(`restart(from:)`). Один экран на всё — `ConnectView(.stage(device, step))`; `WrongCarView`
+больше нет.
+
 ```bash
 cd app && xcodegen generate
 xcodebuild build -scheme AJMiddleCar -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath /tmp/ddata-middle

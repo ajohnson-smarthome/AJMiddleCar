@@ -104,12 +104,11 @@ see the sensor, its filter and its field of view without an app or a wire in the
       oldest untested behaviour in the family.
 - [ ] **OTA.** Cut a release, let the app's launch gate force-update the board, confirm it boots
       and `fw` reports the new build.
-- [ ] **День-флаг без кабеля** (`docs/superpowers/specs/2026-09-17-version-endpoint-design.md`, §7):
-      обе платы на v1.0+879 отвечают 404 на `/version` → адаптер S11 → обновлён; машинка S30 →
-      S27 → обновлена → S28 (симулятор `-viaDongle`, адаптер на Mac).
-- [ ] **Адаптер выдернут и воткнут посреди S27** (экран «Подключение к машинке», машинка ещё не
-      ответила на `/version`):
-      экран уходит на S12/S13, адаптер снова в сети машинки → снова S27, обновление доходит до S28.
+- [ ] **День-флаг без кабеля:** обе платы 404 → адаптер `.stage(.dongle,.updating)` → машинка
+      `.stage(.car,.updating)` → S28 (симулятор `-viaDongle`, адаптер на Mac).
+- [ ] **Адаптер выдернут посреди `.stage(.car,.updating)`:** → `.stage(.dongle,.absent)` →
+      воткнуть → `.stage(.car,.searching/.joining)` → снова `.updating` → S28.
+- [ ] **После обновления машинки лестница показывает `.searching/.joining`** (адаптер переподключается) до `.checking`.
 
 ### Video — after `docs/superpowers/specs/2026-09-14-fpv-video-design.md`, once its own stage 4 is done
 
