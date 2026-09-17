@@ -48,7 +48,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "mock_car"))
 from generated import (CALIBRATION, CONFIG_PATH, DEVICE, DOMAINS, ENDPOINTS,   # noqa: E402
-                       ENVELOPE, GROUPS, PROTO, STATUS_GROUPS, lround)
+                       ENVELOPE, GROUPS, PROTO, STATUS_GROUPS, VERSION_FIELDS, lround)
 from state import CarState, build_number   # noqa: E402
 
 TIMEOUT_S = 10
@@ -183,17 +183,27 @@ class Conformance:
                 self.check(self.status_field_ok(v, f),
                            f"/status.{g}.{f['name']} is {v!r}, want {f['type']}"
                            + (" or null" if f.get("nullable") else ""))
-        device = parsed.get("device") or {}
-        self.check(device.get("id") == DEVICE,
-                   f"/status.device.id {device.get('id')!r}, want {DEVICE!r}")
-        self.check(device.get("build") == build_number(device.get("fw", "")),
-                   f"/status.device.build {device.get('build')!r}, "
-                   f"want build_number({device.get('fw')!r})")
+
+    def version(self):
+        print("/version")
+        status, ctype, parsed, _ = self.call("GET", "/version")
+        if not self.expect_json("/version", status, ctype, parsed, 200):
+            return
+        names = [f["name"] for f in VERSION_FIELDS]
+        self.check(list(parsed) == names,
+                   f"/version: keys {list(parsed)}, want exactly {names} in this order")
+        for f in VERSION_FIELDS:
+            v = parsed.get(f["name"])
+            self.check(self.status_field_ok(v, f), f"/version.{f['name']} is {v!r}, want {f['type']}")
+        self.check(parsed.get("device") == DEVICE, f"/version.device {parsed.get('device')!r}, want {DEVICE!r}")
+        self.check(parsed.get("build") == build_number(parsed.get("fw", "")),
+                   f"/version.build {parsed.get('build')!r}, want build_number({parsed.get('fw')!r})")
+        self.check(parsed.get("proto") == PROTO, f"/version.proto {parsed.get('proto')!r}, want {PROTO}")
 
     def identity(self):
         print("/")
-        _, _, status_parsed, _ = self.call("GET", "/status")
-        device = ((status_parsed or {}).get("device") or {}).get("id", "")
+        _, _, ver, _ = self.call("GET", "/version")
+        device = (ver or {}).get("device", "")
         status, _, _, payload = self.call("GET", "/")
         self.check(status == 200, f"/: status {status}, want 200")
         line = payload.decode(errors="replace").strip()
@@ -491,6 +501,7 @@ class Conformance:
 
     def run(self):
         self.status()
+        self.version()
         self.identity()
         self.config_top()
         for key, domain in DOMAINS.items():

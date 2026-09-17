@@ -34,7 +34,7 @@ import sys
 from aiohttp import web
 
 from generated import (CALIBRATION, CONFIG_PATH, DEVICE, DOMAINS, ENDPOINTS, ENVELOPE,
-                       GROUPS, PROTO, RT, VIDEO)
+                       PROTO, RT, VIDEO)
 from rt_link import Impairment, RTLink, service_loop
 from state import CarState, build_number, parse_image_version
 from video import VideoLink
@@ -130,20 +130,30 @@ async def cfg_post(request):
 async def status(request):
     car, link = request.app["car"], request.app["link"]
     now = asyncio.get_running_loop().time()
-    dev = [f["name"] for f in GROUPS["device"]["fields"]]
-    # Schema order (STATUS_GROUPS): device, link, motors, radio, storage, system, video —
+    # Schema order (STATUS_GROUPS): link, motors, radio, storage, system, video —
     # `radio` and `storage` are /status-only diagnostics the schema does not describe,
     # inserted between link/motors and system/video, the groups `status_groups` already
     # returns in order.
     groups = car.status_groups(link.rx_fps(now, "status"))
     return reply({
-        "device": dict(zip(dev, [car.device, car.fw, build_number(car.fw), car.rollback])),
         "link": groups["link"],
         "motors": groups["motors"],
         "radio": {"fw": "mock", "expected": "mock", "state": "ok"},
         "storage": {"reset_at_boot": car.nvs_wiped},
         "system": groups["system"],
         "video": groups["video"],
+    })
+
+
+async def version(request):
+    """GET /version — the frozen five-field document, raw (it spells its own proto)."""
+    car = request.app["car"]
+    return web.json_response({
+        "device": car.device,
+        "fw": car.fw,
+        "build": build_number(car.fw),
+        "proto": PROTO,
+        "rolled_back": car.rollback,
     })
 
 
@@ -285,6 +295,7 @@ def build_app(car, link, rollback_mode=False):
     app.add_routes([
         web.get(ENDPOINTS["root"], root),
         web.get(ENDPOINTS["status"], status),
+        web.get(ENDPOINTS["version"], version),
         web.get(ENDPOINTS["calibration"], calib_get),
         web.post(ENDPOINTS["calibration"], calib_save),
         web.post(ENDPOINTS["spin"], calib_spin),
