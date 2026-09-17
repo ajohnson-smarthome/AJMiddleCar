@@ -86,13 +86,13 @@ back, so a lost reply must be answerable by the next repeat:
  "device":{"id":"ajmiddlecar","fw":"v1.0+784","build":784,"rolled_back":false}}
 ```
 
-Identity arrives on the first exchange, over the channel that then carries telemetry: this
-reply, not `/status`, is the app's "is this our car" test — for the session; the launch gate's
-test is `/version`. `device` is printed once, for this reply alone — `/status` no longer
-carries it — and `device.id` is load-bearing. Both cars in this family serve this same API at
-this same address, so a client **must** compare it against the one car it drives and refuse
-anything else. Treating a mismatch as "offline" is wrong: the user has to change networks, not
-wait.
+Identity arrives on the first exchange, over the channel that then carries telemetry.
+`device` is printed once, for this reply alone — `/status` no longer carries it — and
+`device.id` is load-bearing. Both cars in this family serve this same API at this same
+address, so identity matters — but the app's "is this our car" test is the launch gate's
+`/version` (below), run once at connect; the live session records the `device` it adopted
+rather than re-judging it. At the gate, treating a mismatch as "offline" is wrong: the user
+has to change networks, not wait.
 `device.build` (the number after `+` in `fw`, already an integer) and `device.rolled_back` arrive
 with the handshake itself, so a client no longer has to visit `/status` to learn whether the
 last update survived its first boot.
