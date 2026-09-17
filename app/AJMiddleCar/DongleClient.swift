@@ -39,9 +39,14 @@ import Network
 final class DongleClient {
     init() {}
 
-    /// The raw `/status` body, for `DongleReply.decode` — the flow classifies it, not this.
+    /// The raw `/status` body — the flow classifies it, not this.
     func statusData() async throws -> Data {
         try await get(DongleContract.statusPath)
+    }
+
+    /// The raw `/version` body — the first thing the gate asks any adapter, before `/status`.
+    func versionData() async throws -> Data {
+        try await get(DongleContract.versionPath)
     }
 
     func join(ssid: String, password: String) async throws -> DongleWifiReply {

@@ -136,18 +136,29 @@ struct RootView: View {
             FirmwareView(palette: p, flow: .forDongle(client: flow.dongle), forced: true,
                          onDone: { flow.dongleUpdateFinished() })
         case .dongleRolledBack:
-            ConnectView(situation: .dongleRolledBack,
-                        onRecheckRollback: { flow.recheckDongleRollback() })
+            ConnectView(situation: .rolledBack(device: .dongle),
+                        onRecheckRollback: { flow.recheckRollback() })
         case .dongleSendingNet:
             ConnectView(situation: .sendingNetwork)
         case .dongleConfiguring:
             ConnectView(situation: .dongleConfiguring)
         case .dongleJoinFailed:
             ConnectView(situation: .dongleJoinFailed, onRetryJoin: { flow.retryDongleJoin() })
+        // The car's own check, and the three verdicts it can end on that are not the forced
+        // update. All decided from `/version` through the relay, before any hello.
+        case .carChecking:
+            ConnectView(situation: .checkingCar)
+        case .carWrong(let device):
+            WrongCarView(palette: p, kind: .foreignDevice(device)) { }   // the poll re-asks by itself
+        case .carRolledBack:
+            ConnectView(situation: .rolledBack(device: .car),
+                        onRecheckRollback: { flow.recheckRollback() })
+        case .appBehind(let device, let proto):
+            ConnectView(situation: .appBehind(device: device, proto: proto))
         case .updateRequired:
+            // HTTP only — see `Phase.opensLink`: no session is opened behind the forced update.
             FirmwareView(palette: p, flow: .forCar(link: link), forced: true,
                          onDone: { flow.updateFinished() })
-                .onAppear { link.start() }
         case .awaitingCar, .ready:
             // The link opens when the gate hands over, not at launch: until then there is
             // nothing to say to the car, and the gate is talking to GitHub.

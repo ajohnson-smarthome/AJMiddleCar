@@ -42,12 +42,12 @@ struct ConnectView: View {
         case noDongle(NWPath.UnsatisfiedReason)
         case localNetworkDenied
         /// Something answered at the dongle's address and it was not usable — an HTTP error, a
-        /// truncated stream, a body that would not decode (`DongleStep.faulty`). The radar
+        /// truncated stream, a body that would not decode (`VersionStep.faulty`). The radar
         /// stays: the flow keeps polling and one bad answer is often a dongle mid-boot.
         case dongleFault
-        /// A USB-Ethernet adapter answered and it is not ours — `status.device.id` disagrees with
-        /// `DongleContract.device`. The dongle's analogue of `WrongCarView`, and like it, it
-        /// names what answered rather than leaving the user to guess.
+        /// A USB-Ethernet adapter answered and it is not ours — its `/version` names a `device`
+        /// other than `DongleContract.device`. The dongle's analogue of `WrongCarView`, and like
+        /// it, it names what answered rather than leaving the user to guess.
         case wrongDongle(String)
         /// The dongle is current and is being told the car's network — for the first time, or
         /// again because it was pointed at some other one (`DongleStep.sendCredentials`). Its
@@ -62,19 +62,25 @@ struct ConnectView: View {
         /// times and then holds here, so this screen carries `onRetryJoin` — without it, the
         /// hold would be a dead end and the retries would have to run forever to avoid one.
         case dongleJoinFailed
-        /// The dongle's bootloader reverted its last update. Standing until the user answers —
+        /// The board's bootloader reverted its last update. Standing until the user answers —
         /// the flag itself does not clear on its own, so without an answer this would be a
-        /// locked room rather than a message. Two answers: `onRecheckRollback` asks whether a
+        /// locked room rather than a message. One answer: `onRecheckRollback` asks whether a
         /// newer release exists yet (the only path back to an update, since the app is the
-        /// dongle's only OTA path), `onSkipRollback` drives on what is running.
-        case dongleRolledBack
+        /// board's only OTA path). S10 is `.dongle`, S31 is `.car`.
+        case rolledBack(device: UpdateRules.Device)
+        /// The car's step 2: its `/version` is being asked through the relay. Mirrors
+        /// `.checkingDongle`, with the car in the frame.
+        case checkingCar
+        /// A board that is newer than this app: current against the release, but speaking a
+        /// protocol this build does not. No button — nothing the app can do but say so.
+        case appBehind(device: UpdateRules.Device, proto: Int)
     }
 
     var situation: Situation = .searching
-    /// `.dongleRolledBack` only, and now the screen's only button: the option to drive on the
-    /// reverted firmware is gone. This asks whether a newer release exists yet — the dongle's
-    /// rollback flag clears only when a later OTA succeeds, and this app is the only thing that
-    /// can perform one.
+    /// `.rolledBack` only, and the screen's only button: the option to drive on the reverted
+    /// firmware is gone. This asks whether a newer release exists yet — a board's rollback flag
+    /// clears only when a later OTA succeeds, and this app is the only thing that can perform
+    /// one.
     var onRecheckRollback: (() -> Void)? = nil
     /// `.dongleJoinFailed` only. The same offer as `onRetryDongleUpdate`, for the other bounded
     /// wait — asking again now, and with a fresh budget.
@@ -91,7 +97,7 @@ struct ConnectView: View {
     }
 
     /// The radar sweep reads as "still looking, will resolve on its own" — true of every
-    /// situation here except the ones that hand control to a button (`.dongleRolledBack`,
+    /// situation here except the ones that hand control to a button (`.rolledBack`,
     /// `.wrongDongle`): none of them retries itself, so none should look
     /// like it will. They borrow `WrongCarView`'s static failed-car image instead, the same way
     /// `WrongCarView` does. `.dongleJoinFailed` keeps the sweep: its retries are bounded but
@@ -111,9 +117,18 @@ struct ConnectView: View {
         case .wrongDongle:
             DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
                         chip: (glyph: "questionmark", tint: p.warn)) { AdapterBody(palette: p) }
-        case .dongleRolledBack:
+        case .rolledBack(let device):
             DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
-                        chip: (glyph: "arrow.uturn.backward", tint: p.warn)) { AdapterBody(palette: p) }
+                        chip: (glyph: "arrow.uturn.backward", tint: p.warn)) {
+                if device == .car { CarBody(palette: p) } else { AdapterBody(palette: p) }
+            }
+        case .appBehind(let device, _):
+            // Not a fault of the board's: it is ahead, not behind. The chip says "a version
+            // turned over", and the rings stay still — waiting will not change the app.
+            DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
+                        chip: (glyph: "exclamationmark.arrow.circlepath", tint: p.warn)) {
+                if device == .car { CarBody(palette: p) } else { AdapterBody(palette: p) }
+            }
         case .localNetworkDenied:
             // The one state in the whole sequence that does not pass on its own: iOS refused to
             // let the request leave the phone, and no amount of waiting changes that. It used to
@@ -132,6 +147,10 @@ struct ConnectView: View {
         case .checkingDongle:
             DeviceScene(palette: p, rings: .wait(),
                         chip: (glyph: "cpu", tint: p.accent)) { AdapterBody(palette: p) }
+        case .checkingCar:
+            // The adapter's step 2, with the car in the frame: found, being asked.
+            DeviceScene(palette: p, rings: .wait(),
+                        chip: (glyph: "cpu", tint: p.accent)) { CarBody(palette: p) }
         case .releaseOffline:
             DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
                         chip: (glyph: "wifi.exclamationmark", tint: p.warn)) { AdapterBody(palette: p) }
@@ -179,7 +198,9 @@ struct ConnectView: View {
         case .sendingNetwork: return L.dongleSendingNetTitle
         case .dongleConfiguring: return L.dongleConfiguringTitle
         case .dongleJoinFailed: return L.dongleJoinFailedTitle
-        case .dongleRolledBack: return L.dongleRolledBackTitle
+        case .rolledBack(let device): return L.rolledBackTitle(device)
+        case .checkingCar: return L.carCheckingTitle
+        case .appBehind: return L.appBehindTitle
         }
     }
 
@@ -199,7 +220,10 @@ struct ConnectView: View {
         case .sendingNetwork: return L.dongleSendingNetSub
         case .dongleConfiguring: return L.dongleConfiguringSub
         case .dongleJoinFailed: return L.dongleJoinFailedSub
-        case .dongleRolledBack: return L.dongleRolledBackSub
+        case .rolledBack(let device): return L.rolledBackSub(device)
+        case .checkingCar: return L.carCheckingSub
+        case .appBehind(let device, let proto):
+            return L.appBehindSub(device, proto, device == .car ? CarContract.proto : DongleContract.proto)
         }
     }
 
@@ -214,9 +238,8 @@ struct ConnectView: View {
     }
 
     /// The one button each situation can offer, if any. `.localNetworkDenied` opens Settings;
-    /// `.dongleRolledBack` and `.dongleJoinFailed` are the two dongle-side escapes from a gate
-    /// that will not clear on its own — see their `Situation` doc comments for why each needs
-    /// one at all.
+    /// `.rolledBack` and `.dongleJoinFailed` are the two escapes from a gate that will not
+    /// clear on its own — see their `Situation` doc comments for why each needs one at all.
     @ViewBuilder private var actionButton: some View {
         switch situation {
         case .localNetworkDenied:
@@ -226,7 +249,7 @@ struct ConnectView: View {
             pillButton(L.openSettings, tint: p.accent) {
                 if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
             }
-        case .dongleRolledBack:
+        case .rolledBack:
             if let onRecheckRollback {
                 pillButton(L.fwRetry, tint: p.warn, action: onRecheckRollback)
             }
@@ -236,7 +259,8 @@ struct ConnectView: View {
             }
         case .searching, .checkingDongle, .noDongle, .sendingNetwork, .dongleConfiguring,
              .dongleFault, .wrongDongle,
-             .findingAdapter, .releaseCheck, .findingCar, .releaseOffline, .releaseMissing:
+             .findingAdapter, .releaseCheck, .findingCar, .releaseOffline, .releaseMissing,
+             .checkingCar, .appBehind:
             EmptyView()
         }
     }

@@ -26,8 +26,12 @@ enum L {
     static var dongleConfiguringSub: String { s("dongle.configuringSub") }
     static var dongleJoinFailedTitle: String { s("dongle.joinFailedTitle") }
     static var dongleJoinFailedSub: String { s("dongle.joinFailedSub") }
-    static var dongleRolledBackTitle: String { s("dongle.rolledBackTitle") }
-    static var dongleRolledBackSub: String { s("dongle.rolledBackSub") }
+    static func rolledBackTitle(_ d: UpdateRules.Device) -> String { s("rolledBackTitle.\(d.rawValue)") }
+    static func rolledBackSub(_ d: UpdateRules.Device) -> String { s("rolledBackSub.\(d.rawValue)") }
+    static var carCheckingTitle: String { s("car.checkingTitle") }
+    static var carCheckingSub: String { s("car.checkingSub") }
+    static var appBehindTitle: String { s("appBehind.title") }
+    static func appBehindSub(_ d: UpdateRules.Device, _ theirs: Int, _ ours: Int) -> String { s("appBehindSub.\(d.rawValue)", theirs, ours) }
     static var settingsFirmwareCar: String { s("settings.firmwareCar") }
     static var settingsFirmwareDongle: String { s("settings.firmwareDongle") }
     static func gateNoReleaseTitle(_ d: UpdateRules.Device) -> String { s("gate.noReleaseTitle.\(d.rawValue)") }

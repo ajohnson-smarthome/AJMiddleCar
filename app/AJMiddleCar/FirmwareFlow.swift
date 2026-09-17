@@ -247,7 +247,7 @@ extension FirmwareFlow {
     }
 
     /// The adapter, reached over USB. Nothing pushes its state at us, so every question costs a
-    /// `/status` — which is why `refresh` exists at all.
+    /// `/version` — which is why `refresh` exists at all.
     static func forDongle(client dongle: DongleClient) -> FirmwareFlow {
         let state = DongleState()
         return FirmwareFlow(device: .dongle,
@@ -283,10 +283,10 @@ private final class DongleState {
     var reachable = false
 
     func refresh(from dongle: DongleClient) async {
-        // Read the way the launch ladder reads it (`DongleReply.decode`): the adapter answers
+        // Read the way the launch ladder reads it (`VersionReply.decode`): the adapter answers
         // the whole document or nothing, on both sides of the reboot this watch runs through.
-        if let data = try? await dongle.statusData(), case .status(let s) = DongleReply.decode(data) {
-            fw = s.device.fw
+        if let data = try? await dongle.versionData(), case .version(let v) = VersionReply.decode(data) {
+            fw = v.fw
             reachable = true
         } else {
             reachable = false
