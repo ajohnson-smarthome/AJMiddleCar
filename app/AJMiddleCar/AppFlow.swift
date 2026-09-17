@@ -312,10 +312,14 @@ final class AppFlow: ObservableObject {
     }
 
     /// The gates' pause between polls — `donglePollInterval`, unless `wakePoll()` cuts it short.
+    ///
+    /// The sleep lives in its own task so a button can cancel it without cancelling the gate;
+    /// the handler passes the gate's own cancellation through, so a cancelled loop does not
+    /// sit out the rest of the interval first.
     private func pollPause() async {
         let t = Task<Void, Never> { try? await Task.sleep(for: Self.donglePollInterval) }
         pollSleep = t
-        await t.value
+        await withTaskCancellationHandler { await t.value } onCancel: { t.cancel() }
     }
 
     /// Cut the current poll pause short — the next read happens immediately.
@@ -558,6 +562,9 @@ final class AppFlow: ObservableObject {
             case .appBehind(let proto):
                 setPhase(.appBehind(device: .car, proto: proto))
             case .ok:
+                // A flap that landed after this iteration's check must not be answered by the
+                // next gate run, whenever that is.
+                dongleRerunWanted = false
                 return true
             }
             await pollPause()

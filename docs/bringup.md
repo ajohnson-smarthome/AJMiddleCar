@@ -107,7 +107,8 @@ see the sensor, its filter and its field of view without an app or a wire in the
 - [ ] **День-флаг без кабеля** (`docs/superpowers/specs/2026-09-17-version-endpoint-design.md`, §7):
       обе платы на v1.0+879 отвечают 404 на `/version` → адаптер S11 → обновлён; машинка S30 →
       S27 → обновлена → S28 (симулятор `-viaDongle`, адаптер на Mac).
-- [ ] **Адаптер выдернут и воткнут посреди S27** (F5 в `FirmwareView`, машинка ещё не ответила):
+- [ ] **Адаптер выдернут и воткнут посреди S27** (экран «Подключение к машинке», машинка ещё не
+      ответила на `/version`):
       экран уходит на S12/S13, адаптер снова в сети машинки → снова S27, обновление доходит до S28.
 
 ### Video — after `docs/superpowers/specs/2026-09-14-fpv-video-design.md`, once its own stage 4 is done
