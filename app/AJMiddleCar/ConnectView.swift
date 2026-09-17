@@ -95,9 +95,6 @@ struct ConnectView: View {
             DeviceScene(palette: p, rings: .deco, ringTint: p.warn, chip: (glyph: "questionmark", tint: p.warn)) { stageBody(d) }
         case .rolledBack:
             DeviceScene(palette: p, rings: .deco, ringTint: p.warn, chip: (glyph: "arrow.uturn.backward", tint: p.warn)) { stageBody(d) }
-        case .appBehind:
-            DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
-                        chip: (glyph: "exclamationmark.arrow.circlepath", tint: p.warn)) { stageBody(d) }
         case .updating:                      // never reached: FirmwareView renders .updating
             DeviceScene(palette: p, rings: .wait(), chip: (glyph: "arrow.down", tint: p.accent)) { stageBody(d) }
         case .sendingNetwork:

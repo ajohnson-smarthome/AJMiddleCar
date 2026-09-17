@@ -2,7 +2,7 @@ import Foundation
 
 /// The launch ladder, run one rung at a time: `[adapter, car]` through the dongle, `[car]`
 /// directly against the mock. Both rungs are answered by the same pure stage (`StageRule`, from
-/// one read of the board's `/version`: identity, rollback, version, protocol) driven by `stage()`
+/// one read of the board's `/version`: identity, rollback, version) driven by `stage()`
 /// below — the dongle-prefixed and car-prefixed gates this replaced (`dongleGate()`/`carGate()`)
 /// repeated one structure twice; now there is one, and a board is a description (`Board`), not a
 /// second copy of the loop.
@@ -133,15 +133,13 @@ final class AppFlow: ObservableObject {
     }
 
     private func dongleBoard() -> Board {
-        Board(identity: .init(device: .dongle, expectedDevice: DongleContract.device,
-                              proto: DongleContract.proto, silentStep: .absent),
+        Board(identity: .init(device: .dongle, expectedDevice: DongleContract.device, silentStep: .absent),
               reachedThrough: nil,
               readVersion: { [dongle] in try await dongle.versionData() },
               reach: { .reached })
     }
     private func carBoard(reachedThrough: Int?) -> Board {
-        Board(identity: .init(device: .car, expectedDevice: CarContract.device,
-                              proto: CarContract.proto, silentStep: .seeking),
+        Board(identity: .init(device: .car, expectedDevice: CarContract.device, silentStep: .seeking),
               reachedThrough: reachedThrough,
               readVersion: { try await CarTransport.shared.get(CarContract.versionPath, timeout: 2) },
               reach: reachedThrough == nil ? { .reached }

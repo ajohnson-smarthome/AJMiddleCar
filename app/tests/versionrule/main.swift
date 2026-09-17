@@ -1,5 +1,5 @@
 // Host test for VersionRule.step — the one decision the launch gate makes for either board
-// from its /version: foreign, rolled back, behind, app behind, or ok. Run with swiftc.
+// from its /version: foreign, rolled back, behind, or ok. Run with swiftc.
 import Foundation
 import Network
 
@@ -14,9 +14,8 @@ func doc(_ device: String = "ajdongle", fw: String, proto: Int = 1, rolledBack: 
     .version(DeviceVersion(device: device, fw: fw, build: UpdateRules.buildNumber(fw) ?? -1,
                            proto: proto, rolled_back: rolledBack))
 }
-func step(_ reply: VersionReply, rollback: RollbackChoice = .unanswered, appProto: Int = 1) -> VersionStep {
-    VersionRule.step(reply: reply, expectedDevice: "ajdongle", latestTag: latest,
-                     appProto: appProto, rollback: rollback)
+func step(_ reply: VersionReply, rollback: RollbackChoice = .unanswered) -> VersionStep {
+    VersionRule.step(reply: reply, expectedDevice: "ajdongle", latestTag: latest, rollback: rollback)
 }
 
 // -- the three ways a read fails map one to one -----------------------------------------------
@@ -48,12 +47,6 @@ check(step(doc(fw: "v1.0")) == .updating, "a build without a number is behind")
 check(step(doc(fw: current)) == .ok, "current: ok")
 check(step(doc(fw: ahead)) == .ok, "ahead of the release, same proto: ok — a dev build from a cable")
 
-// -- protocol, only once the version is not behind -----------------------------------------------
-check(step(doc(fw: current, proto: 2)) == .appBehind(proto: 2),
-      "current build, another proto: the board is newer than this app")
-check(step(doc(fw: ahead, proto: 2)) == .appBehind(proto: 2), "ahead and another proto: app behind")
-check(step(doc(fw: behind, proto: 2)) == .updating,
-      "behind and another proto: update first — the release carries our proto")
-check(step(doc(fw: current, proto: 2), appProto: 2) == .ok, "the app's own proto is a match")
+check(step(doc(fw: current, proto: 2)) == .ok, "current build, any proto: ok — proto is not a gate input anymore")
 
 if failures == 0 { print("test_versionrule: OK") } else { exit(1) }

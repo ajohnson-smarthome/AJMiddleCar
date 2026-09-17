@@ -8,8 +8,8 @@ var failures = 0
 func check(_ ok: Bool, _ what: String) { if !ok { print("FAIL: \(what)"); failures += 1 } }
 
 let latest = "v1.0+200"
-let dongle = Board.Identity(device: .dongle, expectedDevice: "ajdongle", proto: 1, silentStep: .absent)
-let car    = Board.Identity(device: .car,    expectedDevice: "ajmiddlecar", proto: 2, silentStep: .seeking)
+let dongle = Board.Identity(device: .dongle, expectedDevice: "ajdongle", silentStep: .absent)
+let car    = Board.Identity(device: .car,    expectedDevice: "ajmiddlecar", silentStep: .seeking)
 
 func doc(_ device: String, fw: String, proto: Int, rolledBack: Bool = false) -> VersionReply {
     .version(DeviceVersion(device: device, fw: fw, build: UpdateRules.buildNumber(fw) ?? -1,
@@ -45,8 +45,8 @@ check(decide(.reached, doc("ajmiddlecar", fw: "v1.0+200", proto: 2, rolledBack: 
 check(decide(.reached, doc("ajmiddlecar", fw: "v1.0+100", proto: 2), car) == .show(.updating),
       "behind the tag: .updating")
 check(decide(.reached, .absent, car) == .show(.updating), "404: .updating (board older than /version)")
-check(decide(.reached, doc("ajmiddlecar", fw: "v1.0+200", proto: 3), car) == .show(.appBehind(proto: 3)),
-      "current but foreign proto: .appBehind carries the board's proto")
+check(decide(.reached, doc("ajmiddlecar", fw: "v1.0+200", proto: 3), car) == .ok,
+      "current build, any proto: .ok — proto is no longer a gate input")
 check(decide(.reached, doc("ajmiddlecar", fw: "v1.0+200", proto: 2), car) == .ok, "current + our proto: .ok")
 
 if failures == 0 { print("stagerule: all checks passed") } else { print("stagerule: \(failures) FAILED"); exit(1) }

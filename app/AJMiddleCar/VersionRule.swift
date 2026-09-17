@@ -27,9 +27,9 @@ public enum RollbackChoice: Equatable {
 /// The decision the launch gate makes for either board from one read of its `/version`.
 ///
 /// Pure by design — no `async`, no networking — so every branch is host-tested. The order is
-/// the one `DongleLink` always used: identity, then rollback, then version, then protocol.
-/// `latestTag` is not optional: the gate learns the release first (`fetchRelease`) and asks
-/// this only with a tag in hand.
+/// the one `DongleLink` always used: identity, then rollback, then version. `latestTag` is not
+/// optional: the gate learns the release first (`fetchRelease`) and asks this only with a tag
+/// in hand.
 public enum VersionStep: Equatable {
     /// Nothing answered at the board's address.
     case plugIn
@@ -46,16 +46,13 @@ public enum VersionStep: Equatable {
     /// Behind the release — or older than `/version` itself (404). The forced update takes it
     /// across; its `POST /ota` has always existed.
     case updating
-    /// Not behind, but speaking a protocol this app does not: the board is newer than the app.
-    /// Nothing this app can do about it except say so.
-    case appBehind(proto: Int)
-    /// Ours, current, our protocol. The protocol-dependent documents may be read now.
+    /// Ours, and current. Safe to proceed.
     case ok
 }
 
 public enum VersionRule {
     public static func step(reply: VersionReply, expectedDevice: String, latestTag: String,
-                            appProto: Int, rollback: RollbackChoice) -> VersionStep {
+                            rollback: RollbackChoice) -> VersionStep {
         let v: DeviceVersion
         switch reply {
         case .version(let d): v = d
@@ -81,7 +78,9 @@ public enum VersionRule {
             }
         }
         if UpdateRules.mustUpdate(carFw: v.fw, latestTag: latestTag) { return .updating }
-        guard v.proto == appProto else { return .appBehind(proto: v.proto) }
+        // Protocol is no longer a gate input: one release ships the app and both firmwares
+        // together, so "build == the release tag" is the whole of compatibility. `v.proto` is
+        // decoded but not read. See spec 2026-09-17-proto-out-of-app.
         return .ok
     }
 }

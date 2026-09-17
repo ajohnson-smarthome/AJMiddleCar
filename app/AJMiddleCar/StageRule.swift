@@ -11,7 +11,6 @@ public enum GateStep: Equatable {
     case wrongDevice(String)     // /version.device is not ours (S9 / S23) — carries what it called itself
     case rolledBack              // /version.rolled_back (S10 / S31)
     case updating                // behind the release, or 404: FirmwareView(forced) (S11 / S27)
-    case appBehind(proto: Int)   // current, but speaks a protocol this app does not (S32)
     // Reaching a board through another one — the car through the adapter (S12 / S13 / S29 / S14).
     case sendingNetwork, searching, joining, joinFailed
 }
@@ -29,13 +28,11 @@ public struct Board {
     public struct Identity: Equatable {
         public let device: UpdateRules.Device
         public let expectedDevice: String     // DongleContract.device / CarContract.device
-        public let proto: Int                  // DongleContract.proto / CarContract.proto
         /// What silence on `/version` means here: the adapter needs a person (.absent), the car
         /// behind a joined adapter is booting (.seeking).
         public let silentStep: GateStep
-        public init(device: UpdateRules.Device, expectedDevice: String, proto: Int, silentStep: GateStep) {
-            self.device = device; self.expectedDevice = expectedDevice
-            self.proto = proto; self.silentStep = silentStep
+        public init(device: UpdateRules.Device, expectedDevice: String, silentStep: GateStep) {
+            self.device = device; self.expectedDevice = expectedDevice; self.silentStep = silentStep
         }
     }
     public let identity: Board.Identity
@@ -74,14 +71,13 @@ public enum StageRule {
         // rule can compare it. Silence is not "answered": it goes straight to the silent step.
         if answered(version), latestTag == nil { return .needRelease }
         switch VersionRule.step(reply: version, expectedDevice: board.expectedDevice,
-                                latestTag: latestTag ?? "", appProto: board.proto, rollback: rollback) {
+                                latestTag: latestTag ?? "", rollback: rollback) {
         case .plugIn: return .show(board.silentStep)
         case .faulty: return .show(.fault)
         case .accessDenied: return .show(.denied)
         case .wrongDevice(let name): return .show(.wrongDevice(name))
         case .rolledBack: return .show(.rolledBack)
         case .updating: return .show(.updating)
-        case .appBehind(let proto): return .show(.appBehind(proto: proto))
         case .ok: return .ok
         }
     }
