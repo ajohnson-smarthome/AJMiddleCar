@@ -69,8 +69,9 @@ because it knows anything about the car — it knows neither the motors nor the 
 `contract/car-api.json` is the source of truth for everything both sides agree on: the
 protocol version, the real-time channel's constants, the video channel's own section (port,
 the 12-byte wire header, timing, the header vectors all three receivers are tested against),
-the seven status/telemetry groups (`device`, `link`, `motors`, `radio`, `storage`, `system`,
-`video`), the state words each group's enum fields take (`motors.owner`, `motors.bus`,
+the six status groups (`link`, `motors`, `radio`, `storage`, `system`, `video`) and the frozen
+`/version` document (`device`, `fw`, `build`, `proto`, `rolled_back`) both boards serve, the
+state words each group's enum fields take (`motors.owner`, `motors.bus`,
 `radio.state`, `video.state`), the six config domains with their ranges and defaults, and the
 car's error codes. `tools/gen_contract.py` emits all four expressions of it — the firmware's
 descriptor table (`main/cfg_table.inc`, plus the key, type-word and error-code macros the

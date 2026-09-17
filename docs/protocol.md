@@ -87,11 +87,12 @@ back, so a lost reply must be answerable by the next repeat:
 ```
 
 Identity arrives on the first exchange, over the channel that then carries telemetry: this
-reply, not `/status`, is the app's "is this our car" test. `device` is the same object that
-`/status` carries — one printer serves both, so a rename cannot present differently on the two
-paths — and `device.id` is load-bearing. Both cars in this family serve this same API at this
-same address, so a client **must** compare it against the one car it drives and refuse anything
-else. Treating a mismatch as "offline" is wrong: the user has to change networks, not wait.
+reply, not `/status`, is the app's "is this our car" test — for the session; the launch gate's
+test is `/version`. `device` is printed once, for this reply alone — `/status` no longer
+carries it — and `device.id` is load-bearing. Both cars in this family serve this same API at
+this same address, so a client **must** compare it against the one car it drives and refuse
+anything else. Treating a mismatch as "offline" is wrong: the user has to change networks, not
+wait.
 `device.build` (the number after `+` in `fw`, already an integer) and `device.rolled_back` arrive
 with the handshake itself, so a client no longer has to visit `/status` to learn whether the
 last update survived its first boot.
@@ -367,7 +368,7 @@ A bench route, not part of the app's flow: one JPEG of whatever the camera curre
 
 ### Status and telemetry — the `video` group
 
-`video` is the seventh group in `GET /status`, appended after `system`, and the fourth group
+`video` is the sixth group in `GET /status`, appended after `system`, and the fourth group
 telemetry pushes (`link`, `motors`, `system`, `video`) — the same printer serves both, so it
 cannot drift between them:
 
@@ -433,7 +434,22 @@ the phone, one decimal), `video_dropped` (chunks not delivered toward the phone 
 refused by the gate, or admitted and then refused by the USB side). `null` here means the
 adapter predates video, not that nothing is happening.
 
-## `GET /status` — seven groups
+### `GET /version` — the one document that never changes
+
+```json
+{"device":"ajmiddlecar","fw":"v1.0+879","build":879,"proto":2,"rolled_back":false}
+```
+
+Five fields, this order, and nothing else — ever. `device` is who answers; `fw` is the version
+as the build prints it and `build` the number after its `+` (`-1` when there is none); `proto`
+is the protocol number of everything else this board serves; `rolled_back` is the bootloader's
+verdict on the last update, sticky until the next successful one. The app reads this first, for
+both boards, decides "foreign / rolled back / behind / newer than me / fine" before it parses
+anything that lives under `proto`, and updates a board that is behind — a board that answers
+404 predates the endpoint and counts as behind. The adapter serves the same document at
+`192.168.7.1:8080/version` with `proto` from its own contract.
+
+## `GET /status` — six groups
 
 Still served — for humans, scripts, and the radio report; the app's identity test is the
 `hello_ack` reply, and liveness afterwards comes from telemetry freshness, not from polling
@@ -441,7 +457,6 @@ this.
 
 ```json
 {"proto":2,
- "device": {"id":"ajmiddlecar","fw":"v1.0+784","build":784,"rolled_back":false},
  "link":   {"rx_hz":10,"rssi_dbm":-58,"timeouts":0},
  "motors": {"bus":"ok","calibrated":true,"owner":"remote"},
  "radio":  {"fw":"3.0.6","expected":"3.0.6","state":"ok"},
@@ -450,11 +465,10 @@ this.
  "video":  {"state":"idle","fps":0,"kbps":0,"dropped":0}}
 ```
 
-`device`, `link`, `motors` and `system` are the same groups `hello_ack` and telemetry carry
-between them, and `video` is the same group telemetry carries too — one printer per group,
-several call sites, so a rename cannot drift between them. The one difference to know: here
-`link.rx_hz` is a poll-to-poll window (`0` on the first poll after boot, and after a gap of
-10 s or more), where the push's is continuous.
+`link`, `motors`, `system` and `video` are the same groups the 5 Hz telemetry push carries —
+one printer per group, several call sites, so a rename cannot drift between them. The one
+difference to know: here `link.rx_hz` is a poll-to-poll window (`0` on the first poll after
+boot, and after a gap of 10 s or more), where the push's is continuous.
 
 `radio` reports the ESP32-C6 co-processor that provides WiFi. `radio.state` is `ok` when the
 C6's firmware equals `radio.expected` (the version this build was made for, derived from the

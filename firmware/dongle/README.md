@@ -213,24 +213,32 @@ quick reference; `contract/dongle-api.json` is the source of truth, and `tools/g
 is what actually emits the C, Swift and Python that speak it.
 
 ```json
+// GET /version
+{"device":"ajdongle","fw":"v1.0+879","build":879,"proto":1,"rolled_back":false}
+```
+
+Five fields, this order, and nothing else — ever; the same frozen shape the car serves at its
+own `/version`, `proto` here being this contract's own (`1`, not the car's `2`). The app reads
+this first, before anything under `proto`, and updates a board that is behind — a board that
+answers `404` predates the endpoint and counts as behind.
+
+```json
 // GET /status
 {"proto":1,
- "device":{"id":"ajdongle","fw":"v1.0+789","build":789,"rolled_back":false,"idf":"v6.0.2"},
  "usb":   {"state":"up"},
  "wifi":  {"ssid":"AJMiddleCar","configured":true,"state":"connected",
            "rssi_dbm":-53,"channel":1,"attempts":{"used":0,"max":5}},
  "relay": {"to_car_hz":10.0,"to_phone_hz":5.0,"udp_sessions":1,"tcp_connections":2,
            "last_error":{"errno":118,"message":"No route to host","count":3,"age_s":41}},
- "system":{"uptime_s":412,"free_heap":8551152}}
+ "system":{"uptime_s":412,"free_heap":8551152,"idf":"v6.0.2"}}
 ```
 
-Five groups: `device` (identity — `id`, `fw`, `build`, `rolled_back` share their shape with the
-car's own `device` group, plus `idf`, because this firmware's ESP-IDF version is worth knowing
-and the car's is not); `usb` (whether a host is attached); `wifi` (the network the app told it,
-and how the join is going — `rssi_dbm` and `channel` are `null` until connected); `relay` (what
-is being forwarded, and `last_error` — an object with the errno, its `strerror`, a repeat count
-and its age in seconds, or `null` when nothing has failed since boot); `system` (uptime and free
-heap).
+Four groups: `usb` (whether a host is attached); `wifi` (the network the app told it, and how
+the join is going — `rssi_dbm` and `channel` are `null` until connected); `relay` (what is
+being forwarded, and `last_error` — an object with the errno, its `strerror`, a repeat count
+and its age in seconds, or `null` when nothing has failed since boot); `system` (uptime, free
+heap, and `idf`, because this firmware's ESP-IDF version is worth knowing and the car's is
+not). Identity and version — `device`, `fw`, `build`, `rolled_back` — live in `/version`.
 
 There is no `GET /net`: `wifi.ssid` and `wifi.configured` in `/status` are the same two fields it
 used to serve, so a second endpoint for them bought nothing.
@@ -332,13 +340,13 @@ curl --data-binary @build/ajdongle.bin \
 ```
 
 Expect `{"proto":1,"ok":true}`, then the USB interface drops and comes back within a few seconds
-as the dongle reboots into the new slot. Confirm with `/status`:
+as the dongle reboots into the new slot. Confirm with `/version`:
 
 ```bash
-curl -s http://192.168.7.1:8080/status
+curl -s http://192.168.7.1:8080/version
 ```
 
-`device.fw` should be the version just built, and **`device.rolled_back` should be `false`**.
+`fw` should be the version just built, and **`rolled_back` should be `false`**.
 `rolled_back:true` means the bootloader put the previous image back — the new one failed its
 first boot before `app_main` finished, so it never got to cancel the revert. That is the safety
 net working, not a bug in the update; the `fw` you see is the old image, and pushing the same
