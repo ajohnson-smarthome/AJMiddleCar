@@ -3,14 +3,14 @@ import Foundation
 /// The update chain's pure decisions, extracted from `UpdateClient` so they are host-tested.
 /// `UpdateClient` keeps the sockets, the cache files and the sessions; this answers "which
 /// version wins" and "what may enter the firmware cache".
-enum UpdateRules {
+public enum UpdateRules {
     /// Which firmware image: the car's, or the dongle's. `tools/release.sh` has attached both
     /// `ajmiddlecar.bin` and `ajdongle.bin` to every release under one tag since branch P3 — one
     /// release, two images, one version between them. This is the only vocabulary that
     /// distinguishes them; `mustUpdate`, `isUpdateAvailable`, `needsDownload` and `isValidImage`
     /// below stay untouched because they only ever compare version strings or bytes, and neither
     /// cares whose they are.
-    enum Device: String, CaseIterable {
+    public enum Device: String, CaseIterable {
         case car
         case dongle
 
