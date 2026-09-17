@@ -9,7 +9,7 @@ ERRORS = ['bad_json', 'missing_field', 'unknown_field', 'wrong_type', 'out_of_ra
 STATUS_GROUPS = ['link', 'motors', 'radio', 'storage', 'system', 'video']
 VERSION_FIELDS = [   {   'name': 'device',
         'type': 'str',
-        'doc': 'the device name; ajmiddlecar for the car, ajdongle for the adapter'},
+        'doc': "the device name — this contract's own device constant"},
     {   'name': 'fw',
         'type': 'str',
         'doc': 'firmware version as the build prints it: '

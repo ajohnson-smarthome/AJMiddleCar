@@ -53,7 +53,7 @@
   "version": {
     "doc": "GET /version: who this board is and what it runs. The one document whose shape never changes: no field is ever added, renamed or removed; anything else belongs in /status, which lives under proto. A board that answers 404 predates this endpoint and is updated.",
     "fields": [
-      {"name": "device",      "type": "str",  "doc": "the device name; ajmiddlecar for the car, ajdongle for the adapter"},
+      {"name": "device",      "type": "str",  "doc": "the device name — this contract's own device constant"},
       {"name": "fw",          "type": "str",  "doc": "firmware version as the build prints it: v<semver>+<build>[-<n>-g<sha>[-dirty]]"},
       {"name": "build",       "type": "int",  "doc": "the number after + in fw, parsed by the firmware; -1 when fw carries none"},
       {"name": "proto",       "type": "int",  "doc": "the protocol number of everything else this board serves — this contract's proto"},

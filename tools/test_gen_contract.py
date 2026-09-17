@@ -602,11 +602,7 @@ class TestDongleSchema(unittest.TestCase):
         self.assertEqual((b["pass_min"], b["pass_max"]), (8, 63))
 
     def test_it_names_no_car(self):
-        # version is deliberately byte-identical to car-api.json's (frozen by contract),
-        # and its shared field doc names both devices by design — excluded here so this
-        # test still guards the dongle's OWN vocabulary against depending on the car's.
-        s = self.load()
-        text = json.dumps({k: v for k, v in s.items() if k != "version"}).lower()
+        text = (ROOT / "contract" / "dongle-api.json").read_text().lower()
         self.assertNotIn("ajmiddlecar", text)
         self.assertNotIn("drive1234", text)
 
