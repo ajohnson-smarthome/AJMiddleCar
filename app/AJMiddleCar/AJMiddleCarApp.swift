@@ -72,30 +72,29 @@ struct RootView: View {
                 }
             }
             .onChange(of: link.fw) { _, fw in flow.carIdentified(fw: fw) }
-            .onChange(of: link.state) { old, new in
-                // The identity may already be known when the gate finishes; re-asking is cheap
-                // and closes the race where the hello landed before `startupCheck` returned.
-                if case .live = new { flow.carIdentified(fw: link.fw) }
-                // The wire came back. Everything the dongle was asked at launch has to be asked
-                // again — above all whether it is still joined to the car — and the gate that
-                // asked returned for good when it handed over. Without this, a dongle replugged
-                // after the car was switched off answers "failed" to nobody at all.
-                if old.isNoDongle, !new.isNoDongle {
-                    Task {
-                        await flow.dongleReturned()
-                    }
+            // Post-gate guards: once the ladder has handed over (`.awaitingCar`/`.ready`), these
+            // are the only signals that send it back. Everywhere mid-ladder, `restart` is a no-op
+            // or a fall-back the running stage already owns.
+            .onChange(of: link.state) { _, new in
+                switch new {
+                case .noDongle, .localNetworkDenied: flow.restart(from: .dongle)
+                case .wrongCar, .wrongProto:         flow.restart(from: .car)
+                case .live:                          flow.carIdentified(fw: link.fw)
+                case .searching:                     break
                 }
             }
             // Every hand-over to the car re-asks its identity with whatever the link already
-            // holds: a hello that landed while a gate was still deciding was refused by
-            // `carIdentified`'s phase guard, and nothing else would ask again — the launch,
-            // an adapter that came back, and a forced update that finished all hand over here.
-            // Only with the link live, though: `CarLink` keeps `fw` across a closed session, so
-            // after an update the car's OLD build is what it holds until the next hello — and
-            // re-asking with that bounced the flow straight back into the forced update it had
-            // just left. The not-yet-live case is the `.live` re-ask above.
+            // holds: a hello that landed while the ladder was still deciding was refused by
+            // `carIdentified`'s phase guard, and nothing else would ask again — the launch, an
+            // adapter that came back, and a forced update that finished all hand over here.
+            // `retryAfterWrongCar()` clears the hold on a foreign id/proto — used to run from
+            // `WrongCarView`'s own retry, now from here since that screen no longer renders once
+            // the ladder has handed over.
             .onChange(of: flow.phase) { _, phase in
-                if phase == .awaitingCar, link.isLive { flow.carIdentified(fw: link.fw) }
+                if phase == .awaitingCar {
+                    link.retryAfterWrongCar()
+                    if link.isLive { flow.carIdentified(fw: link.fw) }
+                }
             }
     }
 
@@ -104,90 +103,44 @@ struct RootView: View {
         // resolves in milliseconds still gets its moment instead of strobing past. Decisions
         // elsewhere keep reading `phase`, which is the truth without the pacing.
         switch flow.shown {
-        // Steps 1 and 2 of the ladder. Step 1 has not heard from the adapter yet and says only
-        // that it is asking; step 2 has asked and got nothing, and that is the one that tells
-        // the user to plug it in — the same words `CarLink` uses when the wire goes later.
-        // Both draw the adapter faint; step 3 makes it solid.
-        case .checkDongle:
-            ConnectView(situation: .findingAdapter)
-        case .dongleAbsent:
-            ConnectView(situation: .noDongle(.notAvailable))
-        case .dongleChecking:
-            ConnectView(situation: .checkingDongle)
+        case .stage(let dev, .updating):
+            // The forced update: same screen, same phases, same words for either board. Only
+            // the object under the chip differs. HTTP only — see `Phase.opensLink`: no session
+            // is opened behind it, so as not to shout `wrongProto` at the very board it is
+            // updating.
+            FirmwareView(palette: p, flow: dev == .car ? .forCar() : .forDongle(client: flow.dongle),
+                         forced: true, onDone: { flow.updateFinished(dev) })
+        case .stage(let dev, let step):
+            ConnectView(situation: .stage(dev, step), onRetry: flow.retryAction(for: step))
         case .releaseCheck:
             ConnectView(situation: .releaseCheck)
-        case .carFinding:
-            ConnectView(situation: .findingCar)
         case .releaseOffline:
             ConnectView(situation: .releaseOffline)
-        case .releaseMissing(let tag, let device):
-            ConnectView(situation: .releaseMissing(tag: tag, device: device))
-        case .dongleFault:
-            ConnectView(situation: .dongleFault)
-        case .dongleDenied:
-            // The same screen, with the same Settings button, `CarLink` shows for a denial once
-            // the gate has handed over. The gate could not say it at all before this: a denied
-            // request threw, the throw became nil, and nil said "plug in an adapter".
-            ConnectView(situation: .localNetworkDenied)
-        case .dongleWrong(let device):
-            ConnectView(situation: .wrongDongle(device))
-        case .dongleUpdating:
-            // The adapter's update is the car's update: same screen, same phases, same words.
-            // Only the object under the chip differs.
-            FirmwareView(palette: p, flow: .forDongle(client: flow.dongle), forced: true,
-                         onDone: { flow.dongleUpdateFinished() })
-        case .dongleRolledBack:
-            ConnectView(situation: .rolledBack(device: .dongle),
-                        onRecheckRollback: { flow.recheckRollback() })
-        case .dongleSendingNet:
-            ConnectView(situation: .sendingNetwork)
-        case .dongleConfiguring:
-            ConnectView(situation: .dongleConfiguring)
-        case .dongleJoinFailed:
-            ConnectView(situation: .dongleJoinFailed, onRetryJoin: { flow.retryDongleJoin() })
-        // The car's own check, and the three verdicts it can end on that are not the forced
-        // update. All decided from `/version` through the relay, before any hello.
-        case .carChecking:
-            ConnectView(situation: .checkingCar)
-        case .carWrong(let device):
-            // The poll re-asks by itself; the button only cuts its wait short.
-            WrongCarView(palette: p, kind: .foreignDevice(device)) { flow.wakePoll() }
-        case .carRolledBack:
-            ConnectView(situation: .rolledBack(device: .car),
-                        onRecheckRollback: { flow.recheckRollback() })
-        case .appBehind(let device, let proto):
-            ConnectView(situation: .appBehind(device: device, proto: proto))
-        case .updateRequired:
-            // HTTP only — see `Phase.opensLink`: no session is opened behind the forced update.
-            FirmwareView(palette: p, flow: .forCar(), forced: true,
-                         onDone: { flow.updateFinished() })
+        case .releaseMissing(let tag, let dev):
+            ConnectView(situation: .releaseMissing(tag: tag, device: dev))
         case .awaitingCar, .ready:
-            // The link opens when the gate hands over, not at launch: until then there is
-            // nothing to say to the car, and the gate is talking to GitHub.
+            // The link opens when the ladder hands over, not at launch: until then there is
+            // nothing to say to the car, and the ladder is talking to GitHub.
             carRoot.onAppear { link.start() }
         }
     }
 
-    /// Past the gate, the screen is whatever `CarLink` currently is. There is no second opinion.
+    /// Past the ladder, the screen is whatever `CarLink` currently is, except where the ladder is
+    /// already back in charge: `.noDongle`, `.localNetworkDenied`, `.wrongCar` and `.wrongProto`
+    /// all restarted it through a guard the instant they fired (`.onChange(of: link.state)`
+    /// above), so `flow.phase` has already left `.awaitingCar`/`.ready` by the time this would
+    /// render one of them — this is a one-frame fallback for that gap, not a second opinion.
     @ViewBuilder private var carRoot: some View {
         switch link.state {
-        case .noDongle(let reason):
-            ConnectView(situation: .noDongle(reason))
-        case .localNetworkDenied:
-            ConnectView(situation: .localNetworkDenied)
-        case .wrongCar(let device):
-            WrongCarView(palette: p, kind: .foreignDevice(device)) { link.retryAfterWrongCar() }
-        case .wrongProto(let theirs):
-            WrongCarView(palette: p, kind: .protoMismatch(theirs: theirs)) { link.retryAfterWrongCar() }
-        case .searching:
-            ZStack { p.bg.ignoresSafeArea(); ConnectView() }
         case .live:
             if flow.phase == .ready {
                 DriveView(link: link, intent: intent)
             } else {
-                // Live, but the version gate has not answered yet — a moment, not a state.
+                // Live, but the ladder has not answered yet — a moment, not a state (S26).
                 ZStack { p.bg.ignoresSafeArea(); ConnectView() }
             }
+        default:
+            ZStack { p.bg.ignoresSafeArea(); ConnectView() }
         }
     }
 }

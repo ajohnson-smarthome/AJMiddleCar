@@ -1,227 +1,94 @@
 import Foundation
 
-/// The launch gate, in the order the spec states it: is a dongle there → learn the newest
-/// release (once, for both boards) → update the dongle if it is behind → tell it which network
-/// to join if it has not been told → ask the car its `/version` through the relay → force the
-/// update if the car is behind → hand over. Against the mock there is no dongle, so the release
-/// step runs on its own and the car is asked directly.
+/// The launch ladder, run one rung at a time: `[adapter, car]` through the dongle, `[car]`
+/// directly against the mock. Both rungs are answered by the same pure stage (`StageRule`, from
+/// one read of the board's `/version`: identity, rollback, version, protocol) driven by `stage()`
+/// below — the dongle-prefixed and car-prefixed gates this replaced (`dongleGate()`/`carGate()`)
+/// repeated one structure twice; now there is one, and a board is a description (`Board`), not a
+/// second copy of the loop.
 ///
-/// The dongle half and the car half are answered by the same pure rule — `VersionRule`, from
-/// one read of either board's `/version`: identity, rollback, version, protocol — with
-/// `DongleLink` for "what does the dongle need next" on the network side, and
-/// `GateRule`/`UpdateRules` for the hello's re-check of the car. They share one `Phase`, one
-/// `latestTag` and one `startupCheck()` entry point, because from the user's seat this has
-/// always been a single gate, not two gates that happen to run back to back.
-///
-/// It no longer has a `.drive` state. Driving is not a phase the gate can enter and latch; it is
+/// It no longer has a `.drive` state. Driving is not a phase the ladder can enter and latch; it is
 /// what `CarLink` says is true right now, so a car that goes away mid-session is handled by the
 /// screen rather than by a state machine that has already decided.
 @MainActor
 final class AppFlow: ObservableObject {
+    /// One rung of the ladder — the board and its current step. The only screen-bearing phase
+    /// there is now, in place of the twenty-odd board-prefixed cases this replaced.
     enum Phase: Equatable {
-        /// Before the first `/version` has come back at all — not yet known whether a dongle is
-        /// even attached. Distinct from `.dongleAbsent` (which is a definite "nothing answered"
-        /// after actually asking): the two would otherwise flash "plug it in" at every cold
-        /// launch, dongle attached or not, for as long as the first request takes.
-        case checkDongle
-        /// Nothing answered `/version` — `VersionRule.step(reply: .silent, ...)`'s own step, not
-        /// an error the flow invents separately.
-        case dongleAbsent
-        /// Step 2. Something answered at the adapter's address and is being looked over. Brief
-        /// by nature — the reply is already in hand when this is set — which is exactly why
-        /// `PhasePacer` exists: without it this step would never be legible.
-        case dongleChecking
-        /// Step 3. Asking GitHub for the newest release — once per launch, for both boards: one
-        /// release tags both images, so the tag learned here is what the adapter is compared
-        /// against now and the car in its own check (`carGate()`). Had no phase at all before,
-        /// so this wait happened behind whatever screen preceded it.
-        case releaseCheck
-        /// Step 4. The adapter's radio is scanning and has not seen the car's network yet —
-        /// `DongleStep.searchingCar`. Distinct from `.dongleConfiguring`, which is the
-        /// association that follows: this one usually means the car is switched off.
-        case carFinding
-        /// The newest release could not be established: GitHub did not answer. A hold, not a
-        /// failure — the gate keeps asking (`fetchRelease`), so this clears itself the moment
-        /// the network returns, which is why the screen has no button.
-        case releaseOffline
-        /// A release exists and carries no image for `device`, or no build number, so nothing
-        /// can be compared against it and the gate will not proceed. Not the user's to fix —
-        /// only publishing a usable release clears it — which is why the screen says that
-        /// instead of blaming the network.
-        case releaseMissing(tag: String, device: UpdateRules.Device)
-        /// Something answered at the dongle's address and it was not usable — an HTTP error, a
-        /// truncated stream, a body that would not decode. Deliberately not `.dongleAbsent`:
-        /// the one instruction that screen gives is the one thing already done.
-        case dongleFault
-        /// Local-network access is denied, so no request this app makes ever leaves the phone.
-        /// Renders the same screen `CarLink` shows for it later, with the same button — the
-        /// gate had no way to say it at all before, and said "plug in an adapter" instead.
-        case dongleDenied
-        /// Something is answering at the dongle's address and it is not our dongle
-        /// (`VersionStep.wrongDevice`). Carries what it called itself, so the screen can name it.
-        case dongleWrong(device: String)
-        /// The dongle's own firmware is behind the latest release; downloading and flashing it,
-        /// before anything else in this sequence touches the car. Reused for the short reboot
-        /// The screen is `FirmwareView`, the same one the car's update uses.
-        case dongleUpdating
-        /// The dongle's bootloader reverted its last update. Standing until the user answers —
-        /// the rollback flag itself does not clear until a LATER OTA to that slot succeeds, so
-        /// without an answer this phase would never release. One answer:
-        /// `recheckRollback()` asks whether a newer release exists yet, and it is the only
-        /// answer there is: the option to drive on the reverted firmware was removed with the
-        /// rest of the escapes. The app is the dongle's only OTA path, so a release that keeps
-        /// rolling back holds here until a newer one ships.
-        case dongleRolledBack
-        /// The dongle is current and pointed at the car's own network. Either its credentials
-        /// are being sent for the first time (including a re-point, if it was pointed at some
-        /// other network), or the radio is working through its own join budget (`joining`, or a
-        /// state this build does not recognise) — both render the same "connecting" screen; see
-        /// `DongleLink.DongleStep.sendCredentials`/`.waiting`.
-        case dongleConfiguring
-        /// The dongle is current and has not been told the car's network — or was told some
-        /// other one — and is being told now. Its own phase because the screen for the join
-        /// («Подключаю адаптер к машинке — машинка найдена») claimed a car nobody had looked
-        /// for yet: at this step the adapter has not searched at all.
-        case dongleSendingNet
-        /// The dongle will not get any further on its own: the join budget ran out (`failed`),
-        /// or its state machine never left `idle` — see `DongleStep.retryJoin`. The credentials
-        /// are already on the dongle; `dongleGate()` asks the radio to try again — once, see
-        /// `maxDongleJoinAttempts` — and then holds here with a button. The spec is explicit
-        /// that this state is "reached and held rather than retried forever… A radio that hunts
-        /// for an absent car indefinitely is drawing the phone's battery for nothing", and that
-        /// after a few attempts the app says the car is not found and offers a Retry.
-        ///
-        /// Shown only once the asking is over. While a retry is still owed, the gate keeps
-        /// `.carFinding` on screen instead: announcing "no link" for the one poll between the
-        /// dongle's `failed` and the re-ask that will put it straight back into `searching` was
-        /// a verdict the app itself overturned a second and a half later.
-        case dongleJoinFailed
-        /// The car's own check, the adapter's S3 mirrored: `GET /version` through the relay,
-        /// polled until the car answers — it is on the adapter's network, so this is a reboot
-        /// or a slow AP, not an absent car — and decided by the same `VersionRule`.
-        case carChecking
-        /// The car's `/version` named another device. Decided here, before any hello.
-        case carWrong(device: String)
-        /// The car's bootloader reverted its last update — the car's S10.
-        case carRolledBack
-        /// A board that is not behind the release but speaks a protocol this app does not: the
-        /// board is newer than the app. Nothing to do here but say so; the poll goes on so the
-        /// screen leaves by itself if the board is reflashed.
-        case appBehind(device: UpdateRules.Device, proto: Int)
-        /// The gate has passed; the car has not identified itself yet. What is on screen while
-        /// this lasts comes from `CarLink` — searching, wrong car, no dongle, denied.
+        case stage(UpdateRules.Device, GateStep)
+        case releaseCheck                                            // S4
+        case releaseOffline                                          // S5
+        case releaseMissing(tag: String, device: UpdateRules.Device) // S6
+        /// The ladder is done; `CarLink` owns the screen (radar or drive).
         case awaitingCar
-        /// The car is behind the release — decided by `carGate()` from `/version`, before any
-        /// hello, or by `carIdentified` from a later hello. `FirmwareView` runs the update over
-        /// HTTP; no session is opened for it.
-        case updateRequired
-        /// The gate is satisfied. `CarLink` decides whether that means the drive screen.
+        /// `carIdentified` said the car may drive.
         case ready
 
-        /// The phases whose screens open the link — the same set `root` switches on. The
-        /// scene handler restarts the link on `.active` and must not open a session behind
-        /// a gate screen that says there is nothing to talk to. Every dongle phase belongs on
-        /// the `false` side of this for exactly that reason: until the dongle reports
-        /// `.readyForCar`, there is no path to the car for `CarLink` to open a session over.
-        /// `.updateRequired` is on the false side now: the forced update runs over HTTP through
-        /// `/version` and `/ota`, and a session opened behind it would only shout `wrongProto`
-        /// at a car whose protocol is the reason it is being updated.
+        /// The phases whose screen opens the UDP link. Everything mid-ladder is on the false side:
+        /// until the ladder hands over there is no session to open, and `.stage(_, .updating)` runs
+        /// the forced update over HTTP — a session there would only shout `wrongProto` at the very
+        /// car being updated.
         var opensLink: Bool {
             switch self {
             case .awaitingCar, .ready: return true
-            case .checkDongle, .dongleAbsent, .dongleChecking, .releaseCheck, .carFinding,
-                 .releaseOffline, .releaseMissing,
-                 .dongleFault, .dongleDenied, .dongleWrong,
-                 .dongleUpdating, .dongleRolledBack,
-                 .dongleSendingNet, .dongleConfiguring, .dongleJoinFailed,
-                 .carChecking, .carWrong, .carRolledBack, .appBehind,
-                 .updateRequired: return false
+            case .stage, .releaseCheck, .releaseOffline, .releaseMissing: return false
             }
         }
     }
 
-    @Published var phase: Phase = .checkDongle
+    @Published var phase: Phase = .stage(.dongle, .seeking)
     /// What is actually on screen. Lags `phase` by at most `PhasePacer.minVisible` per step, so
     /// a launch whose steps resolve instantly is a readable sequence rather than one frame of
     /// strobing. Everything that renders reads this; everything that decides reads `phase`.
-    @Published private(set) var shown: Phase = .checkDongle
+    @Published private(set) var shown: Phase = .stage(.dongle, .seeking)
     private var shownAt = Date()
     private var queued: [Phase] = []
     private var pacing = false
-    /// The newest release's tag — one for both boards, learned once per launch by
-    /// `fetchRelease` (inside `dongleGate()`, or on its own in `releaseGate()` when there is no
-    /// adapter). `VersionRule.step` compares each board against it — the adapter in
-    /// `dongleGate()`, the car in `carGate()` — and `carIdentified` the car again on every
-    /// hello. Cleared by `recheckRollback()`, which is what makes the next poll ask again.
+    /// The newest release's tag — one for both boards, learned once per launch by `fetchRelease`.
+    /// `StageRule.decide` compares each board against it, and so does `carIdentified` on every
+    /// hello that changes `fw`. Cleared by `recheckRollback()`, which is what makes the next poll
+    /// ask again.
     @Published var latestTag: String?
     let client = UpdateClient()
-    /// Shared with `FirmwareView`, which now runs the adapter's update through the same screen
-    /// the car's goes through — one client, so the gate and the screen are talking to the same
+    /// Shared with `FirmwareView`, which runs the adapter's update through the same screen the
+    /// car's goes through — one client, so the ladder and the screen are talking to the same
     /// device over the same connection.
     let dongle = DongleClient()
 
-    /// How often `dongleGate()` re-reads `/version` (and, past `.ok`, `/status`) while it is
-    /// not yet `.readyForCar`, and how often `carGate()` re-reads the car's `/version`. A
-    /// judgement, not a measurement: fast enough that "plug it in" clears within a beat of the
-    /// cable actually going in, slow enough not to matter next to the requests it is pacing —
-    /// `DongleClient` asks for single-flight use, and this is what keeps every step in this loop
-    /// to at most one outstanding request at a time.
+    /// How often a stage re-reads `/version` (and, for the car through the adapter, `/status`)
+    /// while it is not yet current. A judgement, not a measurement: fast enough that "plug it in"
+    /// clears within a beat of the cable actually going in, slow enough not to matter next to the
+    /// requests it is pacing — `DongleClient` asks for single-flight use, and this is what keeps
+    /// every step in this loop to at most one outstanding request at a time.
     private static let donglePollInterval: Duration = .milliseconds(1500)
 
-    /// How many times `dongleGate()` will POST the car's network at the dongle — the first
-    /// configure and every retry together — before it stops and waits for `retryDongleJoin()`.
-    /// Nothing here was bounded at all once: `.retryJoin` re-POSTed on every poll forever, which
-    /// is precisely the radio the spec says must not hunt for an absent car indefinitely.
-    ///
-    /// ONE, not three. Each ask costs a full join budget on the dongle's side — five attempts,
-    /// counted out loud on its panel as «Попытка 1 из 5» through «5 из 5» — and three asks in a
-    /// row made that count run three times over, with nothing on either screen to say why the
-    /// radio had changed its mind. The bound is now the one the dongle already has: the app asks
-    /// once, the dongle tries five times, and then both say so and wait for a person. A car
-    /// switched on after that gets its join from the Retry button, which is what the button is
-    /// for.
-    private static let maxDongleJoinAttempts = 1
+    /// The ladder for this launch: `[adapter, car]` via the dongle, `[car]` against the mock.
+    private var boards: [Board] = []
+    /// The rung the runner is on — read by `restart` to decide whether to fall back.
+    private var currentRung = 0
+    /// A guard asked the ladder to be at this rung or earlier. Consumed at the top of `stage`.
+    private var wantRung: Int?
+    /// The car's reach state — the join budget — recreated at each entry to the car's stage.
+    private var carReach = CarReach()
 
-    /// Whether `dongleGate()` has handed over this session. Set by `runGates()` right after
-    /// that hand-over, and cleared by it again when `carGate()` hands back — the adapter dropped
-    /// or lost the car's network — so the adapter's gate runs once more. `dongleReturned()`
-    /// clears it before its own re-run for the same reason.
-    private var dongleHandedOver = false
-
-    /// The adapter's wire came back while `carGate()` held one of the car's screens — above all
-    /// the forced update (`.updateRequired`), where the gate parks and polls nothing, so nothing
-    /// would ever notice. A replugged adapter has forgotten the car's network (RAM only), every
-    /// `GET /version` through the relay fails from then on, and `FirmwareView` waits for a car
-    /// it can never reach. `dongleReturned()` raises this instead of starting a second loop;
-    /// `carGate()` reads it at the top of every iteration and hands back to `dongleGate()`,
-    /// which clears it on entry. A flag rather than a `/status` poll inside the park, because a
-    /// poll would trip on the car's own AP dropping during every OTA reboot and tear the update
-    /// screen down.
-    private var dongleRerunWanted = false
-
-    /// The gates' sleep between polls, held so a button can cut it short: «Повторить» on S23
-    /// and S31 re-asks now rather than at the next 1.5 s tick.
+    /// The ladder's sleep between polls, held so a button can cut it short: «Повторить» on a
+    /// wrong-device or rolled-back screen re-asks now rather than at the next 1.5 s tick.
     private var pollSleep: Task<Void, Never>?
 
-    /// Guards against a second `startupCheck()` running while one is already in flight — a
-    /// second tap on a retry button whose screen has not yet updated `phase` (`dongleGate()`'s
-    /// first act is an `await` on `/version`, up to its timeout, before it writes anything) would
-    /// otherwise spawn a second poll loop issuing requests at the dongle's fixed address
-    /// alongside the first, which is exactly what `DongleClient` asks callers not to do — and if
-    /// the first loop has already handed off to a live drive session, the second would still be
-    /// out there writing `phase` out from under it on its own next poll.
+    /// Guards against a second runner running while one is already in flight — a second tap on a
+    /// retry button whose screen has not yet updated `phase` (a stage's first act is an `await`
+    /// on `/version`, up to its timeout, before it writes anything) would otherwise spawn a second
+    /// poll loop issuing requests at the dongle's fixed address alongside the first, which is
+    /// exactly what `DongleClient` asks callers not to do — and if the first loop has already
+    /// handed off to a live drive session, the second would still be out there writing `phase`
+    /// out from under it on its own next poll.
     private var gateRunning = false
 
-    /// Set by `recheckRollback()`. See `Phase.dongleRolledBack`, `Phase.carRolledBack` and
-    /// `RollbackChoice` for why this has to exist at all: a board's rollback flag does not
-    /// clear on its own, and the app is the only OTA path either board has.
+    /// Set by `recheckRollback()`. See `GateStep.rolledBack` and `RollbackChoice` for why this has
+    /// to exist at all: a board's rollback flag does not clear on its own, and the app is the
+    /// only OTA path either board has.
     private var rollbackChoice: RollbackChoice = .unanswered
 
-    /// Whether the adapter's `/version` has ever answered this launch — the trigger for step 2,
-    /// and nothing else.
-    private var sawDongle = false
-    private var dongleJoinAttempts = 0
-    private var dongleJoinGaveUp = false
     /// The last `/status` failure written to the log — see `readDongleStatus()` for why it is
     /// remembered at all.
     private var lastStatusFailure: String?
@@ -235,41 +102,114 @@ final class AppFlow: ObservableObject {
         gateRunning = true
         defer { gateRunning = false }
         UpdateClient.migrateCacheIfNeeded()
-        await runGates()
+        await runLadder(from: 0)
         setPhase(.awaitingCar)
     }
 
-    /// The adapter's gate, then the car's, until both agree: the car's gate hands back when the
-    /// adapter it talks through has dropped or lost the car's network, and the adapter's gate
-    /// is then run again (it forgets the network on every replug). It also hands back when the
-    /// wire itself flapped while it was holding a car screen — `dongleReturned()` cannot start a
-    /// loop of its own while this one runs, so it leaves `dongleRerunWanted` for `carGate()`.
-    ///
-    /// The dongle half runs wherever there is a dongle to ask: every device, and a simulator
-    /// launched with `-viaDongle` (CarHost) — the adapter on the Mac's USB, the simulator as
-    /// the phone. It learns the newest release on the way (step 3). Against the mock there
-    /// is no dongle and nothing stands in for one, so the release step runs on its own; the
-    /// car itself is then asked directly, the same `carGate()` either way.
-    private func runGates() async {
-        while true {
-            if CarHost.viaDongle {
-                if !dongleHandedOver {
-                    await dongleGate()
-                    dongleHandedOver = true
-                }
-            } else {
-                await releaseGate()
+    /// The ladder, rung by rung. `.advance` climbs; `.jump(w)` (a guard, or a lost reach) drops to
+    /// rung `w`. `gateRunning` is claimed by every caller before the first `await`, so two runners
+    /// never overlap.
+    private func runLadder(from start: Int) async {
+        boards = buildBoards()
+        var i = min(start, boards.count - 1)
+        while i < boards.count {
+            currentRung = i
+            switch await stage(boards[i]) {
+            case .advance: i += 1
+            case .jump(let w): i = max(0, min(w, boards.count - 1))
             }
-            if await carGate() { return }
-            dongleHandedOver = false
         }
     }
 
+    /// `[adapter, car-through-adapter]` when there is a dongle to reach the car through; `[car]`
+    /// read directly when there is not (the mock). The rung indices `restart`/`reach` use come from
+    /// `rung(of:)`, not from this array, so they are valid before the first build.
+    private func buildBoards() -> [Board] {
+        if CarHost.viaDongle { return [dongleBoard(), carBoard(reachedThrough: 0)] }
+        return [carBoard(reachedThrough: nil)]
+    }
+    private func rung(of device: UpdateRules.Device) -> Int {
+        switch device { case .dongle: return 0; case .car: return CarHost.viaDongle ? 1 : 0 }
+    }
+
+    private func dongleBoard() -> Board {
+        Board(identity: .init(device: .dongle, expectedDevice: DongleContract.device,
+                              proto: DongleContract.proto, silentStep: .absent),
+              reachedThrough: nil,
+              readVersion: { [dongle] in try await dongle.versionData() },
+              reach: { .reached })
+    }
+    private func carBoard(reachedThrough: Int?) -> Board {
+        Board(identity: .init(device: .car, expectedDevice: CarContract.device,
+                              proto: CarContract.proto, silentStep: .seeking),
+              reachedThrough: reachedThrough,
+              readVersion: { try await CarTransport.shared.get(CarContract.versionPath, timeout: 2) },
+              reach: reachedThrough == nil ? { .reached }
+                                           : { [weak self] in await self?.reachCarViaDongle() ?? .lost })
+    }
+
+    /// One poll of "is the adapter in the car's network yet": its `/status` → `CarReach` → show the
+    /// step and send the POST it asks for. The car's version is read only once this is `.reached`.
+    private func reachCarViaDongle() async -> Reach {
+        let reply = await readDongleStatus()
+        let (reach, ask) = carReach.next(reply, expectedSSID: CarContract.ssid)
+        if let ask { await sendJoin(ask) }
+        return reach
+    }
+
+    private enum StageExit { case advance; case jump(Int) }
+
+    /// One board's whole stage: reach it, read its `/version`, learn the release if needed, apply
+    /// the rule, park on a forced update. Returns when the board is current and ours (`.advance`)
+    /// or a guard/lost reach sends the runner elsewhere (`.jump`).
+    private func stage(_ board: Board) async -> StageExit {
+        if board.identity.device == .car, CarHost.viaDongle { carReach = CarReach() }
+        var sawChecking = false
+        while true {
+            if let w = wantRung { wantRung = nil; return .jump(w) }
+            // Parked: FirmwareView owns the board during a forced update. Poll nothing — the car's
+            // OTA reboot drops its AP and the adapter would read that as "gone" — just wait for
+            // `updateFinished` (which moves the phase off `.updating`) or a guard.
+            if case .stage(let d, .updating) = phase, d == board.identity.device {
+                await pollPause(); continue
+            }
+            let reach = await board.reach()
+            let version: VersionReply? = reach == .reached ? await readCarOrDongleVersion(board) : nil
+            if reach == .reached, let version, !sawChecking, answered(version) {
+                sawChecking = true
+                setPhase(.stage(board.identity.device, .checking))
+            }
+            switch StageRule.decide(reach: reach, version: version, board: board.identity,
+                                    latestTag: latestTag, rollback: rollbackChoice) {
+            case .lost:
+                return .jump(board.reachedThrough ?? max(0, currentRung - 1))
+            case .needRelease:
+                _ = await fetchRelease(for: board.identity.device)   // sets latestTag or a hold phase
+                await pollPause(); continue                          // re-decide next poll with the tag
+            case .ok:
+                return .advance
+            case .show(let step):
+                if step == .rolledBack || step == .updating { consumeRollbackRecheck() }
+                setPhase(.stage(board.identity.device, step))
+                await pollPause(); continue
+            }
+        }
+    }
+
+    /// `readVersion(_:_:)` over a board's own `readVersion` closure — the classified read, logged
+    /// once per distinct failure (`lastVersionFailure`).
+    private func readCarOrDongleVersion(_ board: Board) async -> VersionReply {
+        await readVersion(board.identity.device.rawValue, board.readVersion)
+    }
+    private func answered(_ reply: VersionReply) -> Bool {
+        switch reply { case .version, .absent: return true; case .silent, .faulty, .denied: return false }
+    }
+
     /// Step 3, one attempt: ask GitHub for the newest release and adopt its tag. The release is
-    /// one for both boards — one tag, two images — so this runs once per launch, and both
-    /// gates' `VersionRule.step` calls read the tag it leaves in `latestTag`, and so does
-    /// `carIdentified` on every hello that changes `fw`, and on every hand-over. `device` only
-    /// says which image's presence to insist on.
+    /// one for both boards — one tag, two images — so this runs once per launch, and `StageRule`
+    /// compares both boards against the tag it leaves in `latestTag`, and so does `carIdentified`
+    /// on every hello that changes `fw`, and on every hand-over. `device` only says which image's
+    /// presence to insist on.
     ///
     /// Returns true once `latestTag` is set. Otherwise sets the holding phase — `.releaseOffline`
     /// when GitHub could not be reached, `.releaseMissing` when the release carries no image for
@@ -301,20 +241,10 @@ final class AppFlow: ObservableObject {
         }
     }
 
-    /// The release step on its own, for a launch with no adapter to find it behind (the mock).
-    /// Same step, same screens, same holds as inside `dongleGate()`; `.car` because there is no
-    /// adapter whose image the release would have to carry.
-    private func releaseGate() async {
-        while latestTag == nil {
-            if await fetchRelease(for: .car) { return }
-            await pollPause()
-        }
-    }
-
-    /// The gates' pause between polls — `donglePollInterval`, unless `wakePoll()` cuts it short.
+    /// The ladder's pause between polls — `donglePollInterval`, unless `wakePoll()` cuts it short.
     ///
-    /// The sleep lives in its own task so a button can cancel it without cancelling the gate;
-    /// the handler passes the gate's own cancellation through, so a cancelled loop does not
+    /// The sleep lives in its own task so a button can cancel it without cancelling the stage;
+    /// the handler passes the stage's own cancellation through, so a cancelled loop does not
     /// sit out the rest of the interval first.
     private func pollPause() async {
         let t = Task<Void, Never> { try? await Task.sleep(for: Self.donglePollInterval) }
@@ -325,262 +255,76 @@ final class AppFlow: ObservableObject {
     /// Cut the current poll pause short — the next read happens immediately.
     func wakePoll() { pollSleep?.cancel() }
 
-    /// The dongle's interface came back after going away.
-    ///
-    /// Unplugging mid-drive is handled correctly all the way down — `CarPath` goes unsatisfied,
-    /// `CarLink` says the wire is gone, the screen says so — but `dongleGate()` returned for
-    /// good when it handed over, so nothing is left watching the dongle. The dongle comes back
-    /// having forgotten the car — it keeps the network in RAM only — so it sits idle with no
-    /// network, answering nobody, and `CarLink` radars indefinitely with no path back to the
-    /// join logic. This is that path, and it is the only hole in an otherwise complete unplug
-    /// story.
-    ///
-    /// Only the dongle half re-runs, and then the car's check: the adapter came back knowing
-    /// nothing, and the car may have been reflashed or restarted meanwhile. `latestTag` is still
-    /// held, so the release is not asked again. While a gate loop is already running on a car
-    /// screen — parked on the forced update, most importantly — it is not re-run from here but
-    /// told to hand back (`dongleRerunWanted`), so that one loop does the same thing itself.
-    func dongleReturned() async {
-        guard CarHost.viaDongle else { return }
-        let onCarSide: Bool
-        switch phase {
-        case .awaitingCar, .ready, .updateRequired,
-             // The car-side phases too, in case the link was open behind one of them.
-             .carChecking, .carWrong, .carRolledBack, .appBehind: onCarSide = true
-        default: onCarSide = false
+    /// One POST asking the adapter to join the car's network. `configure` the first time,
+    /// `retry` after — `DongleClient` keeps them apart on purpose. Failures are logged, never
+    /// swallowed; the credentials never reach a log.
+    private func sendJoin(_ ask: CarReach.Ask) async {
+        do {
+            let reply: DongleWifiReply
+            switch ask {
+            case .configure: reply = try await dongle.join(ssid: CarContract.ssid, password: CarContract.password)
+            case .retry:     reply = try await dongle.retryJoin(ssid: CarContract.ssid, password: CarContract.password)
+            }
+            print("dongle \(DongleContract.wifiPath): \(reply.state)")
+        } catch {
+            print("dongle \(DongleContract.wifiPath) (\(ask == .configure ? "configure" : "retry")) failed: " + Self.describe(error))
         }
-        if gateRunning {
-            // `gateRunning` keeps two loops from polling the same address, so the running one
-            // is asked to hand back instead — but only from a car screen. A flap during the
-            // adapter's own gate is that gate's own business: its next poll sees the new device.
-            if onCarSide { dongleRerunWanted = true }
+    }
+
+    /// A post-gate guard fired: the ladder should be at `device`'s rung or earlier. Not running →
+    /// run from there. Running past it → the current stage falls back until it is there. Running at
+    /// it or earlier → nothing (it will reach it). `restart(from: .car)` re-enters the car's stage
+    /// in place; `restart(from: .dongle)` walks back to the adapter.
+    func restart(from device: UpdateRules.Device) {
+        guard CarHost.viaDongle || device == .car else { return }
+        let target = rung(of: device)
+        guard gateRunning else {
+            gateRunning = true
+            Task { @MainActor in
+                defer { self.gateRunning = false }
+                await self.runLadder(from: target)
+                self.setPhase(.awaitingCar)
+            }
             return
         }
-        guard onCarSide else { return }
-        gateRunning = true
-        defer { gateRunning = false }
-        dongleHandedOver = false
-        await runGates()
-        setPhase(.awaitingCar)
+        wantRung = min(wantRung ?? currentRung, target)
+        wakePoll()
     }
 
-    /// Poll the dongle until it reports `.readyForCar` and return. Each poll is `/version`
-    /// first — identity, rollback, version and protocol, decided by `VersionRule` — and only
-    /// after `.ok` the `/status` document, whose shape depends on the protocol just vouched
-    /// for, decided by `DongleLink`. What follows is the caller's (`runGates()`): the car's own
-    /// gate. The newest release is learned here, once, for both boards (`fetchRelease`): one
-    /// release tags both images, and the car is compared against the same tag in `carGate()`.
-    private func dongleGate() async {
-        // This gate is the one a flap hands back to, so a flag raised before it ran — during the
-        // adapter's own update, say — has nothing left to ask for.
-        dongleRerunWanted = false
-        // Fetched once, lazily, the first time `/version` actually answers — not up front. The
-        // spec's own order is "check whether a dongle is there... if it is, check for a newer
-        // version": fetching GitHub before the first presence check would make a phone with
-        // nothing plugged in wait on a network round trip just to be told to plug something in.
-        while true {
-            if phase == .dongleUpdating {
-                // The screen owns the adapter right now. Polling it mid-flash would read the
-                // silence as "unplugged" and tear down the very view doing the work.
-                await pollPause()
-                continue
+    /// «Повторить» on the join-failed screen: a fresh budget, spent from the next reach.
+    func retryJoin() { carReach.retry(); wakePoll() }
+
+    /// `FirmwareView` finished a forced update of `device`. Move the phase off `.updating` so the
+    /// parked stage re-reaches and re-decides from a fresh `/version`; if the ladder is not running
+    /// (a forced update raised by `carIdentified` mid-session), run it from that board's rung.
+    func updateFinished(_ device: UpdateRules.Device) {
+        guard case .stage(let d, .updating) = phase, d == device else { return }
+        setPhase(.stage(device, .checking))
+        if gateRunning {
+            wakePoll()          // unpark the running stage
+        } else {
+            gateRunning = true
+            Task { @MainActor in
+                defer { self.gateRunning = false }
+                await self.runLadder(from: self.rung(of: device))
+                self.setPhase(.awaitingCar)
             }
-            let version = await readVersion("dongle") { try await self.dongle.versionData() }
-            // A 404 is an answer: a board older than the endpoint is a board, being looked over,
-            // and the release is needed to update it — so it takes the same two steps as a
-            // document does.
-            let answered: Bool
-            switch version {
-            case .version, .absent: answered = true
-            case .silent, .faulty, .denied: answered = false
-            }
-            // Step 2, once: something is there and is being looked over. Guarded, because this
-            // loop re-reads /version forever and must not walk the ladder backwards on every poll.
-            if answered, !sawDongle {
-                sawDongle = true
-                setPhase(.dongleChecking)
-            }
-            // Step 3: the newest release must be established before anything is decided about
-            // the adapter — but only once something has answered at all. Retried on every poll
-            // until it is: a launch that could not reach GitHub must not proceed on the
-            // assumption that nothing has changed.
-            if answered, latestTag == nil {
-                if !(await fetchRelease(for: .dongle)) {
-                    await pollPause()
-                    continue
-                }
-            }
-            // Identity, rollback, version, protocol — the same rule the car's gate uses.
-            var proceed = false
-            switch VersionRule.step(reply: version, expectedDevice: DongleContract.device,
-                                    // Unreachable with nil: see the two fetches above.
-                                    latestTag: latestTag ?? "", appProto: DongleContract.proto,
-                                    rollback: rollbackChoice) {
-            case .plugIn:
-                // A dongle that is gone is a dongle that will come back knowing nothing: it
-                // keeps the car's network in RAM only, so a replug (or its own restart) is a
-                // fresh device with an empty configuration. The join budget is per
-                // conversation with one dongle, and this is the end of one — so the next
-                // dongle to answer gets its one ask, whatever this one spent. Without this,
-                // an app that had already given up saw the returning dongle report no
-                // network, declined to send it, and sat on «Нет связи» over a dongle that
-                // was never told what to look for.
-                dongleJoinAttempts = 0
-                dongleJoinGaveUp = false
-                setPhase(.dongleAbsent)
-            case .faulty:
-                setPhase(.dongleFault)
-            case .accessDenied:
-                setPhase(.dongleDenied)
-            case .wrongDevice(let name):
-                setPhase(.dongleWrong(device: name))
-            case .rolledBack:
-                // One look per ask: a recheck that found nothing newer is spent here, so the
-                // screen comes back with its button instead of re-asking GitHub on every poll
-                // from a permission the user gave once.
-                consumeRollbackRecheck()
-                setPhase(.dongleRolledBack)
-            case .updating:
-                consumeRollbackRecheck()
-                // Handing over, not doing. `FirmwareView` runs the update — the same screen and
-                // the same phases the car's update has always used — and this loop stands aside
-                // until `dongleUpdateFinished()` puts the phase back to `.dongleChecking`. It
-                // used to do the work itself, blind, behind a spinner and an attempt budget; the
-                // budget existed because a headless retry can spin forever unnoticed, and a
-                // screen with a failure and a button does not.
-                setPhase(.dongleUpdating)
-            case .appBehind(let proto):
-                setPhase(.appBehind(device: .dongle, proto: proto))
-            case .ok:
-                proceed = true
-            }
-            if !proceed {
-                await pollPause()
-                continue
-            }
-            // The version agrees, so the protocol-dependent document may be read: the network half.
-            let status: DongleStatus
-            switch await readDongleStatus() {
-            case .status(let s): status = s
-            case .silent:
-                // Answered /version a moment ago and not /status: a reboot in between. Ask
-                // again, and say nothing — the phase already on screen is still the truth.
-                await pollPause()
-                continue
-            case .faulty:
-                // Answered, and badly — an HTTP error, a truncated stream, a body that is not
-                // a /status document. The same fault `/version` reports as `.dongleFault`, and
-                // one that persists (a build whose /status this app cannot read) would
-                // otherwise hide behind whatever step was last shown.
-                setPhase(.dongleFault)
-                await pollPause()
-                continue
-            case .denied:
-                setPhase(.dongleDenied)
-                await pollPause()
-                continue
-            }
-            switch DongleLink.next(status: status, expectedSSID: CarContract.ssid) {
-            case .sendCredentials:
-                // Once the budget is spent this is the same dead end `.retryJoin` reaches, and
-                // it says so: a dongle that keeps reporting a network other than the car's
-                // after being told the car's is not "configuring", it is failing to configure.
-                setPhase(dongleJoinGaveUp ? .dongleJoinFailed : .dongleSendingNet)
-                // No credential state lives here or in DongleClient — CarContract's are opaque
-                // constants, read and handed over, never logged or shown (see DongleClient's own
-                // doc for why `join`/`retryJoin` are shaped this way).
-                await askDongleToJoin(retry: false)
-            case .searchingCar:
-                setPhase(.carFinding)
-            case .waiting:
-                setPhase(.dongleConfiguring)
-            case .retryJoin:
-                // The same rule `.sendCredentials` follows: the failure screen only when there
-                // is no ask left to make. With one still owed, the dongle will be searching
-                // again by the next poll, and «Ищу машинку» is what is true for that beat.
-                setPhase(dongleJoinGaveUp ? .dongleJoinFailed : .carFinding)
-                await askDongleToJoin(retry: true)
-            case .readyForCar:
-                // The join worked, so the budget that got here is spent on nothing: reset it,
-                // for this session and for anyone who re-enters this loop later.
-                dongleJoinAttempts = 0
-                dongleJoinGaveUp = false
-                return
-            }
-            await pollPause()
         }
     }
 
-    /// The car's own check — the adapter's steps 2–3 mirrored. `GET /version` through the
-    /// relay until the car answers, then the same `VersionRule`. `.silent` here is a car that
-    /// is on the adapter's network (the adapter said `connected`) but not answering HTTP yet — a
-    /// reboot, a slow AP — so it is a hold, not "plug it in". Returns once the car is ours,
-    /// current and speaking our protocol; every other outcome is a phase this loop keeps
-    /// re-deciding from the next read. Returns false — handing back to the adapter's gate — when
-    /// the car goes silent through the relay and the adapter reports it is no longer joined to
-    /// the car's network, or when the adapter's wire flapped while this loop held a car screen
-    /// (`dongleRerunWanted`): a replugged adapter knows no network, so the relay is dead until
-    /// `dongleGate()` has told it one again.
-    private func carGate() async -> Bool {
-        while true {
-            // Read before anything else, the park included: on `.updateRequired` nothing below
-            // runs, so this is the only place a replug during the forced update is ever seen.
-            if dongleRerunWanted { dongleRerunWanted = false; return false }
-            if phase == .updateRequired {
-                // `FirmwareView` owns the car right now; polling it mid-flash would read the
-                // silence as a reboot that never ends.
-                await pollPause()
-                continue
-            }
-            let version = await readVersion("car") {
-                try await CarTransport.shared.get(CarContract.versionPath, timeout: 2)
-            }
-            if latestTag == nil, !(await fetchRelease(for: .car)) {
-                await pollPause()
-                continue
-            }
-            switch VersionRule.step(reply: version, expectedDevice: CarContract.device,
-                                    latestTag: latestTag ?? "", appProto: CarContract.proto,
-                                    rollback: rollbackChoice) {
-            case .plugIn, .faulty:
-                // Silence through the relay is a rebooting car — unless the relay itself is
-                // gone: the adapter unplugged (it forgets the car's network) or dropped off it.
-                // The link is not open in this phase, so nobody else would notice; ask the
-                // adapter and hand back to its gate when it is not joined any more.
-                if CarHost.viaDongle, !(await adapterStillJoined()) { return false }
-                setPhase(.carChecking)
-            case .accessDenied:
-                setPhase(.dongleDenied)
-            case .wrongDevice(let name):
-                setPhase(.carWrong(device: name))
-            case .rolledBack:
-                consumeRollbackRecheck()
-                setPhase(.carRolledBack)
-            case .updating:
-                consumeRollbackRecheck()
-                setPhase(.updateRequired)
-            case .appBehind(let proto):
-                setPhase(.appBehind(device: .car, proto: proto))
-            case .ok:
-                // A flap that landed after this iteration's check must not be answered by the
-                // next gate run, whenever that is.
-                dongleRerunWanted = false
-                return true
-            }
-            await pollPause()
+    /// The button each `.stage` step can carry, if any — wired into `ConnectView.onRetry`.
+    func retryAction(for step: GateStep) -> (() -> Void)? {
+        switch step {
+        case .wrongDevice: return { [weak self] in self?.wakePoll() }
+        case .rolledBack:  return { [weak self] in self?.recheckRollback() }
+        case .joinFailed:  return { [weak self] in self?.retryJoin() }
+        default:           return nil
         }
-    }
-
-    /// Whether the adapter still reports `connected` to the car's network — the one question
-    /// `carGate()` asks when the car goes silent through the relay.
-    private func adapterStillJoined() async -> Bool {
-        guard case .status(let s) = await readDongleStatus() else { return false }
-        return DongleLink.next(status: s, expectedSSID: CarContract.ssid) == .readyForCar
     }
 
     /// Write `phase` only when it actually moves.
     ///
-    /// `dongleGate()` re-decides the phase on every poll and assigns it unconditionally, and
+    /// A stage re-decides the phase on every poll and assigns it unconditionally, and
     /// `@Published` emits on assignment whether or not the value changed — so an unplugged
     /// phone re-invalidated the whole root tree at 0.67 Hz, indefinitely, to redraw the same
     /// screen. `carIdentified` guards against exactly this three lines from here, for exactly
@@ -671,34 +415,6 @@ final class AppFlow: ObservableObject {
         }
     }
 
-    /// One POST asking the dongle to join the car's network — `join` the first time, `retryJoin`
-    /// afterwards (`DongleClient` keeps them apart on purpose; see `retryJoin`'s doc). Failures
-    /// are logged, never swallowed: a 400 means the dongle rejected the credentials outright and
-    /// a 500 means it took them and the radio refused, which are the same screen but very
-    /// different bench sessions.
-    private func askDongleToJoin(retry: Bool) async {
-        // Bounded, and the bound covers BOTH kinds of ask: a dongle that never holds what it
-        // is told loops through `.sendCredentials` exactly as tirelessly as a radio that cannot
-        // reach the car loops through `.retryJoin`, and neither may run forever.
-        guard !dongleJoinGaveUp else { return }
-        dongleJoinAttempts += 1
-        if dongleJoinAttempts >= Self.maxDongleJoinAttempts { dongleJoinGaveUp = true }
-        do {
-            let reply: DongleWifiReply
-            if retry {
-                reply = try await dongle.retryJoin(ssid: CarContract.ssid, password: CarContract.password)
-            } else {
-                reply = try await dongle.join(ssid: CarContract.ssid, password: CarContract.password)
-            }
-            print("dongle \(DongleContract.wifiPath): \(reply.state)")
-        } catch {
-            // `logDescription` names the failure's shape and nothing else — no body, and
-            // nothing of what was sent. The credentials never reach a log.
-            print("dongle \(DongleContract.wifiPath) (\(retry ? "retry" : "configure")) failed: "
-                  + Self.describe(error))
-        }
-    }
-
     /// `CarError.logDescription` when it is one — the same vocabulary `UpdateClient.upload`
     /// logs — and a plain description otherwise, which is how a `DecodingError` from a body
     /// this build could not read says which key it choked on.
@@ -707,10 +423,10 @@ final class AppFlow: ObservableObject {
     }
 
     /// The user asked whether a newer release exists yet — the one button on either board's
-    /// rolled-back screen (`ConnectView.Situation.rolledBack(device:)`). Two halves, both
+    /// rolled-back screen (`ConnectView.Situation.stage(_, .rolledBack)`). Two halves, both
     /// required: re-open the release fetch (a tag fetched before the rollback screen appeared is
     /// exactly the tag that cannot help), and record what was on offer at the time so
-    /// `VersionRule` can tell a genuinely newer image from the one that just rolled back.
+    /// `StageRule` can tell a genuinely newer image from the one that just rolled back.
     func recheckRollback() {
         rollbackChoice = .recheck(from: latestTag)
         // Clearing the tag is what makes the next poll re-ask GitHub: `fetchRelease` runs while
@@ -720,26 +436,11 @@ final class AppFlow: ObservableObject {
         wakePoll()
     }
 
-    /// A recheck is one look, not a standing permission — spent as soon as `VersionRule` has
+    /// A recheck is one look, not a standing permission — spent as soon as `StageRule` has
     /// answered with it, whichever way it answered.
     private func consumeRollbackRecheck() {
         if case .recheck = rollbackChoice { rollbackChoice = .unanswered }
     }
-
-    /// The user asked for another join attempt from the join-failed screen — either after the
-    /// budget above ran out, or just to stop waiting for the next poll. Both are the same
-    /// request: a fresh budget, spent from the next `.sendCredentials`/`.retryJoin` step.
-    func retryDongleJoin() {
-        dongleJoinGaveUp = false
-        dongleJoinAttempts = 0
-    }
-
-    /// The user asked `dongleGate()` to try updating the dongle again after it gave up —
-    /// the very next `.updating` step gets a fresh budget.
-    /// `FirmwareView` is done with the adapter — updated, or failed and dismissed. Handing the
-    /// phase back to the check is what makes the gate re-decide from a fresh `/version` instead
-    /// of trusting whatever the screen concluded.
-    func dongleUpdateFinished() { setPhase(.dongleChecking) }
 
     /// The car said who it is, in its hello reply. Re-evaluated every time, not once: a car that
     /// reboots into a different build after an OTA is the same question asked again.
@@ -747,38 +448,14 @@ final class AppFlow: ObservableObject {
     /// A nil `fw` is "we have not met the car yet", which is not the same as "the car is behind"
     /// — forcing an update against a car that never answered would be a screen with nothing to
     /// flash.
-    ///
-    /// `.updateRequired` is in the set so the gate can CLEAR: a car that reboots into the
-    /// required build must release the forced screen even if FirmwareView's own confirmation
-    /// window missed the reconnect (decision 4c).
     func carIdentified(fw: String?) {
         guard let fw else { return }
-        guard phase == .awaitingCar || phase == .ready || phase == .updateRequired else { return }
-        let next: Phase = GateRule.mayDrive(deviceBuild: UpdateClient.buildNumber(fw),
-                                           latestBuild: UpdateClient.buildNumber(latestTag))
-            ? .ready : .updateRequired
-        // `setPhase` already writes only on a real change, which matters here more than
-        // anywhere: this is re-asked on every telemetry frame, and `@Published` emits on
-        // assignment whether or not the value moved — five root-tree invalidations a second for
-        // a phase that has not changed since launch.
-        setPhase(next)
-    }
-
-    /// Forced FirmwareView signals completion: re-decide from a fresh /version. If the launch's
-    /// own gate loop is still there (it parks while `.updateRequired`), `.carChecking` wakes it;
-    /// otherwise — a forced update raised by `carIdentified` mid-session — run the gates again.
-    func updateFinished() {
-        guard phase == .updateRequired else { return }
-        setPhase(.carChecking)
-        guard !gateRunning else { return }
-        // Claimed here, synchronously, not inside the Task: a `dongleReturned()` already queued
-        // on the main actor would otherwise pass its own guard in the hop before the Task runs
-        // and start a second gate loop beside this one.
-        gateRunning = true
-        Task { @MainActor in
-            defer { self.gateRunning = false }
-            await self.runGates()
-            self.setPhase(.awaitingCar)
+        guard phase == .awaitingCar || phase == .ready else { return }
+        if GateRule.mayDrive(deviceBuild: UpdateClient.buildNumber(fw),
+                             latestBuild: UpdateClient.buildNumber(latestTag)) {
+            setPhase(.ready)
+        } else {
+            restart(from: .car)   // re-enter the car's stage; the rule raises .updating from /version
         }
     }
 }
