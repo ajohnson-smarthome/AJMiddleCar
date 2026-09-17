@@ -41,7 +41,7 @@ optional» — здесь она заменяется контрактом); `do
   "fields": [
     {"name": "device",      "type": "str",  "doc": "the device name; ajmiddlecar for the car, ajdongle for the adapter"},
     {"name": "fw",          "type": "str",  "doc": "firmware version as the build prints it: v<semver>+<build>[-<n>-g<sha>[-dirty]]"},
-    {"name": "build",       "type": "int",  "doc": "the number after + in fw, parsed by the firmware; 0 when fw carries none"},
+    {"name": "build",       "type": "int",  "doc": "the number after + in fw, parsed by the firmware; -1 when fw carries none"},
     {"name": "proto",       "type": "int",  "doc": "the protocol number of everything else this board serves — this contract's proto"},
     {"name": "rolled_back", "type": "bool", "doc": "the bootloader reverted the last update; sticky until the next successful OTA"}
   ]
@@ -72,7 +72,10 @@ optional» — здесь она заменяется контрактом); `do
 
 ### `/status` теряет `device` — у обеих плат, целиком
 
-Группа `device` уходит из `groups` и из `status.groups` обоих контрактов. Машинка:
+Группа `device` уходит из `status.groups` обоих контрактов. У машинки `groups.device`
+**остаётся** — это объект `hello_ack`, из него генерируется `DeviceInfo`, которым приложение
+разбирает ответ на hello (его не трогаем); его doc меняется на «the object in the hello reply».
+У адаптера `groups.device` уходит целиком — больше никто его не читает. Машинка:
 `/status` = `proto`, затем `link`, `motors`, `radio`, `storage`, `system`, `video` (шесть групп).
 Адаптер: `proto`, затем `usb`, `wifi`, `relay`, `system`; поле `idf` переезжает в `system`
 (`system.idf`, str). `proto` наверху `/status` остаётся — документ протоколо-зависимый, и это
@@ -103,7 +106,7 @@ optional» — здесь она заменяется контрактом); `do
 `{"device":"…","fw":"v1.0+879","build":879,"proto":N,"rolled_back":false}`.
 
 `build` считает прошивка (`fw_build_number`), как и сейчас: `v1.0+881-3-gabc-dirty` → `881`,
-без `+` → `0`.
+без `+` → `-1` (так уже печатают обе прошивки и мок; `-1 < любой релиз` читается как «отстала»).
 
 Порядок при загрузке не меняется: `/version` регистрируется там же, где `/status`, и живёт
 или умирает вместе с HTTP-сервером; поведение по откату (`mark_app_valid` у машинки после
