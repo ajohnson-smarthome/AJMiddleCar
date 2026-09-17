@@ -236,7 +236,9 @@ including the adapter's own update, the car's forced update and the drive screen
 `xcrun simctl launch booted com.adamjohnson.ajmiddlecar -viaDongle`, screenshot with
 `xcrun simctl io booted screenshot`. This is how the first FPV bench round was run (2026-09-14). There is no direct path from a device to the car and no
 argument that opens one — the bench escape hatch was retired 2026-09-13. `MOCK_DEVICE=esp32-car`
-makes the mock impersonate the other car, which is how the wrong-car screen is exercised.
+makes the mock impersonate the other car, which is how the wrong-car screen is exercised;
+`--no-version` (or `MOCK_NO_VERSION=1`) makes it answer 404 on `/version` until the first
+accepted OTA — the flag-day rehearsal, a car older than the endpoint.
 
 `CarLink.video` (a `VideoLink`) and `VideoView` add the FPV picture to the drive screen: a
 `view` subscription over `CarHost.videoPort`, tied to the same session `CarLink` opens, feeding

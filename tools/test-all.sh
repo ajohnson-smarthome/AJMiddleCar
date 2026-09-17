@@ -61,7 +61,11 @@ else
     RT_PORT=4237
     VIDEO_PORT=4238
     LOG="$(mktemp -t mockcar)"
-    "$MOCK_PY" tools/mock_car/mock_car.py --host 127.0.0.1 --port "$PORT" \
+    # The mock reads MOCK_DEVICE and MOCK_NO_VERSION from the environment — a shell that
+    # was just rehearsing the wrong-car screen or the flag day would otherwise hand the
+    # conformance sweep a foreign car, or a 404 on /version, and fail it for no reason.
+    env -u MOCK_NO_VERSION -u MOCK_DEVICE \
+        "$MOCK_PY" tools/mock_car/mock_car.py --host 127.0.0.1 --port "$PORT" \
         --rt-port "$RT_PORT" --video-port "$VIDEO_PORT" --video-loss-pct 0.3 > "$LOG" 2>&1 &
     MOCK_PID=$!
     trap 'kill "$MOCK_PID" 2>/dev/null || true; rm -f "$LOG"' EXIT

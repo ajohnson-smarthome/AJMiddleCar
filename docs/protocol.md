@@ -434,7 +434,7 @@ the phone, one decimal), `video_dropped` (chunks not delivered toward the phone 
 refused by the gate, or admitted and then refused by the USB side). `null` here means the
 adapter predates video, not that nothing is happening.
 
-### `GET /version` — the one document that never changes
+## `GET /version` — frozen, the one document that never changes
 
 ```json
 {"device":"ajmiddlecar","fw":"v1.0+879","build":879,"proto":2,"rolled_back":false}

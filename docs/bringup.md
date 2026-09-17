@@ -85,7 +85,7 @@ see the sensor, its filter and its field of view without an app or a wire in the
       (`joined: ip=192.168.4.2 gw=192.168.4.1`, 2026-08-31 — see `firmware/dongle/README.md`). The
       phone itself never joins: it reaches the car through the dongle.
 - [x] **Identity.** `curl http://192.168.7.1/status` through the relay returns `"device":"ajmiddlecar"`
-      (2026-08-31, same table).
+      (2026-08-31, same table; с 17.09 — `/version`, `/status` личности больше не несёт).
 - [x] **I2C.** Both boards answer and initialise — `0x40` front, `0x60` rear. The rear address
       is not the `0x41` this file originally assumed; see the bench notes. A bus scan is the
       quickest way to check, and it is self-verifying because the on-board ES8311 codec sits at
@@ -104,6 +104,11 @@ see the sensor, its filter and its field of view without an app or a wire in the
       oldest untested behaviour in the family.
 - [ ] **OTA.** Cut a release, let the app's launch gate force-update the board, confirm it boots
       and `fw` reports the new build.
+- [ ] **День-флаг без кабеля** (`docs/superpowers/specs/2026-09-17-version-endpoint-design.md`, §7):
+      обе платы на v1.0+879 отвечают 404 на `/version` → адаптер S11 → обновлён; машинка S30 →
+      S27 → обновлена → S28 (симулятор `-viaDongle`, адаптер на Mac).
+- [ ] **Адаптер выдернут и воткнут посреди S27** (F5 в `FirmwareView`, машинка ещё не ответила):
+      экран уходит на S12/S13, адаптер снова в сети машинки → снова S27, обновление доходит до S28.
 
 ### Video — after `docs/superpowers/specs/2026-09-14-fpv-video-design.md`, once its own stage 4 is done
 

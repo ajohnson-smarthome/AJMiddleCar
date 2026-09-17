@@ -1,6 +1,6 @@
 # `/version` — незаменяемый эндпоинт личности, одно правило обновления на две платы
 
-**Статус:** реализовано 2026-09-17 (план `docs/superpowers/plans/2026-09-17-version-endpoint.md`); стенд — см. `docs/bringup.md`.
+**Статус:** реализовано 2026-09-17 (f3f0dd9..HEAD; план `docs/superpowers/plans/2026-09-17-version-endpoint.md`); стенд не проводился — пункты в `docs/bringup.md`.
 **Опирается на:** `docs/superpowers/specs/2026-09-16-one-release-gate-design.md` (один запрос
 релиза за запуск, машинка проверяется после адаптера);
 `docs/superpowers/specs/2026-09-16-v1-removal-design.md`, §7 (дисциплина «новое поле — только
@@ -194,7 +194,13 @@ readyForCar ──▶ S30 проверяю машинку ── GET /version ч
 переспрашиваем; `.faulty` — то же с логом, как `readStatus()` сейчас.
 
 `dongleReturned()` после повторного прогона `dongleGate()` идёт в `carGate()`, а не сразу в
-`.awaitingCar`: адаптер вернулся — машинку тоже проверяем заново.
+`.awaitingCar`: адаптер вернулся — машинку тоже проверяем заново. На тишине через реле гейт
+машинки переспрашивает адаптер (`/status`) и отдаёт ход его гейту, если тот больше не в сети
+машинки; после `updateFinished()` гейт запускается заново (или будится, если ещё стоит на
+`.updateRequired`). Возврат адаптера на провод во время S27 отмечается флагом
+(`dongleRerunWanted`), и парковка на `.updateRequired` отдаёт ход гейту адаптера — опроса
+`/status` внутри парковки нет намеренно: он срабатывал бы на каждой перезагрузке машинки по
+ходу OTA и снимал бы экран обновления.
 
 ### Экраны
 
@@ -234,7 +240,9 @@ CarContract.versionPath, timeout: 2)`; адаптеру — `DongleClient`), `ru
 
 `tools/mock_car/mock_car.py`: `GET /version` из `car.device`, `car.fw`, `build_number(car.fw)`,
 `PROTO`, `car.rollback`; `/status` без `device`. `MOCK_DEVICE=esp32-car` (чужая машинка)
-теперь проявляется на S23 через `/version`, до hello. Мока адаптера нет и не появляется:
+теперь проявляется на S23 через `/version`, до hello. `--no-version` (или
+`MOCK_NO_VERSION=1`) — мок отвечает `404` на `/version` до первого принятого `/ota`: репетиция
+дня-флага (раздел 7) без платы. Мока адаптера нет и не появляется:
 путь без адаптера — `releaseGate()` → `carGate()` против мока → S28.
 
 `tools/conformance.py`: новая проверка `/version` — пять полей и типы по контракту,
@@ -257,7 +265,10 @@ CarContract.versionPath, timeout: 2)`; адаптеру — `DongleClient`), `ru
   `DeviceVersion` разбирает оба живых документа, `VersionReply.of` классифицирует ошибки
   транспорта (переезд теста из `donglelink`); `donglelink` переписывается под
   `next(status:expectedSSID:)`; `carlink`, `sessionpolicy`, `rtframe` — без изменений.
-- `xcodebuild`; симулятор против мока: S30 → S28 за секунды; `MOCK_DEVICE=esp32-car` → S23.
+- `xcodebuild`; симулятор против мока: S30 → S28 за секунды; `MOCK_DEVICE=esp32-car` → S23;
+  `MOCK_NO_VERSION=1` → S27 с первого же опроса, и после принятого образа — S28 (репетиция
+  дня-флага). `tools/test-all.sh` запускает свой мок с очищенными `MOCK_DEVICE` и
+  `MOCK_NO_VERSION`, чтобы репетиция в соседнем терминале не ломала конформанс.
 - Стенд (раздел 7): день-флаг без кабеля, обе платы.
 
 ## 6. Документы

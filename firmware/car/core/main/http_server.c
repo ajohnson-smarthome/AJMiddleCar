@@ -26,17 +26,19 @@ httpd_handle_t http_server_get_handle(void) {
 esp_err_t http_server_start(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    // 9 routes: /, GET+POST /config, GET+POST /calibration, POST /calibration/spin,
-    // GET /status, POST /ota, GET /snapshot — one /config now covers every domain, so
-    // this count no longer moves when contract/car-api.json grows a domain. Above the
-    // IDF default of 8; without the bump registration aborts with HANDLERS_FULL and the
-    // car comes up with no softAP.
+    // 10 routes: /, GET+POST /config, GET+POST /calibration, POST /calibration/spin,
+    // GET /version, GET /status, POST /ota, GET /snapshot — one /config covers every
+    // domain, so this count no longer moves when contract/car-api.json grows a domain.
+    // Above the IDF default of 8; without the bump registration aborts with
+    // HANDLERS_FULL and the car comes up with no softAP.
     config.max_uri_handlers = 12;
-    // The v2 handlers hold more locals than IDF's default 4096-byte task stack ever
-    // proved margin for: status_get builds the identity, the three telemetry groups
-    // and the 640-byte envelope buffer (~2.4 KB of locals) on top of esp_http_server's
-    // own frames and cJSON's recursion in cfg_get/cfg_post. The P4 has RAM to spare, so
-    // this buys headroom instead of chasing the exact high-water mark.
+    // The handlers hold more locals than IDF's default 4096-byte task stack ever proved
+    // margin for: status_get gathers a telemetry_t, renders its groups, splices radio and
+    // storage in (an API_MEMBERS_MAX members buffer) and hands that to api_reply_json's
+    // own envelope copy — about 2 KB of locals on top of esp_http_server's frames and
+    // cJSON's recursion in cfg_get/cfg_post. version_get is the light one: the frozen
+    // five-field document in a 160-byte buffer. The P4 has RAM to spare, so this buys
+    // headroom instead of chasing the exact high-water mark.
     config.stack_size = 8192;
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &config), TAG, "httpd start");
 
