@@ -90,8 +90,12 @@ struct RootView: View {
             // holds: a hello that landed while a gate was still deciding was refused by
             // `carIdentified`'s phase guard, and nothing else would ask again — the launch,
             // an adapter that came back, and a forced update that finished all hand over here.
+            // Only with the link live, though: `CarLink` keeps `fw` across a closed session, so
+            // after an update the car's OLD build is what it holds until the next hello — and
+            // re-asking with that bounced the flow straight back into the forced update it had
+            // just left. The not-yet-live case is the `.live` re-ask above.
             .onChange(of: flow.phase) { _, phase in
-                if phase == .awaitingCar { flow.carIdentified(fw: link.fw) }
+                if phase == .awaitingCar, link.isLive { flow.carIdentified(fw: link.fw) }
             }
     }
 
@@ -146,7 +150,8 @@ struct RootView: View {
         case .carChecking:
             ConnectView(situation: .checkingCar)
         case .carWrong(let device):
-            WrongCarView(palette: p, kind: .foreignDevice(device)) { }   // the poll re-asks by itself
+            // The poll re-asks by itself; the button only cuts its wait short.
+            WrongCarView(palette: p, kind: .foreignDevice(device)) { flow.wakePoll() }
         case .carRolledBack:
             ConnectView(situation: .rolledBack(device: .car),
                         onRecheckRollback: { flow.recheckRollback() })
