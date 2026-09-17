@@ -1,6 +1,6 @@
 # Лестница плат — одна стадия на адаптер и машинку
 
-**Статус:** утверждён в брейншторме 2026-09-17; план — `docs/superpowers/plans/2026-09-17-board-ladder.md`.
+**Статус:** утверждён в брейншторме 2026-09-17; план — `docs/superpowers/plans/2026-09-17-board-ladder.md`; `GateStep.appBehind`/S32 и `Link.wrongProto` удалены `2026-09-17-proto-out-of-app-design.md`.
 **Опирается на:** `docs/superpowers/specs/2026-09-17-version-endpoint-design.md` (замороженный
 `GET /version`, одно правило `VersionRule` на обе платы, S30–S32 у машинки);
 `docs/superpowers/specs/2026-09-16-one-release-gate-design.md` (один запрос релиза за запуск);

@@ -1,6 +1,6 @@
 # `/version` — незаменяемый эндпоинт личности, одно правило обновления на две платы
 
-**Статус:** реализовано 2026-09-17 (f3f0dd9..HEAD; план `docs/superpowers/plans/2026-09-17-version-endpoint.md`); стенд не проводился — пункты в `docs/bringup.md`; §3 (лестница) заменена docs/superpowers/specs/2026-09-17-board-ladder-design.md.
+**Статус:** реализовано 2026-09-17 (f3f0dd9..HEAD; план `docs/superpowers/plans/2026-09-17-version-endpoint.md`); стенд не проводился — пункты в `docs/bringup.md`; §3 (лестница) заменена docs/superpowers/specs/2026-09-17-board-ladder-design.md; proto-ось из решений приложения снята `2026-09-17-proto-out-of-app-design.md` (`VersionRule` без `appProto`, S32 удалён; поле `proto` в `/version` остаётся).
 **Опирается на:** `docs/superpowers/specs/2026-09-16-one-release-gate-design.md` (один запрос
 релиза за запуск, машинка проверяется после адаптера);
 `docs/superpowers/specs/2026-09-16-v1-removal-design.md`, §7 (дисциплина «новое поле — только

@@ -238,6 +238,10 @@ v2 rule "`proto` first" is spelled as a single byte rather than a JSON key.
 | Offset | Size | Field | Meaning |
 |---|---|---|---|
 | 0 | u8 | `proto` | this wire format's own version, always **1** (`video.wire_proto`) — a separate number from the JSON envelope's `proto:2` above; anything else and the datagram is dropped |
+
+Зачем `proto` на проводе: это версия формата. Её работа — на будущее: при изменении раскладки
+датаграммы старый бинарь по `proto` её отвергнет, а не неверно разберёт. Приложение по `proto`
+не решает (совместимость — по выпуску); прошивка дропает датаграмму с чужим `proto`.
 | 1 | u8 | `flags` | bit 0 set = keyframe (carries SPS/PPS ahead of the frame data); every other bit must be zero |
 | 2 | u8 | `stream` | +1 at every stream start; a receiver that sees it change discards whatever it was assembling and waits for a keyframe |
 | 3 | u8 | reserved | always `0`; a receiver that sees it set drops the datagram |

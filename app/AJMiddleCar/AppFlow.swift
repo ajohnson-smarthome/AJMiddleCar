@@ -26,8 +26,8 @@ final class AppFlow: ObservableObject {
 
         /// The phases whose screen opens the UDP link. Everything mid-ladder is on the false side:
         /// until the ladder hands over there is no session to open, and `.stage(_, .updating)` runs
-        /// the forced update over HTTP — a session there would only shout `wrongProto` at the very
-        /// car being updated.
+        /// the forced update over HTTP — a session there would only fight the very car being updated
+        /// over a protocol it is being updated to speak.
         var opensLink: Bool {
             switch self {
             case .awaitingCar, .ready: return true

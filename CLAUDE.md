@@ -219,6 +219,11 @@ hello, чужой proto) не рисуют своих экранов, а пер�
 (`restart(from:)`). Один экран на всё — `ConnectView(.stage(device, step))`; `WrongCarView`
 больше нет.
 
+Совместимость держится на дисциплине выпуска: один релиз поставляет приложение и обе прошивки
+вместе, поэтому «билд платы == тег релиза» и есть совместимость. Приложение НЕ решает по `proto` —
+ни на гейте, ни в рантайм-сессии; `proto` остаётся байтом на проводе (приложение пишет его в
+исходящие датаграммы, прошивка дропает чужой), но как версия формата, а не вход в решение.
+
 ```bash
 cd app && xcodegen generate
 xcodebuild build -scheme AJMiddleCar -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath /tmp/ddata-middle

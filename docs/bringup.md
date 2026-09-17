@@ -109,6 +109,11 @@ see the sensor, its filter and its field of view without an app or a wire in the
 - [ ] **Адаптер выдернут посреди `.stage(.car,.updating)`:** → `.stage(.dongle,.absent)` →
       воткнуть → `.stage(.car,.searching/.joining)` → снова `.updating` → S28.
 - [ ] **После обновления машинки лестница показывает `.searching/.joining`** (адаптер переподключается) до `.checking`.
+- [ ] **Самопроверка версии приложения при старте** (когда приложение попадёт в App Store):
+      сейчас совместимость держится на инварианте «приложение всегда последнее» (собирается из
+      исходников). Когда появится распространяемый бинарь, приложение должно гейтить СВОЮ версию
+      на старте — это настоящее место защиты «устаревшее приложение + новая прошивка», которую
+      раньше слабо ловил `proto`/S32 (спека `2026-09-17-proto-out-of-app-design.md`).
 
 ### Video — after `docs/superpowers/specs/2026-09-14-fpv-video-design.md`, once its own stage 4 is done
 
