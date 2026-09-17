@@ -37,8 +37,8 @@ final class FirmwareFlow: ObservableObject {
     // ── the seam: four questions, one verb ───────────────────────────────
     private let runningFw: @MainActor () -> String?
     private let isReachable: @MainActor () -> Bool
-    /// Called on every tick of the reboot watch. The car's values arrive by themselves through
-    /// `CarLink`; the adapter's have to be fetched, and this is where it happens.
+    /// Called on every tick of the reboot watch. Both boards are asked through `/version`: the
+    /// car through the relay, the adapter over USB.
     private let refresh: @MainActor () async -> Void
     private let push: @MainActor (URL, UpdateClient, @escaping @MainActor (Double) -> Void) async -> UpdateClient.UploadOutcome
 
@@ -150,10 +150,11 @@ final class FirmwareFlow: ObservableObject {
     /// from `.task(id: flow.phase)`, and `flash()`'s first act is to move the phase — which
     /// cancels the task it is running in. The upload survived that (it is a child `Task` of
     /// its own), but the reboot watch ran cancelled: every sleep returned at once, every
-    /// `/status` threw before opening a connection, and thirty seconds of that ended as
+    /// `/version` threw before opening a connection, and thirty seconds of that ended as
     /// «Прошито» for an adapter that had come back within twenty (bench, 2026-09-15).
     func flashWhenReachable() async {
         while phase == .downloaded {
+            await refresh()
             if isReachable() {
                 Task { @MainActor in await self.flash() }
                 return
@@ -203,7 +204,9 @@ final class FirmwareFlow: ObservableObject {
         while Date.now < deadline {
             try? await Task.sleep(nanoseconds: 500_000_000)
             await refresh()
-            if let now = runningFw(), oldFw != nil, now != oldFw { phase = .done; return }
+            // A version that differs from the one before the flash — including one appearing
+            // where a 404 board had none — is the update landing.
+            if let now = runningFw(), now != oldFw { phase = .done; return }
             if !isReachable() {
                 sawOffline = true
             } else if sawOffline {
@@ -263,6 +266,8 @@ extension FirmwareFlow {
             } catch is CancellationError {
                 return .cancelled
             } catch {
+                // The adapter's own words when it gave any; nil when nothing answered, which the
+                // screen renders as the generic failure rather than quoting silence.
                 return .failed((error as? CarError).map { String(describing: $0) })
             }
         })
@@ -280,13 +285,21 @@ private final class VersionState {
     init(read: @escaping () async throws -> Data) { self.read = read }
 
     func refresh() async {
-        // The frozen document, on both sides of the reboot this watch runs through: a 404 or a
-        // stale-format answer would be a board older than this app, which the gate has already
-        // sent through an update — so anything but the document is "not reachable yet".
-        if let data = try? await read(), case .version(let v) = VersionReply.decode(data) {
+        // One read of the frozen document, classified the way the gate classifies it.
+        let reply: VersionReply
+        do { reply = VersionReply.decode(try await read()) } catch { reply = VersionReply.of(error) }
+        switch reply {
+        case .version(let v):
             fw = v.fw
             reachable = true
-        } else {
+        case .absent:
+            // A board older than /version: it is there, it takes POST /ota, and it is exactly
+            // the board the gate sent here to be updated. Only its version is unknown.
+            fw = nil
+            reachable = true
+        case .silent, .faulty, .denied:
+            // Not answering, or answering with something that is not the document — a reboot
+            // in progress, or not our board at all. Not reachable for a flash either way.
             reachable = false
         }
     }

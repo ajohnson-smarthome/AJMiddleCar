@@ -148,6 +148,10 @@ async def status(request):
 async def version(request):
     """GET /version — the frozen five-field document, raw (it spells its own proto)."""
     car = request.app["car"]
+    if request.app["no_version"]:
+        # A board older than the endpoint: a 404 with any body, exactly like an unmatched
+        # path — the app's `VersionReply.of` maps any 404 here to `.absent`, not a decode.
+        return json_error(404, "not_found", "no such path")
     return web.json_response({
         "device": car.device,
         "fw": car.fw,
@@ -271,6 +275,8 @@ async def ota(request):
         car.rollback = True
         print(f"ota: 'rolled back' — reporting {car.fw}, rollback:true")
     else:
+        # The new image knows /version: from here the board answers it.
+        request.app["no_version"] = False
         print(f"ota: done, now running {car.fw} — 'rebooting'")
     link.simulate_reboot(asyncio.get_running_loop().time())
     return reply({ENVELOPE["ok"]: True})
@@ -282,7 +288,7 @@ async def root(request):
     return web.Response(text=f"{car.device} {car.fw}\n")
 
 
-def build_app(car, link, rollback_mode=False):
+def build_app(car, link, rollback_mode=False, no_version=False):
     # aiohttp's default client_max_size is 1 MB. A real image is already ~0.75 MB
     # (firmware/car/core/build/ajmiddlecar.bin) and growing, so the default would 413 a
     # legitimate upload — and, without the read() guard above, wedge the actuator
@@ -292,6 +298,7 @@ def build_app(car, link, rollback_mode=False):
     app["link"] = link
     app["lock"] = asyncio.Lock()
     app["rollback_mode"] = rollback_mode
+    app["no_version"] = no_version
     app.add_routes([
         web.get(ENDPOINTS["root"], root),
         web.get(ENDPOINTS["status"], status),
@@ -314,7 +321,8 @@ async def serve(args):
 
     _, link = await loop.create_datagram_endpoint(
         lambda: RTLink(car, impair, args.verbose), local_addr=(args.host, args.rt_port))
-    runner = web.AppRunner(build_app(car, link, rollback_mode=args.rollback), access_log=None)
+    runner = web.AppRunner(build_app(car, link, rollback_mode=args.rollback, no_version=args.no_version),
+                           access_log=None)
     await runner.setup()
     await web.TCPSite(runner, args.host, args.port).start()
 
@@ -365,6 +373,8 @@ def main():
     p.add_argument("--rollback", action="store_true",
                    help="rehearsal: every successful /ota 'fails its first boot' — the mock "
                         "comes back on the old fw with rollback:true in /status")
+    p.add_argument("--no-version", action="store_true", default=bool(os.environ.get("MOCK_NO_VERSION")),
+                   help="answer 404 on /version until the first accepted OTA — a car older than the endpoint")
     p.add_argument("--video-port", type=int, default=VIDEO["port"], help="video port (default from the contract)")
     p.add_argument("--video-sample", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "sample.h264"))
     p.add_argument("--video-loss-pct", type=float, default=0.0, help="drop this share of video datagrams")
