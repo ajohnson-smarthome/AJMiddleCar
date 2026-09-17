@@ -700,8 +700,11 @@ final class AppFlow: ObservableObject {
         guard phase == .updateRequired else { return }
         setPhase(.carChecking)
         guard !gateRunning else { return }
+        // Claimed here, synchronously, not inside the Task: a `dongleReturned()` already queued
+        // on the main actor would otherwise pass its own guard in the hop before the Task runs
+        // and start a second gate loop beside this one.
+        gateRunning = true
         Task { @MainActor in
-            self.gateRunning = true
             defer { self.gateRunning = false }
             await self.runGates()
             self.setPhase(.awaitingCar)
