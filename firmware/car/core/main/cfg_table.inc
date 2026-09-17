@@ -73,11 +73,18 @@ static const cfg_domain_t CFG_DOMAINS[] = {
 
 #define PATH_ROOT "/"
 #define PATH_STATUS "/status"
+#define PATH_VERSION "/version"
 #define PATH_CONFIG "/config"
 #define PATH_CALIBRATION "/calibration"
 #define PATH_SPIN "/calibration/spin"
 #define PATH_OTA "/ota"
 #define PATH_SNAPSHOT "/snapshot"
+
+#define KEY_VERSION_DEVICE "device"
+#define KEY_VERSION_FW "fw"
+#define KEY_VERSION_BUILD "build"
+#define KEY_VERSION_PROTO "proto"
+#define KEY_VERSION_ROLLED_BACK "rolled_back"
 
 #define KEY_GROUP_DEVICE "device"
 #define KEY_DEVICE_ID "id"

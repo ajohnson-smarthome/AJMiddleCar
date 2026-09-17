@@ -11,6 +11,7 @@ public enum DongleContract {
     public static let relayVideoMaxKbps = 4000
 
     public static let statusPath = "/status"
+    public static let versionPath = "/version"
     public static let wifiPath = "/wifi"
     public static let otaPath = "/ota"
 
@@ -21,21 +22,6 @@ public enum DongleContract {
 
     public static let ssidField = "ssid"
     public static let passwordField = "password"
-}
-
-/// Who is answering.
-public struct DongleDevice: Codable, Equatable, Sendable {
-    /// the device name; ajdongle for this adapter
-    public var id: String
-    /// firmware version, v<semver>+<build>
-    public var fw: String
-    /// the number after + in fw, as an integer
-    public var build: Int
-    /// the bootloader reverted the last update
-    public var rolled_back: Bool
-    /// the ESP-IDF version this image was built with
-    public var idf: String
-    public init(id: String, fw: String, build: Int, rolled_back: Bool, idf: String) { self.id = id; self.fw = fw; self.build = build; self.rolled_back = rolled_back; self.idf = idf }
 }
 
 /// whether a host is attached
@@ -178,15 +164,15 @@ public struct DongleSystem: Codable, Equatable, Sendable {
     public var uptime_s: Int
     /// free heap in bytes
     public var free_heap: Int
-    public init(uptime_s: Int, free_heap: Int) { self.uptime_s = uptime_s; self.free_heap = free_heap }
+    /// the ESP-IDF version this image was built with
+    public var idf: String
+    public init(uptime_s: Int, free_heap: Int, idf: String) { self.uptime_s = uptime_s; self.free_heap = free_heap; self.idf = idf }
 }
 
 /// GET /status: proto, then these groups.
 public struct DongleStatus: Codable, Equatable, Sendable {
     /// the protocol version the device speaks
     public var proto: Int
-    /// Who is answering.
-    public var device: DongleDevice
     /// The wire to the phone.
     public var usb: DongleUsb
     /// The station: which network it was told, and how the join is going.
@@ -195,7 +181,7 @@ public struct DongleStatus: Codable, Equatable, Sendable {
     public var relay: DongleRelay
     /// Uptime and memory.
     public var system: DongleSystem
-    public init(proto: Int, device: DongleDevice, usb: DongleUsb, wifi: DongleWifi, relay: DongleRelay, system: DongleSystem) { self.proto = proto; self.device = device; self.usb = usb; self.wifi = wifi; self.relay = relay; self.system = system }
+    public init(proto: Int, usb: DongleUsb, wifi: DongleWifi, relay: DongleRelay, system: DongleSystem) { self.proto = proto; self.usb = usb; self.wifi = wifi; self.relay = relay; self.system = system }
 }
 
 /// POST /wifi answers with proto and these two fields of the wifi group, as now held.

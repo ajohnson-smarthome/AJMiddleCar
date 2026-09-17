@@ -38,6 +38,7 @@ public enum CarContract {
     public static let errorField = "error"
     public static let rootPath = "/"
     public static let statusPath = "/status"
+    public static let versionPath = "/version"
     public static let configPath = "/config"
     public static let calibrationPath = "/calibration"
     public static let spinPath = "/calibration/spin"
@@ -55,7 +56,7 @@ public enum RTType {
     public static let view = "view"
 }
 
-/// Who is answering. The same object in the hello reply and in /status.
+/// Who is answering — the object in the hello reply. Version and identity for the launch gate come from /version.
 public struct DeviceInfo: Codable, Equatable, Sendable {
     /// the device name; ajmiddlecar for this car
     public var id: String
@@ -288,8 +289,6 @@ public struct Telemetry: Codable, Equatable, Sendable {
 public struct CarStatus: Codable, Equatable, Sendable {
     /// the protocol version the device speaks
     public var proto: Int
-    /// Who is answering. The same object in the hello reply and in /status.
-    public var device: DeviceInfo
     /// The control link as the car sees it.
     public var link: LinkInfo
     /// The actuator: its bus, its calibration, and who is commanding it.
@@ -302,7 +301,7 @@ public struct CarStatus: Codable, Equatable, Sendable {
     public var system: SystemInfo
     /// The camera and the FPV stream.
     public var video: VideoInfo
-    public init(proto: Int, device: DeviceInfo, link: LinkInfo, motors: MotorsInfo, radio: RadioInfo, storage: StorageInfo, system: SystemInfo, video: VideoInfo) { self.proto = proto; self.device = device; self.link = link; self.motors = motors; self.radio = radio; self.storage = storage; self.system = system; self.video = video }
+    public init(proto: Int, link: LinkInfo, motors: MotorsInfo, radio: RadioInfo, storage: StorageInfo, system: SystemInfo, video: VideoInfo) { self.proto = proto; self.link = link; self.motors = motors; self.radio = radio; self.storage = storage; self.system = system; self.video = video }
 }
 
 /// Slew-rate limit on acceleration. Rise is bounded, fall is instant, so stopping is never delayed.

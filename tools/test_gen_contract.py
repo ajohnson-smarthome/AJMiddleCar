@@ -22,8 +22,8 @@ class TestSchema(unittest.TestCase):
         self.assertNotIn("host", s["network"])
         self.assertEqual(s["envelope"], {"proto": "proto", "ok": "ok", "error": "error",
                                          "code": "code", "message": "message", "field": "field"})
-        self.assertEqual(s["endpoints"], {"root": "/", "status": "/status", "config": "/config",
-                                          "calibration": "/calibration",
+        self.assertEqual(s["endpoints"], {"root": "/", "status": "/status", "version": "/version",
+                                          "config": "/config", "calibration": "/calibration",
                                           "spin": "/calibration/spin", "ota": "/ota",
                                           "snapshot": "/snapshot"})
 
@@ -75,7 +75,7 @@ class TestSchema(unittest.TestCase):
         s = load()
         self.assertEqual(s["telemetry"]["groups"], ["link", "motors", "system", "video"])
         self.assertEqual(s["status"]["groups"],
-                         ["device", "link", "motors", "radio", "storage", "system", "video"])
+                         ["link", "motors", "radio", "storage", "system", "video"])
         for name in s["telemetry"]["groups"] + s["status"]["groups"]:
             self.assertIn(name, s["groups"])
         self.assertEqual(s["telemetry"]["swift"], "Telemetry")
@@ -359,7 +359,7 @@ class TestCommonEmitters(unittest.TestCase):
         out = "\n".join(self.c.swift_document("CarStatus", self.s, self.s["status"]["groups"], "d"))
         lines = [l for l in out.splitlines() if l.startswith("    public var ")]
         self.assertEqual(lines[0], "    public var proto: Int")
-        self.assertEqual(lines[1], "    public var device: DeviceInfo")
+        self.assertEqual(lines[1], "    public var link: LinkInfo")
         self.assertEqual(lines[-1], "    public var video: VideoInfo")
 
     def test_lround_is_half_away_from_zero(self):
@@ -591,7 +591,8 @@ class TestDongleSchema(unittest.TestCase):
         self.assertEqual(s["device"], "ajdongle")
         self.assertEqual(s["network"], {"host": "192.168.7.1", "port": 8080,
                                         "doc": s["network"]["doc"]})
-        self.assertEqual(s["endpoints"], {"status": "/status", "wifi": "/wifi", "ota": "/ota"})
+        self.assertEqual(s["endpoints"], {"status": "/status", "version": "/version",
+                                          "wifi": "/wifi", "ota": "/ota"})
         self.assertEqual(s["envelope"], {"proto": "proto", "ok": "ok", "error": "error",
                                          "code": "code", "message": "message", "field": "field"})
 
@@ -601,22 +602,25 @@ class TestDongleSchema(unittest.TestCase):
         self.assertEqual((b["pass_min"], b["pass_max"]), (8, 63))
 
     def test_it_names_no_car(self):
-        text = (ROOT / "contract" / "dongle-api.json").read_text().lower()
+        # version is deliberately byte-identical to car-api.json's (frozen by contract),
+        # and its shared field doc names both devices by design — excluded here so this
+        # test still guards the dongle's OWN vocabulary against depending on the car's.
+        s = self.load()
+        text = json.dumps({k: v for k, v in s.items() if k != "version"}).lower()
         self.assertNotIn("ajmiddlecar", text)
         self.assertNotIn("drive1234", text)
 
     def test_groups(self):
         g = self.load()["groups"]
-        self.assertEqual(list(g), ["device", "usb", "wifi", "relay", "system"])
+        self.assertEqual(list(g), ["usb", "wifi", "relay", "system"])
         names = {k: [f["name"] for f in v["fields"]] for k, v in g.items()}
-        self.assertEqual(names["device"], ["id", "fw", "build", "rolled_back", "idf"])
         self.assertEqual(names["usb"], ["state"])
         self.assertEqual(names["wifi"], ["ssid", "configured", "state", "rssi_dbm", "channel",
                                          "attempts"])
         self.assertEqual(names["relay"], ["to_car_hz", "to_phone_hz", "udp_sessions",
                                           "tcp_connections", "last_error", "video_sessions",
                                           "video_kbps", "video_dropped"])
-        self.assertEqual(names["system"], ["uptime_s", "free_heap"])
+        self.assertEqual(names["system"], ["uptime_s", "free_heap", "idf"])
         for k, v in g.items():
             self.assertTrue(v["swift"].startswith("Dongle"), k)
         wifi_state = next(f for f in g["wifi"]["fields"] if f["name"] == "state")
@@ -640,7 +644,7 @@ class TestDongleSchema(unittest.TestCase):
 
     def test_status_wifi_and_errors(self):
         s = self.load()
-        self.assertEqual(s["status"]["groups"], ["device", "usb", "wifi", "relay", "system"])
+        self.assertEqual(s["status"]["groups"], ["usb", "wifi", "relay", "system"])
         self.assertEqual(s["status"]["swift"], "DongleStatus")
         self.assertEqual(s["wifi_request"], {"ssid": "ssid", "password": "password"})
         self.assertEqual(s["wifi_reply"]["swift"], "DongleWifiReply")
@@ -759,14 +763,18 @@ class TestDongleEmitters(unittest.TestCase):
                      '#define DONGLE_KEY_WIFI_ATTEMPTS_MAX "max"', '#define DONGLE_KEY_RELAY_LAST_ERROR "last_error"',
                      '#define DONGLE_WIFI_STATE_IDLE "idle"', '#define DONGLE_USB_STATE_UP "up"',
                      '#define DONGLE_WIFI_REQ_PASSWORD "password"', '#define DONGLE_ERR_BAD_LENGTH "bad_length"',
-                     '#define DONGLE_KEY_DEVICE_ID "id"', "#define DONGLE_RELAY_VIDEO_PORT 4211",
+                     '#define DONGLE_KEY_SYSTEM_IDF "idf"', "#define DONGLE_RELAY_VIDEO_PORT 4211",
                      "#define DONGLE_RELAY_VIDEO_MAX_KBPS 4000",
-                     '#define DONGLE_KEY_RELAY_VIDEO_DROPPED "video_dropped"'):
+                     '#define DONGLE_KEY_RELAY_VIDEO_DROPPED "video_dropped"',
+                     '#define DONGLE_PATH_VERSION "/version"',
+                     '#define DONGLE_KEY_VERSION_DEVICE "device"',
+                     '#define DONGLE_KEY_VERSION_ROLLED_BACK "rolled_back"'):
             self.assertEmitsLine(line, self.c)
         for banned in ("#include", "esp_err_t", "typedef", "struct "):
             self.assertNotIn(banned, self.c)
         self.assertNotIn("DONGLE_PATH_NET", self.c)
         self.assertNotIn("DONGLE_NETKEY", self.c)
+        self.assertNotIn("DONGLE_KEY_GROUP_DEVICE", self.c)
 
     def test_swift_exposes_the_same_vocabulary(self):
         for line in ("    public static let proto = 1", '    public static let device = "ajdongle"',
@@ -775,7 +783,8 @@ class TestDongleEmitters(unittest.TestCase):
                      "    public static let ssidMax = 32", '    public static let ssidField = "ssid"',
                      '    public static let passwordField = "password"',
                      "    public static let relayVideoPort: UInt16 = 4211",
-                     "    public static let relayVideoMaxKbps = 4000"):
+                     "    public static let relayVideoMaxKbps = 4000",
+                     '    public static let versionPath = "/version"'):
             self.assertEmitsLine(line, self.sw)
         self.assertIn("public enum DongleWifiState: Equatable, Sendable, Codable {", self.sw)
         self.assertIn("    case searching", self.sw.splitlines())
@@ -785,11 +794,14 @@ class TestDongleEmitters(unittest.TestCase):
         self.assertIn("    public var channel: Int?", self.sw.splitlines())
         self.assertIn("    public var video_kbps: Double?", self.sw.splitlines())
         self.assertIn("    public var video_dropped: Int?", self.sw.splitlines())
+        self.assertIn("public struct DongleSystem: Codable, Equatable, Sendable {", self.sw)
+        self.assertIn("    public var idf: String", self.sw.splitlines())
         self.assertIn("public struct DongleStatus: Codable, Equatable, Sendable {", self.sw)
-        self.assertIn("    public init(proto: Int, device: DongleDevice, usb: DongleUsb, wifi: DongleWifi, "
-                      "relay: DongleRelay, system: DongleSystem) { self.proto = proto; self.device = device; "
+        self.assertIn("    public init(proto: Int, usb: DongleUsb, wifi: DongleWifi, "
+                      "relay: DongleRelay, system: DongleSystem) { self.proto = proto; "
                       "self.usb = usb; self.wifi = wifi; self.relay = relay; self.system = system }",
                       self.sw.splitlines())
+        self.assertNotIn("struct DongleDevice", self.sw)
         self.assertIn("public struct DongleWifiReply: Codable, Equatable, Sendable {", self.sw)
         self.assertIn("    public init(proto: Int, ssid: String, state: DongleWifiState) { self.proto = proto; "
                       "self.ssid = ssid; self.state = state }", self.sw.splitlines())
@@ -801,6 +813,52 @@ class TestDongleEmitters(unittest.TestCase):
     def test_both_emitters_are_deterministic(self):
         self.assertEqual(self.c, self.g.emit_dongle_c(self.s))
         self.assertEqual(self.sw, self.g.emit_dongle_swift(self.s))
+
+
+class TestVersionSection(unittest.TestCase):
+    """GET /version: the one document whose shape never changes — identical in both contracts."""
+
+    def setUp(self):
+        self.car = load()
+        self.dongle = json.loads((ROOT / "contract" / "dongle-api.json").read_text())
+
+    def test_both_contracts_declare_the_endpoint(self):
+        self.assertEqual(self.car["endpoints"]["version"], "/version")
+        self.assertEqual(self.dongle["endpoints"]["version"], "/version")
+
+    def test_the_section_is_byte_identical_in_both_contracts(self):
+        self.assertEqual(json.dumps(self.car["version"], sort_keys=True),
+                         json.dumps(self.dongle["version"], sort_keys=True))
+
+    def test_the_five_fields_in_order(self):
+        fields = [(f["name"], f["type"]) for f in self.car["version"]["fields"]]
+        self.assertEqual(fields, [("device", "str"), ("fw", "str"), ("build", "int"),
+                                  ("proto", "int"), ("rolled_back", "bool")])
+
+    def test_device_left_status_but_the_car_keeps_it_for_the_hello_reply(self):
+        self.assertNotIn("device", self.car["status"]["groups"])
+        self.assertNotIn("device", self.dongle["status"]["groups"])
+        self.assertIn("device", self.car["groups"])          # DeviceInfo — the hello_ack object
+        self.assertNotIn("device", self.dongle["groups"])
+        self.assertIn("idf", [f["name"] for f in self.dongle["groups"]["system"]["fields"]])
+
+    def test_c_version_defines_for_both_prefixes(self):
+        import gen_common
+        car = "\n".join(gen_common.c_version_defines(self.car, ""))
+        dongle = "\n".join(gen_common.c_version_defines(self.dongle, "DONGLE_"))
+        for k in ("DEVICE", "FW", "BUILD", "PROTO", "ROLLED_BACK"):
+            self.assertIn(f'#define KEY_VERSION_{k} "{k.lower()}"', car)
+            self.assertIn(f'#define DONGLE_KEY_VERSION_{k} "{k.lower()}"', dongle)
+
+    def test_emitters_carry_the_path_and_the_python_table(self):
+        import gen_contract, gen_dongle
+        self.assertIn('#define PATH_VERSION "/version"', gen_contract.emit_c(self.car))
+        self.assertIn('#define DONGLE_PATH_VERSION "/version"', gen_dongle.emit_dongle_c(self.dongle))
+        self.assertIn('public static let versionPath = "/version"', gen_contract.emit_swift(self.car))
+        self.assertIn('public static let versionPath = "/version"', gen_dongle.emit_dongle_swift(self.dongle))
+        py = gen_contract.emit_python(self.car)
+        self.assertIn("VERSION_FIELDS = [", py)
+        self.assertIn("'rolled_back'", py)
 
 
 if __name__ == "__main__":

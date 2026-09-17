@@ -4,11 +4,29 @@ import math
 PROTO = 2
 DEVICE = 'ajmiddlecar'
 ENVELOPE = {'proto': 'proto', 'ok': 'ok', 'error': 'error', 'code': 'code', 'message': 'message', 'field': 'field'}
-ENDPOINTS = {'root': '/', 'status': '/status', 'config': '/config', 'calibration': '/calibration', 'spin': '/calibration/spin', 'ota': '/ota', 'snapshot': '/snapshot'}
+ENDPOINTS = {'root': '/', 'status': '/status', 'version': '/version', 'config': '/config', 'calibration': '/calibration', 'spin': '/calibration/spin', 'ota': '/ota', 'snapshot': '/snapshot'}
 ERRORS = ['bad_json', 'missing_field', 'unknown_field', 'wrong_type', 'out_of_range', 'not_allowed', 'busy', 'too_small', 'not_firmware', 'write_failed', 'internal']
-STATUS_GROUPS = ['device', 'link', 'motors', 'radio', 'storage', 'system', 'video']
+STATUS_GROUPS = ['link', 'motors', 'radio', 'storage', 'system', 'video']
+VERSION_FIELDS = [   {   'name': 'device',
+        'type': 'str',
+        'doc': 'the device name; ajmiddlecar for the car, ajdongle for the adapter'},
+    {   'name': 'fw',
+        'type': 'str',
+        'doc': 'firmware version as the build prints it: '
+               'v<semver>+<build>[-<n>-g<sha>[-dirty]]'},
+    {   'name': 'build',
+        'type': 'int',
+        'doc': 'the number after + in fw, parsed by the firmware; -1 when fw carries none'},
+    {   'name': 'proto',
+        'type': 'int',
+        'doc': "the protocol number of everything else this board serves — this contract's "
+               'proto'},
+    {   'name': 'rolled_back',
+        'type': 'bool',
+        'doc': 'the bootloader reverted the last update; sticky until the next successful OTA'}]
 GROUPS = {   'device': {   'swift': 'DeviceInfo',
-                  'doc': 'Who is answering. The same object in the hello reply and in /status.',
+                  'doc': 'Who is answering — the object in the hello reply. Version and '
+                         'identity for the launch gate come from /version.',
                   'fields': [   {   'name': 'id',
                                     'type': 'str',
                                     'doc': 'the device name; ajmiddlecar for this car'},

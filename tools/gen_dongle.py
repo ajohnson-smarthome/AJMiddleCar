@@ -7,8 +7,8 @@ other, and the dongle's rules (lengths, the character class, escaping) live in
 firmware/dongle/main/net_cfg.{c,h} where they are host-tested rather than here.
 """
 from gen_common import (c_group_defines, c_envelope_defines, c_error_defines,
-                        c_endpoint_defines, swift_groups, swift_document, swift_state_enum,
-                        swift_struct, swift_error_envelope)
+                        c_endpoint_defines, c_version_defines, swift_groups, swift_document,
+                        swift_state_enum, swift_struct, swift_error_envelope)
 
 BANNER = "generated from contract/dongle-api.json by tools/gen_contract.py - do not edit"
 
@@ -39,6 +39,7 @@ def emit_dongle_c(schema):
         "",
     ]
     lines += c_endpoint_defines(schema, "DONGLE_")
+    lines += c_version_defines(schema, "DONGLE_")
     lines += c_envelope_defines(schema, "DONGLE_")
     lines += c_group_defines(schema, "DONGLE_")
     for k, v in schema["wifi_request"].items():

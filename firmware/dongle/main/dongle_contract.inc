@@ -18,8 +18,15 @@
 #define DONGLE_PASS_MAX 63
 
 #define DONGLE_PATH_STATUS "/status"
+#define DONGLE_PATH_VERSION "/version"
 #define DONGLE_PATH_WIFI "/wifi"
 #define DONGLE_PATH_OTA "/ota"
+
+#define DONGLE_KEY_VERSION_DEVICE "device"
+#define DONGLE_KEY_VERSION_FW "fw"
+#define DONGLE_KEY_VERSION_BUILD "build"
+#define DONGLE_KEY_VERSION_PROTO "proto"
+#define DONGLE_KEY_VERSION_ROLLED_BACK "rolled_back"
 
 #define DONGLE_KEY_PROTO "proto"
 #define DONGLE_KEY_OK "ok"
@@ -27,13 +34,6 @@
 #define DONGLE_KEY_ERROR_CODE "code"
 #define DONGLE_KEY_ERROR_MESSAGE "message"
 #define DONGLE_KEY_ERROR_FIELD "field"
-
-#define DONGLE_KEY_GROUP_DEVICE "device"
-#define DONGLE_KEY_DEVICE_ID "id"
-#define DONGLE_KEY_DEVICE_FW "fw"
-#define DONGLE_KEY_DEVICE_BUILD "build"
-#define DONGLE_KEY_DEVICE_ROLLED_BACK "rolled_back"
-#define DONGLE_KEY_DEVICE_IDF "idf"
 
 #define DONGLE_KEY_GROUP_USB "usb"
 #define DONGLE_KEY_USB_STATE "state"
@@ -74,6 +74,7 @@
 #define DONGLE_KEY_GROUP_SYSTEM "system"
 #define DONGLE_KEY_SYSTEM_UPTIME_S "uptime_s"
 #define DONGLE_KEY_SYSTEM_FREE_HEAP "free_heap"
+#define DONGLE_KEY_SYSTEM_IDF "idf"
 
 #define DONGLE_WIFI_REQ_SSID "ssid"
 #define DONGLE_WIFI_REQ_PASSWORD "password"

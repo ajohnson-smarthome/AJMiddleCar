@@ -24,8 +24,8 @@ SCHEMA = ROOT / "contract" / "car-api.json"
 sys.path.insert(0, str(ROOT / "tools"))
 from gen_dongle import emit_dongle_c, emit_dongle_swift
 from gen_common import (c_group_defines, c_envelope_defines, c_error_defines, c_endpoint_defines,
-                        swift_state_enum, swift_struct, swift_groups, swift_document,
-                        swift_error_envelope, swift_type, py_common, lround)
+                        c_version_defines, swift_state_enum, swift_struct, swift_groups,
+                        swift_document, swift_error_envelope, swift_type, py_common, lround)
 
 MARK_BEGIN = "<!-- generated:endpoints -->"
 MARK_END = "<!-- /generated:endpoints -->"
@@ -134,6 +134,7 @@ def emit_c(schema):
     out.append("")
     out += c_envelope_defines(schema, "")
     out += c_endpoint_defines(schema, "")
+    out += c_version_defines(schema, "")
     out += c_group_defines(schema, "")
     out += c_error_defines(schema, "")
     cal = schema["calibration"]

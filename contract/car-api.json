@@ -43,16 +43,27 @@
   "endpoints": {
     "root": "/",
     "status": "/status",
+    "version": "/version",
     "config": "/config",
     "calibration": "/calibration",
     "spin": "/calibration/spin",
     "ota": "/ota",
     "snapshot": "/snapshot"
   },
+  "version": {
+    "doc": "GET /version: who this board is and what it runs. The one document whose shape never changes: no field is ever added, renamed or removed; anything else belongs in /status, which lives under proto. A board that answers 404 predates this endpoint and is updated.",
+    "fields": [
+      {"name": "device",      "type": "str",  "doc": "the device name; ajmiddlecar for the car, ajdongle for the adapter"},
+      {"name": "fw",          "type": "str",  "doc": "firmware version as the build prints it: v<semver>+<build>[-<n>-g<sha>[-dirty]]"},
+      {"name": "build",       "type": "int",  "doc": "the number after + in fw, parsed by the firmware; -1 when fw carries none"},
+      {"name": "proto",       "type": "int",  "doc": "the protocol number of everything else this board serves — this contract's proto"},
+      {"name": "rolled_back", "type": "bool", "doc": "the bootloader reverted the last update; sticky until the next successful OTA"}
+    ]
+  },
   "groups": {
     "device": {
       "swift": "DeviceInfo",
-      "doc": "Who is answering. The same object in the hello reply and in /status.",
+      "doc": "Who is answering — the object in the hello reply. Version and identity for the launch gate come from /version.",
       "fields": [
         {"name": "id", "type": "str", "doc": "the device name; ajmiddlecar for this car"},
         {"name": "fw", "type": "str", "doc": "firmware version, v<semver>+<build>"},
@@ -121,7 +132,7 @@
   },
   "status": {
     "swift": "CarStatus",
-    "groups": ["device", "link", "motors", "radio", "storage", "system", "video"],
+    "groups": ["link", "motors", "radio", "storage", "system", "video"],
     "doc": "GET /status: proto, then these groups."
   },
   "config": {

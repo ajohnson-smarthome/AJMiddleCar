@@ -85,6 +85,12 @@ def c_endpoint_defines(schema, prefix):
     return [f'#define {prefix}PATH_{upper(k)} "{v}"' for k, v in schema["endpoints"].items()] + [""]
 
 
+def c_version_defines(schema, prefix):
+    """The keys of GET /version — frozen by contract, so these five names never change."""
+    return [f'#define {prefix}KEY_VERSION_{upper(f["name"])} "{f["name"]}"'
+            for f in schema["version"]["fields"]] + [""]
+
+
 # ---- Swift -----------------------------------------------------------------------
 
 def swift_type(f):
@@ -211,6 +217,7 @@ def py_common(schema):
         f"ENDPOINTS = {schema['endpoints']!r}",
         f"ERRORS = {schema['errors']!r}",
         f"STATUS_GROUPS = {schema['status']['groups']!r}",
+        f"VERSION_FIELDS = {pprint.pformat(schema['version']['fields'], indent=4, sort_dicts=False, width=96)}",
         # pformat, not json.dumps: this is a Python module, and JSON writes `true`
         # where Python needs `True`. sort_dicts=False keeps it deterministic.
         f"GROUPS = {pprint.pformat(schema['groups'], indent=4, sort_dicts=False, width=96)}",
