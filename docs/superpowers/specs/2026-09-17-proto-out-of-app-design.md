@@ -1,6 +1,6 @@
 # `proto` вон из решений приложения — совместимость держится на выпуске
 
-**Статус:** утверждён в чате 2026-09-17; план — `docs/superpowers/plans/2026-09-17-proto-out-of-app.md`.
+**Статус:** утверждён в чате 2026-09-17; план — `docs/superpowers/plans/2026-09-17-proto-out-of-app.md`; в том же духе снят и рантайм-страж личности — `2026-09-17-wrong-car-runtime-out-design.md`.
 **Опирается на:** `docs/superpowers/specs/2026-09-17-version-endpoint-design.md` (замороженный
 `GET /version` с полем `proto`), `docs/superpowers/specs/2026-09-17-board-ladder-design.md`
 (одна лестница, `VersionRule` — одно правило на обе платы),

@@ -97,6 +97,9 @@ wait.
 with the handshake itself, so a client no longer has to visit `/status` to learn whether the
 last update survived its first boot.
 
+После гейта приложение по `device` не судит: живую сессию открывает любой ответивший `hello`;
+чужую машинку отсекает гейт по `GET /version` до открытия сессии (там `device` сверяется первым).
+
 ### Ownership
 
 The car serves one client: the sender of the most recently adopted `hello` owns the session,
