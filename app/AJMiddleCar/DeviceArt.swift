@@ -153,31 +153,39 @@ struct CarBody: View {
 
 /// The USB adapter — deliberately the car's sibling, not a new kind of drawing.
 ///
-/// Same three layers, same `metal`, same 20×20 chip well at its centre; a plug where the car has
-/// wheels. That kinship is the point: the startup sequence hands the story from one device to the
-/// other, and if the two were drawn in different languages every hand-off would read as a jump to
-/// an unrelated screen. Landscape where the car is portrait, so which one is on screen is never
-/// in doubt either.
+/// Same three layers and the same `metal`, so the startup sequence can hand the story from one
+/// device to the other without the hand-off reading as a jump to an unrelated screen. What makes
+/// it read as *this* device rather than the car: a USB-C connector on a short neck where the car
+/// has a windshield, and ascending signal bars — a network bridge, drawn in one material like the
+/// car, with strength read as opacity rather than colour. They cluster at the centre-right; on
+/// the radar screen (no chip) the cluster reads in full, and where `DeviceScene` composes a state
+/// chip over the centre it takes precedence over the inner bars. Landscape where the car is
+/// portrait, so which one is on screen is never in doubt either.
 struct AdapterBody: View {
     let palette: Palette
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 9).fill(palette.bg)
-                .overlay(RoundedRectangle(cornerRadius: 9).fill(palette.panel))
-                .overlay(RoundedRectangle(cornerRadius: 9).stroke(palette.metal, lineWidth: 1))
-                .frame(width: 46, height: 34)
-            // The plug, and the neck joining it to the shell.
+            RoundedRectangle(cornerRadius: 8).fill(palette.bg)
+                .overlay(RoundedRectangle(cornerRadius: 8).fill(palette.panel))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(palette.metal, lineWidth: 1.4))
+                .frame(width: 46, height: 32)
+            // USB-C connector on a short neck, left — the mouth is a bg capsule in the plug.
             RoundedRectangle(cornerRadius: 3).fill(palette.metal)
-                .frame(width: 8, height: 12).offset(x: -26)
-            Rectangle().fill(palette.metal).frame(width: 6, height: 2).offset(x: -20)
-            // Vents: the only ornament, and the thing that keeps the shell from reading as a
-            // plain rounded rectangle at a glance.
-            VStack(spacing: 3.2) {
-                ForEach(0..<3, id: \.self) { _ in
-                    RoundedRectangle(cornerRadius: 1.1).fill(palette.metal.opacity(0.5))
-                        .frame(width: 8, height: 2.2)
-                }
-            }.offset(x: 15)
+                .frame(width: 10, height: 10).offset(x: -22)
+            Capsule().fill(palette.metal)
+                .frame(width: 8, height: 15).offset(x: -30)
+            Capsule().fill(palette.bg)
+                .frame(width: 3.5, height: 9).offset(x: -29.75)
+            // A status light near the connector.
+            Circle().fill(palette.metal).opacity(0.9)
+                .frame(width: 3.4, height: 3.4).offset(x: -12, y: -9)
+            // Ascending signal bars — a network bridge, one material; strength read as opacity.
+            RoundedRectangle(cornerRadius: 1).fill(palette.metal).opacity(0.5)
+                .frame(width: 3, height: 4).offset(x: 2.5, y: 4)
+            RoundedRectangle(cornerRadius: 1).fill(palette.metal).opacity(0.72)
+                .frame(width: 3, height: 7.5).offset(x: 8, y: 2.25)
+            RoundedRectangle(cornerRadius: 1).fill(palette.metal)
+                .frame(width: 3, height: 12).offset(x: 13.5, y: 0)
         }
     }
 }
