@@ -252,6 +252,8 @@ struct LinkScene: View {
     var failed: Bool = false
     private static let adapterX: CGFloat = -44
     private static let carX: CGFloat = 40
+    /// Ease-out radius of a ripple at phase `ph` — fast out, then settling.
+    private static func radius(_ ph: Double) -> Double { 20 + (1 - pow(1 - ph, 1.8)) * 86 }
 
     var body: some View {
         if failed {
@@ -271,27 +273,44 @@ struct LinkScene: View {
     private var live: some View {
         TimelineView(.animation) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
-            // Two waves, half a period apart, and the car's brightness read from the nearer of
-            // them: arrival is computed from the wave's own radius, so the glow cannot drift out
-            // of step with the thing that is supposed to be causing it.
-            let phases = (0..<2).map { i in
-                ((t + Double(i) * 0.9) / 1.8).truncatingRemainder(dividingBy: 1)
+            // Three ripples, evenly spaced over the period, each flying out with an ease-out so it
+            // leaves fast and settles rather than marching at a constant rate. Every ripple is a
+            // directed beam — brightest toward the car, fading at its ends (the angular gradient) —
+            // with a soft glow behind the crisp edge. The car's brightness is read from the
+            // freshest ripple that has reached it, so cause and effect never drift apart.
+            let phases = (0..<3).map { i in
+                ((t + Double(i) * 0.6) / 1.8).truncatingRemainder(dividingBy: 1)
             }
-            let reach = Self.carX - Self.adapterX - 20
+            let reach = Double(Self.carX - Self.adapterX) - 20
             let arrived = phases
-                .filter { 22 + $0 * 78 > reach }
-                .map { 1 - $0 }
+                .filter { Self.radius($0) > reach }
+                .map { pow(1 - $0, 1.2) }
                 .max() ?? 0
+            let beam = AngularGradient(
+                gradient: Gradient(stops: [
+                    .init(color: palette.accent, location: 0),
+                    .init(color: palette.accent.opacity(0.55), location: 0.10),
+                    .init(color: palette.accent.opacity(0.14), location: 0.19),
+                    .init(color: palette.accent.opacity(0.14), location: 0.81),
+                    .init(color: palette.accent.opacity(0.55), location: 0.90),
+                    .init(color: palette.accent, location: 1)]),
+                center: .center)
 
             ZStack {
                 ForEach(Array(phases.enumerated()), id: \.offset) { _, ph in
-                    EmitArc().stroke(palette.accent, lineWidth: 2)
-                        .frame(width: 44 + ph * 156, height: 44 + ph * 156)
-                        .opacity(0.6 * (1 - ph))
-                        .offset(x: Self.adapterX)
+                    let d = CGFloat(Self.radius(ph) * 2)
+                    let op = min(ph * 5, 1) * pow(1 - ph, 1.15)   // in fast, fade to the edge
+                    ZStack {
+                        EmitArc().stroke(beam, style: StrokeStyle(lineWidth: 3.4, lineCap: .round))
+                            .blur(radius: 2.8).opacity(op * 0.5)
+                        EmitArc().stroke(beam, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+                            .opacity(op)
+                    }
+                    .frame(width: d, height: d)
+                    .offset(x: Self.adapterX)
                 }
                 CarBody(palette: palette)
-                    .opacity(0.3 + 0.68 * arrived)
+                    .opacity(0.3 + 0.66 * arrived)
                     .offset(x: Self.carX)
                 AdapterBody(palette: palette).offset(x: Self.adapterX)
             }
