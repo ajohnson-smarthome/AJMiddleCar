@@ -6,12 +6,21 @@ import SwiftUI
 struct RampView: View {
     let palette: Palette
     @ObservedObject private var store = ConfigStore.shared.ramp
-    @State private var rampMs = Ramp.default.rise_ms   // live slider value (label)
+    @State private var rampMs: Int   // live slider value (label)
     /// Applied on release — keeps the illustration from jumping mid-drag. It drives the
     /// animation only, never a write.
-    @State private var demoMs = Ramp.default.rise_ms
+    @State private var demoMs: Int
     @Environment(\.dismiss) private var dismiss
     private var p: Palette { palette }
+
+    init(palette: Palette) {
+        self.palette = palette
+        // The first frame is the car's value when it is already read — not the app's default
+        // for a frame (AJM-106); an unread domain draws no slider at all.
+        let ms = ConfigStore.shared.ramp.value?.rise_ms ?? Ramp.default.rise_ms
+        _rampMs = State(initialValue: ms)
+        _demoMs = State(initialValue: ms)
+    }
 
     var body: some View {
         SplitScreen(palette: p, title: L.rampTitle, onBack: { dismiss() }) {

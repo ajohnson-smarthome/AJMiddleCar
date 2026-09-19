@@ -14,8 +14,18 @@ struct CarDimensionsView: View {
     private var p: Palette { palette }
 
     @ObservedObject private var store = ConfigStore.shared.chassis
-    @State private var trackMm = Chassis.default.track_mm
-    @State private var wheelbaseMm = Chassis.default.wheelbase_mm
+    @State private var trackMm: Int
+    @State private var wheelbaseMm: Int
+
+    init(palette: Palette, wizard: Bool = false) {
+        self.palette = palette
+        self.wizard = wizard
+        // The first frame is the car's value when it is already read — not the app's default
+        // for a frame (AJM-106); an unread domain draws no steppers at all.
+        let d = ConfigStore.shared.chassis.value ?? .default
+        _trackMm = State(initialValue: d.track_mm)
+        _wheelbaseMm = State(initialValue: d.wheelbase_mm)
+    }
 
     var body: some View {
         ZStack {

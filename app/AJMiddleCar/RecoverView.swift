@@ -2,15 +2,34 @@ import SwiftUI
 
 /// Link-loss auto-return: toggle + history-window slider. Split layout like RampView. The
 /// controls appear only once the car's own configuration has been read.
+///
+/// Writes come from the controls' own handlers — the toggle's setter, the slider's release —
+/// never from `.onChange` of the state behind them: that could not tell the car's value being
+/// adopted from the user flipping the switch, and on a car holding `enabled:false` with a
+/// window not a whole second the screen POSTed the domain on opening (AJM-106).
 struct RecoverView: View {
     let palette: Palette
     @ObservedObject private var store = ConfigStore.shared.recovery
-    @State private var enabled = Recovery.default.enabled
-    @State private var windowSec = Recovery.default.window_ms / 1000
+    @State private var enabled: Bool
+    @State private var windowSec: Int
     @Environment(\.dismiss) private var dismiss
     private var p: Palette { palette }
 
     private static let secRange = Recovery.window_msRange.lowerBound / 1000 ... Recovery.window_msRange.upperBound / 1000
+
+    init(palette: Palette) {
+        self.palette = palette
+        // The first frame is the car's value when it is already read, not the app's default
+        // for a frame; an unread domain draws no controls at all.
+        let v = ConfigStore.shared.recovery.value
+        _enabled = State(initialValue: v?.enabled ?? Recovery.default.enabled)
+        _windowSec = State(initialValue: Self.seconds(of: v?.window_ms ?? Recovery.default.window_ms))
+    }
+
+    /// The window as the screen shows it: whole seconds, rounded down, within the field's range.
+    private static func seconds(of windowMs: Int) -> Int {
+        max(secRange.lowerBound, min(secRange.upperBound, windowMs / 1000))
+    }
 
     var body: some View {
         SplitScreen(palette: p, title: L.recoverTitle, onBack: { dismiss() }) {
@@ -21,10 +40,11 @@ struct RecoverView: View {
         .task { await store.loadIfNeeded(); adopt() }
     }
 
+    /// The car's value into the controls. Not a write.
     private func adopt() {
         guard let v = store.value else { return }
         enabled = v.enabled
-        windowSec = max(Self.secRange.lowerBound, min(Self.secRange.upperBound, v.window_ms / 1000))
+        windowSec = Self.seconds(of: v.window_ms)
     }
 
     private func save() {
@@ -35,10 +55,12 @@ struct RecoverView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(L.recoverHeadline).font(.system(size: 20, weight: .semibold)).foregroundStyle(p.text)
             if store.value != nil {
-                Toggle(L.recoverEnable, isOn: $enabled)
+                Toggle(L.recoverEnable, isOn: Binding(
+                    get: { enabled },
+                    set: { on in enabled = on; save() }   // the user's flip, and only that, writes
+                ))
                     .tint(p.accent)
                     .frame(width: 230)
-                    .onChange(of: enabled) { _, _ in save() }
                 VStack(alignment: .leading, spacing: 5) {
                     HStack {
                         Text(L.recoverWindow).font(.system(size: 12)).foregroundStyle(p.muted)

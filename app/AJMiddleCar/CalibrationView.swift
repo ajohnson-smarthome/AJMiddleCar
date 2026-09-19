@@ -10,10 +10,24 @@ private struct CalibSavedKey: EnvironmentKey {
     static let defaultValue: (() -> Void)? = nil
 }
 
+/// `motors.bus` from the newest telemetry frame, handed down by the drive screen to both
+/// wizards on it — the sheet it holds and the one three screens into the settings sheet.
+/// The wizard exists to spin a pair, and with the PWM boards not answering none will: the
+/// car refuses the pulse with `409 busy` (`car/calibration`), and asking anyway used to end
+/// in «Машинка не ответила» with no word about why (AJM-93). `nil` — the gallery, or no
+/// frame yet — is not a verdict; the button stays.
+private struct MotorBusKey: EnvironmentKey {
+    static let defaultValue: MotorsBus? = nil
+}
+
 extension EnvironmentValues {
     var calibSaved: (() -> Void)? {
         get { self[CalibSavedKey.self] }
         set { self[CalibSavedKey.self] = newValue }
+    }
+    var motorBus: MotorsBus? {
+        get { self[MotorBusKey.self] }
+        set { self[MotorBusKey.self] = newValue }
     }
 }
 
@@ -24,6 +38,7 @@ struct CalibrationView: View {
     var dismissible: Bool = true   // Settings push = back chevron; mandatory auto-prompt = none
     @Environment(\.dismiss) private var dismiss
     @Environment(\.calibSaved) private var calibSaved
+    @Environment(\.motorBus) private var motorBus
 
     @State private var step = 0
     @State private var assign: [Corner: (pair: Int, inverted: Bool)] = [:]
@@ -51,6 +66,9 @@ struct CalibrationView: View {
         return .spin
     }
     private var ringsActive: Bool { state == .spin || state == .spinning || state == .saving }
+    /// Nothing to spin: the boards are not answering. Judged as the drive screen's warning
+    /// judges it — anything but `ok`.
+    private var busDown: Bool { motorBus.map { $0 != .ok } ?? false }
     private var p: Palette { palette }
 
     var body: some View {
@@ -148,14 +166,22 @@ struct CalibrationView: View {
             segments
             switch state {
             case .spin:
-                title(L.calibStep(min(step + 1, 4))); sub(L.calibSpinSub)
-                pill(L.calibSpin, p.accent) { spin() }
+                title(L.calibStep(min(step + 1, 4)))
+                // The boards are not answering: the reason instead of the button, on this
+                // step, until the car sees them again — a pulse it would refuse is not sent.
+                if busDown { busDownNote } else {
+                    sub(L.calibSpinSub)
+                    pill(L.calibSpin, p.accent) { spin() }
+                }
             case .spinning:
                 title(L.calibStep(min(step + 1, 4))); sub(L.calibSpinSub)
                 pill(L.calibSpin, p.muted) { }
             case .spinFailed:
-                title(L.calibSpinFailTitle); sub(L.calibSpinFailSub)
-                pill(L.calibRetry, p.accent) { spin() }
+                title(L.calibSpinFailTitle)
+                if busDown { busDownNote } else {
+                    sub(L.calibSpinFailSub)
+                    pill(L.calibRetry, p.accent) { spin() }
+                }
             case .direction:
                 if let c = pending {
                     title(L.calibWheel(c.label)); sub(L.calibWhichDir2)
@@ -193,6 +219,18 @@ struct CalibrationView: View {
     }
     private func sub(_ t: String) -> some View {
         Text(t).font(.system(size: 12)).foregroundStyle(p.muted).fixedSize(horizontal: false, vertical: true)
+    }
+    /// «Драйвер моторов не отвечает» — the drive screen's own words for it — and what to do.
+    private var busDownNote: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "bolt.trianglebadge.exclamationmark")
+                Text(L.driveBusFail)
+            }
+            .font(.system(size: 14, weight: .semibold)).foregroundStyle(p.warn)
+            sub(L.calibBusDownSub)
+        }
+        .padding(.top, 2)
     }
     private func pill(_ text: String, _ tint: Color, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {

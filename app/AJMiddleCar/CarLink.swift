@@ -278,6 +278,9 @@ final class CarLink: ObservableObject {
                 guard gen == self.radioFetchGen else { return }
                 if let data, let s = try? JSONDecoder().decode(CarStatus.self, from: data) {
                     self.radio = .known(s.radio)
+                    // The same document carries `storage.reset_at_boot` — the one signal
+                    // that the config caches are the previous boot's (AJM-99).
+                    self.config?.status(s, now: Date().timeIntervalSinceReferenceDate)
                     return
                 }
             }

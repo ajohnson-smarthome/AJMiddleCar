@@ -23,6 +23,9 @@ struct DriveView: View {
 
     /// The car's `video` domain — the switch lives there.
     @ObservedObject private var videoCfg = ConfigStore.shared.video
+    /// For the one thing the store itself says: the car's settings were reset at its boot
+    /// (`resetNotice`), shown here once, until tapped away.
+    @ObservedObject private var config = ConfigStore.shared
     /// The switch as the car last confirmed it — deliberately not `videoCfg.value`: the store
     /// shows what it is *sending* while a save is in flight and nothing at all after a failed
     /// one, and the screen must move on the car's answer alone (spec §3): a tap that did not
@@ -236,7 +239,7 @@ struct DriveView: View {
         // exactly the car it exists for (AJM-63). The rule judges the frame; the flag's history
         // is its business, not this view's.
         .onChange(of: telemetry, initial: true) { _, t in
-            let required = calib.frame(calibrated: t?.motors.calibrated,
+            let required = calib.frame(calibrated: t?.motors.calibrated, bus: t?.motors.bus,
                                        now: Date().timeIntervalSinceReferenceDate)
             if showCalib != required { showCalib = required }
         }
@@ -256,6 +259,11 @@ struct DriveView: View {
                 showCalib = false
             }
         }
+        // Outermost, so both sheets inherit it: the wizard reads `motors.bus` from here and
+        // shows «Драйвер моторов не отвечает» instead of «Крутить» while the boards are not
+        // answering (AJM-93) — the mandatory one has closed by then (`CalibGate`), the one
+        // reached through settings stays and says why.
+        .environment(\.motorBus, telemetry?.motors.bus)
     }
 
     /// «Поиск…» over the drive screen: telemetry is late, the session is not over. Translucent,
@@ -359,7 +367,7 @@ struct DriveView: View {
                 // Warnings are the one thing allowed over the picture, and only while there are
                 // any. Under the top row rather than beside it: two at once («драйвер» and
                 // «управляет») are wider than the gap between the link and the scheme toggle.
-                warnings
+                notices
                     .padding(.top, 52)
                     .frame(maxHeight: .infinity, alignment: .top)
             }
@@ -423,7 +431,7 @@ struct DriveView: View {
                               onStop: { intent.stopTrick() },
                               cardEdge: .top,   // the FAB is bottom-centre: the card opens upward, as before video
                               debugOpen: previewTricksOpen)
-                warnings          // amber only, and only while something is wrong — under the FAB, as before video
+                notices           // amber only, and only while something is wrong — under the FAB, as before video
             }
             .padding(.bottom, 16)
         }
@@ -455,6 +463,29 @@ struct DriveView: View {
             .frame(maxHeight: .infinity, alignment: top ? .top : .bottom)
             .ignoresSafeArea()
             .allowsHitTesting(false)
+    }
+
+    /// The telemetry warnings, and under them the one notice that is the app's rather than
+    /// the frame's: the car's store was wiped at its boot, so its settings and calibration are
+    /// at their defaults (`app/settings`, AJM-99). Said once per car boot, until tapped away;
+    /// it waits under the mandatory wizard the same wipe opens, for when that closes.
+    private var notices: some View {
+        VStack(spacing: 6) {
+            warnings
+            if config.resetNotice {
+                Button { config.dismissResetNotice() } label: {
+                    HStack(spacing: 6) {
+                        statusItem("arrow.counterclockwise.circle", L.configResetNotice, p.warn)
+                        Image(systemName: "xmark").foregroundStyle(p.warn.opacity(0.7))
+                    }
+                    .font(.system(size: 10))
+                    .padding(8)
+                    .background(p.bg.opacity(0.45))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 
     /// What `warnings` is about to show — the same conditions its items use. The pill is gated
