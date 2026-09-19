@@ -41,7 +41,11 @@ if [ "$DRY_RUN" = 1 ]; then
     echo "[dry-run]         : $BIN_DONGLE"
     echo "[dry-run] radio   : built from the pinned esp_hosted and embedded in $BIN_CAR"
     echo "[dry-run] notes   : $NOTES"
-    echo "[dry-run] would run: test-all && rm sdkconfig && idf.py fullclean && idf.py build (car, dongle) && gh release create '$VER' '$BIN_CAR' '$BIN_DONGLE' --target <HEAD> ..."
+    echo "[dry-run] would run: test-all && rm sdkconfig && idf.py fullclean && idf.py build (car, dongle) && tools/release-publish.sh '$VER' <HEAD> ..."
+    echo "[dry-run] publish : gh release create '$VER' --draft --target <HEAD>"
+    echo "[dry-run]           → gh release upload '$VER' $(basename "$BIN_CAR") $(basename "$BIN_DONGLE")"
+    echo "[dry-run]           → gh release view '$VER' (exactly those two names, or the draft stays a draft)"
+    echo "[dry-run]           → gh release edit '$VER' --draft=false"
     exit 0
 fi
 
@@ -139,5 +143,9 @@ if ! (cd firmware/dongle && idf.py fullclean >/dev/null && idf.py build); then
 fi
 [ -f "$BIN_DONGLE" ] || { echo "ERROR: $BIN_DONGLE not built"; exit 1; }
 
-gh release create "$VER" "$BIN_CAR" "$BIN_DONGLE" --target "$LOCAL_HEAD" --title "$TITLE" --notes "$NOTES"
+# Draft → upload both files → check the names → publish. Never `gh release create` with the files
+# as arguments: that publishes before it uploads, and a broken second upload left a one-file
+# release at /releases/latest (AJM-139). The helper leaves a draft behind on any failure, which
+# /releases/latest does not see, and says how to finish or discard it.
+tools/release-publish.sh "$VER" "$LOCAL_HEAD" "$TITLE" "$NOTES" "$BIN_CAR" "$BIN_DONGLE"
 echo "Released $VER"
