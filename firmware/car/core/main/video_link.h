@@ -7,9 +7,10 @@
 // The video channel: one UDP socket on VIDEO_PORT, a subscription tied to the rt
 // session's owner, and the stream toward whoever holds it. Three tasks, all below the
 // actuator: video_ctl owns the socket's receive side and the subscription; video_enc
-// owns the camera pipeline and the encoder and fills a two-slot ring; the sender drains
-// the ring one chunk per millisecond on an esp_timer's wake-up, so a keyframe leaves as
-// a stream rather than a burst. Nothing here touches the motors.
+// owns the camera pipeline and the encoder and fills a six-slot ring in PSRAM; the sender
+// drains the ring one chunk every 3 ms on an esp_timer's wake-up (the dongle's USB drains
+// ~4 Mbit/s), so a keyframe leaves as a trickle rather than a burst. Nothing here touches
+// the motors.
 //
 // Call after camera_init() and rt_link_start(). A car whose camera is off still starts
 // this: the socket answers nothing, and video.state says why.
