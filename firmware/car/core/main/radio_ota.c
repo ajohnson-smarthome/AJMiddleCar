@@ -6,9 +6,18 @@
  * at the call site, so the refusal is part of the tested decision and not of the wiring. */
 #define RADIO_FW_UNAVAILABLE "unavailable"
 
-bool radio_ota_should_flash(const char *running, const char *expected,
-                            int attempts, int max_attempts, bool have_image)
+int radio_ota_attempts_for(const char *charged_for, const char *expected, int attempts)
 {
+    if (charged_for == NULL || expected == NULL)    return 0;
+    if (strcmp(charged_for, expected) != 0)         return 0;
+    return attempts;
+}
+
+bool radio_ota_should_flash(const char *running, const char *expected,
+                            int attempts, int max_attempts, bool have_image,
+                            bool app_confirmed)
+{
+    if (!app_confirmed)                                return false;
     if (!have_image)                                   return false;
     if (running == NULL || expected == NULL)           return false;
     if (strcmp(running, RADIO_FW_UNAVAILABLE) == 0)    return false;

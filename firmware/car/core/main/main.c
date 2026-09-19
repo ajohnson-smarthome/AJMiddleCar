@@ -95,23 +95,36 @@ static int parse_mix(const char *line, float *t, float *y) {
     return 0;
 }
 
-/* The attempt counter. Its own namespace and a single byte: this is not configuration, nothing
-   reads it over the API, and the JSON-per-domain shape the config domains use would be
-   ceremony around one number. */
-#define RADIO_NVS_NS   "radio"
-#define RADIO_NVS_KEY  "ota_tries"
+/* The attempt counter. Its own namespace, a single byte and the version string it was charged
+   against: this is not configuration, nothing reads it over the API, and the JSON-per-domain
+   shape the config domains use would be ceremony around one number and one word. The version
+   beside the byte is what lets a release with a different radio pin start with a fresh budget
+   (radio_ota_attempts_for) instead of inheriting a counter spent on a version it never asked
+   for. */
+#define RADIO_NVS_NS       "radio"
+#define RADIO_NVS_KEY      "ota_tries"
+#define RADIO_NVS_TARGET   "ota_for"    /* RADIO_EXPECTED_FW of the build that charged the byte */
+#define RADIO_TARGET_LEN   24           /* "%u.%u.%u" of three bytes, same bound as radio_flash.c */
 
-static uint8_t radio_attempts_load(void) {
+/* The stored byte as-is, and the version it was charged against in `charged_for` — empty when
+   flash holds no record of one (an older firmware's counter). Whether the byte applies to this
+   build is radio_ota_attempts_for's call, made at the gate, so the raw value stays readable for
+   the one place that must clear it regardless. */
+static uint8_t radio_attempts_load(char charged_for[RADIO_TARGET_LEN]) {
+    charged_for[0] = '\0';
     nvs_handle_t h;
     if (nvs_open(RADIO_NVS_NS, NVS_READONLY, &h) != ESP_OK) return 0;
     uint8_t n = 0;
     if (nvs_get_u8(h, RADIO_NVS_KEY, &n) != ESP_OK) n = 0;
+    size_t len = RADIO_TARGET_LEN;
+    if (nvs_get_str(h, RADIO_NVS_TARGET, charged_for, &len) != ESP_OK) charged_for[0] = '\0';
     nvs_close(h);
     return n;
 }
 
 /* Returns whether the value actually reached flash. The gate needs to know: an attempt that
-   cannot be counted is an uncounted loop. */
+   cannot be counted is an uncounted loop. The byte and the version it is charged against go
+   in one commit, so flash never holds a count without the target it belongs to. */
 static bool radio_attempts_store(uint8_t n) {
     nvs_handle_t h;
     if (nvs_open(RADIO_NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
@@ -119,6 +132,7 @@ static bool radio_attempts_store(uint8_t n) {
         return false;
     }
     esp_err_t err = nvs_set_u8(h, RADIO_NVS_KEY, n);
+    if (err == ESP_OK) err = nvs_set_str(h, RADIO_NVS_TARGET, RADIO_EXPECTED_FW);
     if (err == ESP_OK) err = nvs_commit(h);
     nvs_close(h);
     if (err != ESP_OK) {
@@ -128,22 +142,34 @@ static bool radio_attempts_store(uint8_t n) {
     return true;
 }
 
-static void radio_gate(void) {
+/* `app_confirmed` is false only when this boot tried to cancel the rollback and could not: the
+   gate ends in a restart the car chose, and under PENDING_VERIFY the bootloader would take that
+   restart for a crash and revert the image. */
+static void radio_gate(bool app_confirmed) {
     const char *running = radio_flash_version();
     const bool have_image = radio_flash_image_size() > 0;
     const bool match = (strcmp(running, RADIO_EXPECTED_FW) == 0);
-    const uint8_t attempts = radio_attempts_load();
+    char charged_for[RADIO_TARGET_LEN];
+    const uint8_t stored = radio_attempts_load(charged_for);
+    const uint8_t attempts = (uint8_t)radio_ota_attempts_for(charged_for, RADIO_EXPECTED_FW, stored);
 
     if (match) {
         /* Clear on a match however it came about — a bench reflash counts too, and the next
-           genuine mismatch deserves a fresh budget. A failed write here costs nothing: the count
-           stays where it was, which errs toward giving up sooner rather than later. */
-        if (attempts != 0) radio_attempts_store((uint8_t)radio_ota_next_attempts(true, attempts));
+           genuine mismatch deserves a fresh budget. Cleared from the byte in flash, not from the
+           budget this build sees: a byte charged against another version would otherwise wait
+           there for a build that expects that version again. A failed write here costs nothing:
+           the count stays where it was, which errs toward giving up sooner rather than later. */
+        if (stored != 0) radio_attempts_store((uint8_t)radio_ota_next_attempts(true, stored));
         return;
     }
     if (!radio_ota_should_flash(running, RADIO_EXPECTED_FW,
-                                attempts, RADIO_OTA_MAX_ATTEMPTS, have_image)) {
-        if (have_image) {
+                                attempts, RADIO_OTA_MAX_ATTEMPTS, have_image, app_confirmed)) {
+        if (!have_image) return;    /* nothing on board to offer — not this gate's news */
+        if (!app_confirmed) {
+            ESP_LOGW(TAG, "radio %s vs expected %s: this image is not confirmed — leaving the "
+                          "radio alone this boot, the next one decides",
+                     running, RADIO_EXPECTED_FW);
+        } else {
             ESP_LOGW(TAG, "radio %s vs expected %s: %d attempts spent, giving up and booting on",
                      running, RADIO_EXPECTED_FW, (int)attempts);
         }
@@ -230,9 +256,20 @@ void app_main(void) {
        everything below must tolerate failure — a panic after this point is its own bug. */
     const esp_partition_t *running = esp_ota_get_running_partition();
     esp_ota_img_states_t ota_state;
+    bool app_confirmed = true;
     if (esp_ota_get_state_partition(running, &ota_state) == ESP_OK &&
         ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
-        esp_ota_mark_app_valid_cancel_rollback();
+        esp_err_t mark = esp_ota_mark_app_valid_cancel_rollback();
+        if (mark != ESP_OK) {
+            /* The call that was to make this image permanent is the one that failed: it stays
+               PENDING_VERIFY, and the bootloader reverts to the previous one on the next reset.
+               This line is the only record of why — and the radio gate below is told, because
+               its deliberate restart would be exactly that reset (AJM-138). */
+            ESP_LOGE(TAG, "cancel rollback failed (%s) — image stays PENDING_VERIFY, the "
+                          "bootloader will revert on the next reset; the radio gate stays shut "
+                          "this boot", esp_err_to_name(mark));
+            app_confirmed = false;
+        }
     }
     /* The radio's image rides inside this one, so a pin bump no longer means a bench visit
        (docs/superpowers/specs/2026-08-31-radio-in-one-image-design.md).
@@ -240,8 +277,9 @@ void app_main(void) {
        The position is not free. AFTER mark-valid, because a successful flash ends in a restart
        we chose and the bootloader cannot tell that from a crash — before it, that restart would
        revert a perfectly good app image. BEFORE rt_link_start/http_server_start, because from
-       there on the car is serving and the SDIO link is not ours to drop. */
-    radio_gate();
+       there on the car is serving and the SDIO link is not ours to drop. And only if mark-valid
+       actually took: a gate that cannot rely on it is a gate that does not open this boot. */
+    radio_gate(app_confirmed);
     telemetry_start();                     // 1 Hz RSSI sampler, off the control task
     /* Post-mark-valid, so nothing from here on may panic — rollback is already waived, and
        a panic is a permanent boot-loop on a car with no cable. Log loudly and keep what
