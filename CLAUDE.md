@@ -120,6 +120,7 @@ because it knows anything about the car — it knows neither the motors nor the 
 
 1. `orca linear issue --current --full --json` — тикет; из body взять путь к change;
    прочитать `proposal.md`, `design.md`, `tasks.md` и spec-дельты.
+   Сразу `orca linear status set --current --to "In Progress"` — Orca сам статус не двигает.
 2. Делать только свой пункт `tasks.md`. Чужие пункты не трогать.
    Баг вне scope — `orca linear create --parent-current --title "..." --body-file - --json`, не чинить.
 3. Отметить свой пункт `[x]` в `tasks.md`, прогнать `CONFORMANCE=required tools/test-all.sh`,
