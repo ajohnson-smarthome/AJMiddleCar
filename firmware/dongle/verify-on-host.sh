@@ -51,17 +51,22 @@ for i in $(seq 1 300); do
       echo "GET /status:"
       curl -s --max-time 5 -w "\n  [HTTP %{http_code} in %{time_total}s]\n" http://192.168.7.1:8080/status 2>&1 | sed 's/^/  /'
       echo
-      echo "GET /net (before):"
-      curl -s --max-time 5 -w "\n  [HTTP %{http_code} in %{time_total}s]\n" http://192.168.7.1:8080/net 2>&1 | sed 's/^/  /'
-      echo "POST /net (a network that does not exist — nothing here joins it):"
-      curl -s --max-time 5 -X POST http://192.168.7.1:8080/net \
+      # The network endpoint is POST /wifi (contract/dongle-api.json → endpoints.wifi, the body
+      # per wifi_request), and there is no GET for it any more: the `wifi` group of the
+      # GET /status above is the reading before, and POST /wifi's own reply — the network and
+      # the radio's state as now held — is the reading after (firmware/dongle/README.md).
+      echo "POST /wifi (a network that does not exist — nothing here joins it; must answer 200 with BenchTest and a state, must NOT show the password):"
+      curl -s --max-time 5 -X POST http://192.168.7.1:8080/wifi \
            -H 'Content-Type: application/json' \
            -d '{"ssid":"BenchTest","password":"benchpass"}' \
            -w "\n  [HTTP %{http_code} in %{time_total}s]\n" 2>&1 | sed 's/^/  /'
-      echo "GET /net (after — must show BenchTest, must NOT show the password):"
-      curl -s --max-time 5 -w "\n  [HTTP %{http_code} in %{time_total}s]\n" http://192.168.7.1:8080/net 2>&1 | sed 's/^/  /'
-      echo "POST /net with a 3-character password (must be refused, naming the field):"
-      curl -s --max-time 5 -X POST http://192.168.7.1:8080/net \
+      echo "POST /wifi with the same network again (unchanged while the search is still running — must answer 200 with the same BenchTest and state, a read-back, not a restart):"
+      curl -s --max-time 5 -X POST http://192.168.7.1:8080/wifi \
+           -H 'Content-Type: application/json' \
+           -d '{"ssid":"BenchTest","password":"benchpass"}' \
+           -w "\n  [HTTP %{http_code} in %{time_total}s]\n" 2>&1 | sed 's/^/  /'
+      echo "POST /wifi with a 3-character password (must be refused as bad_length, naming the field password):"
+      curl -s --max-time 5 -X POST http://192.168.7.1:8080/wifi \
            -H 'Content-Type: application/json' \
            -d '{"ssid":"BenchTest","password":"abc"}' \
            -w "\n  [HTTP %{http_code} in %{time_total}s]\n" 2>&1 | sed 's/^/  /'

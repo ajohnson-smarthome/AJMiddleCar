@@ -17,7 +17,7 @@
 
 - [ ] 3.1 Три проверки `rebootWindow` в `app/tests/update` стоят после вердикта и не могут провалить прогон (AJM-59): перенести вердикт в конец; проверить, что искусственно сломанная проверка роняет `tools/test-all.sh`; источники: `app/tests/update/main.swift:164-173` (AJM-70)
 - [ ] 3.2 Мок догоняет прошивку: срабатывание сторожевого таймера потребляет крошки, начало OTA не снимает взвод (AJM-32, AJM-38); проверить новыми тестами в `tools/mock_car/test_state.py` (второй возврат после срабатывания ничего не отматывает; `link.timeouts` растёт при тишине под OTA) и `python3 tools/mock_car/test_state.py`; источники: `tools/mock_car/state.py` (`_trip`, начало OTA), `firmware/car/core/main/recovery.c` (`snapshot_consume`), `rt_glue.h` (AJM-71)
-- [ ] 3.3 `firmware/dongle/verify-on-host.sh` ходит в `/net`, конечная точка — `/wifi` (AJM-44); проверить `bash -n` и сухим чтением, что все три шага скрипта бьют в `/wifi` с телом по `contract/dongle-api.json` → `wifi_request`; источники: `firmware/dongle/verify-on-host.sh:54-57`, `firmware/dongle/main/net_api.c` (AJM-72)
+- [x] 3.3 `firmware/dongle/verify-on-host.sh` ходит в `/net`, конечная точка — `/wifi` (AJM-44); проверить `bash -n` и сухим чтением, что все три шага скрипта бьют в `/wifi` с телом по `contract/dongle-api.json` → `wifi_request`; источники: `firmware/dongle/verify-on-host.sh:54-57`, `firmware/dongle/main/net_api.c` (AJM-72)
 
 ## 4. Документы
 
