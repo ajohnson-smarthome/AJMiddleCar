@@ -109,6 +109,31 @@ async def one_at_a_time(request, handler):
         return await handler(request)
 
 
+@web.middleware
+async def rebooting(request, handler):
+    """A car that just took a flash is rebooting, and nothing of it answers until the
+    AP is back — REST included. For the same window the real-time channel is deaf and
+    mute (`RTLink.simulate_reboot`), a request here is dropped before a byte of a reply,
+    whether its connection was just accepted or held open from before the flash: the
+    app's reboot guard (FirmwareFlow.swift) arms on `/version` *not* answering, and only
+    then can "came back on the same fw" read as a rollback. A mock that answered
+    `/version` straight through the pause never armed it, so `--rollback` — the rehearsal
+    of exactly that screen — ran its 60 s window out and reported success instead.
+
+    Listed after `one_at_a_time`, so the check runs under the lock: a poll that arrived
+    mid-flash and waited behind the upload goes down with the reboot, as it does behind
+    the car's single httpd task, rather than being answered in the gap between the two.
+    """
+    if request.app["link"].rebooting(asyncio.get_running_loop().time()):
+        # Close the connection now and let aiohttp find it closed when it goes to write
+        # the reply: that is its "premature client disconnection" path, logged at debug
+        # and nothing else. Raising here instead would be an "Error handling request"
+        # in the mock's log, and a 500 is not silence.
+        request.protocol.force_close()
+        return web.Response()
+    return await handler(request)
+
+
 async def cfg_get(request):
     return reply(request.app["car"].config_wire())
 
@@ -293,7 +318,8 @@ def build_app(car, link, rollback_mode=False, no_version=False):
     # (firmware/car/core/build/ajmiddlecar.bin) and growing, so the default would 413 a
     # legitimate upload — and, without the read() guard above, wedge the actuator
     # on the way. The P4 has 16 MB of flash; set the cap generously above that.
-    app = web.Application(middlewares=[one_at_a_time], client_max_size=17 * 1024 * 1024)
+    app = web.Application(middlewares=[one_at_a_time, rebooting],
+                          client_max_size=17 * 1024 * 1024)
     app["car"] = car
     app["link"] = link
     app["lock"] = asyncio.Lock()

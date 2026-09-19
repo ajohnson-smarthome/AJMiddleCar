@@ -25,10 +25,12 @@ from state import build_number, parse_frame, seq_is_newer
 TICK_S = 0.020
 PUSH_EVERY = round((1.0 / RT["telemetry_hz"]) / TICK_S)
 
-# How long the mock is deaf and mute after a "flash", simulating the reboot.
-# Hand-mirrored against the app: CarTransport.swift's stallTimeout is 3 s, and the
-# gap must exceed it so the app tears down, re-hellos, and reads the new fw from
-# the hello reply — which is the only place it learns fw.
+# How long the mock is deaf and mute after a "flash", simulating the reboot — on all
+# three ports: this channel, video (which follows the session), and REST, whose
+# middleware in mock_car.py asks `RTLink.rebooting`. Hand-mirrored against the app:
+# CarTransport.swift's stallTimeout is 3 s, and the gap must exceed it so the app tears
+# down, re-hellos, and reads the new fw from the hello reply — which is the only place
+# it learns fw.
 REBOOT_QUIET_S = 4.0
 
 
@@ -110,7 +112,7 @@ class RTLink(asyncio.DatagramProtocol):
 
     def datagram_received(self, data, addr):
         now = self.loop.time()
-        if self._quiet_until is not None and now < self._quiet_until:
+        if self.rebooting(now):
             return                                  # "rebooting": deaf
         if self.impair.stalled(now):
             return                                  # a stalled car services nothing
@@ -298,10 +300,20 @@ class RTLink(asyncio.DatagramProtocol):
         self._quiet_until = now + REBOOT_QUIET_S
         print(f"rt: 'rebooting' — deaf and mute for {REBOOT_QUIET_S:g} s")
 
+    def rebooting(self, now):
+        """True inside the reboot window `simulate_reboot` opened.
+
+        One predicate for every port: the UDP side is deaf and mute on it, and the REST
+        side (mock_car.py) drops a connection on it before a byte of a reply — a
+        rebooting car has no AP, so nothing of it answers, and the app's reboot guard
+        arms on exactly that absence.
+        """
+        return self._quiet_until is not None and now < self._quiet_until
+
     def push_telemetry(self, now):
         if self.owner is None or self.impair.stalled(now):
             return
-        if self._quiet_until is not None and now < self._quiet_until:
+        if self.rebooting(now):
             return                                  # "rebooting": mute
         self._send(self.car.telemetry(self.rx_fps(now, "push")), self.owner)
 

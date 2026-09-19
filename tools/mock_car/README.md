@@ -110,6 +110,10 @@ a file; `ffplay /tmp/out.h264` opens it.
   `datagram_received` directly. Stdlib only, like `state.py`, and for the same reason.
 - `test_state.py`, `test_rtlink.py` — `python3 test_state.py && python3 test_rtlink.py`.
   Stdlib only: no aiohttp, no sockets, no sleeping.
+- `test_http.py` — `.venv/bin/python test_http.py`: the REST side over a real aiohttp
+  server, for what only shows through a socket — the simulated reboot dropping REST
+  connections unanswered for the same window UDP is deaf and mute, then `/version` with
+  the new fw (or, under `--rollback`, the old one and `rolled_back: true`).
 - `mock_car.py` — plumbing only: it binds the UDP endpoint and the aiohttp REST server,
   whose six config domains are one route, `/config`, that walks the schema.
 - `generated.py` — **generated**. Never hand-edit it; change `contract/car-api.json` and
