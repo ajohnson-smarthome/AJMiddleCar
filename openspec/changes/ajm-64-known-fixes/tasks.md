@@ -4,7 +4,7 @@
 
 ## 1. Прошивка машинки
 
-- [ ] 1.1 `POST /ota`: не-образ на первом блоке → `400 not_firmware`, отказ флеша → `500 write_failed` (AJM-37): карта «код IDF → код конверта и статус» чистой функцией с хост-тестом, `ota_api.c` только вызывает её; проверить `make -C firmware/car/core/test run` с новым тестом карты и `tools/conformance.py` против мока (шаг с 4096 нулями); источники: `firmware/car/core/main/ota_api.c:77-86`, `tools/conformance.py:500`, `tools/mock_car/state.py` (ответ на не-образ), дельта `specs/car/ota-and-rollback/spec.md` (AJM-65)
+- [x] 1.1 `POST /ota`: не-образ на первом блоке → `400 not_firmware`, отказ флеша → `500 write_failed` (AJM-37): карта «код IDF → код конверта и статус» чистой функцией с хост-тестом, `ota_api.c` только вызывает её; проверить `make -C firmware/car/core/test run` с новым тестом карты и `tools/conformance.py` против мока (шаг с 4096 нулями); источники: `firmware/car/core/main/ota_api.c:77-86`, `tools/conformance.py:500`, `tools/mock_car/state.py` (ответ на не-образ), дельта `specs/car/ota-and-rollback/spec.md` (AJM-65)
 - [ ] 1.2 Видеоподписка завершается при смене владельца rt-сессии (AJM-40): подписка помнит sid открытия, на каждом такте сравнивает с `rt_link_owner_sid()`, не совпало — конец подписки и потока; правило в `video_sub.h`, тест в `test_video_sub.c`; проверить `make -C firmware/car/core/test run` и `tools/conformance_video.py` против мока; источники: `firmware/car/core/main/video_sub.h:29-63`, `video_link.c` (такт управления), `rt_link.h` (`rt_link_owner_sid`), дельта `specs/car/video-stream/spec.md` (AJM-66)
 
 ## 2. Приложение
