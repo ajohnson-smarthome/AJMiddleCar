@@ -16,11 +16,11 @@ public enum RollbackChoice: Equatable {
     /// Nothing said yet: report the rollback and stop there.
     case unanswered
     /// "Check again" — the one button on a rolled-back screen (S10 for the adapter, S31 for the
-    /// car) (`fw.retry`). One look at whatever the release feed now says, measured from the tag
+    /// car) (`fw.retry`). One look at whatever the release feed now says. `from` is the tag
     /// that was on offer when it was asked (`nil` when nothing was known then: offline, no
-    /// cache). A release NEWER than that is a different image and is offered; the same one is
-    /// not re-flashed into the same rollback. The flow consumes this after one decision — one
-    /// look per ask, not a standing permission.
+    /// cache) — the reference a newer release is measured from only when the phone has no
+    /// record of what it last flashed into the board (`VersionRule.step`'s `flashed`). The flow
+    /// consumes this after one decision — one look per ask, not a standing permission.
     case recheck(from: String?)
 }
 
@@ -29,7 +29,9 @@ public enum RollbackChoice: Equatable {
 /// Pure by design — no `async`, no networking — so every branch is host-tested. The order is
 /// the one `DongleLink` always used: identity, then rollback, then version. `latestTag` is not
 /// optional: the gate learns the release first (`fetchRelease`) and asks this only with a tag
-/// in hand.
+/// in hand. `flashed` is the last build this phone flashed into this board (recorded at the
+/// flash's `ok` — `UpdateClient.lastFlashedTag`), `nil` when it never has: the reference a
+/// rolled-back board's next offer is measured from.
 public enum VersionStep: Equatable {
     /// Nothing answered at the board's address.
     case plugIn
@@ -52,7 +54,7 @@ public enum VersionStep: Equatable {
 
 public enum VersionRule {
     public static func step(reply: VersionReply, expectedDevice: String, latestTag: String,
-                            rollback: RollbackChoice) -> VersionStep {
+                            flashed: String?, rollback: RollbackChoice) -> VersionStep {
         let v: DeviceVersion
         switch reply {
         case .version(let d): v = d
@@ -63,19 +65,28 @@ public enum VersionRule {
         }
         guard v.device == expectedDevice else { return .wrongDevice(name: v.device) }
         if v.rolled_back {
-            switch rollback {
-            case .unanswered:
-                return .rolledBack
-            case .recheck(let from):
-                // Newer than what was on offer when they asked, AND newer than what the board
-                // runs: the first keeps the image that just rolled back from being re-flashed
-                // into the same rollback, the second is the ordinary update question.
-                if UpdateRules.isUpdateAvailable(running: from, latest: latestTag),
-                   UpdateRules.mustUpdate(carFw: v.fw, latestTag: latestTag) {
-                    return .updating
-                }
-                return .rolledBack
+            // The reference a newer release is measured from. The build this phone last
+            // flashed into the board, when it has one on record — that is the image that
+            // rolled back (or an older one; either way the floor), and it answers the first
+            // look, no tap needed. Without a record: the tag on offer when «Повторить» was
+            // tapped, and before the tap nothing at all — the rollback stands. Measuring from
+            // the tag on hand alone was AJM-132: in any launch after the rollback the ladder
+            // learns the newest tag first, so "newer than what was on offer" was "newer than
+            // itself", and a rolled-back board never got the fixing release.
+            let reference: String?
+            switch (flashed, rollback) {
+            case (let record?, _): reference = record
+            case (nil, .recheck(let from)): reference = from
+            case (nil, .unanswered): return .rolledBack
             }
+            // Newer than the reference, AND newer than what the board runs: the first keeps
+            // the image that rolled back from being re-flashed into the same rollback, the
+            // second is the ordinary update question.
+            if UpdateRules.isUpdateAvailable(running: reference, latest: latestTag),
+               UpdateRules.mustUpdate(carFw: v.fw, latestTag: latestTag) {
+                return .updating
+            }
+            return .rolledBack
         }
         if UpdateRules.mustUpdate(carFw: v.fw, latestTag: latestTag) { return .updating }
         // Protocol is no longer a gate input: one release ships the app and both firmwares

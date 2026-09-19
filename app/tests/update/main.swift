@@ -191,4 +191,42 @@ check(UpdateRules.rebootWindow(for: .dongle) >= 25, "the adapter keeps at least 
 check(UpdateRules.rebootWindow(for: .car) > UpdateRules.rebootWindow(for: .dongle),
       "and the car, with a radio and a camera to bring up, waits longer than the adapter")
 
+// -- the forced screen's automaton: phase → what it does by itself (AJM-123, AJM-131) ---------
+// The gate offers no choice, so every phase that waits for a tap from Settings is an act
+// here — and `.available` is one of them from WHEREVER it came. It used to be acted on only
+// by the screen's appearance: after «Повторить» (a failed download, a refused image, a
+// lost `ok`, «Прошито»), `check()` landed on `.available` again and the screen showed
+// «Требуется обновление» with no button and nothing happening — a dead end until the app
+// was killed. The phase change is the trigger now, the same way `.downloaded` always was.
+check(UpdateRules.forcedAct(on: .available) == .download,
+      "available → download, however the phase was reached — not only on first appearance")
+check(UpdateRules.forcedAct(on: .downloaded) == .flashWhenReachable,
+      "downloaded → flash the moment the board answers")
+check(UpdateRules.forcedAct(on: .upToDate) == .finish, "up to date → hand the board back to the ladder")
+check(UpdateRules.forcedAct(on: .done) == .finish, "done → hand the board back to the ladder")
+for phase in [FwPhase.checking, .downloading, .uploading, .rebooting] {
+    check(UpdateRules.forcedAct(on: phase) == .wait, "\(phase): the flow is busy — wait")
+}
+for phase in [FwPhase.flashed, .failed] {
+    check(UpdateRules.forcedAct(on: phase) == .wait, "\(phase): stopped on «Повторить» — wait for the tap")
+}
+
+// -- the board answered while the forced screen waited to flash it (AJM-135) ------------------
+// `flashWhenReachable` used to flash on the first answer, whatever it said. A car that had
+// taken the image and rebooted — the `ok` lost on the way, or the upload cancelled in its
+// last fraction of a second — answered with the release's version and was flashed with the
+// same image again, then came back "on the same version" after the reboot, which the watch
+// read as a rollback. The same comparison `check()` makes, made again against what the board
+// runs NOW: behind the target → flash; at it or past it → the flash already landed.
+check(UpdateRules.reached(running: "v1.0+500", target: "v1.0+584") == .flash,
+      "behind the target: flash")
+check(UpdateRules.reached(running: "v1.0+584", target: "v1.0+584") == .done,
+      "already on the target: done — the flash landed, its ok did not; not a second flash")
+check(UpdateRules.reached(running: "v1.0+600", target: "v1.0+584") == .done,
+      "ahead of the target: done — never down")
+check(UpdateRules.reached(running: nil, target: "v1.0+584") == .flash,
+      "a 404 board — no version to compare — is flashed, as check() offers it")
+check(UpdateRules.reached(running: "v1.0", target: "v1.0+584") == .flash,
+      "a build without a number is behind any versioned target")
+
 if failures == 0 { print("test_update: OK") } else { exit(1) }

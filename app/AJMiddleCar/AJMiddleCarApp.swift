@@ -111,6 +111,7 @@ struct RootView: View {
             // the object under the chip differs. HTTP only — see `Phase.opensLink`: no session
             // is opened behind it, so as not to drive the very board it is updating.
             FirmwareView(palette: p, flow: dev == .car ? .forCar() : .forDongle(client: flow.dongle),
+                         link: dev == .car ? link : nil,
                          forced: true, onDone: { flow.updateFinished(dev) })
         case .stage(let dev, let step):
             ConnectView(situation: .stage(dev, step), onRetry: flow.retryAction(for: step))

@@ -69,6 +69,10 @@ final class FirmwareFlow: ObservableObject {
     var currentFw: String? { runningFw() }
     var reachable: Bool { isReachable() }
     var canCancelUpload: Bool { uploadTask != nil }
+    /// The version the image on offer carries: the release's tag, or the cached image's when
+    /// there is no feed. What the screen prints as the transition's far end, what the board
+    /// is compared against before a flash, and what the flash is recorded as.
+    var targetTag: String? { offlineCache ? UpdateClient.cachedTag(for: device) : release?.tag }
 
     // ── check ────────────────────────────────────────────────────────────
     func check() async {
@@ -141,23 +145,63 @@ final class FirmwareFlow: ObservableObject {
         }
     }
 
+    // ── forced mode: the automaton ───────────────────────────────────────
+    /// The launch gate's driving of this flow, whole: check, then act on the phase by
+    /// `UpdateRules.forcedAct` (pure, host-tested) until the board is current — `onFinish`
+    /// hands it back to the ladder — or the screen goes away. One task, started by
+    /// `FirmwareView` once on appearance and cancelled by SwiftUI only with the screen: the
+    /// phases it waits through (`.checking`, `.downloading`, `.uploading`, `.rebooting`) are
+    /// its own calls in progress, and the ones it stops on (`.failed`, `.flashed`) are the
+    /// buttons — «Повторить» runs `check()`, and the next look here finds `.available` and
+    /// carries on, from wherever it came (AJM-123, AJM-131).
+    ///
+    /// A poll every 100 ms rather than a `.task(id: phase)` per phase, because the screen used
+    /// to drive it that way and SwiftUI does not promise a restart per transition: a phase set
+    /// synchronously right after the previous task returned (`download()` finding the image in
+    /// the cache, `.available` → `.downloaded` in one main-actor turn) rendered on screen and
+    /// started nothing, and the retry rehearsal (mock, 2026-09-20) sat on «Подключение к
+    /// машинке» with a board answering `/version`. A wait of 100 ms on a screen that exists
+    /// only while a board updates costs nothing anyone can see.
+    func runForced(onFinish: @escaping @MainActor () -> Void) async {
+        await check()
+        while !Task.isCancelled {
+            switch UpdateRules.forcedAct(on: phase) {
+            case .download: await download()
+            case .flashWhenReachable: await flashWhenReachable()
+            case .finish: onFinish(); return
+            case .wait: try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+    }
+
     /// Forced mode's answer to `.downloaded`: flash the moment the device is reachable, whether
     /// that is now or later. `FirmwareView` used to flash on the phase change only if the
     /// device happened to be reachable in that same instant; a car still re-joining through
     /// the dongle was not, and the screen then waited for a tap on a button nothing told the
     /// user to press. Returns when the phase has moved on, or when cancelled.
     ///
-    /// The flash itself runs in a task of its own, NOT in this one. `FirmwareView` runs this
-    /// from `.task(id: flow.phase)`, and `flash()`'s first act is to move the phase — which
-    /// cancels the task it is running in. The upload survived that (it is a child `Task` of
-    /// its own), but the reboot watch ran cancelled: every sleep returned at once, every
-    /// `/version` threw before opening a connection, and thirty seconds of that ended as
-    /// «Прошито» for an adapter that had come back within twenty (bench, 2026-09-15).
+    /// The answer is compared before it is flashed (`UpdateRules.reached`, AJM-135): a board
+    /// that answers already on the target took the image while the `ok` was lost — or the
+    /// upload was cancelled in its last fraction of a second — and is done, not flashed again
+    /// into a false rollback. The comparison is against what it runs NOW: `VersionState`
+    /// forgets a version across silence, so nothing here can read the pre-flash version as the
+    /// post-reboot one.
+    ///
+    /// The flash itself runs in a task of its own, awaited from here rather than inside this
+    /// one: `runForced`'s task dies with the screen, and a screen torn down mid-flash (a guard
+    /// restarting the ladder — the adapter unplugged) must not leave the reboot watch running
+    /// cancelled, where every sleep returns at once and every `/version` throws before opening
+    /// a connection. That was how thirty seconds of watch ended as «Прошито» for an adapter
+    /// that had come back within twenty (bench, 2026-09-15), back when `.task(id: phase)`
+    /// cancelled this the moment `flash()` moved the phase.
     func flashWhenReachable() async {
         while phase == .downloaded {
             await refresh()
             if isReachable() {
-                Task { @MainActor in await self.flash() }
+                switch UpdateRules.reached(running: runningFw(), target: targetTag) {
+                case .flash: await Task { @MainActor in await self.flash() }.value
+                case .done: phase = .done
+                }
                 return
             }
             try? await Task.sleep(for: .milliseconds(500))
@@ -201,7 +245,10 @@ final class FirmwareFlow: ObservableObject {
 
         // Acknowledged: the image is written, set as the boot target, and the reboot follows.
         // From here the flash is COMMITTED — the only question left is whether this phone gets
-        // to watch the confirmation.
+        // to watch the confirmation. Which is why the flash is recorded here and not at
+        // «Готово»: the image that rolls back never reaches «Готово», and it is exactly the
+        // one the ladder's rollback rule needs named (`UpdateClient.lastFlashedTag`).
+        if let tag = targetTag { UpdateClient.recordFlashed(tag: tag, for: device) }
         phase = .rebooting
         let oldFw = runningFw()
         var sawOffline = false
@@ -308,7 +355,13 @@ private final class VersionState {
             reachable = true
         case .silent, .faulty, .denied:
             // Not answering, or answering with something that is not the document — a reboot
-            // in progress, or not our board at all. Not reachable for a flash either way.
+            // in progress, or not our board at all. Not reachable for a flash either way, and
+            // its version is UNKNOWN, not what it last said: a board that goes silent is
+            // usually rebooting into a different build, and a version kept across the silence
+            // is what let `flashWhenReachable` flash a board that had already come back new
+            // (AJM-135). `check()` reads nil as "behind any versioned release", which is what
+            // the forced screen wants: download, then wait for the board and compare then.
+            fw = nil
             reachable = false
         }
     }

@@ -16,8 +16,10 @@ func doc(_ device: String, fw: String, proto: Int, rolledBack: Bool = false) -> 
                            proto: proto, rolled_back: rolledBack))
 }
 func decide(_ reach: Reach, _ version: VersionReply?, _ b: Board.Identity,
-            tag: String? = latest, rollback: RollbackChoice = .unanswered) -> StageRule.Verdict {
-    StageRule.decide(reach: reach, version: version, board: b, latestTag: tag, rollback: rollback)
+            tag: String? = latest, flashed: String? = nil,
+            rollback: RollbackChoice = .unanswered) -> StageRule.Verdict {
+    StageRule.decide(reach: reach, version: version, board: b, latestTag: tag, flashed: flashed,
+                     rollback: rollback)
 }
 
 // reach speaks first, before /version is even read.
@@ -47,6 +49,9 @@ check(decide(.reached, doc("esp32-car", fw: "v1.0+200", proto: 2), car) == .show
       "foreign device: .wrongDevice with its name")
 check(decide(.reached, doc("ajmiddlecar", fw: "v1.0+200", proto: 2, rolledBack: true), car) == .show(.rolledBack),
       "rolled back: .rolledBack")
+check(decide(.reached, doc("ajmiddlecar", fw: "v1.0+100", proto: 2, rolledBack: true), car, flashed: "v1.0+150")
+      == .show(.updating),
+      "rolled back from a build older than the tag: .updating — the phone's record reaches the rule (AJM-132)")
 check(decide(.reached, doc("ajmiddlecar", fw: "v1.0+100", proto: 2), car) == .show(.updating),
       "behind the tag: .updating")
 check(decide(.reached, .absent, car) == .show(.updating), "404: .updating (board older than /version)")

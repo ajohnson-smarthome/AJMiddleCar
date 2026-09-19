@@ -7,10 +7,11 @@ import SwiftUI
 /// place on the screen. The only thing that differs is the object under the chip, chosen by
 /// `flow.device`.
 ///
-/// It used to carry one more line: the radio co-processor's version, car-only, kept because it
-/// was the app's sole view of a pinned-version mismatch. That reason expired when the car learned
-/// to correct its own radio at boot — a mismatch is now a transient state during one reboot
-/// rather than something a person has to notice and act on.
+/// The car's screen carries one more line: the radio co-processor's firmware against what this
+/// build expects, from `/status` (`CarLink.radio`). The car corrects its own radio at boot, so a
+/// mismatch is usually a transient state during one reboot — but one that stands after the
+/// car's attempt budget is spent, or a radio that never answered, is visible nowhere else in
+/// the app, and it costs five seconds of every boot (AJM-92). The adapter has no radio.
 struct FirmwareView: View {
     @StateObject private var flow: FirmwareFlow
     let palette: Palette
@@ -21,18 +22,23 @@ struct FirmwareView: View {
     var onDone: (() -> Void)? = nil
     /// Gallery only: hold a phase, with no network behind it.
     var debugPhase: FwPhase? = nil
+    /// The car's link, for the radio line — `nil` on the adapter's screen, which has none.
+    /// Not observed here: `RadioLine` observes it, so the screen redraws for the radio only
+    /// where the radio is drawn.
+    private let link: CarLink?
 
     @Environment(\.dismiss) private var dismiss
     private var p: Palette { palette }
     private var device: UpdateRules.Device { flow.device }
 
-    init(palette: Palette, flow: @autoclosure @escaping () -> FirmwareFlow, forced: Bool = false,
-         onDone: (() -> Void)? = nil, debugPhase: FwPhase? = nil) {
+    init(palette: Palette, flow: @autoclosure @escaping () -> FirmwareFlow, link: CarLink? = nil,
+         forced: Bool = false, onDone: (() -> Void)? = nil, debugPhase: FwPhase? = nil) {
         self.palette = palette
         // `StateObject(wrappedValue:)` takes an autoclosure and evaluates it once, on the first
         // render — so the flow (and the `UpdateClient` inside it) survives the struct being
         // rebuilt, which SwiftUI does constantly.
         _flow = StateObject(wrappedValue: flow())
+        self.link = link
         self.forced = forced
         self.onDone = onDone
         self.debugPhase = debugPhase
@@ -46,18 +52,19 @@ struct FirmwareView: View {
         }
         .task {
             if let dp = debugPhase { flow.seed(dp); return }
-            await flow.check()
-            // Forced means the gate, and the gate offers no alternative — so it does not ask.
-            // Opened from Settings the same phase waits for the button, because there the person
-            // came on purpose and the decision is theirs.
-            if forced, flow.phase == .available { await flow.download() }
+            link?.refreshRadio()
+            // Forced means the gate, and the gate offers no alternative — so it does not ask:
+            // `runForced` is the whole automaton, check through flash, in this one task,
+            // which lives as long as the screen. Opened from Settings the phases wait for
+            // their buttons, because there the person came on purpose and the decision is
+            // theirs.
+            if forced { await flow.runForced { onDone?() } } else { await flow.check() }
         }
-        .task(id: flow.phase) {
-            // The download and the flash are one movement when the gate is driving — and the
-            // movement waits for the device rather than for a tap: `flashWhenReachable` polls
-            // until the car or the adapter answers, however long its reboot or re-join takes.
-            // `task(id:)` cancels the wait the moment the phase moves on.
-            if forced, flow.phase == .downloaded { await flow.flashWhenReachable() }
+        .onChange(of: flow.phase) { _, phase in
+            // An OTA just behind us may have changed the radio's answer — the car delivers its
+            // radio image on the first boot of a new build, before it serves `/version`. Not in
+            // the gallery, whose frozen link is the whole point of the frame.
+            if phase == .done, debugPhase == nil { link?.refreshRadio() }
         }
     }
 
@@ -68,14 +75,12 @@ struct FirmwareView: View {
                 title(L.fwChecking); sub(L.fwCurrent(flow.currentFw ?? "—"))
             case .upToDate:
                 title(L.fwUpToDate); sub(L.fwVersionLine(flow.currentFw ?? "—"))
-                if forced { Color.clear.frame(width: 0, height: 0).onAppear { onDone?() } }
-                else { fwButton(L.fwRecheck, prominent: false) { Task { await flow.check() } } }
+                // Forced: nothing to press — the automaton above hands the board back.
+                if !forced { fwButton(L.fwRecheck, prominent: false) { Task { await flow.check() } } }
             case .available:
                 title(forced ? L.gateUpdateTitle : L.fwAvailable)
-                let target = flow.offlineCache
-                    ? (UpdateClient.cachedTag(for: device) ?? "—") : (flow.release?.tag ?? "—")
                 sub(forced ? L.gateUpdateSub
-                           : L.fwTransition(flow.currentFw ?? "—", target)
+                           : L.fwTransition(flow.currentFw ?? "—", flow.targetTag ?? "—")
                              + (flow.offlineCache ? " · " + L.fwFromCache : ""))
                 if !forced { fwButton(L.fwUpdate, prominent: true) { Task { await flow.download() } } }
             case .downloading:
@@ -98,7 +103,7 @@ struct FirmwareView: View {
                 }
             case .uploading:
                 title(L.fwUploadTitle)
-                sub("\(flow.offlineCache ? (UpdateClient.cachedTag(for: device) ?? "") : (flow.release?.tag ?? "")) · \(Int(flow.uploadProgress * 100))%")
+                sub("\(flow.targetTag ?? "") · \(Int(flow.uploadProgress * 100))%")
                 ProgressView(value: flow.uploadProgress).tint(p.accent).frame(width: 160)
                 fwButton(L.fwCancel, prominent: false) { flow.cancelUpload() }
             case .rebooting:
@@ -111,12 +116,56 @@ struct FirmwareView: View {
                 if forced { fwButton(L.fwRetry, prominent: false) { Task { await flow.check() } } }
             case .done:
                 title(L.fwDoneTitle); sub(L.fwDoneSub(flow.currentFw ?? "—"))
-                if forced { Color.clear.frame(width: 0, height: 0).onAppear { onDone?() } }
+                // Forced: the automaton above hands the board back.
             case .failed:
                 title(L.fwFailTitle)
                 sub(flow.rolledBack ? L.fwRollbackSub(device) : L.fwFailLine(device, flow.failReason))
-                fwButton(L.fwRetry, prominent: true) { Task { await flow.check() } }
+                if forced, flow.rolledBack {
+                    // A rollback's «Повторить» goes back to the ladder, not through `check()`:
+                    // `check()` would find the board behind the same release, and the
+                    // automaton would flash the same image into the same rollback, forever.
+                    // The ladder reads `rolled_back` from `/version` and applies the one rule
+                    // that knows what rolled back — the build recorded at this flash's `ok`
+                    // (`VersionRule`, AJM-132): a release newer than it is offered, the same
+                    // one is not.
+                    fwButton(L.fwRetry, prominent: true) { onDone?() }
+                } else {
+                    fwButton(L.fwRetry, prominent: true) { Task { await flow.check() } }
+                }
             }
+            if let link { RadioLine(link: link, palette: p) }
+        }
+    }
+
+    /// The car's radio against what this build expects, on every phase — it is the only place
+    /// in the app a standing mismatch can be noticed (AJM-92). Its own view so that only this
+    /// line redraws when `/status` answers, and so that the adapter's screen, which passes no
+    /// link, carries nothing.
+    private struct RadioLine: View {
+        @ObservedObject var link: CarLink
+        let palette: Palette
+
+        var body: some View {
+            switch link.radio {
+            case .known(let r) where r.state == .ok:
+                line(L.fwRadio(r.fw ?? "—"), palette.muted)
+            case .known(let r):
+                // `mismatch`, or a state this build does not know — anything but `ok` names both
+                // versions. `unavailable` is the radio not answering the car: no version to
+                // name, only the one expected.
+                line(r.fw.map { L.fwRadioMismatch($0, r.expected) } ?? L.fwRadioSilent(r.expected),
+                     palette.warn)
+            case .unavailable:
+                line(L.fwRadioUnknown, palette.muted)
+            case nil:
+                EmptyView()
+            }
+        }
+
+        private func line(_ t: String, _ color: Color) -> some View {
+            Text(t).font(.system(size: 12)).foregroundStyle(color)
+                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 260, alignment: .leading)
+                .padding(.top, 6)
         }
     }
 

@@ -60,7 +60,7 @@ struct GalleryView: View {
                           motors: MotorsInfo(bus: busOk ? .ok : .down, calibrated: calibrated, owner: owner),
                           system: SystemInfo(uptime_s: 3847, free_heap: 131072),
                           video: VideoInfo(state: .idle, fps: 0, kbps: 0, dropped: 0))
-        return CarLink.preview(.live(t), fw: fw, radio: .known(fw: "3.0.6", ok: true))
+        return CarLink.preview(.live(t), fw: fw, radio: .known(RadioInfo(fw: "3.0.6", expected: "3.0.6", state: .ok)))
     }
 
     @MainActor private func makeFrames(_ p: Palette) -> [(label: String, view: AnyView)] {
@@ -75,12 +75,16 @@ struct GalleryView: View {
         ConfigStore.shared.video.seed(.default)   // the switch on: the drive frames are the HUD
         // One helper, two devices: the whole point of the unification is that these render the
         // same screen with a different object under the chip.
+        // The car's frames carry the radio line — `radio` is what `/status` said; the adapter's
+        // carry no link and no line.
         func fw(_ phase: FwPhase, forced: Bool = false,
-                device: UpdateRules.Device = .car) -> AnyView {
+                device: UpdateRules.Device = .car,
+                radio: CarLink.RadioStatus? = .known(RadioInfo(fw: "3.0.6", expected: "3.0.6", state: .ok))) -> AnyView {
             let flow = device == .car ? FirmwareFlow.forCar()
                                       : FirmwareFlow.forDongle(client: DongleClient())
+            let link = device == .car ? CarLink.preview(.searching, radio: radio) : nil
             return AnyView(NavigationStack {
-                FirmwareView(palette: p, flow: flow, forced: forced, debugPhase: phase)
+                FirmwareView(palette: p, flow: flow, link: link, forced: forced, debugPhase: phase)
             })
         }
         func calib(_ d: CalibrationView.CalDebug) -> AnyView {
@@ -124,6 +128,11 @@ struct GalleryView: View {
             ("Firmware forced",         fw(.available, forced: true)),
             ("Firmware flashed",         fw(.flashed)),
             ("Firmware failed forced",   fw(.failed, forced: true)),
+            // The radio line's three words for a car that could not put its own radio right:
+            // spent attempt budget, a radio that never answered, and a /status nobody got.
+            ("Firmware radio mismatch",  fw(.upToDate, radio: .known(RadioInfo(fw: "3.0.5", expected: "3.0.6", state: .mismatch)))),
+            ("Firmware radio silent",    fw(.upToDate, radio: .known(RadioInfo(fw: nil, expected: "3.0.6", state: .unavailable)))),
+            ("Firmware radio unknown",   fw(.upToDate, radio: .unavailable)),
             // The adapter, through the same screen — this is the unification, visible.
             ("Adapter fw checking",      fw(.checking, device: .dongle)),
             ("Adapter fw available",     fw(.available, device: .dongle)),

@@ -223,7 +223,9 @@ final class AppFlow: ObservableObject {
                 setPhase(.stage(board.identity.device, .checking))
             }
             switch StageRule.decide(reach: reach, version: version, board: board.identity,
-                                    latestTag: latestTag, rollback: rollbackChoice) {
+                                    latestTag: latestTag,
+                                    flashed: UpdateClient.lastFlashedTag(for: board.identity.device),
+                                    rollback: rollbackChoice) {
             case .lost:
                 // Pace the hand-back: a board reached through another one whose reach faults
                 // (e.g. the adapter answers /version but its /status is persistently bad) would
@@ -554,8 +556,11 @@ final class AppFlow: ObservableObject {
     /// The user asked whether a newer release exists yet — the one button on either board's
     /// rolled-back screen (`ConnectView.Situation.stage(_, .rolledBack)`). Two halves, both
     /// required: re-open the release fetch (a tag fetched before the rollback screen appeared is
-    /// exactly the tag that cannot help), and record what was on offer at the time so
-    /// `StageRule` can tell a genuinely newer image from the one that just rolled back.
+    /// exactly the tag that cannot help), and record what was on offer at the time — the
+    /// reference `StageRule` measures "newer" from on a phone that has no record of what it
+    /// last flashed into this board. With a record (`UpdateClient.lastFlashedTag`, written at
+    /// the flash's `ok`), the rule measures from that instead: the tag on hand here is, in any
+    /// launch after the rollback, already the newest one, and was the wrong yardstick (AJM-132).
     func recheckRollback() {
         rollbackChoice = .recheck(from: latestTag)
         // Clearing the tag is what makes the next poll re-ask GitHub: `fetchRelease` runs while

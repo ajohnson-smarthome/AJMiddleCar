@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// Phases of a firmware update, shared by both devices' screens and their images.
-enum FwPhase { case checking, upToDate, available, downloading, downloaded, uploading, rebooting, flashed, done, failed }
-
 /// The device being updated, drawn top-down with a chip carrying the phase and OTA rings
 /// around it.
 ///

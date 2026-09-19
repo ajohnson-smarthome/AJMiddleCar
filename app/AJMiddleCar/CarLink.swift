@@ -13,9 +13,15 @@ final class CarLink: ObservableObject {
     /// The radio co-processor's firmware, from `/status`. Three states: unknown (still
     /// fetching), known, and unavailable — every `/status` attempt failed. Unavailable is a
     /// state of its own because hiding the line made silence indistinguishable from health
-    /// on the one screen that exists to surface a mismatch.
+    /// on the one screen that exists to surface a mismatch (`FirmwareView`'s radio line).
     enum RadioStatus: Equatable {
-        case known(fw: String, ok: Bool)
+        /// `/status.radio` as the car reported it (`contract.groups.radio`): what the radio
+        /// runs (`fw`, nil when it did not answer the car), what this build was made for
+        /// (`expected`), and the car's own verdict (`state`). The whole group rather than a
+        /// digest, because the screen names both versions — a `mismatch` that stands after the
+        /// car's own attempts is «X → ожидается Y», and the reader needs Y to know what to
+        /// bring to the bench.
+        case known(RadioInfo)
         case unavailable
     }
 
@@ -260,7 +266,7 @@ final class CarLink: ObservableObject {
                 // generation can have moved.
                 guard gen == self.radioFetchGen else { return }
                 if let data, let s = try? JSONDecoder().decode(CarStatus.self, from: data) {
-                    self.radio = .known(fw: s.radio.fw ?? "", ok: s.radio.state == .ok)
+                    self.radio = .known(s.radio)
                     return
                 }
             }
@@ -269,8 +275,9 @@ final class CarLink: ObservableObject {
         }
     }
 
-    /// FirmwareView calls this on appear: the radio line is that screen's reason to exist,
-    /// and an OTA just behind us may have changed the answer.
+    /// `FirmwareView` calls this when it opens for the car and again on «Готово»: the radio
+    /// line is that screen's, an OTA just behind us may have changed the answer, and in forced
+    /// mode there is no session to have asked — `/status` is REST and needs none.
     func refreshRadio() { fetchRadio() }
 
     #if DEBUG
