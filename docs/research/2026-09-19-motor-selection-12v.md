@@ -242,6 +242,58 @@ BTS7960 и 3S-пак это держат. Это тот самый мотор, �
 заказать по одной обеих (~$35 на двоих), стоп-момент и стоп-ток на весах и амперметре
 решают; таблица NFP для 555 — оценка, для 3429 — заводская.
 
+## 8. Базовый выбор против нынешнего — что изменится за рулём
+
+CHR-GM37-3429-ABHL 1:18.8 против JGB37-520B 1:9, оба 12 В / Ø37 мм / вал 6 мм D / холл AB.
+Сила на ободе Ø110 мм по скорости (момент щёточного мотора падает линейно от стопа к
+холостому ходу):
+
+| км/ч | 0 | 2 | 4 | 6 | **8,4** | 10 | 12 | 15 | 20 |
+|---|---|---|---|---|---|---|---|---|---|
+| JGB37-520B 1:9 — сейчас, кгс | 0,55 | 0,49 | 0,44 | 0,39 | 0,33 | **0,28** | **0,23** | **0,15** | 0,02 |
+| CHR-GM37-3429 1:18.8, кгс | **1,36** | **1,12** | **0,87** | **0,62** | 0,33 | 0,12 | — | — | — |
+
+| | Сейчас | 3429 1:18.8 |
+|---|---|---|
+| Холостой ход / крейсер | 1000 об/мин → 20,7 / ~18 км/ч | 530 → 11,0 / ~10 км/ч |
+| Стоп-момент / сила на ободе | ~3 кг·см / 0,55 кгс | ≥7,5 / 1,36 кгс (2,5×) |
+| Запас на порог 2 см (нужно 2,1 кг·см) | 1,4× | 3,5× |
+| Макс. механическая мощность | 7,7 Вт | 10,2 Вт |
+| Стоп-ток / под номиналом | ~3 А / ~1 А | ≤7 А / ≤2,3 А |
+| Энкодер, имп. на оборот колеса (×4) | 99 (396) | 207 (827) |
+| Масса | ~150 г | ~180 г |
+| Вал | 6 мм D × 15 мм | 6 мм D × 21 мм |
+| Разъём энкодера | XH2.54-6P | **PH2.0-6P** — переобжать или переходник |
+
+3429 **меняет верхние 10 км/ч на тягу внизу**: ниже 8 км/ч тянет в 1,5–2,5 раза сильнее,
+выше 8,4 — нынешний сильнее и едет до 20. Мощность у обоих ~8–10 Вт: это та же энергия,
+распределённая туда, где машинка живёт. За рулём: старт с ковра, порог, трава — мотор упрётся
+в сцепление (~0,4–0,5 кгс на колесо), а не в момент, колесо буксует, а не стоит; ровный пол —
+10 вместо 18 км/ч, следующей передачи вверх у 3429 нет (1:10 → 4 кг·см, почти как сейчас);
+разгон ограничен сцеплением у обоих, 3429 держит его до 6 км/ч; контур скорости — вдвое
+лучше разрешение.
+
+## 9. Письма продавцам
+
+**ChiHai (Alibaba / `sales@chihaimotor.cn`):**
+
+> Subject: CHR-GM37-3429-ABHL 12 V 1:18.8 — quotation for 4 pcs
+>
+> Hello, I need the CHR-GM37-3429 with the AB hall encoder (ABHL), 12 V, ratio 1:18.8
+> (530 rpm), 4 pieces, shipping to <страна>. Please quote unit price, shipping and lead time.
+> Two questions: (1) does the plain CHR-GM37-3429 (no encoder) have the rear shaft
+> extension, so an encoder disc and hall board can be fitted later? (2) what is the stall
+> torque and stall current of the 1:18.8 at 12 V from your test data? Thank you.
+
+**Aslong (Alibaba / `sales@aslongmotor.com`):**
+
+> Subject: JGB37-555B with hall encoder, 12 V 1:10 — quotation for 4 pcs
+>
+> Hello, I need the JGB37-555 with the hall encoder (JGB37-555B), 12 V, ratio 1:10
+> (800 rpm), 4 pieces, shipping to <страна>. Please quote unit price, shipping and lead
+> time, and confirm the stall torque and stall current of this ratio at 12 V (your table
+> shows 9 kg·cm and 3 A — is 3 A the rated or the stall current?). Thank you.
+
 ## Источники
 
 - NFP / microdcmotors — таблицы 12 В по передачам: [GM37-3429-EN](https://microdcmotors.com/product/37mm-12v-24v-permanent-magnet-brush-gear-motor-with-encoder-model-nfp-gm37-3429-en-2), [JGB37-3530-EN](https://microdcmotors.com/product/12v-24v-mini-geared-dc-motor-with-encoder-model-nfp-jgb37-3530-en), [36GP-555-EN](https://microdcmotors.com/product/micro-dc-gear-motor-12v-model-nfp-ga36y-555-ce-with-encoder), [42GP-775-EN](https://microdcmotors.com/product/42mm-dc-planetary-geared-motor-with-encoder-model-nfp-42gp-775-en), [JGB37-520-EN](https://precisionminidrives.com/product/37mm-gear-motor-with-encoder-41mm-type-model-nfp-jgb37-520-en).
