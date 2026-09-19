@@ -117,8 +117,45 @@ def _no_duplicates(pairs):
     return d
 
 
+# The ESP application image, as far as the car's /ota reads it before it trusts it. The
+# header is esp_image_header_t (esp_app_format.h, packed): magic, segment_count, spi_mode,
+# spi_speed/spi_size, entry_addr[4], wp_pin, spi_pin_drv[3] — then chip_id, a uint16 at
+# offset 12 — and the application descriptor opens the first segment, right after the
+# 8-byte segment header. Not in the contract on any side: the car gets all of it from
+# the IDF, so the mock mirrors it by hand, like SID_MAX_CHARS.
+_IMAGE_MAGIC = 0xE9            # esp_app_format.h ESP_IMAGE_HEADER_MAGIC — byte 0
+_CHIP_ID_OFFSET = 12           # esp_image_header_t.chip_id, little-endian uint16
+CHIP_ID = 0x0012               # esp_app_format.h ESP_CHIP_ID_ESP32P4 (CONFIG_IDF_FIRMWARE_CHIP_ID)
 _APP_DESC_OFFSET = 32          # esp_image_header_t (24 B) + esp_image_segment_header_t (8 B)
 _APP_DESC_MAGIC = 0xABCD5432   # esp_app_desc.h ESP_APP_DESC_MAGIC_WORD
+
+
+def _app_desc_magic(data):
+    return int.from_bytes(data[_APP_DESC_OFFSET:_APP_DESC_OFFSET + 4], "little")
+
+
+def image_refusal(data):
+    """The message the car's /ota refuses `data` with as `not_firmware`, or None.
+
+    The car makes two passes over the header (ota_api.c, ota_reply.h). esp_ota_write's
+    first block must open with the image magic — "not an ESP image", the one check the
+    mock always had. Then esp_ota_end verifies the written image as a whole and refuses
+    it as "image invalid" when, among other things, the header's chip_id is not this
+    board's (bootloader_common_check_chip_validity) or the first segment does not open
+    with the application descriptor's magic word (esp_image_format.c). Those two are the
+    ones that cost nothing here, and they are the ones the dongle's image fails: it is
+    0xE9 with chip_id 9 (ESP32-S3) and a descriptor carrying the same release tag, so the
+    mock used to "flash" it and report the tag while the car answers 400 (AJM-105). The
+    car answers after the whole body is written; the caller here has already read it.
+    """
+    if not data or data[0] != _IMAGE_MAGIC:
+        return "not an ESP image"
+    if len(data) < _APP_DESC_OFFSET + 4:
+        return "image invalid"
+    chip_id = int.from_bytes(data[_CHIP_ID_OFFSET:_CHIP_ID_OFFSET + 2], "little")
+    if chip_id != CHIP_ID or _app_desc_magic(data) != _APP_DESC_MAGIC:
+        return "image invalid"
+    return None
 
 
 def parse_image_version(data):
@@ -130,10 +167,9 @@ def parse_image_version(data):
     report after flashing these bytes, so the simulator must report the same — a
     synthetic bump hid every asset-vs-tag mismatch from rehearsal (2026-08-23 audit).
     """
-    if len(data) < _APP_DESC_OFFSET + 48 or data[0] != 0xE9:
+    if len(data) < _APP_DESC_OFFSET + 48 or data[0] != _IMAGE_MAGIC:
         return None
-    magic = int.from_bytes(data[_APP_DESC_OFFSET:_APP_DESC_OFFSET + 4], "little")
-    if magic != _APP_DESC_MAGIC:
+    if _app_desc_magic(data) != _APP_DESC_MAGIC:
         return None
     raw = data[_APP_DESC_OFFSET + 16:_APP_DESC_OFFSET + 48]
     ver = raw.split(b"\x00", 1)[0].decode("ascii", "replace")
