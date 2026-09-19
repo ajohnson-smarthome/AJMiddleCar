@@ -21,6 +21,17 @@ void tcp_pending_stash(tcp_pending_t *p, const char *chunk, int n, int sent)
     p->off = 0;
 }
 
+int tcp_pending_room(const tcp_pending_t *p)
+{
+    return TCP_PENDING_BUF_LEN - p->len;
+}
+
+void tcp_pending_append(tcp_pending_t *p, const char *chunk, int n)
+{
+    memcpy(p->buf + p->len, chunk, (size_t)n);
+    p->len += n;
+}
+
 void tcp_pending_advance(tcp_pending_t *p, int w)
 {
     p->off += w;

@@ -290,11 +290,13 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
     }
 
     /* Scored either way (uplink.h): a send that went out and a send that failed are the same
-     * strike against an uplink that never answers. The station's own view is the guard: a
-     * streak while it says `connected` is the association the car's softAP forgot, and a
-     * re-join is the only exit. While it says anything else the silence has a reason
-     * wifi_state already owns — its budget and its hold — and kicking from here would be the
-     * radio hunting an absent car forever, which the design forbids. */
+     * silence toward an uplink that never answers, and the streak is measured in time from
+     * its first send, so a 10 Hz drive stream and the REST relay's polls read the same clock.
+     * The station's own view is the guard: a streak while it says `connected` is the
+     * association the car's softAP forgot, and a re-join is the only exit. While it says
+     * anything else the silence has a reason wifi_state already owns — its budget and its
+     * hold — and kicking from here would be the radio hunting an absent car forever, which
+     * the design forbids. */
     bool kick;
     if (send(r->car_sock[idx], buf, (size_t)n, 0) < 0) {
         int err = errno;
@@ -321,8 +323,9 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
     }
     if (kick) {
         if (wifi_sta_connected()) {
-            ESP_LOGW(TAG, "%s: %u sends to the car went unanswered while the station says "
-                          "connected — rejoining", r->cfg->name, (unsigned)UPLINK_DEAD_AFTER);
+            ESP_LOGW(TAG, "%s: the car has answered nothing for %u ms of sends while the "
+                          "station says connected — rejoining", r->cfg->name,
+                     (unsigned)UPLINK_DEAD_AFTER_MS);
             esp_err_t jerr = wifi_sta_rejoin();
             if (jerr != ESP_OK) ESP_LOGW(TAG, "rejoin refused: %s", esp_err_to_name(jerr));
         }
@@ -334,7 +337,7 @@ static void handle_phone_datagram(relay_state_t *r, const char *buf, int n,
  * address and port udp_sess recorded for this slot when the session was created. */
 static void handle_car_datagram(relay_state_t *r, int idx, const char *buf, int n)
 {
-    uplink_heard(uplink_shared());   /* the car spoke: whatever the count of unanswered sends was, it is over */
+    uplink_heard(uplink_shared());   /* the car spoke: however long the silence was, it is over */
     /* The video instance only: admitted against rate_gate before it is ever handed to
      * lwIP/TinyUSB, so a refusal is counted here rather than lost silently in the NTB pool
      * (rate_gate.h). The control instance is never throttled — cfg->video is false for it,
