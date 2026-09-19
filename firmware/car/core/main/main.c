@@ -171,21 +171,22 @@ void app_main(void) {
        with bus_ok=false is diagnosable and OTA-recoverable; a boot loop needs a
        USB cable and tells you nothing. */
     bool motors_ok = i2c_bus_init(BOARD_I2C_SDA, BOARD_I2C_SCL) == ESP_OK
-                  && pca9685_attach(BOARD_I2C_HZ) == ESP_OK
-                  && pca9685_init(BOARD_PWM_HZ) == ESP_OK;
-    /* Immediately, not later in link_init, and UNCONDITIONALLY. pca9685_init ends by writing
-       MODE1 with the RESTART bit, which by design resumes every channel at its pre-sleep duty
-       — so on a reset taken mid-drive the motors come back at full throttle. Everything
-       between here and link_init (an NVS init that may erase flash) would run with them
-       spinning.
+                  && pca9685_attach(BOARD_I2C_HZ) == ESP_OK;
+    /* Immediately, not later in link_init; UNCONDITIONALLY; and BEFORE the init. The chip's
+       registers survive a P4 reset, and pca9685_init ends by writing MODE1 with the RESTART
+       bit, which by design resumes every channel at its register contents — so on a reset
+       taken mid-drive an init run first resumed the motors at the pre-crash duty, and the
+       zeroing that followed it was ~40 ms late (the init's four tick-long delays), on top of
+       the reset-to-app_main window no code can close. Zeroed first, RESTART resumes zeros;
+       this is the order the actuator task's own retry has always used (link.h).
 
-       Unconditionally, because this used to run only on success — and the init walks the
-       boards in order, so a failure on the REAR board's first write had already taken the
-       FRONT board through RESTART. Front wheels at the pre-crash duty for the whole NVS
-       init was exactly the window this call exists to close. zero_all tolerates a board
-       that never came up (a NULL handle is skipped), so there is no case in which it must
-       not run. */
+       Unconditionally, because this used to be gated on the init's success, and the init
+       walks the boards in order: a failure on the REAR board left the FRONT board resumed
+       and never zeroed. zero_all tolerates a board that never came up (a NULL handle is
+       skipped), so there is no case in which it must not run. Everything between here and
+       link_init (an NVS init that may erase flash) runs with the outputs off. */
     pca9685_zero_all();
+    motors_ok = motors_ok && pca9685_init(BOARD_PWM_HZ) == ESP_OK;
     if (!motors_ok) {
         ESP_LOGE(TAG, "motor bus did not come up — the actuator task will keep trying once "
                       "a second; until it succeeds the car will not drive, but the network "
