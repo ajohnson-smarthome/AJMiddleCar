@@ -13,6 +13,11 @@ echo "== contract =="
 python3 tools/test_gen_contract.py
 bash tools/check_contract.sh
 
+echo "== release =="
+# The publish step of release.sh against a fake gh: draft → upload → names → publish, and
+# a draft left behind when a step fails. The real gh is never reached from here.
+python3 tools/test_release.py
+
 echo "== firmware host tests =="
 make -C firmware/car/core/test run
 make -C firmware/dongle/test run
