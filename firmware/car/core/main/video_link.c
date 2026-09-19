@@ -17,6 +17,7 @@
 #include "rt_link.h"
 #include "video_cfg.h"
 #include "video_enc.h"
+#include "video_retry.h"
 #include "video_sub.h"
 #include "video_wire.h"
 
@@ -61,6 +62,7 @@ static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static struct sockaddr_in s_peer;          /* under s_mux */
 static volatile bool s_want;               /* ctl -> enc: stream wanted */
 static volatile bool s_streaming;          /* enc: pipeline and encoder are up */
+static volatile bool s_dead;               /* enc: the series of failed starts says `off` (video_retry.h) */
 static volatile bool s_force_idr;          /* ctl/enc -> enc */
 static volatile uint32_t s_fps, s_kbps, s_dropped;
 
@@ -130,15 +132,28 @@ static void sender_task(void *arg) {
 }
 
 /* ---- encoder task: camera -> H.264 -> ring ---------------------------------------- */
-static bool stream_open(void) {
-    ESP_RETURN_ON_FALSE(camera_start(CAMERA_FMT_YUV420) == ESP_OK, false, TAG, "camera start");
-    if (video_enc_open(video_cfg_get_bitrate()) != ESP_OK) { camera_stop(); return false; }
+typedef enum {
+    OPEN_OK,
+    OPEN_BUSY,     /* a snapshot holds the pipeline: not the sensor's fault, not a failed start */
+    OPEN_FAILED,   /* the pipeline or the encoder would not come up */
+} open_result_t;
+
+static open_result_t stream_open(void) {
+    esp_err_t err = camera_start(CAMERA_FMT_YUV420);
+    /* INVALID_STATE is the one refusal that says nothing about the sensor: GET /snapshot
+       owns the pipeline for its ~3.5 s (camera.h's lock is what makes the answer clean).
+       Counted toward the series, a single snapshot would have said `off` — three tries a
+       second apart fit inside it — so it is not counted: the caller asks again next tick,
+       and the stream starts as soon as the request lets go, as the spec promises. */
+    if (err == ESP_ERR_INVALID_STATE) return OPEN_BUSY;
+    if (err != ESP_OK) { ESP_LOGE(TAG, "camera start: %s", esp_err_to_name(err)); return OPEN_FAILED; }
+    if (video_enc_open(video_cfg_get_bitrate()) != ESP_OK) { camera_stop(); return OPEN_FAILED; }
     s_stream++;
     for (unsigned i = 0; i < RING_SLOTS; i++) s_ring[i].full = false;
     s_ring_head = s_ring_tail = 0;
     s_streaming = true;
     ESP_LOGI(TAG, "stream %u up", s_stream);
-    return true;
+    return OPEN_OK;
 }
 
 static void stream_close(void) {
@@ -150,18 +165,47 @@ static void stream_close(void) {
     ESP_LOGI(TAG, "stream %u down", s_stream);
 }
 
+/* A start that brought no frame, or a stream whose sensor went quiet: the series grows,
+   and the pause before the next attempt is video_retry's — 1 s while the series is short,
+   5 s once it says `off`. The word is published from here (video_link_stats), and the
+   transition is said once, not on every retry. */
+static void stream_failed(video_retry_t *r) {
+    video_retry_failed(r, now_ms());
+    if (video_retry_off(r) && !s_dead) {
+        ESP_LOGE(TAG, "%d starts without a frame — camera off; retrying every %d s while watched",
+                 VIDEO_RETRY_OFF_AFTER, VIDEO_RETRY_SLOW_MS / 1000);
+    }
+    s_dead = video_retry_off(r);
+}
+
 static void enc_task(void *arg) {
     (void)arg;
     uint16_t frame = 0;
     uint32_t sensor_frames = 0;
+    /* Lives across streams and across subscriptions: a sensor judged dead stays `off`
+       through the viewer leaving and coming back, until it delivers a frame. */
+    video_retry_t retry;
+    video_retry_init(&retry);
     for (;;) {
-        if (!s_want) { vTaskDelay(pdMS_TO_TICKS(CTL_TICK_MS)); continue; }
-        if (!stream_open()) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
+        if (!s_want || !video_retry_due(&retry, now_ms())) { vTaskDelay(pdMS_TO_TICKS(CTL_TICK_MS)); continue; }
+        switch (stream_open()) {
+        case OPEN_BUSY:   vTaskDelay(pdMS_TO_TICKS(CTL_TICK_MS)); continue;
+        case OPEN_FAILED: stream_failed(&retry); continue;
+        case OPEN_OK:     break;
+        }
         frame = 0; sensor_frames = 0;
-        bool capture_failed = false;
+        bool capture_failed = false, delivered = false;
         while (s_want) {
             camera_frame_t f;
             if (camera_acquire(&f) != ESP_OK) { ESP_LOGE(TAG, "capture failed — stream over"); capture_failed = true; break; }
+            if (!delivered) {
+                /* The first frame is the evidence: the sensor answers, whatever it did
+                   before — the series is over and the word is back to what the pipeline says. */
+                delivered = true;
+                if (s_dead) ESP_LOGI(TAG, "sensor answered — camera back");
+                video_retry_delivered(&retry);
+                s_dead = false;
+            }
             bool take = (sensor_frames++ % FRAME_SKIP) == 0;
             if (!take) { camera_release(&f); continue; }
             ring_slot_t *slot = &s_ring[s_ring_tail];
@@ -198,8 +242,9 @@ static void enc_task(void *arg) {
             s_ring_tail = (s_ring_tail + 1) % RING_SLOTS;
         }
         stream_close();
-        /* A sensor that stopped delivering would otherwise be reopened at ~2 Hz (R9b). */
-        if (capture_failed) vTaskDelay(pdMS_TO_TICKS(1000));
+        /* A stream that ran and then lost its sensor counts like a start that brought
+           nothing: the same series, the same pause before the next attempt (R9b, AJM-94). */
+        if (capture_failed) stream_failed(&retry);
     }
 }
 
@@ -272,7 +317,10 @@ static void ctl_task(void *arg) {
 
 /* ---- public ----------------------------------------------------------------------- */
 void video_link_stats(video_link_stats_t *out) {
-    out->state = !camera_present() ? VIDEO_STATE_OFF : (s_streaming ? VIDEO_STATE_STREAMING : VIDEO_STATE_IDLE);
+    /* `off` from two sources: no sensor at boot, or the series of failed starts (AJM-94).
+       The second outranks `streaming`: a retry has the pipeline up before it has a frame,
+       and the word must not flicker to `streaming` every attempt while the sensor is dead. */
+    out->state = (!camera_present() || s_dead) ? VIDEO_STATE_OFF : (s_streaming ? VIDEO_STATE_STREAMING : VIDEO_STATE_IDLE);
     out->fps = s_fps;
     out->kbps = s_kbps;
     out->dropped = s_dropped;

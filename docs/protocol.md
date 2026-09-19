@@ -375,7 +375,9 @@ A bench route, not part of the app's flow: one JPEG of whatever the camera curre
   debug endpoint is not worth it. A request that loses the race against a stream that is *just
   starting* gets the same `409`, without touching the stream that won.
 - **`off`** — `500 internal`, `"camera off"`. No sensor answered at boot; there is no pipeline
-  to start.
+  to start. (The other `off`, a sensor that went quiet mid-run, still has a pipeline, and the
+  request meets it as at `idle` — a dead sensor answers `"capture failed"`, a stream attempt
+  under way answers `409 busy`.)
 - **`idle`** — the pipeline starts for this request alone (in UYVY — the JPEG block cannot
   take YUV420 either), frames are discarded for three seconds while AE walks up from its cold
   start (measured: black at 0 s, settled by ~2.7 s), one is encoded, and the pipeline stops
@@ -395,8 +397,12 @@ cannot drift between them:
 ```
 
 - **`state`** — `off` (no sensor answered at boot; the car drives without one — there is no
-  runtime retry, so a physically reconnected camera needs a reboot), `idle` (sensor in
-  standby, nobody watching — CSI, ISP and the encoder are all stopped), or `streaming`
+  runtime retry, so a physically reconnected camera needs a reboot — or a sensor that
+  answered at boot has gone quiet while someone was watching: three stream starts in a row
+  that delivered no frame, judged by the car's encode task, and the word holds until a frame
+  arrives; the retries go on while the subscription lives, every five seconds instead of
+  every one, and `view` is still accepted — that is what keeps them going), `idle` (sensor
+  in standby, nobody watching — CSI, ISP and the encoder are all stopped), or `streaming`
   (encoding for the driver).
 - **`fps`** — frames sent in the last second: counted at the sender, when a frame's last
   chunk leaves, not at the encoder — in steady state the two agree to within the ring's lag,
