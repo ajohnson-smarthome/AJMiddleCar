@@ -20,6 +20,15 @@ final class CarLink: ObservableObject {
     }
 
     @Published private(set) var state: Link = .searching
+    /// Whether the drive screen, once shown, still stands — the second thing the root reads,
+    /// and the only one besides `state`. `state` says `.searching` both for "the session is
+    /// open but telemetry is late" and "there is no session", which is right for the label
+    /// and wrong for the screen's existence: a telemetry pause shorter than the transport's
+    /// stall used to replace the drive screen with the radar, and the sheets on it — the
+    /// wizard's assignments, the settings stack — went with it (AJM-107). True from a
+    /// session's first frame until the session, or the path under it, ends; the drive
+    /// screen is born on `.live` and dies on this going false (`LinkRule.inSession`).
+    @Published private(set) var inSession = false
     /// The car's identity, from the hello reply — this is what the version gate compares.
     @Published private(set) var fw: String?
     @Published private(set) var device: String?
@@ -231,6 +240,8 @@ final class CarLink: ObservableObject {
         // Only on a real change: the decay tick re-asks five times a second, and `@Published`
         // emits on assignment whether or not the value moved.
         if state != next { state = next }
+        let held = LinkRule.inSession(path: pathState, session: session, telemetry: telemetry)
+        if inSession != held { inSession = held }
     }
 
     /// `/status` is one GET against a single-request server that is busy with the geometry
@@ -279,6 +290,7 @@ final class CarLink: ObservableObject {
         let l = CarLink(monitorsPath: false)
         l.frozen = true
         l.state = state
+        l.inSession = state.isLive
         l.fw = fw
         l.device = CarContract.device
         l.radio = radio

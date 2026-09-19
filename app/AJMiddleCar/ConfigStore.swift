@@ -88,11 +88,20 @@ final class ConfigStore {
     let video = ConfigDomainStore<Video>()
 
     /// Warm the domains the drive screen needs before the user can press anything that
-    /// depends on them — the two the tricks compute with, and the video switch, so the drive
-    /// screen knows which layout to draw before it appears.
+    /// depends on them — the video switch, so the drive screen knows which layout to draw
+    /// before it appears, and the two the tricks compute with.
+    ///
+    /// One task, in this order, not three: the transport serialises requests on a path, so
+    /// three tasks made `video` the third `GET /config` round trip through the relay, and on
+    /// a cold cache the drive screen — drawn with the first telemetry frame, within 200 ms
+    /// of the handshake — appeared classic and flipped to the HUD when the third answer
+    /// landed (AJM-114). `video` first is what the spec asks of the prefetch; the tricks'
+    /// geometry is not needed until a tap.
     func prefetchDriveGeometry() {
-        Task { await wheel.loadIfNeeded() }
-        Task { await chassis.loadIfNeeded() }
-        Task { await video.loadIfNeeded() }
+        Task {
+            await video.loadIfNeeded()
+            await wheel.loadIfNeeded()
+            await chassis.loadIfNeeded()
+        }
     }
 }

@@ -1,11 +1,29 @@
 import SwiftUI
 
+/// How the wizard tells whoever presents it that the car accepted the table. The mandatory
+/// wizard is a sheet holding a `NavigationStack` three screens deep, and `dismiss()` from the
+/// third is a pop — back to «Параметры колёс, шаг 2 из 3» with «Далее» — not the sheet
+/// closing; the sheet then hung on the next telemetry frame to close, and a frame that did not
+/// come left it open on step 2 (AJM-102). The presenter sets this; the settings path leaves
+/// it nil, where `dismiss()` pops back into settings, which is what that path wants.
+private struct CalibSavedKey: EnvironmentKey {
+    static let defaultValue: (() -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    var calibSaved: (() -> Void)? {
+        get { self[CalibSavedKey.self] }
+        set { self[CalibSavedKey.self] = newValue }
+    }
+}
+
 struct CalibrationView: View {
     let palette: Palette
     enum CalDebug { case spin, spinning, spinFailed, direction, done, saving, failed }   // gallery seed
     var debugState: CalDebug? = nil
     var dismissible: Bool = true   // Settings push = back chevron; mandatory auto-prompt = none
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.calibSaved) private var calibSaved
 
     @State private var step = 0
     @State private var assign: [Corner: (pair: Int, inverted: Bool)] = [:]
@@ -213,7 +231,9 @@ struct CalibrationView: View {
             do {
                 _ = try await client.save(ControlModel.calibWheels(assign))
                 saving = false
-                dismiss()
+                // Accepted: the wizard is over. The sheet's owner closes the sheet (mandatory
+                // path); with no owner, this is a pushed screen and pops back (settings path).
+                if let calibSaved { calibSaved() } else { dismiss() }
             } catch {
                 saving = false
                 failed = true

@@ -34,6 +34,11 @@ final class VideoLink: ObservableObject {
 
     private var sid: String?
     private var watching = false
+    /// When the socket last spoke — the car's subscription timeout counts from here.
+    private var lastViewAt: TimeInterval = 0
+    /// The car accepted a new bitrate for a running stream: the next open waits until the
+    /// car's subscription has lapsed, so the stream restarts and reads it (`VideoReopenHold`).
+    private var hold = VideoReopenHold()
     private var conn: NWConnection?
     private var viewTimer: Timer?
     private var statsTimer: Timer?
@@ -94,9 +99,33 @@ final class VideoLink: ObservableObject {
         sendView(key: true)
     }
 
+    /// The car accepted a `video` write that changes the bitrate of a stream it may still be
+    /// running. It reads the bitrate at stream start only (`car/video-stream`), and a `view`
+    /// inside `videoSubscribeTimeoutMs` of the last one refreshes the old stream rather than
+    /// starting a new one — so the settings sheet's slider, closed within three seconds, used to
+    /// change nothing the driver could see (AJM-122). Let the subscription lapse: close a socket
+    /// that is open, and hold the next open until the timeout after the last view has passed.
+    func streamRestartNeeded() {
+        hold.arm(lastViewAt: lastViewAt)
+        if conn != nil { close() }
+        reconcile()
+    }
+
     private func reconcile() {
         let want = sid != nil && watching
-        if want, conn == nil { open() }
+        if want, conn == nil {
+            if let wait = hold.delay(now: Date().timeIntervalSinceReferenceDate) {
+                // Come back when the hold is over; `reconcile` is idempotent, so a watcher or a
+                // session that changed in the meantime costs nothing, and several of these
+                // pending at once open one socket, not several.
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(wait))
+                    reconcile()
+                }
+            } else {
+                open()
+            }
+        }
         if !want, conn != nil { close() }
     }
 
@@ -158,6 +187,7 @@ final class VideoLink: ObservableObject {
 
     private func sendView(key: Bool) {
         guard let sid, let conn else { return }
+        lastViewAt = Date().timeIntervalSinceReferenceDate
         conn.send(content: RTFrame.view(sid: sid, key: key).data(using: .utf8), completion: .contentProcessed { _ in })
     }
 

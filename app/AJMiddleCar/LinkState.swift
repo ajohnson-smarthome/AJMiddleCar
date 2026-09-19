@@ -68,4 +68,18 @@ enum LinkRule {
         guard let telemetry, let age, age < staleAfter else { return .searching }
         return .live(telemetry)
     }
+
+    /// Whether the drive screen, once shown, still stands. `compose` folds "the session is
+    /// open but telemetry is late" and "there is no session" into one `.searching`, which is
+    /// right for the label on screen and wrong for the screen's existence: a telemetry pause
+    /// shorter than the stall that ends the session used to swap the drive screen for the
+    /// radar, and the sheets on it — the wizard's assignments, the settings stack — went with
+    /// it (AJM-107). The screen is born on `.live` and lives exactly while this holds: the
+    /// path up, the session adopted, and a frame seen in *this* session — `telemetry` is
+    /// cleared with the session, so a fresh one is not born on the previous one's memory.
+    /// Path and session outrank the frame here as they do in `compose`.
+    static func inSession(path: PathState, session: SessionState, telemetry: Telemetry?) -> Bool {
+        guard case .dongleUp = path, case .adopted = session else { return false }
+        return telemetry != nil
+    }
 }

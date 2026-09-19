@@ -61,29 +61,44 @@ struct DriveView: View {
     }
     private var signalColor: Color { signalLevel == 0 ? .red : (signalLevel == 1 ? p.warn : p.accent) }
 
+    /// Something drawn over the drive screen: a sheet — settings or the mandatory wizard — or
+    /// the «Поиск…» veil of a telemetry pause inside a live session. One notion for the rule,
+    /// because the three mean the same thing to the car: nobody is driving it right now.
+    private var covered: Bool { showSettings || showCalib || !linkUp }
+
     private var screen: DriveScreenState {
-        DriveModeRule.state(config: confirmed, covered: showSettings || showCalib)
+        DriveModeRule.state(config: confirmed, covered: covered)
     }
 
-    /// The video switch: same shape as the gear next to it. The tap posts the whole domain
-    /// (bitrate as the car has it), disabled while the answer is on its way.
+    /// The video switch: same shape as the gear next to it. Read, the tap posts the whole
+    /// domain (bitrate as the car has it); unread, it re-reads — a dead button over an unread
+    /// domain left the driver in the classic layout with no way back to the picture but the
+    /// settings sheet (AJM-120). Disabled only while an answer is on its way.
     private var videoButton: some View {
         let on = confirmed?.enabled ?? false
+        let glyph = confirmed == nil ? "questionmark.video" : (on ? "video" : "video.slash")
         return Button {
-            guard let cur = confirmed else { return }
             Task {
-                if await !videoCfg.save(Video(bitrate_kbps: cur.bitrate_kbps, enabled: !cur.enabled)) {
-                    videoToggleFailed = true
+                let landed: Bool
+                switch DriveModeRule.videoTap(config: confirmed) {
+                case .reread:
+                    await videoCfg.reload()
+                    landed = videoCfg.value != nil
+                case .toggle(let next):
+                    landed = await videoCfg.save(next)
                     // The store is `.failed` now and would refuse a retry; re-read the car's
                     // truth behind the flash. `confirmed` moves only if the GET lands — if it
                     // fails too, the last answer stands and the button stays live for a retry.
-                    Task { await videoCfg.reload() }
+                    if !landed { Task { await videoCfg.reload() } }
+                }
+                if !landed {
+                    videoToggleFailed = true
                     try? await Task.sleep(for: .milliseconds(650))
                     videoToggleFailed = false
                 }
             }
         } label: {
-            Image(systemName: on ? "video" : "video.slash")
+            Image(systemName: glyph)
                 .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(p.text)
                 .frame(width: 40, height: 32)
@@ -91,8 +106,8 @@ struct DriveView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(videoToggleFailed ? p.warn : p.line))
         }
-        .disabled(confirmed == nil || videoCfg.isBusy)
-        .accessibilityLabel(on ? L.videoOn : L.videoOff)
+        .disabled(videoCfg.isBusy)
+        .accessibilityLabel(confirmed == nil ? L.configRetry : (on ? L.videoOn : L.videoOff))
     }
 
     private var gearButton: some View {
@@ -118,8 +133,10 @@ struct DriveView: View {
 
     /// Every input path lands here, and `ControlIntent` decides what it means for a running
     /// trick — the view no longer orders "cancel the trick" and "send the command" by hand.
+    /// Covered, it lands nowhere: the sheet has the screen, and a gamepad the sheet cannot
+    /// cover has no say either (AJM-101) — the rule, not each input site, decides.
     private func push() {
-        guard !preview else { return }
+        guard !preview, screen.inputAllowed else { return }
         let c: (t: Double, y: Double)
         if padActive {
             if scheme == .arcade { c = ControlModel.arcade(stickX: pad.leftX, stickY: -pad.leftY) }
@@ -150,10 +167,26 @@ struct DriveView: View {
         // running trick — for a layout change.
         ZStack {
             if screen.mode == .hud { hud } else { classic }
+            // A telemetry pause inside a live session is drawn over the screen, not instead of
+            // it: the root keeps this view while the session stands (`CarLink.inSession`), so the
+            // sheets on it — the wizard mid-table, the settings stack — survive what used to be
+            // a swap to the radar and back (AJM-107). The veil also covers the screen for the
+            // rule above: nothing under it drives.
+            if !linkUp && !preview { searchingVeil }
         }
         .task { if !preview { await videoCfg.loadIfNeeded() } }
-        .onChange(of: videoCfg.state, initial: true) { _, st in
-            if case .loaded(let v) = st { confirmed = v }
+        .onChange(of: videoCfg.state, initial: true) { old, st in
+            guard case .loaded(let v) = st else { return }
+            // The car took a write that changes a running stream's bitrate — the slider on the
+            // settings sheet. It reads the bitrate at stream start only, so the subscription
+            // has to lapse before the next `view`, or the sheet's closing refreshes the old
+            // stream and the change is invisible (AJM-122). Judged on the write the store just
+            // finished (`.saving` → `.loaded`), against the value the car last confirmed.
+            if case .saving = old, let was = confirmed, !preview,
+               VideoReopenHold.restartsStream(from: was, to: v) {
+                video.streamRestartNeeded()
+            }
+            confirmed = v
         }
         .onAppear { if !preview { video.setWatching(screen.watching) } }
         // Zero the intent, and deliberately do NOT say goodbye here.
@@ -177,6 +210,21 @@ struct DriveView: View {
             // switch off on the car, the config not read yet (DriveModeRule).
             if !preview { video.setWatching(watching) }
         }
+        .onChange(of: screen.inputAllowed) { _, allowed in
+            guard !preview else { return }
+            if allowed {
+                // The cover is gone: input is taken again from where the controls are now. The
+                // gamepad's axes are live values and are re-read here; the touch stick's are
+                // not — a finger that was on it when the sheet came got no `onEnded`, so its
+                // last position was zeroed with the cover, and the next drag event re-seeds it.
+                padPush()
+            } else {
+                // Covered: the held command goes to zero now — a trick with it — rather than
+                // when the gesture happens to end, which under a sheet it may never report.
+                intent.neutral()
+                arcX = 0; arcY = 0; leftY = 0; rightY = 0
+            }
+        }
         .onReceive(pad.$leftX) { _ in padPush() }
         .onReceive(pad.$leftY) { _ in padPush() }
         .onReceive(pad.$rightY) { _ in padPush() }
@@ -192,16 +240,39 @@ struct DriveView: View {
                                        now: Date().timeIntervalSinceReferenceDate)
             if showCalib != required { showCalib = required }
         }
-        .sheet(isPresented: $showCalib, onDismiss: {
-            // The wizard is interactiveDismissDisabled, so the only way it closes is its own
-            // dismiss() after a save the car accepted. The rule treats that as "calibrated": the
-            // telemetry frame already in flight was computed before the write and still says false.
-            calib.saved(now: Date().timeIntervalSinceReferenceDate)
-        }) {
+        .sheet(isPresented: $showCalib) {
             NavigationStack {
                 CarDimensionsView(palette: p, wizard: true)  // step 1 → Wheel → Calibration
             }
             .interactiveDismissDisabled(true)
+            // The wizard is interactiveDismissDisabled, so it closes two ways: telemetry says
+            // `calibrated:true` (the rule above), or the car accepted the table and the wizard
+            // says so here. Its own `dismiss()` cannot do it — inside a `NavigationStack` that
+            // is a pop back to step 2 with «Далее», and the sheet then hung on the next frame
+            // of telemetry to close (AJM-102). Closing here, the rule is told at once: the
+            // frame already in flight was computed before the write and still says false.
+            .environment(\.calibSaved) {
+                calib.saved(now: Date().timeIntervalSinceReferenceDate)
+                showCalib = false
+            }
+        }
+    }
+
+    /// «Поиск…» over the drive screen: telemetry is late, the session is not over. Translucent,
+    /// so the driver still sees where the car was; opaque to touches, so nothing under it is
+    /// tapped by mistake — the rule already refuses input while covered, this keeps the buttons
+    /// honest too. The label and the bars in the top row say the same thing.
+    private var searchingVeil: some View {
+        ZStack {
+            p.bg.opacity(0.55).ignoresSafeArea()
+            HStack(spacing: 8) {
+                ProgressView().tint(p.muted)
+                Text(L.driveSearching).font(.system(size: 14, weight: .semibold)).foregroundStyle(p.text)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(p.panel.opacity(0.9))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(p.line))
         }
     }
 
