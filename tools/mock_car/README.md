@@ -70,31 +70,35 @@ arrives in under 1 s, under 5% of frames lost); `tools/test-all.sh` runs it agai
 started with 0.3% loss.
 
 `sample.h264` is checked into the repository (≤ 400 KB) so nothing needs `ffmpeg` to run the
-mock. Regenerating it does:
+mock. It is `VIDEO["width"]` × `VIDEO["height"]` (1280 × 720) — the picture the car puts on
+the wire, the middle 720 rows of its 4:3 sensor, not the whole sensor frame — and
+`test_video.py` reads the clip's SPS to pin that to the contract, so a clip regenerated at
+another size fails `test-all` before it can teach the simulator a frame the car never sends.
+Regenerating it does:
 
 ```bash
 brew install ffmpeg      # only needed to regenerate the clip, not to run the mock
-cd tools/mock_car && ffmpeg -y -f lavfi -i "testsrc2=size=1280x960:rate=15" -t 3 \
+cd tools/mock_car && ffmpeg -y -f lavfi -i "testsrc2=size=1280x720:rate=15" -t 3 \
   -c:v libx264 -profile:v baseline -level 3.1 -pix_fmt yuv420p -bf 0 -b:v 600k \
   -x264-params "keyint=45:min-keyint=45:scenecut=0:bframes=0:repeat-headers=1:annexb=1:nal-hrd=none" \
   -f h264 sample.h264
 ```
 
-At 600k a P-frame spans 4–6 of `VIDEO["chunk_bytes"]` (1400 B) chunks, and a multi-chunk
+At 600k a P-frame spans 3–8 of `VIDEO["chunk_bytes"]` (1400 B) chunks, and a multi-chunk
 frame is lost whenever *any* of its chunks is: per-datagram loss `p` becomes roughly
 `1-(1-p)^5` per frame, plus whatever arrives while a requested keyframe is still in flight —
 `Receiver` withholds every frame it *does* finish reassembling until that keyframe lands, and
 those withheld-but-complete frames count toward neither side of the conformance's loss ratio,
 which skews the measured percentage toward the size of whichever frames actually trigger the
 few counted drop events (up to the 16-chunk keyframe itself). That makes 2% datagram loss
-into 11–28% measured frame loss — the physics of UDP video without FEC, exactly the case the
+into 17–23% measured frame loss — the physics of UDP video without FEC, exactly the case the
 reassembler and key-on-demand recovery exist for. The bench's own target for the real link is
-0.5%, but at that figure the same skew still lands the measured ratio right at the
-conformance's 5% edge (confirmed empirically: 6.2%, reproducibly, over a 6 s run) — so
-`tools/test-all.sh` runs the mock at 0.3% for a reliable margin (~2.3% measured, consistently)
-and treats 0.5%/2% as the figures to reach for by hand with `--video-loss-pct` when exercising
-the bench's own numbers directly, not as something this fixed-length, fixed-seed conformance
-run can be relied on to clear on every machine.
+0.5%, but at that figure the same skew lands the measured ratio close under the conformance's
+5% edge (1.6–3.9% over three 6 s runs of this clip; the previous 4:3 clip, with fatter
+P-frames, sat at a reproducible 6.2%) — so `tools/test-all.sh` runs the mock at 0.3% for a
+reliable margin (0.8–1.6% measured) and treats 0.5%/2% as the figures to reach for by hand
+with `--video-loss-pct` when exercising the bench's own numbers directly, not as something
+this fixed-length, fixed-seed conformance run can be relied on to clear on every machine.
 
 `tools/conformance_video.py 127.0.0.1 --out /tmp/out.h264` writes the reassembled stream to
 a file; `ffplay /tmp/out.h264` opens it.
