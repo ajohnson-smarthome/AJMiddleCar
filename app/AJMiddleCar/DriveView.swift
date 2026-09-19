@@ -15,7 +15,10 @@ struct DriveView: View {
     @State private var rightY = 0.0
     @State private var showSettings = false
     @State private var showCalib = false
-    @State private var lastCalibTrue = Date.distantPast
+    /// The mandatory wizard's rule (`CalibGate`): asked on every telemetry frame, and
+    /// `showCalib` only mirrors its verdict. State of this view, so it is born with the
+    /// session's drive screen and dies with it — no memory of a previous session.
+    @State private var calib: CalibGate
     @State private var padWasActive = false
 
     /// The car's `video` domain — the switch lives there.
@@ -43,6 +46,7 @@ struct DriveView: View {
         // Seeded here, not only on appear: the domain is prefetched when the car is met, so
         // the first body already draws the right layout rather than classic for a frame.
         if case .loaded(let v) = ConfigStore.shared.video.state { _confirmed = State(initialValue: v) }
+        _calib = State(initialValue: CalibGate(preview: preview))
         self.preview = preview
         self.previewTricksOpen = previewTricksOpen
     }
@@ -178,22 +182,21 @@ struct DriveView: View {
         .onReceive(pad.$rightY) { _ in padPush() }
         .onReceive(pad.$connected) { _ in padPush() }
         .sheet(isPresented: $showSettings) { SettingsView(palette: p, link: link) }
-        .onChange(of: telemetry?.motors.calibrated) { _, cal in
-            if cal == true {
-                showCalib = false                       // calibrated → close
-                lastCalibTrue = Date()
-            } else if cal == false, Date().timeIntervalSince(lastCalibTrue) > 2, !preview {
-                // Mandatory: reopen — but ignore the stale `false` the car still reports for a
-                // frame or two right after a successful save, which would re-open the sheet
-                // mid-dismiss and flicker.
-                showCalib = true
-            }
+        // Every frame, `initial: true` — the first one included: this screen appears with a
+        // frame already in hand, and an uncalibrated car's `false` in it is no change for an
+        // `onChange` on the flag to see, which is how the mandatory wizard used to stay shut on
+        // exactly the car it exists for (AJM-63). The rule judges the frame; the flag's history
+        // is its business, not this view's.
+        .onChange(of: telemetry, initial: true) { _, t in
+            let required = calib.frame(calibrated: t?.motors.calibrated,
+                                       now: Date().timeIntervalSinceReferenceDate)
+            if showCalib != required { showCalib = required }
         }
         .sheet(isPresented: $showCalib, onDismiss: {
             // The wizard is interactiveDismissDisabled, so the only way it closes is its own
-            // dismiss() after a save the car accepted. Treat that as "calibrated": the telemetry
-            // frame already in flight was computed before the write and still says false.
-            lastCalibTrue = Date()
+            // dismiss() after a save the car accepted. The rule treats that as "calibrated": the
+            // telemetry frame already in flight was computed before the write and still says false.
+            calib.saved(now: Date().timeIntervalSinceReferenceDate)
         }) {
             NavigationStack {
                 CarDimensionsView(palette: p, wizard: true)  // step 1 → Wheel → Calibration
