@@ -15,8 +15,16 @@
 #include "api_util.h"
 #include "display.h"
 #include "dongle_contract.inc"
+#include "ota_reply.h"
 
 static const char *TAG = "ota_api";
+
+/* ota_reply.h carries its own copies of the two IDF codes it tells apart, so the map stays
+   host-testable; this is where the copies meet the real header. */
+_Static_assert(OTA_ERR_VALIDATE_FAILED == ESP_ERR_OTA_VALIDATE_FAILED,
+               "ota_reply.h's ESP_ERR_OTA_VALIDATE_FAILED drifted from esp_ota_ops.h");
+_Static_assert(OTA_ERR_ROLLBACK_INVALID_STATE == ESP_ERR_OTA_ROLLBACK_INVALID_STATE,
+               "ota_reply.h's ESP_ERR_OTA_ROLLBACK_INVALID_STATE drifted from esp_ota_ops.h");
 
 /* Bytes accepted, out of the upload's Content-Length — the same numbers the receive loop below
  * already computes for itself (remaining vs req->content_len), just also published for a reader
@@ -35,6 +43,22 @@ static void ota_progress_clear(void)
     atomic_store(&s_ota_done, 0);
 }
 
+/* Send the envelope ota_reply_for chose for a refused esp_ota_* call, and hand back the
+ * send's result. Every refusal in ota_post returns this or api_reply_error's result directly,
+ * never ESP_FAIL: a handler that returns ESP_FAIL makes httpd close the session with the
+ * body unread (httpd_uri.c: "Handler returns error, this socket should be closed" —
+ * httpd_req_delete's purge never runs), and TCP answers a close with unread data with RST,
+ * so the envelope just written never reached the client, which reported a connection error
+ * instead of the reason. On ESP_OK httpd purges the rest of the body first
+ * (httpd_req_delete), which for an upload refused at esp_ota_begin or on the first block
+ * means reading and discarding up to the whole image; that is the price of the client
+ * learning why. The car's twin paid it first (firmware/car/core/main/ota_api.c). */
+static esp_err_t ota_refuse(httpd_req_t *req, ota_step_t step, esp_err_t err)
+{
+    ota_reply_t r = ota_reply_for(step, (int)err);
+    return api_reply_error(req, r.status, r.code, "", r.msg);
+}
+
 /* A deliberate twin of firmware/car/core/main/ota_api.c, not a shared file — the two firmwares do not
  * reference each other. What is missing here is the car's actuator arbitration: the car seizes
  * the motors for the length of the flash and releases them on every failure path, because a
@@ -51,8 +75,7 @@ static esp_err_t ota_post(httpd_req_t *req)
     }
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
     if (part == NULL) {
-        api_reply_error(req, "500 Internal Server Error", DONGLE_ERR_WRITE_FAILED, "", "no ota partition");
-        return ESP_FAIL;
+        return api_reply_error(req, "500 Internal Server Error", DONGLE_ERR_WRITE_FAILED, "", "no ota partition");
     }
     if ((uint32_t)req->content_len > part->size) {
         return api_reply_error(req, "400 Bad Request", DONGLE_ERR_NOT_FIRMWARE, "",
@@ -63,20 +86,20 @@ static esp_err_t ota_post(httpd_req_t *req)
     /* The exact length is known from Content-Length: erasing only what the image needs, instead
        of OTA_SIZE_UNKNOWN's full 4 MB, saves seconds of erase and flash wear per update — and a
        too-large image fails above rather than after the erase. */
-    esp_err_t berr = esp_ota_begin(part, req->content_len, &handle);
-    if (berr != ESP_OK) {
-        if (berr == ESP_ERR_OTA_ROLLBACK_INVALID_STATE) {
+    esp_err_t err = esp_ota_begin(part, req->content_len, &handle);
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_OTA_ROLLBACK_INVALID_STATE) {
             /* The running image is still PENDING_VERIFY, so IDF refuses to start another update.
                app_main cancels rollback before it returns, so reaching this needs a request that
                beat the last instruction of boot — which USB enumeration alone makes implausible.
-               It gets its own message anyway: "ota begin failed" would send someone hunting the
-               flash for a fault that is really a race. */
+               It gets its own log line anyway (and its own envelope, `busy`, in ota_reply_for):
+               "ota begin failed" would send someone hunting the flash for a fault that is
+               really a race. */
             ESP_LOGE(TAG, "refusing: this image has not finished verifying its own boot");
-            return api_reply_error(req, "409 Conflict", DONGLE_ERR_BUSY, "", "image still pending verify");
+        } else {
+            ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
         }
-        ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(berr));
-        api_reply_error(req, "500 Internal Server Error", DONGLE_ERR_WRITE_FAILED, "", "ota begin failed");
-        return ESP_FAIL;
+        return ota_refuse(req, OTA_STEP_BEGIN, err);
     }
     ESP_LOGI(TAG, "OTA -> %s, %d bytes", part->label, (int)req->content_len);
     /* done first, total second -- the mirror of ota_progress_clear(), which stores total first.
@@ -104,48 +127,43 @@ static esp_err_t ota_post(httpd_req_t *req)
             esp_ota_abort(handle);
             ota_progress_clear();
             /* `internal` is a 500 by contract: the client's bytes stopped arriving, which is
-               not a malformed request to be corrected and resent. */
-            api_reply_error(req, "500 Internal Server Error", DONGLE_ERR_INTERNAL, "", "upload stalled");
-            return ESP_FAIL;
+               not a malformed request to be corrected and resent. The reply's result, as
+               everywhere: httpd's purge of what is left will time out on the same silence and
+               close the session then — after the envelope went out, not instead of it. */
+            return api_reply_error(req, "500 Internal Server Error", DONGLE_ERR_INTERNAL, "", "upload stalled");
         }
         timeouts = 0;  /* progress resets the stall budget */
         /* esp_ota_write rejects a first byte that is not 0xE9 (ESP_IMAGE_HEADER_MAGIC) with
            ESP_ERR_OTA_VALIDATE_FAILED — the spec's "reject anything whose first byte is not the
            ESP image magic" is satisfied by IDF, not by a check of ours. Do not add a second one:
            a hand-rolled magic test would be a copy of app_update's that could drift from it. */
-        esp_err_t werr = esp_ota_write(handle, buf, r);
-        if (werr != ESP_OK) {
+        err = esp_ota_write(handle, buf, r);
+        if (err != ESP_OK) {
+            /* The first block's header check lives inside esp_ota_write: by its code, a body
+               that is not an image (400, the client's fault) is told from a flash that refused
+               (500, this device's) — the map in ota_reply.h makes that call. */
             esp_ota_abort(handle);
-            if (werr == ESP_ERR_OTA_VALIDATE_FAILED) {
-                /* The client sent something that isn't a valid app image — its fault. */
-                api_reply_error(req, "400 Bad Request", DONGLE_ERR_NOT_FIRMWARE, "", "image invalid");
-            } else {
-                /* Anything else (e.g. an esp_partition_write flash error) is this device's
-                   fault, not the client's. The car's twin (firmware/car/core/main/ota_api.c) reports
-                   500 for both cases, which is wrong in the other direction — most of its
-                   failures here are this same magic-byte rejection, not a device fault. */
-                ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(werr));
-                api_reply_error(req, "500 Internal Server Error", DONGLE_ERR_WRITE_FAILED, "", "ota write failed");
+            if (err != ESP_ERR_OTA_VALIDATE_FAILED) {
+                ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
             }
             ota_progress_clear();
-            return ESP_FAIL;
+            return ota_refuse(req, OTA_STEP_WRITE, err);
         }
         remaining -= r;
         atomic_fetch_add(&s_ota_done, (uint32_t)r);
     }
 
-    if (esp_ota_end(handle) != ESP_OK) {
+    err = esp_ota_end(handle);
+    if (err != ESP_OK) {
         ota_progress_clear();
-        api_reply_error(req, "400 Bad Request", DONGLE_ERR_NOT_FIRMWARE, "", "image invalid");
-        return ESP_FAIL;
+        return ota_refuse(req, OTA_STEP_END, err);
     }
-    esp_err_t serr = esp_ota_set_boot_partition(part);
-    if (serr != ESP_OK) {
+    err = esp_ota_set_boot_partition(part);
+    if (err != ESP_OK) {
         ESP_LOGE(TAG, "set_boot_partition failed: %s (image written+valid but not booted)",
-                 esp_err_to_name(serr));
+                 esp_err_to_name(err));
         ota_progress_clear();
-        api_reply_error(req, "500 Internal Server Error", DONGLE_ERR_WRITE_FAILED, "", "set boot failed");
-        return ESP_FAIL;
+        return ota_refuse(req, OTA_STEP_SET_BOOT, err);
     }
     /* Cleared here too, ahead of the reboot below: the image is already committed either way,
        but a client polling GET /status in the vTaskDelay window that follows should see the
