@@ -71,7 +71,7 @@ public struct DeviceInfo: Codable, Equatable, Sendable {
 
 /// The control link as the car sees it.
 public struct LinkInfo: Codable, Equatable, Sendable {
-    /// drive datagrams received per second
+    /// drive commands accepted per second; a datagram the proto, owner or sequence gate refuses is not counted
     public var rx_hz: Int
     /// the driving station's signal at the car, null when not measured
     public var rssi_dbm: Int?
@@ -259,7 +259,7 @@ public enum VideoState: Equatable, Sendable, Codable {
 public struct VideoInfo: Codable, Equatable, Sendable {
     /// off: no sensor answered at boot; idle: sensor in standby, nobody watching; streaming: encoding for the driver
     public var state: VideoState
-    /// frames encoded in the last second
+    /// frames sent in the last second, counted at the sender's output when a frame's last chunk leaves, not at the encoder
     public var fps: Int
     /// kbit sent in the last second
     public var kbps: Int
