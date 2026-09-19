@@ -132,7 +132,7 @@ static void handle_disconnected(const wifi_event_sta_disconnected_t *ev)
     }
     if (!lock_take()) {
         /* No further event follows from this dropped one, so the station will not retry on
-         * its own — only a POST /net with a CHANGED value restarts it from here. */
+         * its own — only a POST /wifi with a CHANGED value restarts it from here. */
         ESP_LOGE(TAG, "state lock busy — the station will not retry");
         return;
     }
@@ -264,7 +264,7 @@ esp_err_t wifi_sta_start(void)
     ESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_NONE), TAG, "set ps");
 
     /* And nothing more. The station is up and idle; the first join is the app's to ask for,
-     * through POST /net. It used to join a stored network here, before the app arrived —
+     * through POST /wifi. It used to join a stored network here, before the app arrived —
      * see net_api.c for what that cost. */
     return ESP_OK;
 }
@@ -347,7 +347,7 @@ esp_err_t wifi_sta_join(const net_cfg_t *cfg)
     esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &wc);
     if (err != ESP_OK) {
         /* The state machine is stepped to FAILED, not left alone. An earlier version left
-         * it, reasoning that net.state "still describes what the radio is doing — the
+         * it, reasoning that wifi.state "still describes what the radio is doing — the
          * previous attempt" — but the disconnect four lines up has already torn that attempt
          * down, and its event will be consumed as ours. Left alone, a station that had been
          * CONNECTED kept saying so with the radio idle, wifi_sta_connected() made the next
@@ -356,7 +356,7 @@ esp_err_t wifi_sta_join(const net_cfg_t *cfg)
          * configures again. The suppression window is deliberately LEFT armed: the
          * disconnect's event is still coming and is still not a failed join. */
         ESP_LOGE(TAG, "set config failed (%s) — the previous association is already down; "
-                      "net.state is failed until a new POST /net", esp_err_to_name(err));
+                      "wifi.state is failed until a new POST /wifi", esp_err_to_name(err));
         abort_join_locked_or_not();
         return err;
     }
@@ -384,7 +384,7 @@ esp_err_t wifi_sta_join(const net_cfg_t *cfg)
         /* CONFIGURED was stepped above, so the machine says "joining" about a request the
          * radio just refused to start — nothing is in flight and nothing will retry it. Same
          * remedy as the set_config path: say failed, which is what it is. */
-        ESP_LOGW(TAG, "connect failed: %s — net.state is failed until a new POST /net",
+        ESP_LOGW(TAG, "connect failed: %s — wifi.state is failed until a new POST /wifi",
                  esp_err_to_name(cerr));
         abort_join_locked_or_not();
         return cerr;
@@ -399,7 +399,7 @@ esp_err_t wifi_sta_join(const net_cfg_t *cfg)
 
 bool wifi_sta_connected(void)
 {
-    /* The lock-free mirror, not s_sm.state: this is called from the HTTP task on the POST /net
+    /* The lock-free mirror, not s_sm.state: this is called from the HTTP task on the POST /wifi
      * path, and a bounded-wait mutex acquisition would be a worse answer than a read that is
      * at most one transition stale. Staleness is harmless in both directions here — a stale
      * "connected" costs a join that net_api would otherwise have skipped, and a stale

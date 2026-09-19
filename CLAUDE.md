@@ -253,14 +253,15 @@ unchanged POST does not rewrite flash.
 
 `esp_video`'s `isp_task` outranks everything above — see Gotchas below.
 
-On the dongle (`firmware/dongle/main/`), `relay_udp.c` is the same ~450 lines run **twice**
+On the dongle (`firmware/dongle/main/`), `relay_udp.c` is the same ~600 lines run **twice**
 rather than copied: port, task name, priority and counters are parameters
 (`relay_udp_cfg_t`), so the real-time channel (`4210`, priority 5) and video (`4211`, priority
-4) share one implementation. Video's instance is admitted toward the phone by
-`rate_gate.{c,h}` — *pure*, host-tested: bytes per fixed window (**1000 ms**), charged against
-`relay.video_max_kbps`; a datagram over budget is refused and counted
-(`relay.video_dropped`) here, where it is visible, rather than silently in `esp_tinyusb` when
-the NTB pool fills up. The real-time instance is never throttled.
+6 — above TinyUSB and the real-time relay, since the bench of 2026-09-15 lost half the video
+chunks to a receiver out of buffers) share one implementation. Video's instance is admitted
+toward the phone by `rate_gate.{c,h}` — *pure*, host-tested: bytes per fixed window
+(**1000 ms**), charged against `relay.video_max_kbps`; a datagram over budget is refused and
+counted (`relay.video_dropped`) here, where it is visible, rather than silently in
+`esp_tinyusb` when the NTB pool fills up. The real-time instance is never throttled.
 
 ## Build
 
@@ -296,10 +297,13 @@ SwiftUI, XcodeGen, landscape-locked, Russian-localised, warm light/dark themes.
 стадия `reach → /version → выпуск → правило → шаг` (`StageRule`, чистая, хост-тест
 `app/tests/stagerule`). До машинки добираются через адаптер — `CarReach` (`app/tests/carreach`),
 сетевой автомат с бюджетом попыток. `AppFlow` — проводка: фазы `Phase.stage(device, GateStep)`,
-раннер `runLadder`/`restart`/`updateFinished`. Стражи связи после гейта (провод пропал, чужой
-hello, чужой proto) не рисуют своих экранов, а перезапускают лестницу с нужной ступени
-(`restart(from:)`). Один экран на всё — `ConnectView(.stage(device, step))`; `WrongCarView`
-больше нет.
+раннер `runLadder`/`restart`/`updateFinished`. Стражи связи после гейта не рисуют своих
+экранов, а перезапускают лестницу с нужной ступени (`restart(from:)`): провод пропал и
+локальная сеть запрещена — со ступени адаптера; `fw` в `hello` младше тега выпуска (или без
+номера, или при неизвестном теге) — со ступени машинки, где правило по `/version` поднимет
+«обновление». Стражей «чужой hello» и «чужой proto» нет: `CarLink` усыновляет любой ответивший
+`hello`, а `proto` приложение не сравнивает (ниже). Один экран на всё —
+`ConnectView(.stage(device, step))`; `WrongCarView` больше нет.
 
 Совместимость держится на дисциплине выпуска: один релиз поставляет приложение и обе прошивки
 вместе, поэтому «билд платы == тег релиза» и есть совместимость. Приложение НЕ решает по `proto` —
@@ -347,11 +351,15 @@ an `AVSampleBufferDisplayLayer` frame by frame. Reassembly runs on `VideoLink`'s
 `onFrame` is confined there — never called from the main actor, which only reads the published
 counters back across that same queue.
 
-The drive screen is a HUD: the picture is a 16:9 window onto the 4:3 frame (`resizeAspectFill`,
-the fisheye's top and bottom eighths cropped), and every instrument keeps to its edges — nothing
-sits in the middle of the picture with a scrim behind it. `DriveLayout` (pure, host-tested) is
-where the pieces go, derived from the screen and its safe area, not from one model's numbers;
-`docs/superpowers/specs/2026-09-15-drive-hud-design.md` says why each piece is where it is.
+The drive screen is a HUD: the picture is a 16:9 window the full height of the screen, filled
+`resizeAspectFill` with a frame that is already 16:9 — since 2026-09-15 the car crops the
+fisheye's 4:3 sensor frame to its middle `video.height` rows at the encoder's input
+(`frame_crop.h`, `sensor_height` in the contract), so the top and bottom eighths never reach
+the wire, and the app only trims the sides on a screen squatter than 16:9 — and every
+instrument keeps to its edges — nothing sits in the middle of the picture with a scrim behind
+it. `DriveLayout` (pure, host-tested) is where the pieces go, derived from the screen and its
+safe area, not from one model's numbers; `docs/superpowers/specs/2026-09-15-drive-hud-design.md`
+says why each piece is where it is.
 
 Pure Swift modules are host-tested with `swiftc` directly — no XCTest runtime needed.
 

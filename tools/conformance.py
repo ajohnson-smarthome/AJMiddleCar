@@ -10,7 +10,7 @@ range, the value one past each end, the members of every enum. Nothing here is w
 twice, so a schema change moves this suite with it — which is the point. The contract
 used to exist in four hand-written places and be enforced in none, and they disagreed.
 
-What it asserts for `/status` and for **/config** (v2's single endpoint over the five
+What it asserts for `/status` and for **/config** (v2's single endpoint over the six
 config domains): the field set and its types, `application/json` on every answer, both
 ends of every range accepted, one past each end rejected, an enum refusing a value
 outside its set, a fractional value where a `fixed` field expects one accepted and

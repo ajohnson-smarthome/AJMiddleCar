@@ -1,10 +1,11 @@
 # Mock car
 
-The car's wire, without the car: the real-time UDP channel and the whole REST API, over a
-`CarState` that implements the watchdog, the reverse-replay retreat and the actuator
-arbiter. It is what makes the app testable without hardware, so it is only worth having
-while it behaves like the car — an earlier version of this mock defaulted `/recover` to
-off/3000 where the firmware has on/5000, served every client at once and had no watchdog,
+The car's wire, without the car: the real-time UDP channel, the video channel and the REST
+API — all of it but `GET /snapshot`, the bench's look at the sensor, which the mock answers
+`404` — over a `CarState` that implements the watchdog, the reverse-replay retreat and the
+actuator arbiter. It is what makes the app testable without hardware, so it is only worth
+having while it behaves like the car — an earlier version of this mock defaulted `/recover`
+to off/3000 where the firmware has on/5000, served every client at once and had no watchdog,
 which taught every simulator session that a car losing its link simply stops.
 
 ## Run
@@ -106,17 +107,18 @@ a file; `ffplay /tmp/out.h264` opens it.
 - `test_state.py`, `test_rtlink.py` — `python3 test_state.py && python3 test_rtlink.py`.
   Stdlib only: no aiohttp, no sockets, no sleeping.
 - `mock_car.py` — plumbing only: it binds the UDP endpoint and the aiohttp REST server,
-  whose five config domains are one handler pair registered in a loop over the schema.
+  whose six config domains are one route, `/config`, that walks the schema.
 - `generated.py` — **generated**. Never hand-edit it; change `contract/car-api.json` and
   run `tools/gen_contract.py`.
 
 `tools/conformance.py http://<host>:<port>` runs the REST request matrix against this mock
-or against a real car, and `tools/conformance_rt.py <host>:<port>` does the same for the
-UDP channel with real datagrams. `tools/test-all.sh` runs both against a mock it starts
-itself (skipped when `.venv` is missing, unless `CONFORMANCE=required`). Since the
+or against a real car, `tools/conformance_rt.py <host>:<port>` does the same for the
+UDP channel with real datagrams, and `tools/conformance_video.py <host>` for the video
+channel (above). `tools/test-all.sh` runs all three against a mock it starts itself (skipped
+when `.venv` is missing, unless `CONFORMANCE=required`). Since the
 2026-08-22 unification (rule 8 of the audit-fix spec) there is one reply shape to assert:
 `{"ok":true}` on success, `{"error":"…","field":"…"}` on a rejection, `application/json`
-either way — for `/calib*` and `/ota` as well as for the five config domains, so
+either way — for `/calib*` and `/ota` as well as for the six config domains, so
 conformance asserts their bodies and not merely their status codes. The firmware's
 plain-text `ok` and `httpd_resp_send_err` bodies are gone; `field` is `""` when the fault
 is the body as a whole.
@@ -138,8 +140,8 @@ three different ways — see "Session lifecycle — who owns the actuator, and w
 short, and as `state.py` implements it:
 
 - Every app→car datagram except `hello` carries `seq`. One without it is dropped, a
-  goodbye included. A *bare* goodbye (`{"seq":n,"bye":1}`, no axes) is a complete
-  instruction and is acted on.
+  goodbye included. A *bare* goodbye (`{"proto":2,"type":"bye","seq":n}`, no axes) is a
+  complete instruction and is acted on.
 - **Adopting** a session releases SAFE, clears the breadcrumb history, resets the
   sequence gate, and leaves the watchdog **disarmed** — it arms on the first accepted
   command, because that is what it measures. A repeat `hello` from the same peer and sid
@@ -175,16 +177,20 @@ python3 - <<'PY'
 import json, socket, time
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(1)
 car = ("127.0.0.1", 4210)
-s.sendto(json.dumps({"proto": 1, "hello": "7f3a91c2"}).encode(), car)
-print(s.recvfrom(256)[0])                       # the identity reply
+s.sendto(json.dumps({"proto": 2, "type": "hello", "session": "7f3a91c2"}).encode(), car)
+print(s.recvfrom(512)[0])                       # the hello_ack, naming the car
 for seq in range(1, 21):                        # 2 s of driving forward
-    s.sendto(json.dumps({"seq": seq, "t": 0.5, "y": 0}).encode(), car)
+    s.sendto(json.dumps({"proto": 2, "type": "drive", "seq": seq,
+                         "throttle": 0.5, "turn": 0}).encode(), car)
     time.sleep(0.1)
-s.sendto(json.dumps({"seq": 21, "t": 0, "y": 0, "bye": 1}).encode(), car)
+s.sendto(json.dumps({"proto": 2, "type": "bye", "seq": 21,
+                     "throttle": 0, "turn": 0}).encode(), car)
 PY
 ```
 
-The axes on that goodbye are what the app happens to send; `{"seq": 21, "bye": 1}` is
-accepted just the same.
+Every datagram names its `type` and carries the contract's `proto` (`2`): a frame without
+either, or one still speaking the old `{"hello": …}` / `{"t": …, "y": …}` shape, is dropped
+without a reply, exactly as the car drops it. The axes on that goodbye are what the app
+happens to send; `{"proto": 2, "type": "bye", "seq": 21}` is accepted just the same.
 
 Stop streaming without the `bye` and the mock retreats, exactly as the car does.

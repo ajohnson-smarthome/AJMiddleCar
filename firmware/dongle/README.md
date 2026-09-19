@@ -149,7 +149,7 @@ Measurements taken as each plan lands, rather than assumed.
 | The car's 1.83 MB image through the relay | Delivered. That image carries the C6's firmware inside it, and is about three times the largest payload this relay had carried before | 2026-09-01 |
 | Timing, screens, retries during an over-the-air update | *(nobody was watching — no console was recording when it happened, so there is no evidence of how close the upload ran to its budget or what the screens showed; still owed)* | |
 | The app talks to the car through the relay, on a device, with no `-carHost` argument | Works. The escape hatch was kept until the dongle's OTA cycle and rollback had both been run on the bench, and retired 2026-09-13; on a device the app now has no other path | 2026-08-31 |
-| The station joins the car | `joined: ip=192.168.4.2 gw=192.168.4.1`. It also rejoined by itself after a cable reflash with no second `POST /net` — the firmware of that day kept the network in NVS; since 2026-09-13 it keeps it in RAM only and joins nothing until the app tells it what (see `net_api.c` for why) | 2026-08-31 |
+| The station joins the car | `joined: ip=192.168.4.2 gw=192.168.4.1`. It also rejoined by itself after a cable reflash with no second POST of the network — the firmware of that day kept the network in NVS; since 2026-09-13 it keeps it in RAM only and joins nothing until the app tells it what (see `net_api.c` for why) | 2026-08-31 |
 | `tools/conformance.py http://192.168.7.1` — the car's whole REST surface, relayed | Every endpoint passed except one pre-existing car-vs-mock divergence, unrelated to the relay: `POST /calib/save` with string `pair`s is correctly rejected `400`, but the car's envelope names `field:"pair"` where the mock and the test expect `"wheels"`. `docs/protocol.md` says `field` names *the offending key*, so the car is right and the mock and `conformance.py` are the ones to correct. First time this suite had ever run against real hardware | 2026-08-31 |
 | `tools/conformance_rt.py 192.168.7.1:4210` — the real-time channel, relayed | All checks passed: hello, wrong-proto rejection, telemetry, datagram drops measured by `rx_fps`, the session cap, eviction, `bye`. The Mac has no route to `192.168.4.1`, so every one of those frames went through the dongle | 2026-08-31 |
 | Relayed `GET /status` round trip | 0.489 s cold (Wi-Fi association plus the upstream connect), well inside the app's budget | 2026-08-31 |
@@ -158,10 +158,10 @@ Measurements taken as each plan lands, rather than assumed.
 | The strict version gate, with both devices current | Satisfied and passes. Both flashed by cable from the release's own images, so nothing was asked to update — which is the point: the gate lets a current pair through without an OTA | 2026-08-31 |
 | A release carrying the adapter's image | `v1.0+725` is the first one. Every release before it held only `ajmiddlecar.bin`, so the adapter's release lookup returned nothing — invisible until the gate became strict, at which point the app locked itself out and blamed the network | 2026-08-31 |
 | What the screen costs in flash — u8g2, the two fonts that reach the image, the I²C driver and `display.{c,h}` / `display_hal.{c,h}` | 31,936 bytes (`ajdongle.bin` 0xd4740 → 0xdc400, 849 KB → 881 KB) in a 4 MB OTA slot — 21% used, 3.14 MB free. Measured, unlike everything else this plan added: a linked image is a fact even with no panel on the bench | 2026-09-01 |
-| The panel lights at all — screen 1, «AJDONGLE» over the firmware version, for two seconds at power-on | *(the panel has not been bought; nothing in `display.c` or `display_hal.c` has been seen on glass. If this row ever says yes, then power, I²C, the fonts and the layout are all alive and every row below it becomes worth reading — record what you observed)* | |
-| The I²C pins as chosen in `board.h` — SDA `GPIO8`, SCL `GPIO9` | *(chosen only to be clear of the native USB pair and the octal PSRAM bus, never checked against this third-party board's silkscreen; correcting them is a `board.h` edit and nothing else — record what you observed)* | |
-| The panel's address — `BOARD_OLED_ADDR`, `0x3C` or `0x3D` depending on the module's address pad | *(a wrong address is indistinguishable from a dead panel from the console: `display_hal` logs one line naming the address and both pins, then counts the rest — record what you observed)* | |
-| `BOOT` paging — four diagnostics pages, then «Сигнал», then back to the state screen, and the five-second return with no press | *(GPIO0 is the boot strap, polled at 5 Hz with the poll interval as the whole debounce; whether a real press registers exactly once has never been observed — record what you observed)* | |
+| The panel lights at all — screen 1, «AJDONGLE» over the firmware version, for two seconds at power-on | **Yes** — a GM009605 v4.3 module, on glass, once the I²C pins were the right way round (next row). Power, I²C, the fonts and the layout are all alive; `board.h` records the panel and the date | 2026-09-06 |
+| The I²C pins in `board.h` — SDA `GPIO9`, SCL `GPIO8` | **Confirmed** — the first guess had them the other way round (SDA 8 / SCL 9) and the panel answered nothing: `display_hal: panel does not answer at 0x3c on SDA 8 / SCL 9`. Swapping them was the whole fix, a `board.h` edit and nothing else, and the file's header says so | 2026-09-06 |
+| The panel's address — `BOARD_OLED_ADDR`, `0x3C` or `0x3D` depending on the module's address pad | **`0x3C`** — the module answered there as soon as the pins were right. A wrong address is indistinguishable from a dead panel from the console (`display_hal` logs one line naming the address and both pins), which is exactly how the swapped pins presented | 2026-09-06 |
+| `BOOT` paging — five diagnostics pages, «Сигнал» first, then address, radio, relay, faults, then back to the state screen, and the five-second return with no press | *(GPIO0 is the boot strap, polled at 5 Hz with the poll interval as the whole debounce; whether a real press registers exactly once has never been observed — record what you observed)* | |
 | Current draw with the panel lit, **with a phone as the power source, not a Mac** | *(the design budgets ~20 mA for the panel beside Wi-Fi, and a Mac's port would not notice either way; an iPhone is the fussy one and is the only source this measurement means anything from — record what you observed)* | |
 
 The app was 395 KB before this plan added the radio; roughly double, as expected, and comfortable
@@ -240,8 +240,8 @@ and its age in seconds, or `null` when nothing has failed since boot); `system` 
 heap, and `idf`, because this firmware's ESP-IDF version is worth knowing and the car's is
 not). Identity and version — `device`, `fw`, `build`, `rolled_back` — live in `/version`.
 
-There is no `GET /net`: `wifi.ssid` and `wifi.configured` in `/status` are the same two fields it
-used to serve, so a second endpoint for them bought nothing.
+There is no `GET /wifi`: `wifi.ssid` and `wifi.configured` in `/status` are the two fields a
+read-back would serve, so a second endpoint for them bought nothing.
 
 ```jsonc
 // POST /wifi ← {"ssid":"AJMiddleCar","password":"drive1234"}
@@ -249,12 +249,16 @@ used to serve, so a second endpoint for them bought nothing.
 ```
 
 The network lives in RAM only — nothing about the car's network survives a reboot, and the app
-sends it again on every launch. A new network is remembered and joined; the same network, while
-connected or still searching, does nothing (`200`, the state exactly as it already was — a POST
-must not restart a join that is already working); the same network after `failed` starts a fresh
-search. The reply carries the `wifi` group's two words, not `{"proto":1,"ok":true}` — the point
-of asking is what the dongle now holds, the same rule `/config` and `/calibration` follow on the
-car.
+sends it again on every launch. A new network is remembered and joined. The same network again
+has three outcomes, decided by what the station is doing: while it is `searching` or `joining`,
+or `connected` with a live uplink, the POST does nothing (`200`, the state exactly as it already
+was — a POST must not restart a join that is already working); after `failed` it starts a fresh
+search with a full budget; and `connected` with a **dead** uplink — `UPLINK_DEAD_AFTER` sends
+toward the car unanswered (`uplink.h`), the association the car's softAP forgot when it
+rebooted — it re-joins the same network with a full budget (`wifi_sta_rejoin`), which is what
+the relays do on their own within seconds and what «Повторить» in the app asks for sooner. The
+reply carries the `wifi` group's two words, not `{"proto":1,"ok":true}` — the point of asking
+is what the dongle now holds, the same rule `/config` and `/calibration` follow on the car.
 
 Every error reply is the same envelope shape as the car's, with the dongle's own `proto` — `1`,
 not `2`, because this is a separate contract for a device that knows nothing about the car, and
@@ -272,14 +276,15 @@ Dongle error codes: `bad_json`, `missing_field`, `unknown_field`, `wrong_type`, 
 
 ## The video relay — UDP `4211`
 
-A second, independent instance of the same relay. `relay_udp.c` (~450 lines) is not copied for
+A second, independent instance of the same relay. `relay_udp.c` (~600 lines) is not copied for
 the video port — port, task name, priority and counters are parameters
 (`relay_udp_cfg_t`) — so the real-time relay (`4210`, task priority 5) and the video relay
-(`4211`, priority 4) are one implementation running twice. Same session model as the real-time
-channel (the phone's address + source port, matched to this relay's own `connect()`-ed socket
-to `car:4211`; a `view` once a second keeps the session alive the same way `drive` does), same
-`SO_BINDTODEVICE` to the USB interface, same self-gateway guard, same 1500-byte datagram cap.
-`api_guard` does not apply — this is not HTTP.
+(`4211`, priority 6 — above TinyUSB and the real-time relay, raised from 4 on 2026-09-15 when
+half the video chunks were being lost to a receiver out of buffers) are one implementation
+running twice. Same session model as the real-time channel (the phone's address + source port,
+matched to this relay's own `connect()`-ed socket to `car:4211`; a `view` once a second keeps
+the session alive the same way `drive` does), same `SO_BINDTODEVICE` to the USB interface, same
+self-gateway guard, same 1500-byte datagram cap. `api_guard` does not apply — this is not HTTP.
 
 **Wider buffers, sized for a whole keyframe, not a whole datagram.** A keyframe (60–100 KB) has
 to cross the USB link as roughly a dozen back-to-back 1400-byte chunks, not one; the real-time

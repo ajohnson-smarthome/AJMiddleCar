@@ -216,8 +216,9 @@ struct DriveView: View {
             ZStack {
                 p.bg.ignoresSafeArea()
                 if !preview {
-                    // A 16:9 window onto the 4:3 frame: the layer fills it, cropping the top and
-                    // bottom eighths — the fisheye's worst — rather than pillarboxing the middle.
+                    // A 16:9 window for a frame the car already cropped to 16:9 (the fisheye's
+                    // top and bottom eighths never reach the wire): the layer fills it rather
+                    // than pillarboxing, so only a squatter screen trims anything, at the sides.
                     VideoView(link: video)
                         .frame(width: lay.picture.width, height: lay.picture.height)
                         .clipped()

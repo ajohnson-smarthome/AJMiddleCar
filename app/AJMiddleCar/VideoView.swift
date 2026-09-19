@@ -47,8 +47,9 @@ struct VideoView: UIViewRepresentable {
         private weak var link: VideoLink?
 
         func attach(_ layer: AVSampleBufferDisplayLayer, link: VideoLink) {
-            // Fill, not fit: the drive screen frames this view as a 16:9 window and the 4:3
-            // picture is cropped top and bottom to fill it — see `DriveLayout`.
+            // Fill, not fit: the drive screen frames this view as a 16:9 window and the frame
+            // is already 16:9 (the car cropped the sensor's 4:3 to it), so on a 16:9 window
+            // nothing is trimmed; a squatter screen loses the sides — see `DriveLayout`.
             layer.videoGravity = .resizeAspectFill
             renderer = layer.sampleBufferRenderer
             self.link = link

@@ -100,9 +100,11 @@ MIPI-CSI/DSI — none of which is used yet, all of which is why this board.
   there is no sensor to ask
 
 **The dongle's panel**
-- Fifteen screens on a 128×64 OLED, one template: a word in 10×20, a rule that is a dashed
+- Sixteen screens on a 128×64 OLED, one template: a word in 10×20, a rule that is a dashed
   line, a level gauge, a 46-second signal history or the page markers, and up to two rows in
-  6×12. Nine are chosen by the dongle itself, five are paged to, one counts down.
+  6×12. Ten are chosen by the dongle itself — nine states and «Перезапуск», the last frame
+  before every deliberate restart, so the glass does not carry a stale frame through the
+  reboot — five are paged to, one counts down.
   Only the dongle's own measurements — never the car's telemetry, never "hertz"
 - A short press of BOOT pages through five reference pages (signal, address, radio, relay,
   faults); a five-second hold counts down on the gauge and erases NVS

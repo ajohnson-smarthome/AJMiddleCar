@@ -17,7 +17,7 @@
  * plugged into while the phone cannot see it happening. "Stops attempting" is the precise
  * claim — WIFI_FAILED means no further connection attempts are made, not that an attempt
  * already in flight is disowned; see WIFI_EV_GOT_IP's handling in wifi_state.c. The app
- * restarts the attempt by POSTing /net again. */
+ * restarts the attempt by POSTing /wifi again. */
 
 typedef enum {
     WIFI_IDLE = 0,   /* nothing configured yet — the dongle has never been told a network */
@@ -30,7 +30,7 @@ typedef enum {
 } wifi_state_t;
 
 typedef enum {
-    WIFI_EV_CONFIGURED,    /* a POST /net arrived with a network to join */
+    WIFI_EV_CONFIGURED,    /* a POST /wifi arrived with a network to join */
     WIFI_EV_DISCONNECTED,  /* association lost, or an attempt failed */
     WIFI_EV_GOT_IP,        /* DHCP completed — the only event that means "usable" */
     WIFI_EV_ABORTED,       /* wifi_sta_join could not even ask the radio: the old association
