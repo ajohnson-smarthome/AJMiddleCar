@@ -161,8 +161,6 @@ check(UpdateRules.flashPlan(for: .dongle, release: nil, cachedBuild: nil, hasCac
 check(UpdateRules.flashPlan(for: .dongle, release: nil, cachedBuild: 100, hasCachedFile: false) == .unavailable,
       "a recorded build with no backing file is not something to flash")
 
-if failures == 0 { print("test_update: OK") } else { exit(1) }
-
 // -- the reboot watch's window is the device's, not one number for both -------------------
 // The car's first boot after an update is the long one: the radio gate (an RPC of up to 5 s
 // against a mismatched slave), the camera probe, the dongle noticing the softAP forgot it and
@@ -172,3 +170,5 @@ check(UpdateRules.rebootWindow(for: .car) >= 60, "the car gets at least a minute
 check(UpdateRules.rebootWindow(for: .dongle) >= 25, "the adapter keeps at least what it had")
 check(UpdateRules.rebootWindow(for: .car) > UpdateRules.rebootWindow(for: .dongle),
       "and the car, with a radio and a camera to bring up, waits longer than the adapter")
+
+if failures == 0 { print("test_update: OK") } else { exit(1) }
