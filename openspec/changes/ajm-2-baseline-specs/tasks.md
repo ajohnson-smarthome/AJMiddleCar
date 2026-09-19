@@ -4,7 +4,7 @@
 
 ## 1. Пилот
 
-- [ ] 1.1 Сверить пилот `car/rt-link` с кодом и довести до формы образца: каждое требование найдено в коде или тесте, лишнее убрано, пропущенное добавлено; проверить `openspec validate ajm-2-baseline-specs --strict` и `CONFORMANCE=required tools/test-all.sh`; источники: `firmware/car/core/main/rt_link.{c,h}`, `control_proto.{c,h}`, `watchdog.h`, `rt_glue.c`, `test/test_rt_session.c`, `test/test_control_proto.c`, `test/test_rt_glue.c`, `docs/protocol.md` → The real-time channel, `contract/car-api.json` → `rt`, `tools/conformance_rt.py`, `tools/mock_car/rt_link.py` (AJM-3)
+- [x] 1.1 Сверить пилот `car/rt-link` с кодом и довести до формы образца: каждое требование найдено в коде или тесте, лишнее убрано, пропущенное добавлено; проверить `openspec validate ajm-2-baseline-specs --strict` и `CONFORMANCE=required tools/test-all.sh`; источники: `firmware/car/core/main/rt_link.{c,h}`, `control_proto.{c,h}`, `watchdog.h`, `rt_glue.h`, `test/test_rt_session.c`, `test/test_control_proto.c`, `test/test_rt_glue.c`, `docs/protocol.md` → The real-time channel, `contract/car-api.json` → `rt`, `tools/conformance_rt.py`, `tools/mock_car/rt_link.py` (AJM-3)
 
 ## 2. Машинка — `specs/car/`
 
