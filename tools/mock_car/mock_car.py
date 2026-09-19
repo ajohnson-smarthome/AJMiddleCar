@@ -26,6 +26,7 @@ so it is repeatable only for a run driven the same way from the same moment.
 """
 import argparse
 import asyncio
+import json
 import math
 import os
 import socket
@@ -36,13 +37,24 @@ from aiohttp import web
 from generated import (CALIBRATION, CONFIG_PATH, DEVICE, DOMAINS, ENDPOINTS, ENVELOPE,
                        PROTO, RT, VIDEO)
 from rt_link import Impairment, RTLink, service_loop
-from state import CarState, build_number, parse_image_version
+from state import CarState, build_number, image_refusal, parse_image_version
 from video import VideoLink
 
 # A flash is the one REST call that takes real time; the mock spends it so a client's
 # progress UI has something to show.
 OTA_SECONDS = 2.0
 OTA_MIN_BYTES = 4096       # the firmware refuses to erase a slot for anything smaller
+
+# The car reads each JSON body into a fixed buffer on the httpd task's stack and refuses
+# one that does not fit with its NUL: api_util.c's api_read_body returns -1 for
+# `content_len >= sizeof buf`, and every handler answers that with `bad_json` and no
+# `field`. The three sizes are not in the contract on any side — the buffer is each
+# handler's own — so they are mirrored here by hand, like SID_MAX_CHARS, and read as
+# "a body of this many bytes is refused". The app's compact bodies sit well inside; a
+# pretty-printed one would otherwise learn the limit from the car alone (AJM-113).
+BODY_MAX_CONFIG = 512        # cfg_api.c cfg_post: char body[512]
+BODY_MAX_CALIBRATION = 512   # calib_api.c calib_save: char b[512]
+BODY_MAX_SPIN = 96           # calib_api.c calib_spin: char b[96]
 
 
 def is_private(addr):
@@ -99,6 +111,28 @@ def json_error(status, code, message, field=""):
     return web.json_response({ENVELOPE["proto"]: PROTO, ENVELOPE["error"]: err}, status=status)
 
 
+async def read_object(request, limit):
+    """The body as the car's JSON handlers see it, or the rejection they answer instead.
+
+    Returns (body, None) or (None, response). The three refusals every one of cfg_api.c's
+    and calib_api.c's handlers makes before looking at a single key, in their order and
+    with their envelope — `bad_json`, no `field`: a body that is missing or would not fit
+    the handler's buffer (`limit`, see BODY_MAX_*), one that does not parse, and one that
+    parses to anything but an object. The mock's own limit was aiohttp's 17 MB, and
+    `/calibration` answered `[]` with `missing_field` `wheels` (AJM-113).
+    """
+    data = await request.read()
+    if not data or len(data) >= limit:
+        return None, json_error(400, "bad_json", "body missing or too long")
+    try:
+        body = json.loads(data)
+    except ValueError:
+        return None, json_error(400, "bad_json", "malformed JSON")
+    if not isinstance(body, dict):
+        return None, json_error(400, "bad_json", "expected a JSON object")
+    return body, None
+
+
 @web.middleware
 async def one_at_a_time(request, handler):
     """The firmware serves REST from a single httpd task, so requests queue behind
@@ -140,10 +174,9 @@ async def cfg_get(request):
 
 async def cfg_post(request):
     car = request.app["car"]
-    try:
-        body = await request.json()
-    except ValueError:
-        return json_error(400, "bad_json", "malformed JSON")
+    body, refused = await read_object(request, BODY_MAX_CONFIG)
+    if refused is not None:
+        return refused
     ok, err = car.apply_config(body)
     if not ok:
         code, field, message = err
@@ -195,12 +228,9 @@ async def calib_get(request):
 async def calib_spin(request):
     car = request.app["car"]
     k = CALIBRATION["keys"]
-    try:
-        body = await request.json()
-    except ValueError:
-        return json_error(400, "bad_json", "malformed JSON")
-    if not isinstance(body, dict):
-        return json_error(400, "bad_json", "expected a JSON object")
+    body, refused = await read_object(request, BODY_MAX_SPIN)
+    if refused is not None:
+        return refused
     for key in body:
         if key not in (k["pair"], k["direction"]):
             return json_error(400, "unknown_field", "no such field", key)
@@ -244,11 +274,10 @@ async def calib_spin(request):
 async def calib_save(request):
     car = request.app["car"]
     k = CALIBRATION["keys"]
-    try:
-        body = await request.json()
-    except ValueError:
-        return json_error(400, "bad_json", "malformed JSON")
-    if not isinstance(body, dict) or k["wheels"] not in body:
+    body, refused = await read_object(request, BODY_MAX_CALIBRATION)
+    if refused is not None:
+        return refused
+    if k["wheels"] not in body:
         return json_error(400, "missing_field", "required", k["wheels"])
     for key in body:
         if key != k["wheels"]:
@@ -281,13 +310,18 @@ async def ota(request):
     if len(data) < OTA_MIN_BYTES:
         car.end_ota(flashed=False)
         return json_error(400, "too_small", "image too small")
-    if data[0] != 0xE9:
-        # esp_ota_write validates the ESP image magic on the first write, and
-        # ota_api.c answers "not an ESP image". Any 4 KB blob used to flash here
-        # and bump fw — the exact wrong-release-asset path the app could never
-        # rehearse.
+    refusal = image_refusal(data)
+    if refusal:
+        # esp_ota_write checks the image magic on the first block, esp_ota_end verifies
+        # the written image as a whole — chip_id and the app descriptor among the rest —
+        # and ota_api.c answers either with `not_firmware`, the slot unassigned and the
+        # running image untouched. After the whole body, as here: the car has read it
+        # all before esp_ota_end can refuse it. Byte 0 alone used to be the check, so
+        # any 4 KB blob — the dongle's image included — flashed and bumped fw: the exact
+        # wrong-release-asset path the app could never rehearse (AJM-105).
         car.end_ota(flashed=False)
-        return json_error(400, "not_firmware", "not an ESP image")
+        print(f"ota: {len(data)} bytes refused — {refusal}")
+        return json_error(400, "not_firmware", refusal)
     prev_fw = car.fw
     print(f"ota: {len(data)} bytes — motors stopped, flashing")
     await asyncio.sleep(OTA_SECONDS)

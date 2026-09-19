@@ -13,10 +13,10 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from generated import CALIBRATION, DOMAINS, GROUPS, PROTO, RT, TELEMETRY_GROUPS   # noqa: E402
-from state import (OWNER_CALIBRATION, OWNER_CONSOLE, OWNER_IDLE, OWNER_RECOVERING,   # noqa: E402
-                   OWNER_REMOTE, OWNER_SAFE_STOP, OWNER_UPDATE, CarState, build_number,
-                   clamp_axis, number, parse_frame, parse_image_version, seq_is_newer,
-                   valid_seq, valid_sid)
+from state import (CHIP_ID, OWNER_CALIBRATION, OWNER_CONSOLE, OWNER_IDLE,   # noqa: E402
+                   OWNER_RECOVERING, OWNER_REMOTE, OWNER_SAFE_STOP, OWNER_UPDATE, CarState,
+                   build_number, clamp_axis, image_refusal, number, parse_frame,
+                   parse_image_version, seq_is_newer, valid_seq, valid_sid)
 
 DEADLINE_S = RT["watchdog_ms"] / 1000.0
 K, T = RT["keys"], RT["types"]
@@ -943,11 +943,13 @@ class TestTelemetry(unittest.TestCase):
         self.assertEqual(car.telemetry(0)["system"]["uptime_s"], 42)
 
 
-def synthetic_image(version=b"v9.9+123", magic=0xABCD5432, first=0xE9, size=4096):
-    """The least image parse_image_version accepts: 0xE9 header, esp_app_desc_t at 32
-    (image header 24 + segment header 8), magic word first, version[32] at its offset 16."""
+def synthetic_image(version=b"v9.9+123", magic=0xABCD5432, first=0xE9, size=4096, chip_id=CHIP_ID):
+    """The least image the mock's /ota flashes: 0xE9 header with this board's chip_id at
+    its offset 12, esp_app_desc_t at 32 (image header 24 + segment header 8), magic word
+    first, version[32] at its offset 16. `chip_id=0x0009` is the dongle's (ESP32-S3)."""
     img = bytearray(size)
     img[0] = first
+    img[12:14] = chip_id.to_bytes(2, "little")
     img[32:36] = magic.to_bytes(4, "little")
     img[48:48 + len(version)] = version
     return bytes(img)
@@ -958,8 +960,8 @@ class TestImageVersion(unittest.TestCase):
         self.assertEqual(parse_image_version(synthetic_image()), "v9.9+123")
 
     def test_garbage_yields_none(self):
-        """A 0xE9 blob without the app-desc magic is not an app image — the fallback
-        (a synthetic bump) keeps old rehearsal blobs working."""
+        """A 0xE9 blob without the app-desc magic is not an app image. /ota refuses it
+        before asking (`image_refusal`); this is the parser's own answer."""
         self.assertIsNone(parse_image_version(b"\xe9" + b"\x00" * 8191))
         self.assertIsNone(parse_image_version(b"\x00" * 8192))
         self.assertIsNone(parse_image_version(b"\xe9short"))
@@ -981,6 +983,32 @@ class TestImageVersion(unittest.TestCase):
         car = CarState(now=0.0)
         self.assertFalse(car.rollback)
         self.assertFalse(car.nvs_wiped)
+
+
+class TestImageRefusal(unittest.TestCase):
+    """What POST /ota refuses as `not_firmware`, decided from the header — the checks
+    esp_ota_write and esp_ota_end make of it on the car (`car/ota-and-rollback`: an image
+    that fails verification as a whole is `not_firmware`, the running image untouched)."""
+
+    def test_this_boards_image_is_not_refused(self):
+        self.assertIsNone(image_refusal(synthetic_image()))
+
+    def test_another_boards_chip_id_is_refused(self):
+        """The dongle's image: 0xE9, chip_id 9 (ESP32-S3), a descriptor carrying the same
+        release tag. The mock used to flash it and report the tag (AJM-105); the car's
+        esp_ota_end fails it as a whole — "image invalid", not "not an ESP image"."""
+        dongle = synthetic_image(b"v9.9+7777-dongle", chip_id=0x0009)
+        self.assertEqual(image_refusal(dongle), "image invalid")
+
+    def test_a_missing_app_descriptor_is_refused(self):
+        """Right chip, no descriptor magic at segment 0: esp_image_verify fails it too."""
+        self.assertEqual(image_refusal(synthetic_image(magic=0)), "image invalid")
+        self.assertEqual(image_refusal(b"\xe9" + b"\x00" * 8191), "image invalid")
+
+    def test_the_wrong_first_byte_is_not_an_esp_image(self):
+        """esp_ota_write's first-block check, the one refusal the mock always had."""
+        self.assertEqual(image_refusal(b"\x00" * 4096), "not an ESP image")
+        self.assertEqual(image_refusal(synthetic_image(first=0xE8)), "not an ESP image")
 
 
 if __name__ == "__main__":
