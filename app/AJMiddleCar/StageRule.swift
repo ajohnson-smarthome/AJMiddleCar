@@ -58,9 +58,11 @@ public enum StageRule {
     }
 
     /// `version` is nil exactly when `reach` was not `.reached` (nothing was asked). When
-    /// `reach == .reached`, `version` must be non-nil.
+    /// `reach == .reached`, `version` must be non-nil. `flashed` is what this phone last
+    /// flashed into this board (`UpdateClient.lastFlashedTag`) — `VersionRule`'s reference for
+    /// a rolled-back board.
     public static func decide(reach: Reach, version: VersionReply?, board: Board.Identity,
-                              latestTag: String?, rollback: RollbackChoice) -> Verdict {
+                              latestTag: String?, flashed: String?, rollback: RollbackChoice) -> Verdict {
         switch reach {
         case .lost: return .lost
         case .hold(let step): return .show(step)
@@ -71,7 +73,7 @@ public enum StageRule {
         // rule can compare it. Silence is not "answered": it goes straight to the silent step.
         if answered(version), latestTag == nil { return .needRelease }
         switch VersionRule.step(reply: version, expectedDevice: board.expectedDevice,
-                                latestTag: latestTag ?? "", rollback: rollback) {
+                                latestTag: latestTag ?? "", flashed: flashed, rollback: rollback) {
         case .plugIn: return .show(board.silentStep)
         case .faulty: return .show(.fault)
         case .accessDenied: return .show(.denied)

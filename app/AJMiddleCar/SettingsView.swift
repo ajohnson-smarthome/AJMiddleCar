@@ -78,7 +78,7 @@ struct SettingsView: View {
                     }
                     Section {
                         NavigationLink {
-                            FirmwareView(palette: palette, flow: .forCar())
+                            FirmwareView(palette: palette, flow: .forCar(), link: link)
                         } label: {
                             Label(L.settingsFirmwareCar, systemImage: "arrow.down.circle")
                                 .foregroundStyle(palette.text)

@@ -1,5 +1,10 @@
 import Foundation
 
+/// Phases of a firmware update, shared by both devices' screens and their images. Here rather
+/// than beside the screen because the forced screen's automaton (`UpdateRules.forcedAct`) is a
+/// pure function over it, and host tests see this file and not SwiftUI.
+enum FwPhase { case checking, upToDate, available, downloading, downloaded, uploading, rebooting, flashed, done, failed }
+
 /// The update chain's pure decisions, extracted from `UpdateClient` so they are host-tested.
 /// `UpdateClient` keeps the sockets, the cache files and the sessions; this answers "which
 /// version wins" and "what may enter the firmware cache".
@@ -207,6 +212,51 @@ public enum UpdateRules {
     /// detected; being wrong the other way fails an update that was working.
     static func uploadTimeout(bytes: Int) -> TimeInterval {
         max(60, Double(bytes) / 10_000)
+    }
+
+    /// What the forced screen does by itself on finding the flow at `phase` — the gate's
+    /// automaton (`FirmwareFlow.runForced`), driven by the phase and nothing else (AJM-123,
+    /// AJM-131). Forced means the launch gate, and the gate offers no alternative, so every
+    /// phase that waits for a tap from Settings is an act here. `.available` in particular: it
+    /// used to be acted on only by the screen's first appearance, so `.available` reached again
+    /// through «Повторить» — after a refused image, a failed download, a lost `ok`, «Прошито» —
+    /// stood on «Требуется обновление» with no button, a dead end until the app was killed.
+    enum ForcedAct: Equatable {
+        /// The flow is busy, or has stopped on «Повторить» — nothing to do until it moves.
+        case wait
+        /// `.available`: fetch the image, or take it from the cache, wherever the phase came from.
+        case download
+        /// `.downloaded`: flash the moment the board answers (`FirmwareFlow.flashWhenReachable`).
+        case flashWhenReachable
+        /// `.upToDate` / `.done`: the board is current — hand it back to the ladder.
+        case finish
+    }
+
+    static func forcedAct(on phase: FwPhase) -> ForcedAct {
+        switch phase {
+        case .available: return .download
+        case .downloaded: return .flashWhenReachable
+        case .upToDate, .done: return .finish
+        case .checking, .downloading, .uploading, .rebooting, .flashed, .failed: return .wait
+        }
+    }
+
+    /// The board answered `/version` while the forced screen waited to flash it (AJM-135). The
+    /// same comparison `check()` makes — `isUpdateAvailable` — made again against what the
+    /// board runs NOW, because what it said before it went silent is not what it runs after:
+    /// a board that took the image and rebooted while the `ok` was lost, or the upload was
+    /// cancelled in its last fraction of a second, answers with the target's version. Flashing
+    /// it again with the same image made the reboot watch read "came back on the same
+    /// version" as a rollback of an update that had worked.
+    enum ReachedAct: Equatable {
+        /// Still behind the target (or a 404 board): flash it.
+        case flash
+        /// At the target or past it: the flash landed; the screen is done, not flashing twice.
+        case done
+    }
+
+    static func reached(running: String?, target: String?) -> ReachedAct {
+        isUpdateAvailable(running: running, latest: target) ? .flash : .done
     }
 
     /// Decision 6: what may enter the firmware cache. An ESP application image starts with

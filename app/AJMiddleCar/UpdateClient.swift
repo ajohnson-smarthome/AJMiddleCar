@@ -71,6 +71,12 @@ final class UpdateClient: NSObject, ObservableObject {
     private static func kTag(_ device: UpdateRules.Device) -> String {
         "\(kTagLegacy)-\(device.rawValue)"
     }
+    /// The last build this phone flashed into `device` (`lastFlashedTag`). Per device, like
+    /// the cache keys, and for the same reason: the car's rollback must never be measured
+    /// from the adapter's flash.
+    private static func kFlashed(_ device: UpdateRules.Device) -> String {
+        "lastFlashedTag-\(device.rawValue)"
+    }
 
     /// Application Support, not Caches: this file is the offline gate's lifeline (GateRule),
     /// and iOS may purge Caches under storage pressure — evaporating the one thing that lets
@@ -161,6 +167,22 @@ final class UpdateClient: NSObject, ObservableObject {
     static func recordCache(build: Int, tag: String, for device: UpdateRules.Device = .car) {
         UserDefaults.standard.set(build, forKey: kBuild(device))
         UserDefaults.standard.set(tag, forKey: kTag(device))
+    }
+
+    /// The tag of the last image this phone pushed into `device` and had acknowledged — the
+    /// reference a rolled-back board's next offer is measured from (`VersionRule.step`'s
+    /// `flashed`, AJM-132). Recorded at the flash's `ok`, not at «Готово»: the image that
+    /// rolls back is exactly the one that never reaches «Готово», and it is the one the
+    /// record has to name. `nil` on a phone that never flashed this board — the rule then
+    /// falls back to the tag on hand at «Повторить», as before. Kept beside the cache keys;
+    /// a cable flash the phone never saw leaves it stale, and the design accepts that: a stale
+    /// record can only offer an update once more, never withhold one (`mustUpdate` still
+    /// compares against the board itself).
+    static func lastFlashedTag(for device: UpdateRules.Device) -> String? {
+        UserDefaults.standard.string(forKey: kFlashed(device))
+    }
+    static func recordFlashed(tag: String, for device: UpdateRules.Device) {
+        UserDefaults.standard.set(tag, forKey: kFlashed(device))
     }
 
     /// What a release lookup can come back as.

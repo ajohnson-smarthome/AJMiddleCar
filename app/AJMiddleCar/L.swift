@@ -119,6 +119,11 @@ enum L {
     static var fwFlashedTitle: String { s("fw.flashedTitle") }
     static func fwFlashedSub(_ d: UpdateRules.Device) -> String { s("fw.flashedSub.\(d.rawValue)") }
     static func fwRollbackSub(_ d: UpdateRules.Device) -> String { s("fw.rollbackSub.\(d.rawValue)") }
+    /// The car's radio line on the firmware screen — `/status.radio` in words (AJM-92).
+    static func fwRadio(_ fw: String) -> String { s("fw.radio", fw) }
+    static func fwRadioMismatch(_ fw: String, _ expected: String) -> String { s("fw.radioMismatch", fw, expected) }
+    static func fwRadioSilent(_ expected: String) -> String { s("fw.radioSilent", expected) }
+    static var fwRadioUnknown: String { s("fw.radioUnknown") }
     static var driveConnected: String { s("drive.connected") }
     static var rampTitle: String { s("ramp.title") }
     static var rampHeadline: String { s("ramp.headline") }
