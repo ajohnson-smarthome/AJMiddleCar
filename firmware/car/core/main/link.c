@@ -12,8 +12,6 @@
 
 static const char *TAG = "link";
 
-#define SHADOW_UNKNOWN LINK_SHADOW_UNKNOWN   /* link.h owns the value; the planner needs it too */
-
 /* Releases owed to sources that could not take s_lock twice, keyed by the SERIAL of the grant
    they were aimed at (0 = nothing owed). Drained by link_task under the lock it takes every
    tick, so no grant can outlive its owner's attempt to give it up.
@@ -30,7 +28,7 @@ static _Atomic uint32_t s_release_pending[LINK_SRC_COUNT];
 static SemaphoreHandle_t s_lock;   /* guards s_arb and s_target */
 static link_arb_t        s_arb = { .owner = LINK_SRC_NONE, .until_ms = 0, .sticky = false };
 static uint16_t          s_target[8];
-static uint16_t          s_current[8];
+static link_tick_t       s_tick;   /* the shadows and the retry pacing; link_task's alone */
 static volatile bool     s_bus_ok = true;
 /* Published under the lock, read without it. Telemetry is gathered on the rt_link task,
    which holds the car's safety and must not block on a mutex for a value it only
@@ -44,6 +42,33 @@ static _Atomic uint32_t    s_serial_pub;
 static uint32_t now_ms(void) {
     return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 }
+
+/* The tick's effects table (link.h): the real boards behind the pure tick. The last
+   driver error is kept for the log line the bus reset earns. */
+static esp_err_t s_last_err = ESP_OK;
+
+static bool fx_ready(void *ctx)    { (void)ctx; return pca9685_ready(); }
+static void fx_zero_all(void *ctx) { (void)ctx; pca9685_zero_all(); }
+static bool fx_init(void *ctx) {
+    (void)ctx;
+    esp_err_t e = pca9685_init(BOARD_PWM_HZ);
+    if (e != ESP_OK) s_last_err = e;
+    return e == ESP_OK;
+}
+static bool fx_set_pwm(void *ctx, uint8_t ch, uint16_t duty) {
+    (void)ctx;
+    esp_err_t e = pca9685_set_pwm(ch, duty);
+    if (e != ESP_OK) s_last_err = e;
+    return e == ESP_OK;
+}
+static void fx_bus_recover(void *ctx) { (void)ctx; pca9685_bus_recover(); }
+static uint32_t fx_now_ms(void *ctx)  { (void)ctx; return now_ms(); }
+
+static const link_tick_fx_t s_fx = {
+    .ctx = NULL,
+    .ready = fx_ready, .zero_all = fx_zero_all, .init = fx_init,
+    .set_pwm = fx_set_pwm, .bus_recover = fx_bus_recover, .now_ms = fx_now_ms,
+};
 
 bool link_bus_ok(void) { return s_bus_ok; }
 
@@ -138,7 +163,8 @@ static void link_task(void *arg) {
         vTaskDelayUntil(&last, pdMS_TO_TICKS(LINK_TICK_MS));
         if (twdt) esp_task_wdt_reset();
 
-        uint16_t tgt[8];
+        uint16_t   tgt[8];
+        link_src_t owner;
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(LINK_TICK_MS)) != pdTRUE) continue;
 
         /* Finish the releases link_release_must could not. Drained before the lapse check
@@ -164,108 +190,49 @@ static void link_task(void *arg) {
             s_owner_pub = LINK_SRC_NONE;
         }
         memcpy(tgt, s_target, sizeof(tgt));
+        owner = s_arb.owner;   /* read with the target it belongs to: the ramp depends on it */
         xSemaphoreGive(s_lock);
 
-        /* Nothing is written while the boards are not up, and bringing them up is retried
-           from here. pca9685_ready() used to be set once per boot: a single NACK inside the
-           init's ten register writes — a marginal bus at power-on — pinned bus_ok false for the
-           whole session, while every later write ACKed and the wheels turned anyway on a warm
-           reset. Two lies at once. Gating the writes makes the protocol's "bus_ok false means
-           the car will not drive" true by construction, and retrying the init makes a
-           transient fault cost a second instead of a power cycle.
-
-           Zeroed first, always. The init ends in RESTART, which resumes every channel at its
-           register contents — so the registers are made zero before it, and the shadows are
-           made zero after it succeeds, and the two agree. zero_all is safe in every state
-           (the LED registers are writable asleep) and is the direction of safety anyway. */
-        if (!pca9685_ready()) {
-            static uint32_t s_init_at;
-            uint32_t inow = now_ms();
-            if (s_init_at == 0u || (int32_t)(inow - s_init_at) >= 0) {
-                s_init_at = inow + 1000u;
-                pca9685_zero_all();
-                if (pca9685_init(BOARD_PWM_HZ) == ESP_OK) {
-                    memset(s_current, 0, sizeof(s_current));
-                    ESP_LOGI(TAG, "PCA9685 boards are up");
+        /* The whole I2C side of the tick is link_tick_io (link.h), pure over s_fx, so that
+           the bring-up retry and the write pass are host-tested; what is left here is the
+           bus word the rest of the car reads and the log lines. */
+        uint16_t up = link_max_up(owner, ramp_get_ms(), LINK_TICK_MS);
+        switch (link_tick_io(&s_tick, tgt, up, &s_fx)) {
+            case LINK_TICK_WAITING:
+                s_bus_ok = false;
+                break;
+            case LINK_TICK_STILL_DOWN: {
+                s_bus_ok = false;
+                /* Once per ten seconds, not per attempt: boards left unpowered are a normal
+                   state of the bench, and pca9685_init already names the failing write. Seeded
+                   past the window so the first attempt's line is not the one dropped. */
+                static uint32_t last_log = (uint32_t)-10001;
+                uint32_t t = now_ms();
+                if ((uint32_t)(t - last_log) > 10000) {
+                    last_log = t;
+                    ESP_LOGW(TAG, "PCA9685 boards are not up (%s) — retrying once a second, "
+                                  "resetting the I2C bus before each attempt",
+                             esp_err_to_name(s_last_err));
                 }
+                break;
             }
-            s_bus_ok = false;
-            continue;
-        }
-
-        uint16_t up = ramp_max_up_per_tick(ramp_get_ms(), LINK_TICK_MS);
-        uint16_t next[8];
-        uint8_t  order[8];
-        uint8_t  writes = link_plan_writes(s_current, tgt, up, next, order);
-        bool wrote = false, failed = false;
-        esp_err_t last_err = ESP_OK;
-        for (uint8_t k = 0; k < writes; k++) {
-            uint8_t ch = order[k];
-            /* The mate's fall is ordered before this rise; if that write failed the
-               mate still shows its old duty here, and the rise waits with it rather
-               than driving both inputs of one bridge. */
-            if (!link_rise_safe(s_current[ch ^ 1], next[ch])) continue;
-            wrote = true;
-            esp_err_t e = pca9685_set_pwm(ch, next[ch]);
-            if (e == ESP_OK) {
-                s_current[ch] = next[ch];      /* shadow follows the chip, not our intent */
-            } else {
-                /* SHADOW_UNKNOWN, not the old value and not the new one. A failed write is
-                   not the same as a write that did not happen: pca9685_set_pwm pushes five
-                   bytes into four auto-incrementing registers and the PCA9685 has no
-                   per-channel double buffer, so a transfer that aborts partway can leave the
-                   channel driving a duty neither side asked for — and both i2c attempts can
-                   report failure for a transfer the peripheral latched. Keeping the OLD value
-                   was the bug: the shadow then says 0 while the chip drives, this channel
-                   stops being planned at all (cur == tgt), and the pair-mate's next rise
-                   passes link_rise_safe(0, x) and drives the other input of the same BTS7960.
-                   That is the shoot-through motors.h and link.h call structurally impossible,
-                   reached through the one path where the shadow stops describing the chip.
-
-                   The unknown value is what link.h already designed for this: it is nonzero,
-                   so link_rise_safe counts this channel as DRIVING and holds the mate down,
-                   and it differs from every target, so the next tick still replans and
-                   retries — which is what the old comment was protecting and is kept. */
-                s_current[ch] = SHADOW_UNKNOWN;
-                failed = true;
-                last_err = e;
-            }
-        }
-        /* Only a tick that actually wrote may call the bus healthy. A tick where every
-           channel already sat at its target attempts nothing, and clearing the flag on
-           that evidence would report a dead bus as fine the moment the car stood still.
-
-           And only if the boards were actually brought up. A board that a half-finished
-           pca9685_init left in SLEEP keeps ACKing every write above — SLEEP gates the PWM
-           oscillator, not the I2C interface — so `wrote && !failed` was true on a car whose
-           wheels could not turn, and bus_ok latched true. That removed the one signal the app
-           has, and contradicted the contract CLAUDE.md states: a motor bus that did not come
-           up boots with bus_ok false and the motors inert. pca9685_ready() is the question
-           worth asking — and it is asked at the top of the tick, where a "no" also skips the
-           writes and retries the init, so this line only ever runs on boards that are up. */
-        if (failed)      s_bus_ok = false;
-        else if (wrote)  s_bus_ok = true;
-
-        /* A wedged bus fails eight channels fifty times a second — but each failing
-           write BLOCKS for up to two 50 ms I2C timeouts, so a "tick" under the exact
-           fault pca9685_bus_recover exists for (SDA held low) runs 100-800 ms, and
-           pacing by tick count turned "speak and recover once a second" into once
-           per 10-40 s while the motors held their last duty. Pace by the clock. */
-        static bool     s_failing;
-        static uint32_t s_recover_at;
-        if (failed) {
-            uint32_t fnow = now_ms();
-            if (!s_failing) {
-                s_failing = true;
-                s_recover_at = fnow + 1000;      /* first attempt after ~1 s of failure */
-            } else if ((int32_t)(fnow - s_recover_at) >= 0) {
-                ESP_LOGE(TAG, "PCA9685 write failing (%s) — resetting the I2C bus",
-                         esp_err_to_name(last_err));
-                pca9685_bus_recover();
-                s_recover_at = fnow + 1000;
-            }
-        } else {
-            s_failing = false;
+            case LINK_TICK_CAME_UP:
+                s_bus_ok = false;   /* ok only once the next tick's zeros have landed */
+                ESP_LOGI(TAG, "PCA9685 boards are up");
+                break;
+            case LINK_TICK_IDLE:
+                break;
+            case LINK_TICK_WROTE:
+                s_bus_ok = true;
+                break;
+            case LINK_TICK_FAILED:
+                s_bus_ok = false;
+                break;
+            case LINK_TICK_RESET:
+                s_bus_ok = false;
+                ESP_LOGE(TAG, "PCA9685 write failing (%s) — reset the I2C bus",
+                         esp_err_to_name(s_last_err));
+                break;
         }
     }
 }
@@ -281,7 +248,7 @@ esp_err_t link_init(void) {
         s_bus_ok = false;
         ESP_LOGE(TAG, "could not zero the PCA9685 at boot: %s", esp_err_to_name(e));
     }
-    for (int ch = 0; ch < 8; ch++) s_current[ch] = SHADOW_UNKNOWN;
+    link_tick_init(&s_tick);   /* every shadow unknown: the first tick writes eight zeros */
     memset(s_target, 0, sizeof(s_target));
 
     return xTaskCreate(link_task, "link", 3072, NULL, 5, NULL) == pdPASS ? ESP_OK : ESP_FAIL;

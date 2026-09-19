@@ -98,9 +98,13 @@ _Static_assert(LINK_SRC_SAFE + 2 == MOTORS_OWNER_COUNT, "link_src_t and motors.o
 
 /* How long each source's grant holds without being refreshed. The RT hold is one
  * actuator tick PAST the control watchdog's deadline, and necessarily so: the trip
- * must be declared before the grant lapses, or the car coasts to a stop before the
- * loss is noticed and the retreat starts from rest instead of from the path it was
- * on. rt_link checks silence on a beat of its own, so one tick of slack covers the
+ * must be declared before the grant lapses. The trip revokes the grant itself and
+ * hands the actuator to the retreat in the same instant (rt_glue.h), so the retreat's
+ * first step follows the stream's last frame with no tick of rest between them — the
+ * target it inherits is already zero either way; what the slack buys is that a frame
+ * arriving exactly on the deadline refreshes a grant still standing rather than one
+ * that lapsed a tick earlier and dipped the duty with no trip at all (test_link.c).
+ * rt_link checks silence on a beat of its own, so one tick of slack covers the
  * scheduling gap; the RT_COMMAND_HZ stream refreshes the grant far inside it. */
 #define LINK_HOLD_RT_MS     ((uint32_t)RT_WATCHDOG_MS + LINK_TICK_MS)
 #define LINK_HOLD_CALIB_MS  600u   /* one identification pulse */
@@ -162,6 +166,171 @@ static inline uint8_t link_plan_writes(const uint16_t cur[8], const uint16_t tgt
  * the chip. The boot shadow's unknown value is nonzero, so it counts as driving. */
 static inline bool link_rise_safe(uint16_t mate_cur, uint16_t duty) {
     return duty == 0 || mate_cur == 0;
+}
+
+/* Pure: how far a channel may rise this tick, given who holds the actuator. Every driving
+ * source ramps by ramp.rise_ms — the pilot's stream, the retreat, the console. The wizard's
+ * identification pulse does not: it is one wheel at ~40 % for LINK_HOLD_CALIB_MS, which is
+ * shorter than the slowest ramp — at rise_ms 2000 the channel climbed 40 a tick, reached
+ * 1200 of its 1600 in the 30 ticks of the hold and fell to zero, so the "fixed speed" the
+ * wizard promises was neither fixed nor reached — and at that scale the ramp buys no safety.
+ * The pulse is planned unramped; the pair-mate ordering below still guards the bridge. */
+static inline uint16_t link_max_up(link_src_t owner, uint16_t ramp_ms, uint16_t tick_ms) {
+    if (owner == LINK_SRC_CALIB) return 4095;
+    return ramp_max_up_per_tick(ramp_ms, tick_ms);
+}
+
+/* ---- The writer's tick, over an effects table ----------------------------------------
+ * What link_task does once it has copied the target out from under the lock: bring the
+ * boards up if they are not, otherwise plan, order and write the eight channels, keep the
+ * shadows honest and pace the bus reset by the clock. link.c supplies the real table; the
+ * host test supplies a recorder — the seam rt_glue.h gives the session lifecycle, given
+ * here to the half of link.c that the review found untestable (AJM-127, AJM-91). */
+
+typedef struct {
+    void *ctx;                                              /* the recorder in tests; NULL in firmware */
+    bool     (*ready)(void *ctx);                           /* pca9685_ready() */
+    void     (*zero_all)(void *ctx);                        /* pca9685_zero_all() */
+    bool     (*init)(void *ctx);                            /* pca9685_init(BOARD_PWM_HZ) == ESP_OK */
+    bool     (*set_pwm)(void *ctx, uint8_t ch, uint16_t d); /* pca9685_set_pwm(ch, d) == ESP_OK */
+    void     (*bus_recover)(void *ctx);                     /* pca9685_bus_recover() */
+    uint32_t (*now_ms)(void *ctx);                          /* the clock, read where it matters */
+} link_tick_fx_t;
+
+/* The bring-up retry and the bus reset share one period, as the spec has it: a second. */
+#define LINK_BUS_RETRY_MS 1000u
+
+typedef struct {
+    uint16_t cur[8];       /* the shadow: the last duty known to be on the chip, or UNKNOWN */
+    uint32_t retry_at;     /* boards down: when the next bring-up attempt may run */
+    bool     retry_armed;  /* retry_at holds a deadline; false at boot, so the first tick tries */
+    bool     failing;      /* boards up: a write has failed and none has landed since */
+    uint32_t recover_at;   /* boards up: when the failing run next earns a bus reset */
+} link_tick_t;
+
+static inline void link_tick_init(link_tick_t *t) {
+    for (int ch = 0; ch < 8; ch++) t->cur[ch] = LINK_SHADOW_UNKNOWN;
+    t->retry_at    = 0;
+    t->retry_armed = false;
+    t->failing     = false;
+    t->recover_at  = 0;
+}
+
+typedef enum {
+    LINK_TICK_WAITING,      /* boards down, next attempt not due: nothing touched */
+    LINK_TICK_STILL_DOWN,   /* an attempt ran — bus reset, zero, init — and failed */
+    LINK_TICK_CAME_UP,      /* this attempt brought the boards up: shadows unknown, nothing written yet */
+    LINK_TICK_IDLE,         /* every channel on target: nothing written, the bus word is left alone */
+    LINK_TICK_WROTE,        /* every write landed: the bus is ok */
+    LINK_TICK_FAILED,       /* a write failed: the bus is down */
+    LINK_TICK_RESET,        /* writes failing for about a second: the bus was clocked free; still down */
+} link_tick_result_t;
+
+static inline link_tick_result_t link_tick_io(link_tick_t *t, const uint16_t tgt[8],
+                                              uint16_t max_up, const link_tick_fx_t *fx) {
+    /* Nothing is written while the boards are not up, and bringing them up is retried from
+       here. pca9685_ready() used to be set once per boot: a single NACK inside the init's ten
+       register writes — a marginal bus at power-on — pinned bus_ok false for the whole
+       session, while every later write ACKed and the wheels turned anyway on a warm reset.
+       Two lies at once. Gating the writes makes the protocol's "bus_ok false means the car
+       will not drive" true by construction, and retrying the init makes a transient fault
+       cost a second instead of a power cycle. */
+    if (!fx->ready(fx->ctx)) {
+        uint32_t now = fx->now_ms(fx->ctx);
+        if (t->retry_armed && (int32_t)(now - t->retry_at) < 0) return LINK_TICK_WAITING;
+        t->retry_armed = true;
+        t->retry_at    = now + LINK_BUS_RETRY_MS;
+        /* Every attempt here follows a failed one — the boot's, or the last retry's — so the
+           bus is clocked free first, the same lever the write path below pulls after a second
+           of failures. It used to be pulled only there, which is the one place a car with its
+           boards down never reaches: a reset taken mid-transaction leaves a slave holding SDA,
+           the boot init times out, and every retry timed out after it — thirty-two zero writes
+           and the init's first, once a second, until the battery came off, with the boards
+           holding the duty the car crashed at. Unpowered boards get the same reset and do not
+           mind: it is a millisecond of clocking on a bus nobody is listening to.
+
+           Zeroed second, always, and before the init. The init ends in RESTART, which resumes
+           every channel at its register contents — so the registers are made zero before it.
+           zero_all is safe in every state (the LED registers are writable asleep) and is the
+           direction of safety anyway. */
+        fx->bus_recover(fx->ctx);
+        fx->zero_all(fx->ctx);
+        if (!fx->init(fx->ctx)) return LINK_TICK_STILL_DOWN;
+        /* Unknown, not zero, exactly as link_init leaves them. The zeroing above was not
+           checked, and a channel whose zero did not land came back through RESTART at its old
+           duty; a shadow of 0 under a target of 0 is a channel the planner never touches, so
+           the wheel drove itself under owner idle until some command wanted it nonzero. Unknown
+           shadows make the next tick write eight zeros — retried until they land — and the bus
+           word turns ok on that evidence, with no command from anyone: boards powered up after
+           boot read ok within a tick of coming up, not at the first push of the stick. */
+        for (int ch = 0; ch < 8; ch++) t->cur[ch] = LINK_SHADOW_UNKNOWN;
+        return LINK_TICK_CAME_UP;
+    }
+
+    uint16_t next[8];
+    uint8_t  order[8];
+    uint8_t  writes = link_plan_writes(t->cur, tgt, max_up, next, order);
+    bool wrote = false, failed = false;
+    for (uint8_t k = 0; k < writes; k++) {
+        uint8_t ch = order[k];
+        /* The mate's fall is ordered before this rise; if that write failed the mate still
+           shows its old duty here, and the rise waits with it rather than driving both inputs
+           of one bridge. */
+        if (!link_rise_safe(t->cur[ch ^ 1], next[ch])) continue;
+        wrote = true;
+        if (fx->set_pwm(fx->ctx, ch, next[ch])) {
+            t->cur[ch] = next[ch];      /* shadow follows the chip, not our intent */
+        } else {
+            /* SHADOW_UNKNOWN, not the old value and not the new one. A failed write is not
+               the same as a write that did not happen: pca9685_set_pwm pushes five bytes into
+               four auto-incrementing registers and the PCA9685 has no per-channel double
+               buffer, so a transfer that aborts partway can leave the channel driving a duty
+               neither side asked for — and both i2c attempts can report failure for a transfer
+               the peripheral latched. Keeping the OLD value was the bug: the shadow then says 0
+               while the chip drives, this channel stops being planned at all (cur == tgt), and
+               the pair-mate's next rise passes link_rise_safe(0, x) and drives the other input
+               of the same BTS7960. That is the shoot-through motors.h and this file call
+               structurally impossible, reached through the one path where the shadow stops
+               describing the chip.
+
+               The unknown value is what this file already designed for: it is nonzero, so
+               link_rise_safe counts this channel as DRIVING and holds the mate down, and it
+               differs from every target, so the next tick still replans and retries. */
+            t->cur[ch] = LINK_SHADOW_UNKNOWN;
+            failed = true;
+        }
+    }
+    /* Only a tick that actually wrote may call the bus healthy. A tick where every channel
+       already sat at its target attempts nothing, and clearing the flag on that evidence
+       would report a dead bus as fine the moment the car stood still.
+
+       And only if the boards were actually brought up. A board that a half-finished
+       pca9685_init left in SLEEP keeps ACKing every write above — SLEEP gates the PWM
+       oscillator, not the I2C interface — so `wrote && !failed` was true on a car whose
+       wheels could not turn, and bus_ok latched true. That removed the one signal the app
+       has, and contradicted the contract CLAUDE.md states: a motor bus that did not come up
+       boots with bus_ok false and the motors inert. pca9685_ready() is the question worth
+       asking — and it is asked at the top, where a "no" also skips the writes and retries
+       the init, so this point is only ever reached on boards that are up. */
+    if (!failed) {
+        t->failing = false;
+        return wrote ? LINK_TICK_WROTE : LINK_TICK_IDLE;
+    }
+    /* A wedged bus fails eight channels fifty times a second — but each failing write
+       BLOCKS for up to two 50 ms I2C timeouts, so a "tick" under the exact fault
+       pca9685_bus_recover exists for (SDA held low) runs 100-800 ms, and pacing by tick
+       count turned "speak and recover once a second" into once per 10-40 s while the
+       motors held their last duty. Pace by the clock, read after the writes. */
+    uint32_t now = fx->now_ms(fx->ctx);
+    if (!t->failing) {
+        t->failing    = true;
+        t->recover_at = now + LINK_BUS_RETRY_MS;      /* first attempt after ~1 s of failure */
+        return LINK_TICK_FAILED;
+    }
+    if ((int32_t)(now - t->recover_at) < 0) return LINK_TICK_FAILED;
+    fx->bus_recover(fx->ctx);
+    t->recover_at = now + LINK_BUS_RETRY_MS;
+    return LINK_TICK_RESET;
 }
 
 #ifndef LINK_HOST_TEST
