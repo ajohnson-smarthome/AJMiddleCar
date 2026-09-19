@@ -4,8 +4,9 @@
 Шаг 3 роли «PM-сессия» из CLAUDE.md. Идемпотентен: пункты, у которых id уже
 проставлен, пропускаются, поэтому прерванный запуск можно повторить.
 
-Пункты с пометкой «(стенд)» — работа с платой на столе — в Linear не уходят:
-их делает PM-сессия, а не воркер в worktree (см. openspec/config.yaml).
+Пункты с пометкой «(стенд)» — работа с платой на столе — и «(PM)» — шаги самой
+PM-сессии (триаж, сведение) — в Linear не уходят: их не делает воркер в worktree
+(см. openspec/config.yaml и CLAUDE.md).
 
 Использование:
   tools/pm/tasks-to-linear.py <change-dir> (--project <id> | --parent AJM-N)
@@ -28,7 +29,7 @@ from pathlib import Path
 HEADING = re.compile(r"^## (\d+)\. (.+)$")
 TASK = re.compile(r"^- \[( |x|X)\] (\d+\.\d+) (.+)$")
 LINKED = re.compile(r"\([A-Z]+-\d+\)\s*$")
-BENCH = re.compile(r"\(стенд\)")
+BENCH = re.compile(r"\((стенд|PM)\)")
 TITLE_MAX = 110
 
 
