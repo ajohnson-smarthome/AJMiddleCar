@@ -573,6 +573,39 @@ class TestPythonEmitter(unittest.TestCase):
         self.assertEqual(m.validate_config({"wheel": {**w, "gear_ratio": 300.0051}})[1][:2],
                          ("out_of_range", "wheel.gear_ratio"))
 
+    def test_non_finite_is_wrong_type_not_an_exception(self):
+        # json.loads turns 1e400 into inf and accepts the NaN literal; cfg_value.h answers
+        # both with wrong_type (!isfinite before any arithmetic), and so must the mock —
+        # int(inf) raises OverflowError and lround(nan) ValueError, which aiohttp would
+        # turn into a bare 500 (AJM-111).
+        m = self.m
+        w = m.to_wire("wheel", m.DOMAINS["wheel"]["defaults"])
+        for v in (json.loads("1e400"), json.loads("NaN"), json.loads("Infinity")):
+            self.assertEqual(m.validate_config({"ramp": {"rise_ms": v}})[1][:2],
+                             ("wrong_type", "ramp.rise_ms"), repr(v))
+            self.assertEqual(m.validate_config({"wheel": {**w, "gear_ratio": v}})[1][:2],
+                             ("wrong_type", "wheel.gear_ratio"), repr(v))
+            self.assertEqual(m.validate_config({"wheel": {**w, "quadrature": v}})[1][:2],
+                             ("wrong_type", "wheel.quadrature"), repr(v))
+
+    def test_integral_float_is_stored_and_printed_as_an_integer(self):
+        # 1e2 is a JSON number the car reads as the integer 100 and prints back as `100`;
+        # json.loads makes it the float 100.0, and the validator rightly accepts it — but
+        # the stored value must be int, or GET /config answers `100.0` where the car
+        # answers `100` (AJM-111).
+        m = self.m
+        v = json.loads("1e2")
+        self.assertEqual(m.validate_config({"ramp": {"rise_ms": v}}), (True, None))
+        stored = m.from_wire("ramp", {"rise_ms": v})["rise_ms"]
+        self.assertIs(type(stored), int)
+        self.assertEqual(stored, 100)
+        self.assertEqual(json.dumps(m.to_wire("ramp", {"rise_ms": stored})), '{"rise_ms": 100}')
+        w = m.to_wire("wheel", m.DOMAINS["wheel"]["defaults"])
+        self.assertIs(type(m.from_wire("wheel", {**w, "quadrature": json.loads("4e0")})["quadrature"]), int)
+        # A boolean stays a boolean: it is not "cast to int" along with int and enum.
+        r = m.to_wire("recovery", m.DOMAINS["recovery"]["defaults"])
+        self.assertIs(m.from_wire("recovery", {**r, "enabled": True})["enabled"], True)
+
 
 class TestDriftCheck(unittest.TestCase):
     def test_check_script_passes_on_a_clean_tree(self):

@@ -293,11 +293,17 @@ def to_wire(key, values):
 
 
 def from_wire(key, obj):
-    """A validated domain object -> internal integers: fixed fields x scale, rounded."""
+    """A validated domain object -> internal integers: fixed fields x scale, rounded;
+    int and enum fields cast to int, so a JSON `1e2` (a float once json.loads is done
+    with it) is held and printed back as the `100` the car prints, not `100.0`."""
     out = {}
     for f in DOMAINS[key]["fields"]:
         v = obj[f["name"]]
-        out[f["name"]] = lround(v * f["scale"]) if f["type"] == "fixed" else v
+        if f["type"] == "fixed":
+            v = lround(v * f["scale"])
+        elif f["type"] != "bool":
+            v = int(v)
+        out[f["name"]] = v
     return out
 
 
@@ -337,6 +343,11 @@ def validate_config(body):
             # isinstance check. cJSON_IsNumber does not accept a JSON boolean either.
             if isinstance(v, bool) or not isinstance(v, (int, float)):
                 return False, ("wrong_type", where, f"{where} must be a number")
+            # json.loads makes 1e400 an inf and accepts the NaN literal; cfg_value.h
+            # answers both with wrong_type before any arithmetic, and so must this —
+            # int(inf) and lround(nan) below would raise instead of refusing.
+            if not math.isfinite(v):
+                return False, ("wrong_type", where, f"{where} must be a finite number")
             if f["type"] == "fixed":
                 scaled = lround(v * f["scale"])
                 if not (f["min"] <= scaled <= f["max"]):
