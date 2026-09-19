@@ -11,6 +11,7 @@
 #include "http_server.h"
 #include "calibration.h"
 #include "calib_wire.h"
+#include "calib_spin.h"
 #include "car.h"
 #include "link.h"
 #include "motors.h"
@@ -31,6 +32,19 @@ static esp_err_t reply_table(httpd_req_t *req) {
 
 // GET /calibration -> {"proto":2,"calibrated":…,"wheels":[…]}
 static esp_err_t calib_get(httpd_req_t *req) { return reply_table(req); }
+
+/* The spin's effects table: the live modules behind calib_spin.h's sequence. */
+static bool spin_fx_bus_ok(void *c) { (void)c; return link_bus_ok(); }
+static bool spin_fx_spin(void *c, uint8_t pair, bool forward) { (void)c; return car_spin_pair(pair, forward); }
+static void spin_fx_hold(void *c) {
+    (void)c;
+    /* The grant lapses on its own after LINK_HOLD_CALIB_MS, so the pulse ends whether
+       or not this handler is still here. The delay is only so the reply lands after
+       the wheel has stopped, which is what the wizard's next step assumes. */
+    vTaskDelay(pdMS_TO_TICKS(LINK_HOLD_CALIB_MS));
+}
+static void spin_fx_release(void *c) { (void)c; link_release_must(LINK_SRC_CALIB); }
+static const calib_spin_effects_t SPIN_FX = { NULL, spin_fx_bus_ok, spin_fx_spin, spin_fx_hold, spin_fx_release };
 
 // POST /calibration/spin  {"pair":0..3,"direction":"forward"|"reverse"}. Pulses ~0.6 s.
 static esp_err_t calib_spin(httpd_req_t *req) {
@@ -74,16 +88,15 @@ static esp_err_t calib_spin(httpd_req_t *req) {
         return api_reply_error(req, "400 Bad Request", ERR_NOT_ALLOWED, KEY_CALIB_DIRECTION, "forward or reverse");
     }
     ESP_LOGI(TAG, "spin pair %d %s", pair, fwd ? "fwd" : "rev");
-    if (!car_spin_pair((uint8_t)pair, fwd != 0)) {
-        /* 409 is the honest code — the request is fine, the actuator is taken. IDF's
-           httpd_err_code_t has no 409, so the status line is set directly. */
-        return api_reply_error(req, "409 Conflict", ERR_BUSY, "", "actuator busy");
+    calib_spin_result_t r = calib_spin_run(&SPIN_FX, (uint8_t)pair, fwd != 0);
+    if (r != CALIB_SPIN_DONE) {
+        /* 409 is the honest code — the request is fine, the car cannot pulse right now:
+           the actuator is taken, or the bus is down and nothing would reach the wheel.
+           IDF's httpd_err_code_t has no 409, so the status line is set directly. */
+        calib_spin_reply_t no = calib_spin_refusal(r);
+        ESP_LOGW(TAG, "spin refused: %s", no.msg);
+        return api_reply_error(req, no.status, no.code, "", no.msg);
     }
-    /* The grant lapses on its own after LINK_HOLD_CALIB_MS, so the pulse ends whether
-       or not this handler is still here. The delay is only so the reply lands after
-       the wheel has stopped, which is what the wizard's next step assumes. */
-    vTaskDelay(pdMS_TO_TICKS(LINK_HOLD_CALIB_MS));
-    link_release_must(LINK_SRC_CALIB);
     return api_reply_ok(req);
 }
 

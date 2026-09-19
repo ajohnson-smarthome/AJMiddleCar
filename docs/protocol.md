@@ -601,8 +601,9 @@ sees exactly what took.
 
 `POST /calibration/spin` pulses the named pair for a fixed duration, and the `200` lands only
 after the pulse ends — the wizard's "which wheel turned?" must not race a spinning wheel. `409`
-means a higher-priority source holds the actuator: the wheel did **not** turn, and a client must
-not advance its wizard.
+means the car cannot pulse right now — a higher-priority source holds the actuator, or the PWM
+bus is down (`motors.bus: "down"`) and the answer comes at once, without the pulse's wait: the
+wheel did **not** turn, and a client must not advance its wizard.
 
 ## Errors
 
