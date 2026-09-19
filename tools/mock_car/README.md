@@ -66,8 +66,12 @@ impairment model `rt_link.py`'s `Impairment` uses for the drive channel — seed
 `--seed`, so a failing run is repeatable. `tools/conformance_video.py` opens a real-time
 session, subscribes on the video port, reassembles frames, asks for a keyframe on every
 loss, and checks the contract's invariants (every IDR carries SPS/PPS, a requested keyframe
-arrives in under 1 s, under 5% of frames lost); `tools/test-all.sh` runs it against a mock
-started with 0.3% loss.
+arrives in under 1 s, under 5% of frames lost); after the window it walks the subscription
+rules — `/status.video` mid-stream, a foreign sid and a `hello` on the video port, the
+`video.enabled` switch, eviction by a second session, `bye` — each a short leg without
+driving. `tools/test-all.sh` runs it against a mock started with 0.3% loss. One thing it
+measures but does not judge on loopback is the chunk pacing of a keyframe: the car lets one
+chunk go every 3 ms, the mock sends a whole frame in one burst.
 
 `sample.h264` is checked into the repository (≤ 400 KB) so nothing needs `ffmpeg` to run the
 mock. Regenerating it does:
