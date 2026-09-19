@@ -1,0 +1,34 @@
+schema: spec-driven
+
+context: |
+  Language: ru
+  All artifacts must be written in ru.
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+  Wire truth lives in docs/protocol.md and contract/*.json; a spec delta references them,
+  never restates them. Generated files (tools/gen_*.py outputs) are never hand-edited —
+  a task that touches the wire changes the schema and re-runs the generator.
+  The car is real hardware on one bench. A tasks.md item that needs flashing a board or
+  reading docs/bringup.md is marked (стенд) and stays with the PM session; every other
+  item must be closable by tools/test-all.sh alone, since workers run in parallel worktrees.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing
