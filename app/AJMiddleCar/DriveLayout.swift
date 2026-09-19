@@ -3,18 +3,21 @@ import CoreGraphics
 /// Where the drive screen's pieces go. Pure: the screen's size and safe-area insets in, points
 /// out, so the design's numbers can be checked without a simulator (`app/tests/drivelayout`).
 ///
-/// The picture is the 4:3 frame cropped to 16:9 — the fisheye's top and bottom eighths are its
-/// worst — and stretched to the screen's full height, centred on the *screen*, not the safe
-/// frame: the bands either side of it are what the safe insets mostly cover. Everything else
-/// hangs off the picture's edges rather than the screen's, so a wider or narrower phone moves
-/// the instruments with the picture. Points are in the safe-area frame the ZStack lays out in,
-/// which is why a stick astride the picture's left edge sits left of zero.
+/// The picture is a 16:9 window the screen's full height, centred on the *screen*, not the safe
+/// frame: the bands either side of it are what the safe insets mostly cover. The frame on the
+/// wire is already 16:9 — the car crops the fisheye's 4:3 sensor frame to its middle rows at
+/// the encoder's input (`frame_crop.h`), the top and bottom eighths being the fisheye's worst —
+/// so the window trims nothing on a 16:9 screen and only the sides on a squatter one.
+/// Everything else hangs off the picture's edges rather than the screen's, so a wider or
+/// narrower phone moves the instruments with the picture. Points are in the safe-area frame
+/// the ZStack lays out in, which is why a stick astride the picture's left edge sits left of
+/// zero.
 struct DriveLayout {
     struct Insets {
         let top: CGFloat, leading: CGFloat, bottom: CGFloat, trailing: CGFloat
     }
 
-    /// The window's shape. 4:3 → 16:9 drops 12.5 % top and bottom.
+    /// The window's shape — the wire's own, `video.width` : `video.height`.
     static let pictureAspect: CGFloat = 16.0 / 9.0
 
     let screen: CGSize

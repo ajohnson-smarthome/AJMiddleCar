@@ -77,7 +77,8 @@ see the sensor, its filter and its field of view without an app or a wire in the
 - [x] **Flash.** `cd firmware/car/core && source ../../tools/env-p4.sh && idf.py -p /dev/cu.usbmodem* flash monitor`
       — works on either port. Needed one config change first; see the bench notes on chip revision.
 - [x] **Radio.** `esp-hosted fw versions: host=3.0.6 coprocessor=3.0.6 (match)`, and `status_api`
-      logs `radio firmware 3.0.6`, which it only does when `radio.ok` is true.
+      logs `radio firmware 3.0.6`, which it only does when `radio.state` is `ok` (`mismatch` and
+      `unavailable` each log their own line — `firmware/car/modem/README.md`).
 - [x] **SDIO pull-ups.** Present. Not inspected visually — inferred from behaviour, which is
       stronger: the link comes up as `SDIO 4-bit 40000 kHz` and reports `Card init success`,
       which is exactly what missing `D2`/`D3` pull-ups would prevent by dropping the slave to SPI.

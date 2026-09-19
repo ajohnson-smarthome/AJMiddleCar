@@ -8,7 +8,7 @@
  *
  * httpd_config_t in ESP-IDF 6.0.2 has no bind-address field, so status_api's server always
  * listens on INADDR_ANY — every interface the dongle has, USB and (since the station came up)
- * the car's Wi-Fi alike. GET /status is harmless to expose; POST /net carries a password and
+ * the car's Wi-Fi alike. GET /status is harmless to expose; POST /wifi carries a password and
  * POST /ota writes firmware with no authentication, so both must answer only on the USB wire.
  *
  * Assign this to httpd_config_t.open_fn before httpd_start. It runs on every accepted
@@ -56,7 +56,7 @@
  *    is inside a handler for another session or blocked in esp_http_server_dispatch_event's
  *    own CONFIG_HTTPD_SERVER_EVENT_POST_TIMEOUT (2000 ms here). The honest statement is up to
  *    a full 5760-byte receive window, over an unbounded interval — comfortably enough for a
- *    whole POST /net, which is exactly what this note exists to worry about.
+ *    whole POST /wifi, which is exactly what this note exists to worry about.
  *
  * That local address does not arrive as a plain IPv4 sockaddr: esp_http_server's listener is
  * AF_INET6 whenever CONFIG_LWIP_IPV6=y (IDF 6.0.2's own default here), so an IPv4 connection's

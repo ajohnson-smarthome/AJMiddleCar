@@ -421,7 +421,7 @@ static void diag_page_address(const dongle_view_t *v, screen_t *out)
     /* These two are the WIFI STATION's address and gateway — whatever the joined network's
      * DHCP server handed out. NOT the USB side: an earlier comment here derived this row's
      * width from usb_net.h (USB_NET_ADDR = DONGLE_HOST, a fixed /24), but display.c fills both
-     * fields from esp_netif_get_ip_info() on the station netif, and POST /net can point this
+     * fields from esp_netif_get_ip_info() on the station netif, and POST /wifi can point this
      * dongle at any network. A lease of 192.168.100.101 is fifteen glyphs, and the row that
      * claimed to be unbounded by construction was seven glyphs of label plus those fifteen:
      * 22 against a budget of 21, clipped by u8g2 with no ellipsis and no error.

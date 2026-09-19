@@ -273,7 +273,7 @@ async def ota(request):
         # detector must learn to call a FAILURE (decision 5).
         car.fw = prev_fw
         car.rollback = True
-        print(f"ota: 'rolled back' — reporting {car.fw}, rollback:true")
+        print(f"ota: 'rolled back' — reporting {car.fw}, rolled_back:true")
     else:
         # The new image knows /version: from here the board answers it.
         request.app["no_version"] = False
@@ -372,7 +372,8 @@ def main():
                    help="log every frame instead of one line a second")
     p.add_argument("--rollback", action="store_true",
                    help="rehearsal: every successful /ota 'fails its first boot' — the mock "
-                        "comes back on the old fw with rollback:true in /status")
+                        "comes back on the old fw with rolled_back:true in /version and in "
+                        "hello_ack's device")
     p.add_argument("--no-version", action="store_true", default=bool(os.environ.get("MOCK_NO_VERSION")),
                    help="answer 404 on /version until the first accepted OTA — a car older than the endpoint")
     p.add_argument("--video-port", type=int, default=VIDEO["port"], help="video port (default from the contract)")

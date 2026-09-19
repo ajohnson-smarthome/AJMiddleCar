@@ -12,7 +12,7 @@
  * esp_http_server offers no interface-binding option (httpd_config_t has server_port
  * and ctrl_port, nothing address-shaped). Since the station came up this surface is
  * reachable from the car's network as well as USB, and this server carries a car's
- * password (POST /net) and an unauthenticated firmware-write endpoint (POST /ota).
+ * password (POST /wifi) and an unauthenticated firmware-write endpoint (POST /ota).
  * What makes that safe: status_api_start sets httpd_config_t.open_fn to
  * api_guard_open (api_guard.h), which refuses every accepted connection that did not
  * land on DONGLE_HOST, before a single request byte is read. */

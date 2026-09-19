@@ -15,7 +15,7 @@ pinned to in `firmware/car/core/main/idf_component.yml` — currently **3.0.6** 
 ships inside that component. Host and co-processor versions must match: `/status` reports what
 the C6 actually runs, the expectation is derived at compile time from the pinned component's own
 version macros (so it cannot drift from `idf_component.yml` — `board.h` says where), and a
-mismatch shows up as `radio.ok: false` rather than as WiFi behaving strangely for no visible reason.
+mismatch shows up as `radio.state: "mismatch"` rather than as WiFi behaving strangely for no visible reason.
 
 There is no `CMakeLists.txt` here because there is nothing of ours to build. The image comes from
 `firmware/car/core/managed_components/espressif__esp_hosted/examples/wifi/sta/cp`, which arrives with
@@ -114,11 +114,12 @@ bring-up, because pull-ups missing on `D2`/`D3` also let the slave fall into SPI
 `GET /status` on the car:
 
 ```json
-"radio": {"fw": "3.0.6", "expected": "3.0.6", "ok": true}
+"radio": {"fw": "3.0.6", "expected": "3.0.6", "state": "ok"}
 ```
 
-The app shows the same line on its Firmware screen. The boot log says the same thing earlier and
-without a client:
+`state` is one of three words — `ok` when `fw` equals `expected`, `mismatch` when it does not,
+`unavailable` (with `fw: null`) when the C6 never answered the version RPC. The app shows the
+same line on its Firmware screen. The boot log says the same thing earlier and without a client:
 
 ```
 eh_init_evt: esp-hosted fw versions: host=3.0.6 coprocessor=3.0.6 (match)
@@ -127,5 +128,9 @@ status_api: radio firmware 3.0.6
 ```
 
 A mismatch is visible in the same three places, inverted: the versions differ, aggregation falls
-back to `compatible streaming mode`, and `status_api` logs `could not read radio firmware version`
-after a five-second timeout — which is also five seconds added to every boot.
+back to `compatible streaming mode`, and `status_api` logs `radio firmware <fw>, expected 3.0.6 —
+the car could not correct it` — `radio.state` is `mismatch`. A co-processor too old to answer the
+version RPC at all is a third state, not a mismatch: `radio_flash` logs `could not read radio
+firmware version` after a five-second timeout — which is also five seconds added to every boot —
+`status_api` follows with `radio firmware unavailable — the RPC to the C6 did not answer`, and
+`radio.state` is `unavailable` with `fw: null`.

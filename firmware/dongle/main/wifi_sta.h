@@ -20,7 +20,7 @@
  * relays already run a select() loop that wakes at least once a second, so they poll
  * wifi_sta_gateway() instead of being told. */
 
-/* Bring up the station, idle: it joins nothing until POST /net says what. Safe to call once,
+/* Bring up the station, idle: it joins nothing until POST /wifi says what. Safe to call once,
  * from app_main, after nvs_flash_init (the radio's calibration lives there) and
  * esp_event_loop_create_default. */
 esp_err_t wifi_sta_start(void);
@@ -30,12 +30,13 @@ esp_err_t wifi_sta_start(void);
  * attempt is genuinely under way — ESP_OK means "the join started", never "the join
  * succeeded"; poll wifi_sta_state_name() for the outcome.
  *
- * net_api calls this when a POST /net changed the current value, and ALSO when an unchanged
- * POST arrives while the station is not connected. The rule is "an unchanged POST must not
- * restart a WORKING radio" — not "an unchanged POST does nothing". Those read the same until
- * the state is `failed`, which is the one state the retry exists for: the design says a failed
- * join is held rather than retried forever and the app decides when to try again by POSTing
- * again, so an unchanged re-POST is exactly how that decision arrives. */
+ * net_api calls this when a POST /wifi changed the current value, and ALSO when an unchanged
+ * POST arrives while the station is neither connected nor trying. The rule is "an unchanged
+ * POST must not restart a WORKING radio" — not "an unchanged POST does nothing". Those read
+ * the same until the state is `failed`, which is the one state the retry exists for: the design
+ * says a failed join is held rather than retried forever and the app decides when to try again
+ * by POSTing again, so an unchanged re-POST is exactly how that decision arrives. (The third
+ * case — `connected` with a dead uplink — goes through wifi_sta_rejoin below, not here.) */
 esp_err_t wifi_sta_join(const net_cfg_t *cfg);
 /* Join the last network wifi_sta_join was given, again — the same disconnect, reconfigure and
  * connect, the same fresh attempt budget. For the one failure the station cannot see for
@@ -45,7 +46,7 @@ esp_err_t wifi_sta_join(const net_cfg_t *cfg);
  * state. ESP_ERR_INVALID_STATE before any join. */
 esp_err_t wifi_sta_rejoin(void);
 
-/* Whether the station is associated AND addressed right now. Lock-free, so /net's handler can
+/* Whether the station is associated AND addressed right now. Lock-free, so /wifi's handler can
  * ask without waiting behind the event task; it reads the same _Atomic mirror
  * wifi_sta_state_name falls back to. This is a liveness question, not a configuration one —
  * net_api uses it to tell "the radio is already doing what you asked" from "the radio gave up
@@ -55,20 +56,20 @@ bool wifi_sta_connected(void);
 /* Whether the station is still WORKING on a join — scanning or associating, with its budget
  * not yet spent. The same lock-free mirror as wifi_sta_connected, for the same caller and the
  * same reason. net_api needs both halves of "the radio is already doing what you asked": an
- * unchanged POST /net must leave a connected radio alone, and it must equally leave a
- * SEARCHING one alone — restarting a join that is on attempt three of five throws those three
- * away and counts from one again, which is what the panel showed whenever the app relaunched
- * while a search it had asked for earlier was still running. Still needed with no boot-time
- * join: the app relaunching is enough to reproduce it. */
+ * unchanged POST /wifi must leave a connected radio (with a live uplink) alone, and it must
+ * equally leave a SEARCHING one alone — restarting a join that is on attempt three of five
+ * throws those three away and counts from one again, which is what the panel showed whenever
+ * the app relaunched while a search it had asked for earlier was still running. Still needed
+ * with no boot-time join: the app relaunching is enough to reproduce it. */
 bool wifi_sta_trying(void);
 
-/* GET /status's `net.state`, spelled by the generated contract. */
+/* GET /status's `wifi.state`, spelled by the generated contract. */
 const char *wifi_sta_state_name(void);
 
-/* GET /status's `net.rssi` and the joined network's primary channel, from ONE query. The dongle
- * is a station and reads its own receiver, so unlike the car these are real measurements
- * whenever they are non-zero; both are zeroed, and false returned, when there is no
- * association to read them from. 0 is that sentinel and never a placeholder for a reading —
+/* GET /status's `wifi.rssi_dbm` and the joined network's primary channel, from ONE query. The
+ * dongle is a station and reads its own receiver, so unlike the car these are real
+ * measurements whenever they are non-zero; both are zeroed, and false returned, when there is
+ * no association to read them from. 0 is that sentinel and never a placeholder for a reading —
  * see display.c's RSSI_NO_LINK and screens.c's «нет» for what has to be done with it.
  *
  * One call rather than an accessor each, because both callers show the two together and
