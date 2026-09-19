@@ -183,9 +183,10 @@ The pure modules have **zero ESP-IDF dependencies** and are host-tested with pla
   typed — `hello`, `drive`, `bye`, `view` — read from the wire's `type` key, not guessed from
   which other keys showed up. `view` (the video channel's subscription, below) is a `hello`
   shape with an optional `key` flag, so it costs this parser nothing new.
-- `car.{c,h}` — clamps, mixes, plans, and offers the duties to the actuator arbiter. Holds the
-  mutex around the calibration read, with a bounded 200 ms wait so a stuck holder cannot wedge
-  the watchdog.
+- `car.{c,h}` — clamps, mixes, plans, and offers the duties to the actuator arbiter. The
+  calibration table is published by an atomic pointer swap: readers on the control path load
+  it and never block (the old mutex with a 200 ms timeout is gone — a timeout there was a
+  frame the car did not drive on).
 - `ramp.{c,h}` — *pure* slew step plus the `ramp` domain of `/config`; the 50 Hz actuator task
   lives in `link.c`. Bounded rise, instant fall.
 - `link.{c,h}` — the actuator arbiter (who may command the motors: `rt`, `console`, `calib`,
@@ -227,7 +228,7 @@ The pure modules have **zero ESP-IDF dependencies** and are host-tested with pla
   `key:true` may force an IDR.
 - `video_link.{c,h}` — the video channel: one UDP socket on `4211`, three tasks below the
   actuator — control (the socket's receive side and the subscription), encode (camera →
-  `video_enc` → a two-slot ring, handed off with a release/acquire store rather than a lock),
+  `video_enc` → a six-slot ring in PSRAM, handed off with a release/acquire store rather than a lock),
   and a sender that drains the ring one chunk every 3 ms off an `esp_timer` (the dongle's USB drains ~4 Mbit/s — bringup.md), so a keyframe
   leaves as a trickle rather than a burst. Nothing here touches the motors.
 - `video_cfg.{c,h}` — the `video` domain of `/config`: the encoder's target bitrate, read once
