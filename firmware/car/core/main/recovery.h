@@ -10,9 +10,16 @@
 #  define ESP_OK 0
 #endif
 
-// Configurable history-window bounds (milliseconds).
+// Configurable history-window bounds (milliseconds) — contract.config.domains.recovery's
+// window_ms range, spelled here because this header is pure and includes nothing;
+// test_recovery pins the two together. The ceiling is not free: a retrace over the whole
+// window starts RT_WATCHDOG_MS after the last accepted command and lasts one capped tail
+// plus the window, while the session dies RT_SESSION_IDLE_MS after that same command and
+// throws the path away with it. Session mortality is the senior budget, so the ceiling
+// stays under it with room for ticks — at 10 000 the session's death cut the oldest
+// half-second of the path instead of the retrace finishing it (AJM-129).
 #define RECOVER_WIN_MIN_MS 1000
-#define RECOVER_WIN_MAX_MS 10000
+#define RECOVER_WIN_MAX_MS 8000
 
 // Load NVS config (enabled + window, defaults: ON, 5000 ms) and start the retreat
 // task. Call once, BEFORE rt_link_start() — the control watchdog trips into it.
@@ -40,6 +47,16 @@ void recovery_get_config(bool *enabled, uint16_t *window_ms);
 // Persist the current enabled+window config as a JSON string in NVS, and say
 // whether it landed.
 esp_err_t recovery_save(void);
+
+// Pure (host-tested): a window held by the car — what recovery_set_config keeps and what a
+// stored value becomes at boot. Clamped to the contract's range, not reset to the default:
+// the ceiling came down from 10 000 to 8 000 (AJM-129), and a car whose owner had chosen
+// the old ceiling boots with the new one, not with 5 000.
+static inline uint16_t recovery_window_clamp(int window_ms) {
+    if (window_ms < RECOVER_WIN_MIN_MS) return RECOVER_WIN_MIN_MS;
+    if (window_ms > RECOVER_WIN_MAX_MS) return RECOVER_WIN_MAX_MS;
+    return (uint16_t)window_ms;
+}
 
 // Pure (host-tested): reverse a command = negate both axes.
 static inline void recovery_reverse(float t, float y, float *rt, float *ry) {

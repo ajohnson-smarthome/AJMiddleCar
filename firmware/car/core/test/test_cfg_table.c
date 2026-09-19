@@ -39,7 +39,7 @@ int main(void) {
     const cfg_field_t *e = find("recovery", "enabled");
     assert(e && e->type == CFG_BOOL && e->def == 1);
     const cfg_field_t *w = find("recovery", "window_ms");
-    assert(w && w->min == 1000 && w->max == 10000 && w->def == 5000);
+    assert(w && w->min == 1000 && w->max == 8000 && w->def == 5000);
     const cfg_field_t *t = find("trim", "balance_pct");
     assert(t && t->min == -30 && t->max == 30 && t->def == 0);
     assert(find("wheel", "nonexistent") == NULL);

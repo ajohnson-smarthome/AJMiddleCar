@@ -338,7 +338,7 @@ public extension Trim {
 public struct Recovery: Codable, Equatable, Sendable {
     /// retrace on unexpected silence; when false the car stops instead
     public var enabled: Bool
-    /// how far back the breadcrumb history reaches
+    /// how far back the breadcrumb history reaches; capped below rt.session_idle_ms so a full-window retrace ends before the session does
     public var window_ms: Int
     public init(enabled: Bool, window_ms: Int) { self.enabled = enabled; self.window_ms = window_ms }
 }
@@ -346,7 +346,7 @@ public struct Recovery: Codable, Equatable, Sendable {
 public extension Recovery {
     static let key = "recovery"
     static let `default` = Recovery(enabled: true, window_ms: 5000)
-    static let window_msRange: ClosedRange<Int> = 1000...10000
+    static let window_msRange: ClosedRange<Int> = 1000...8000
     static func pick(from c: CarConfig) -> Recovery? { c.recovery }
     static func wrap(_ v: Recovery) -> CarConfig { CarConfig(recovery: v) }
 }

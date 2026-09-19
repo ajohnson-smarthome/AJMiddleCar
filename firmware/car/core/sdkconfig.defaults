@@ -31,6 +31,14 @@ CONFIG_HTTPD_WS_SUPPORT=n
 # panics rather than logging: a reboot re-zeroes the PCA9685 on the way up (link_init),
 # which is what makes rebooting the safer of the two failures.
 CONFIG_ESP_TASK_WDT_PANIC=y
+# ...and the period is chosen, not inherited: it is the one number that bounds how far a
+# car whose writer has hung keeps driving on its last duty, and IDF's default (5 s) was
+# never a decision. The floor is the longest single turn of the actuator loop between two
+# esp_task_wdt_reset calls, which is a bring-up attempt on a wedged bus — pca9685_zero_all
+# is 32 writes blocking PCA_I2C_TIMEOUT_MS (50 ms) each, then pca9685_init's first write
+# and its retry: ~1.7 s, all inside one iteration (link.c). 3 s clears that with room for
+# the scheduler and keeps the drive-on-last-duty window near the rt watchdog's own scale.
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=3
 
 # 16 MB flash with a custom table: two 4 MB OTA slots plus a reserved data partition.
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y

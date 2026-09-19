@@ -12,7 +12,7 @@ static const cfg_field_t CFG_TRIM_FIELDS[] = {
 };
 static const cfg_field_t CFG_RECOVER_FIELDS[] = {
     { "enabled", CFG_BOOL, 0, 1, 1, NULL, 0, 1 },
-    { "window_ms", CFG_INT, 1000, 10000, 5000, NULL, 0, 1 },
+    { "window_ms", CFG_INT, 1000, 8000, 5000, NULL, 0, 1 },
 };
 static const cfg_field_t CFG_WHEEL_FIELDS[] = {
     { "diameter_mm", CFG_INT, 20, 150, 65, NULL, 0, 1 },

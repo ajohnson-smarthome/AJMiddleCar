@@ -33,8 +33,8 @@ test_radio_ota: test_radio_ota.c ../main/radio_ota.c
 test_telemetry: test_telemetry.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-test_recovery: test_recovery.c
-	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+test_recovery: test_recovery.c ../main/recovery.h ../main/cfg_table.inc ../main/cfg_contract.h
+	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
 
 test_wheel: test_wheel.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)

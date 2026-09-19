@@ -15,7 +15,7 @@ check(Trim.default == Trim(balance_pct: 0), "Trim.default")
 check(Wheel.diameter_mmRange == 20...150, "diameter range")
 check(Wheel.gear_ratioRange == 1.0...300.0, "gear ratio range")
 check(Trim.balance_pctRange == -30...30, "trim range")
-check(Recovery.window_msRange == 1000...10000, "window range")
+check(Recovery.window_msRange == 1000...8000, "window range")
 check(Wheel.quadratureAllowed == [1, 2, 4], "quadrature allowed")
 
 check(Wheel.key == "wheel" && Chassis.key == "chassis" && Ramp.key == "ramp"
