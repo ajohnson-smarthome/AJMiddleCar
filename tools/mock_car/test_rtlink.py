@@ -542,7 +542,9 @@ class TestWatchdog(Quiet):
           t=10.25       the trip (last command + watchdog 300 ms + 50 ms). `_trip`
                         evicts breadcrumbs older than window_ms (10 s, the contract's
                         max) first, and the oldest sample is 9.95 s old here, so all
-                        49 survive and the retrace replays the whole path.
+                        49 survive and the retrace replays the whole path — and
+                        consumes it, as recovery.c's snapshot_consume does, so the
+                        count is read off the trip's line, not off the ring.
           retrace       9.6 s of gaps + a 250 ms tail (capped from the 350 ms of
                         silence) = 9.85 s → still running until t=20.10
           t=19.95       the idle clock, anchored at t=9.9, runs out (10 s + 50 ms) —
@@ -562,9 +564,10 @@ class TestWatchdog(Quiet):
             seq, loop.t = seq + 1, round(loop.t + 0.2, 10)
         self.assertEqual(seq - 1, 49, "48 gaps of 200 ms, each credited under the cap")
         loop.t = 9.9 + DEADLINE_S + 0.05                      # t = 10.25: the trip
-        self.assertIsNotNone(rt.tick(loop.t), "the trip starts the retrace")
+        line = rt.tick(loop.t)
+        self.assertIsNotNone(line, "the trip starts the retrace")
+        self.assertIn("retracing 49 samples", line, "the oldest sample survives the trip's own eviction")
         self.assertTrue(car.retreating, "a wide window keeps the retrace running")
-        self.assertEqual(car.history_len, 49, "the oldest sample survives the trip's own eviction")
         loop.t = 9.9 + idle_s + 0.05                          # t = 19.95: past idle
         line = rt.tick(loop.t)
         self.assertIsNone(line, "not a natural exhaustion — the retrace was still due to run")
