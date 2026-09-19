@@ -1,6 +1,7 @@
 """The mock's video channel: a `view` from the live session's owner starts the clip.
 
-`sample.h264` (Annex B, Baseline, IDR every 45 frames with SPS/PPS before each — the
+`sample.h264` (Annex B, Baseline, VIDEO["width"] x VIDEO["height"] — the car's cropped
+16:9 picture, not its 4:3 sensor frame — IDR every 45 frames with SPS/PPS before each: the
 shape the car's encoder produces) plays in a loop at VIDEO["fps"], one access unit per
 frame, chunked with video_wire.chunks exactly as the car chunks. `frame` keeps counting
 across loops and `stream` stays put: to the receiver a looped clip is one long stream.
