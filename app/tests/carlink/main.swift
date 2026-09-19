@@ -52,4 +52,23 @@ check(compose(.dongleUp, adopted, fresh, 1.0).isLive,
 check(compose(.dongleUp, adopted, fresh, LinkRule.staleAfter - 0.01).isLive, "just inside the window")
 check(!compose(.dongleUp, adopted, fresh, LinkRule.staleAfter).isLive, "the boundary is not live")
 
+// Whether the drive screen, once shown, still stands (AJM-107). `.searching` folds "the session
+// is open but telemetry is late" and "there is no session" into one word, which is right for
+// the label and wrong for the screen's existence: a telemetry pause shorter than the stall that
+// ends the session used to swap the drive screen for the radar and take the sheets on it —
+// the wizard's assignments, the settings stack — along. The screen is born on `.live` and lives
+// while this holds: path up, session adopted, and a frame seen in this session.
+func held(_ p: PathState, _ s: SessionState, _ t: Telemetry?) -> Bool {
+    LinkRule.inSession(path: p, session: s, telemetry: t)
+}
+check(held(.dongleUp, adopted, fresh), "adopted with a frame: the drive screen stands")
+check(!held(.dongleUp, adopted, nil), "adopted, no frame yet: not born — the first frame opens the screen")
+check(!held(.dongleUp, .none, fresh), "no session: whatever frame is remembered, the screen goes")
+check(!held(.noDongle(.notAvailable), adopted, fresh), "path gone: the screen goes with it")
+check(!held(.localNetworkDenied, adopted, fresh), "denial: same")
+// The point: stale telemetry inside a live session is `.searching` for the label and a held
+// screen for the root — the two are asked separately, and disagree exactly here.
+check(compose(.dongleUp, adopted, fresh, 2.6) == .searching && held(.dongleUp, adopted, fresh),
+      "2.6 s of silence: «Поиск…» over the drive screen, not the radar instead of it")
+
 if failures == 0 { print("test_carlink: OK") } else { exit(1) }

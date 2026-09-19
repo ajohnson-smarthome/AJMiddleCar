@@ -134,16 +134,21 @@ struct RootView: View {
     /// guard the instant they fired (`.onChange(of: link.state)` above), so `flow.phase` has
     /// already left `.awaitingCar`/`.ready` by the time this would render one of them — this is a
     /// one-frame fallback for that gap, not a second opinion.
+    ///
+    /// The drive screen is born with a session's first frame and lives as long as the session
+    /// (`link.inSession`), not as long as `link.state` stays `.live`: a telemetry pause shorter
+    /// than the stall that ends the session is «Поиск…» drawn by the drive screen over itself,
+    /// not the radar instead of it. The swap used to take the sheets with it — the wizard back
+    /// to «Шаг 1 из 4» with four empty wheels after a 2.4 s Wi-Fi hiccup on step three, the
+    /// settings stack gone mid-edit (AJM-107). Only the session's end takes the screen down,
+    /// which is what `app/calibration` promises the wizard. One `if`, not a `switch`: the view
+    /// keeps its identity across `.live` ↔ `.searching`, or the sheets would still fall.
     @ViewBuilder private var carRoot: some View {
-        switch link.state {
-        case .live:
-            if flow.phase == .ready {
-                DriveView(link: link, intent: intent)
-            } else {
-                // Live, but the ladder has not answered yet — a moment, not a state (S26).
-                ZStack { p.bg.ignoresSafeArea(); ConnectView() }
-            }
-        default:
+        if flow.phase == .ready, link.inSession {
+            DriveView(link: link, intent: intent)
+        } else {
+            // Not yet a session with a frame, or live but the ladder has not answered yet — a
+            // moment, not a state (S26).
             ZStack { p.bg.ignoresSafeArea(); ConnectView() }
         }
     }
