@@ -57,4 +57,24 @@ static inline int cfg_value_print(const cfg_field_t *f, int32_t v, char *buf, si
     return r;
 }
 
+/* A stored record as the values a domain starts with (car/config, «При старте — из
+ * памяти, иначе умолчания контракта»), field by field, each on its own. A field the
+ * record named (has[i]) starts as what it said (v[i]), held to the field's bounds — an
+ * enum outside its list has no nearest value and falls to the default. A field the record
+ * did not name starts as the contract's default. Nothing here throws a record away: one
+ * that predates a field keeps every other field the user chose (AJM-104). */
+static inline void cfg_values_stored(const cfg_field_t *fields, int n, const bool *has,
+                                     const int32_t *v, int32_t *out) {
+    for (int i = 0; i < n; i++) {
+        const cfg_field_t *f = &fields[i];
+        if (!has[i]) {
+            out[i] = f->def;
+        } else if (f->type == CFG_ENUM) {
+            out[i] = cfg_value_check(f, v[i]) ? f->def : v[i];
+        } else {
+            out[i] = v[i] < f->min ? f->min : (v[i] > f->max ? f->max : v[i]);
+        }
+    }
+}
+
 #endif /* CFG_VALUE_H */

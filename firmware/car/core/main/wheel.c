@@ -3,9 +3,17 @@
 #include <stdio.h>
 #include "cJSON.h"
 #include "cfg_json.h"
+#include "cfg_value.h"
 #include "esp_log.h"
 
 static const char *TAG = "wheel";
+
+/* The record's spelling of each contract field, in CFG_WHEEL_FIELDS' order: `ppr`,
+   `gear_x100` and `quad` predate the wire's names, and a record is not rewritten for a
+   rename. */
+static const char *const STORED[] = { "diameter_mm", "ppr", "gear_x100", "quad" };
+_Static_assert(sizeof STORED / sizeof *STORED == sizeof CFG_WHEEL_FIELDS / sizeof *CFG_WHEEL_FIELDS,
+               "a field the contract added needs its stored spelling here");
 
 static wheel_params_t s_params = {
     .diameter_mm = 65, .ppr = 11, .gear_x100 = 900, .quad = 4,
@@ -39,19 +47,16 @@ void wheel_init(void) {
     char buf[96];
     if (cfg_json_load("wheel", buf, sizeof(buf))) {
         cJSON *j = cJSON_Parse(buf);
-        int d, ppr, gear, quad;
-        /* Range-checked before narrowing, like ramp_init and car_init and unlike what this
-           did: (uint16_t)65556 is 20, a diameter wheel_set's clamp is happy to accept from a
-           blob that never said 20. Out of range falls back to the default, as a blob that
-           failed to parse would. */
-        if (cfg_json_int(j, "diameter_mm", &d) && cfg_json_int(j, "ppr", &ppr) &&
-            cfg_json_int(j, "gear_x100", &gear) && cfg_json_int(j, "quad", &quad) &&
-            d >= 0 && d <= UINT16_MAX && ppr >= 0 && ppr <= UINT16_MAX &&
-            gear >= 0 && gear <= UINT16_MAX && quad >= 0 && quad <= UINT8_MAX) {
-            wheel_params_t w = { .diameter_mm = (uint16_t)d, .ppr = (uint16_t)ppr,
-                                 .gear_x100 = (uint16_t)gear, .quad = (uint8_t)quad };
-            wheel_set(&w);   // clamps + applies
-        }
+        /* Field by field, like recovery_init, not all four or nothing: a record older than
+           one field keeps the three the user chose (car/config, «Запись старше поля»). Held
+           to the contract's bounds before narrowing — (uint16_t)65556 is 20, a diameter
+           wheel_set's clamp is happy to accept from a record that never said 20. */
+        bool has[4]; int32_t v[4], x[4];
+        for (int i = 0; i < 4; i++) { int n = 0; has[i] = cfg_json_int(j, STORED[i], &n); v[i] = n; }
+        cfg_values_stored(CFG_WHEEL_FIELDS, 4, has, v, x);
+        wheel_params_t w = { .diameter_mm = (uint16_t)x[0], .ppr = (uint16_t)x[1],
+                             .gear_x100 = (uint16_t)x[2], .quad = (uint8_t)x[3] };
+        wheel_set(&w);   // clamps + applies
         cJSON_Delete(j);
     }
     ESP_LOGI(TAG, "wheel d=%u mm ppr=%u gear=%u/100 quad=%u (cpr %.0f)",

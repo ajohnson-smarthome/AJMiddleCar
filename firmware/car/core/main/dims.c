@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include "cJSON.h"
 #include "cfg_json.h"
+#include "cfg_value.h"
 #include "esp_log.h"
 
 static const char *TAG = "dims";
@@ -35,13 +36,13 @@ void dims_init(void) {
     char buf[64];
     if (cfg_json_load("dims", buf, sizeof(buf))) {
         cJSON *j = cJSON_Parse(buf);
-        int track, base;
-        /* Range-checked before narrowing — see wheel_init for why. */
-        if (cfg_json_int(j, "track_mm", &track) && cfg_json_int(j, "wheelbase_mm", &base) &&
-            track >= 0 && track <= UINT16_MAX && base >= 0 && base <= UINT16_MAX) {
-            dims_params_t d = { .track_mm = (uint16_t)track, .wheelbase_mm = (uint16_t)base };
-            dims_set(&d);   // clamps + applies
-        }
+        /* Field by field, held to the contract's bounds before narrowing — see wheel_init
+           for why. The record spells the fields as the contract does. */
+        bool has[2]; int32_t v[2], x[2];
+        for (int i = 0; i < 2; i++) { int n = 0; has[i] = cfg_json_int(j, CFG_DIMS_FIELDS[i].name, &n); v[i] = n; }
+        cfg_values_stored(CFG_DIMS_FIELDS, 2, has, v, x);
+        dims_params_t d = { .track_mm = (uint16_t)x[0], .wheelbase_mm = (uint16_t)x[1] };
+        dims_set(&d);   // clamps + applies
         cJSON_Delete(j);
     }
     ESP_LOGI(TAG, "dims track=%u mm wheelbase=%u mm", s_params.track_mm, s_params.wheelbase_mm);
