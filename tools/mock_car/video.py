@@ -78,6 +78,7 @@ class VideoLink(asyncio.DatagramProtocol):
         self.loop = loop if loop is not None else asyncio.get_running_loop()
         self.transport = None
         self.peer = None
+        self.sid = None                      # the rt session the stream opened under
         self.last_view = None
         self.stream = 0
         self.frame = 0
@@ -104,8 +105,15 @@ class VideoLink(asyncio.DatagramProtocol):
             self.stream = (self.stream + 1) & 0xFF
             self.frame = 0
             self.pos = 0
+            self.sid = f[K["session"]]
             self.car.video_state = "streaming"
             print(f"video: view from {addr[0]}:{addr[1]} — streaming (stream {self.stream})")
+        elif f[K["session"]] != self.sid:
+            # The stream belongs to the sid it opened under (video_sub.h, AJM-40): the new
+            # owner's view is not a refresh of the old owner's stream — taking it would carry
+            # the stream, mid-GOP, to the new address. The next tick ends the stream (owner
+            # changed), and the new owner's next view opens one of its own, from an IDR.
+            return
         elif addr != self.peer:
             print(f"video: viewer moved to {addr[0]}:{addr[1]}")
         self.peer = addr
@@ -117,6 +125,7 @@ class VideoLink(asyncio.DatagramProtocol):
         if self.peer is not None:
             print(f"video: {why} — stream ends")
         self.peer = None
+        self.sid = None
         self.last_view = None
         self.car.video_state = "idle"
         self.car.video_fps = self.car.video_kbps = 0
@@ -152,11 +161,13 @@ class VideoLink(asyncio.DatagramProtocol):
 
     def tick(self, now):
         """One period of the sender. Returns True when there was nothing to send: no viewer,
-        or the stream just ended (session over, viewer gone, switch off)."""
+        or the stream just ended (session over, owner changed, viewer gone, switch off)."""
         if self.peer is None:
             return True
-        if self.link.session is None:
-            self._stop("session over")
+        if self.link.session != self.sid:
+            # Nobody (bye, idled out) or somebody else (evicted by another hello): either
+            # ends the stream on this tick, not at the timeout — the car's rule.
+            self._stop("session over" if self.link.session is None else "owner changed")
             return True
         if not self.car.config["video"]["enabled"]:
             self._stop("video switched off")   # the car's rule: within one tick, not the timeout

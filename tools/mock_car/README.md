@@ -49,7 +49,11 @@ datagram burst, chunked exactly as `video_wire.chunks` chunks it on the car. `st
 once per stream start; `frame` keeps counting across loops, so to the receiver a looped clip
 is one long stream. The subscription is soft — no `view` for `VIDEO["subscribe_timeout_ms"]`
 and the mock stops sending and resets `car.video_state/fps/kbps` to idle/0/0, same as the
-watchdog does for the drive channel.
+watchdog does for the drive channel. It also belongs to the sid it opened under, as on the
+car (`video_sub.h`): when the rt session ends (`bye`, idling out) or is taken by another
+`hello`, the stream ends on the next frame period, not at the timeout — a `view` from the
+new owner while the old stream is still running is ignored rather than adopted, and its next
+`view` opens a stream of its own, `stream` + 1, from the top of the clip and its IDR.
 
 `view` may carry `key:true` to ask for a keyframe. The clip is only 3 s with one IDR per
 loop, so *seeking forward* to the next one could take up to 3 s — past what a real receiver
@@ -115,13 +119,16 @@ a file; `ffplay /tmp/out.h264` opens it.
 or against a real car, `tools/conformance_rt.py <host>:<port>` does the same for the
 UDP channel with real datagrams, and `tools/conformance_video.py <host>` for the video
 channel (above). `tools/test-all.sh` runs all three against a mock it starts itself (skipped
-when `.venv` is missing, unless `CONFORMANCE=required`). Since the
-2026-08-22 unification (rule 8 of the audit-fix spec) there is one reply shape to assert:
-`{"ok":true}` on success, `{"error":"…","field":"…"}` on a rejection, `application/json`
-either way — for `/calib*` and `/ota` as well as for the six config domains, so
-conformance asserts their bodies and not merely their status codes. The firmware's
-plain-text `ok` and `httpd_resp_send_err` bodies are gone; `field` is `""` when the fault
-is the body as a whole.
+when `.venv` is missing, unless `CONFORMANCE=required`). Every reply is
+`application/json` in one shape, so conformance asserts bodies and not merely status codes.
+A rejection is the envelope of `docs/protocol.md` → Errors, on every endpoint:
+`{"proto":2,"error":{"code":"…","message":"…","field":"…"}}`, with `field` present only when
+a single key is at fault and **absent** — not `""` — when the body as a whole is
+(`mock_car.py::json_error`; `tools/conformance.py` asserts the absence too). Success is
+not one shape: `POST /config` and `POST /calibration` answer with what is now stored — the
+body of the matching GET — while `POST /calibration/spin` and `POST /ota` answer
+`{"proto":2,"ok":true}`. Paths are the contract's `endpoints`: `/calibration`,
+`/calibration/spin`, `/ota`, and `/config` for the six domains.
 
 ## The two caps
 
@@ -154,12 +161,17 @@ short, and as `state.py` implements it:
   wizard owns the actuator, the goodbye neither steals nor releases that grant — the
   motors are already stopped, or under the wizard's pulse — and does only its other
   three duties.
-- **A watchdog trip clears the arm flag and nothing else — the sequence gate survives**
-  (rule 1). Silence proves the stream is dead, but the gate is what stops a
-  network-delayed duplicate of a pre-dropout command from being accepted as the resumed
-  stream, driving the car at stale stick values and aborting the retreat. A same-session
-  stream that resumes carries newer seqs and passes; the gate resets only on adopt and
-  on bye.
+- **A watchdog trip clears the arm flag and takes the window's breadcrumbs — the owner
+  and the sequence gate survive** (rule 1). Silence proves the stream is dead, but the
+  gate is what stops a network-delayed duplicate of a pre-dropout command from being
+  accepted as the resumed stream, driving the car at stale stick values and aborting the
+  retreat. A same-session stream that resumes carries newer seqs and passes; the gate
+  resets only on adopt and on bye. The crumbs inside `recovery.window_ms` are what the
+  trip retraces, and with `recovery.enabled` on they are consumed with it — the ring is
+  empty after the trip, as `snapshot_consume` leaves it on the car, so a second dropout
+  retraces only the ground driven after the first retreat (`_trip`,
+  `test_state.py::test_a_trip_consumes_the_path_it_retraces`). With auto-return off the
+  trip stops without reaching the ring and the crumbs stay, as they do on the car.
 - **Sessions are mortal** (rule 4). While the watchdog is not armed — after a trip, or
   for a handshake that never commanded — a session more than `session_idle_ms` past its
   last activity ends: ownership cleared, telemetry stopped, sid remembered dead, and the
