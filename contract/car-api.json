@@ -75,7 +75,7 @@
       "swift": "LinkInfo",
       "doc": "The control link as the car sees it.",
       "fields": [
-        {"name": "rx_hz", "type": "int", "doc": "drive datagrams received per second"},
+        {"name": "rx_hz", "type": "int", "doc": "drive commands accepted per second; a datagram the proto, owner or sequence gate refuses is not counted"},
         {"name": "rssi_dbm", "type": "int", "nullable": true, "doc": "the driving station's signal at the car, null when not measured"},
         {"name": "timeouts", "type": "int", "doc": "control-watchdog trips since boot"}
       ]
@@ -119,7 +119,7 @@
       "fields": [
         {"name": "state", "type": "state", "swift": "VideoState", "values": ["off", "idle", "streaming"],
          "doc": "off: no sensor answered at boot; idle: sensor in standby, nobody watching; streaming: encoding for the driver"},
-        {"name": "fps", "type": "int", "doc": "frames encoded in the last second"},
+        {"name": "fps", "type": "int", "doc": "frames sent in the last second, counted at the sender's output when a frame's last chunk leaves, not at the encoder"},
         {"name": "kbps", "type": "int", "doc": "kbit sent in the last second"},
         {"name": "dropped", "type": "int", "doc": "frames not sent since boot: the sender was still busy with the previous frame, the encoder overflowed, or the frame needed more than 255 chunks"}
       ]

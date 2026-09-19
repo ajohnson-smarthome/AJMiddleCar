@@ -43,7 +43,9 @@ GROUPS = {   'device': {   'swift': 'DeviceInfo',
                 'doc': 'The control link as the car sees it.',
                 'fields': [   {   'name': 'rx_hz',
                                   'type': 'int',
-                                  'doc': 'drive datagrams received per second'},
+                                  'doc': 'drive commands accepted per second; a datagram the '
+                                         'proto, owner or sequence gate refuses is not '
+                                         'counted'},
                               {   'name': 'rssi_dbm',
                                   'type': 'int',
                                   'nullable': True,
@@ -112,7 +114,9 @@ GROUPS = {   'device': {   'swift': 'DeviceInfo',
                                           'the driver'},
                                {   'name': 'fps',
                                    'type': 'int',
-                                   'doc': 'frames encoded in the last second'},
+                                   'doc': 'frames sent in the last second, counted at the '
+                                          "sender's output when a frame's last chunk leaves, "
+                                          'not at the encoder'},
                                {   'name': 'kbps',
                                    'type': 'int',
                                    'doc': 'kbit sent in the last second'},

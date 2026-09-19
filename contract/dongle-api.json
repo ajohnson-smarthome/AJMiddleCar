@@ -66,7 +66,7 @@
       "doc": "What is being forwarded, and the last time forwarding failed.",
       "fields": [
         {"name": "to_car_hz", "type": "number", "doc": "control datagrams per second toward the car"},
-        {"name": "to_phone_hz", "type": "number", "doc": "datagrams per second toward the phone"},
+        {"name": "to_phone_hz", "type": "number", "doc": "real-time channel datagrams per second toward the phone; video chunks are counted in video_kbps, not here"},
         {"name": "udp_sessions", "type": "int", "doc": "real-time sessions in use, of 4"},
         {"name": "tcp_connections", "type": "int", "doc": "HTTP connections in use, of 4"},
         {"name": "last_error", "type": "object", "swift": "DongleRelayError", "nullable": true, "doc": "the most recent forwarding failure, null when none since boot", "fields": [

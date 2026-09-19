@@ -141,7 +141,7 @@ public struct DongleRelayError: Codable, Equatable, Sendable {
 public struct DongleRelay: Codable, Equatable, Sendable {
     /// control datagrams per second toward the car
     public var to_car_hz: Double
-    /// datagrams per second toward the phone
+    /// real-time channel datagrams per second toward the phone; video chunks are counted in video_kbps, not here
     public var to_phone_hz: Double
     /// real-time sessions in use, of 4
     public var udp_sessions: Int
