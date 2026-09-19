@@ -17,16 +17,24 @@ outside its set, a fractional value where a `fixed` field expects one accepted a
 rounded, a missing field rejected rather than partially written, and a rejection
 carrying `{"proto","error":{"code","message"[,"field"]}}` — the envelope `cfg_api.c` and
 the mock both emit. `field` is checked to be present only when a field, not the whole
-body, is at fault — its absence otherwise is asserted too, not merely tolerated.
+body, is at fault — its absence otherwise is asserted too, not merely tolerated. A domain
+that is not an object is `wrong_type` naming the domain, and `GET /config`'s own body
+echoed back is refused for its `proto`: not a domain, so `unknown_field`.
 
-`/calibration*` and `/ota` are asserted against the same envelope. The spin's 200 is also
-held to land only after the pulse, the timing calib_api.c documents the wizard as
-assuming.
+`/calibration*` and `/ota` are asserted against the same envelope: every shape of a
+`wheels[i]` record the car names in its rejection (not an object, a wrong type inside,
+an unknown key, a pair out of range, a corner it has never heard of), and — with
+`--write-calibration` — a good table sent out of corner order coming back, and reading
+back, in the contract's order. The spin's 200 is held to land only after the pulse, the
+timing calib_api.c documents the wizard as assuming, once forward and once in reverse.
+`/status` is polled twice in a row with no command stream, and `link.rx_hz` must be 0 on
+both — run it with no pult driving, or the second poll measures the pult.
 
 It restores every config value it found. Three things it does anyway, unavoidably:
 it POSTs each domain about ten times, and on a real car every accepted POST is an NVS
-write; it spins a wheel once (`/calibration/spin`), so put the car on a stand; and the
-two rejected `/ota` bodies stop the motors and briefly take the actuator on a real car.
+write; it spins two wheels once each (`/calibration/spin`: pair 0 forward, the last pair
+in reverse), so put the car on a stand; and the two rejected `/ota` bodies stop the
+motors and briefly take the actuator on a real car.
 
 The one check it does NOT run by default is POSTing a valid `/calibration` table: a
 calibration is not a range that can be dialled back to what it was, so overwriting a
@@ -78,7 +86,8 @@ class Conformance:
             with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
                 status, headers, payload = r.status, r.headers, r.read()
         except urllib.error.HTTPError as e:
-            status, headers, payload = e.code, e.headers, e.read()
+            with e:     # a response too, and unclosed it is a ResourceWarning under unittest
+                status, headers, payload = e.code, e.headers, e.read()
         except (urllib.error.URLError, OSError) as e:
             raise Unreachable(f"{method} {path}: {e}") from e
         try:
@@ -167,6 +176,21 @@ class Conformance:
         status, ctype, parsed, _ = self.call("GET", "/status")
         if not self.expect_json("/status", status, ctype, parsed, 200):
             return
+        self.status_shape(parsed)
+        # `link.rx_hz` has a window of its own here — from the previous /status poll to
+        # this one — and no stream is running, so two polls in a row both say 0: the
+        # first for want of a previous poll (or after a gap), the second for want of
+        # frames. A car that handed /status the telemetry push's accumulator, or a
+        # cached rate, would show it here.
+        again, ctype, second, _ = self.call("GET", "/status")
+        if not self.expect_json("/status (again)", again, ctype, second, 200):
+            return
+        for which, doc in (("first", parsed), ("second", second)):
+            hz = doc.get("link", {}).get("rx_hz") if isinstance(doc.get("link"), dict) else None
+            self.check(hz == 0, f"/status.link.rx_hz on the {which} of two polls is {hz!r}, "
+                                f"want 0 with no stream")
+
+    def status_shape(self, parsed):
         want_keys = ["proto"] + STATUS_GROUPS
         self.check(sorted(parsed) == sorted(want_keys),
                    f"/status: top-level keys {sorted(parsed)}, want {sorted(want_keys)}")
@@ -371,6 +395,13 @@ class Conformance:
         self.expect_rejected(f"POST {CONFIG_PATH} {key} with an unknown field", CONFIG_PATH,
                              {key: extra}, "unknown_field", f"{key}.bogus_field")
         self.expect_domain_get(f"GET {CONFIG_PATH} after an unknown field in {key}", key, original)
+        # A domain is an object of its fields; a number or an array in its place is
+        # `wrong_type` naming the domain — cfg_api.c's first check on a present domain,
+        # before any field of it is looked at.
+        for not_an_object in (5, [original[f["name"]] for f in fields]):
+            self.expect_rejected(f"POST {CONFIG_PATH} {key}={not_an_object!r} (not an object)",
+                                 CONFIG_PATH, {key: not_an_object}, "wrong_type", key)
+            self.expect_domain_get(f"GET {CONFIG_PATH} after {key}={not_an_object!r}", key, original)
 
     def config_body_shapes(self):
         print(f"{CONFIG_PATH} (whole-body shapes)")
@@ -383,6 +414,11 @@ class Conformance:
         self.expect_rejected("POST /config (malformed JSON)", CONFIG_PATH, None,
                              "bad_json", raw=b"{not json")
         self.expect_rejected("POST /config (JSON array)", CONFIG_PATH, [1, 2], "bad_json")
+        # The body GET answered, sent straight back: it leads with the envelope's proto,
+        # which is not a domain, so the car refuses it by that key — the one top-level
+        # key a client is most likely to echo without meaning to.
+        self.expect_rejected("POST /config (GET's own body, proto and all)", CONFIG_PATH,
+                             original, "unknown_field", ENVELOPE["proto"])
         # Two domains, the second bad: the car validates the whole body before writing
         # any of it, so the first (good) domain must not have been applied either.
         bad_body = {"ramp": original["ramp"],
@@ -400,6 +436,23 @@ class Conformance:
         k = CALIBRATION["keys"]
         return [{k["corner"]: c, k["pair"]: p, k["inverted"]: inv}
                 for c, p, inv in zip(CALIBRATION["corners"], pairs, inverted)]
+
+    def spin(self, pair, direction):
+        """One pulse. A 200 must land AFTER it: calib_api.c sleeps the pulse out so the
+        wizard's "which wheel turned?" prompt appears with the wheel already stopped,
+        and a client paced against an instant reply mispaces on hardware."""
+        k = CALIBRATION["keys"]
+        where = f"POST /calibration/spin pair={pair} {direction}"
+        t0 = time.monotonic()
+        status, ctype, parsed, _ = self.call("POST", ENDPOINTS["spin"],
+                                             {k["pair"]: pair, k["direction"]: direction})
+        elapsed = time.monotonic() - t0
+        if self.expect_json(where, status, ctype, parsed, 200):
+            self.check(parsed.get(ENVELOPE["ok"]) is True,
+                       f"{where}: body {parsed}, want {{'ok':true}}")
+            floor = CarState.CALIB_HOLD_MS / 1000.0 * 0.8
+            self.check(elapsed >= floor,
+                       f"{where}: 200 in {elapsed:.2f}s, want >= {floor:.2f}s (after the pulse)")
 
     def calibration(self):
         print(ENDPOINTS["calibration"])
@@ -432,20 +485,12 @@ class Conformance:
         self.expect_rejected("POST /calibration/spin (malformed JSON)", ENDPOINTS["spin"],
                              None, "bad_json", raw=b"{not json")
 
-        # The one call that moves the car. A 200 must land AFTER the pulse:
-        # calib_api.c sleeps it out so the wizard's "which wheel turned?" prompt
-        # appears with the wheel already stopped, and a client paced against an
-        # instant reply mispaces on hardware.
-        t0 = time.monotonic()
-        status, ctype, parsed, _ = self.call("POST", ENDPOINTS["spin"],
-                                             {k["pair"]: 0, k["direction"]: "forward"})
-        elapsed = time.monotonic() - t0
-        if self.expect_json("POST /calibration/spin", status, ctype, parsed, 200):
-            self.check(parsed.get(ENVELOPE["ok"]) is True,
-                       f"spin: body {parsed}, want {{'ok':true}}")
-            floor = CarState.CALIB_HOLD_MS / 1000.0 * 0.8
-            self.check(elapsed >= floor,
-                       f"spin: 200 in {elapsed:.2f}s, want >= {floor:.2f}s (after the pulse)")
+        # The calls that move the car: one wheel forward, another in reverse — the
+        # second word of `calibration.directions` is a distinct code path on the car
+        # (the pair's other channel), not a sign flip the first spin already covered.
+        forward, reverse = CALIBRATION["directions"]
+        self.spin(0, forward)
+        self.spin(CALIBRATION["pairs"] - 1, reverse)
 
         self.expect_rejected("POST /calibration (three wheels)", ENDPOINTS["calibration"],
                              {k["wheels"]: self._wheels()[:3]}, "wrong_type", k["wheels"])
@@ -462,6 +507,41 @@ class Conformance:
                              {k["wheels"]: str_pair}, "wrong_type", f"{k['wheels']}[0]")
         self.expect_rejected("POST /calibration (no wheels)", ENDPOINTS["calibration"],
                              {}, "missing_field", k["wheels"])
+        self.expect_rejected("POST /calibration (a key beside wheels)", ENDPOINTS["calibration"],
+                             {k["wheels"]: self._wheels(), "x": 1}, "unknown_field", "x")
+        # The shapes of one record, each named by its index: calib_api.c walks the
+        # records in order and stops at the first fault, so the faulty one sits behind
+        # good ones and `wheels[i]` must point at it, not at the array.
+        def record(i, **changes):
+            wheels = self._wheels()
+            wheels[i] = dict(wheels[i], **changes)
+            return {k["wheels"]: wheels}
+        not_an_object = self._wheels()
+        not_an_object[1] = 5
+        self.expect_rejected("POST /calibration (a record that is not an object)",
+                             ENDPOINTS["calibration"], {k["wheels"]: not_an_object},
+                             "wrong_type", f"{k['wheels']}[1]")
+        self.expect_rejected("POST /calibration (inverted as a number)", ENDPOINTS["calibration"],
+                             record(0, **{k["inverted"]: 1}), "wrong_type", f"{k['wheels']}[0]")
+        self.expect_rejected("POST /calibration (corner as a number)", ENDPOINTS["calibration"],
+                             record(0, **{k["corner"]: 7}), "wrong_type", f"{k['wheels']}[0]")
+        self.expect_rejected("POST /calibration (pair as a fraction)", ENDPOINTS["calibration"],
+                             record(0, **{k["pair"]: 0.5}), "wrong_type", f"{k['wheels']}[0]")
+        self.expect_rejected("POST /calibration (an unknown key in a record)",
+                             ENDPOINTS["calibration"], record(3, x=1),
+                             "unknown_field", f"{k['wheels']}[3]")
+        self.expect_rejected(f"POST /calibration (pair={CALIBRATION['pairs']} in a record)",
+                             ENDPOINTS["calibration"], record(2, **{k["pair"]: CALIBRATION["pairs"]}),
+                             "out_of_range", f"{k['wheels']}[2]")
+        self.expect_rejected("POST /calibration (a corner the car has no name for)",
+                             ENDPOINTS["calibration"], record(1, **{k["corner"]: "middle"}),
+                             "not_allowed", f"{k['wheels']}[1]")
+        # None of those rejections may have touched the table the car drives by.
+        if before is not None:
+            status, ctype, parsed, _ = self.call("GET", ENDPOINTS["calibration"])
+            if self.expect_json("GET /calibration (after the rejections)", status, ctype, parsed, 200):
+                self.check(parsed == before,
+                           f"GET /calibration after the rejections: {parsed}, want unchanged {before}")
 
         # The one call that saves, and a saved calibration cannot be un-saved — so this
         # is opt-in (see the module docstring), and restores whatever was there before.
@@ -482,6 +562,20 @@ class Conformance:
             if self.expect_json("GET /calibration (after save)", status, ctype, parsed, 200):
                 self.check(parsed.get(k["wheels"]) == good,
                            f"GET /calibration: {k['wheels']} {parsed.get(k['wheels'])}, want {good}")
+            # The same table with its records reversed: accepted in any order, answered —
+            # and read back — in `calibration.corners` order, which is how the car
+            # stores it. A car echoing the request's order would show here.
+            status, ctype, parsed, _ = self.call("POST", ENDPOINTS["calibration"],
+                                                 {k["wheels"]: list(reversed(good))})
+            if self.expect_json("POST /calibration (good table, corners reversed)", status, ctype, parsed, 200):
+                self.check(parsed.get(k["wheels"]) == good,
+                           f"POST /calibration (reversed): {k['wheels']} {parsed.get(k['wheels'])}, "
+                           f"want {good} in the contract's corner order")
+            status, ctype, parsed, _ = self.call("GET", ENDPOINTS["calibration"])
+            if self.expect_json("GET /calibration (after the reversed save)", status, ctype, parsed, 200):
+                self.check(parsed.get(k["wheels"]) == good,
+                           f"GET /calibration (after the reversed save): {k['wheels']} "
+                           f"{parsed.get(k['wheels'])}, want {good}")
         finally:
             if isinstance(before, dict) and before.get(k["calibrated"]) \
                     and isinstance(before.get(k["wheels"]), list):
