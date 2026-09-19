@@ -78,3 +78,10 @@ fi
 git worktree prune
 
 orca linear status set "$ISSUE" --to Done --json >/dev/null && echo "$ISSUE → Done"
+
+# A fix PR also names the issues it fixes ("Closes AJM-N"); Linear's GitHub link may or
+# may not act on those, so close them here as well — the task issue itself included.
+for other in $(gh pr view "$PR" --json body --jq .body | grep -oE '[Cc]loses +[A-Z]+-[0-9]+' | grep -oE '[A-Z]+-[0-9]+' | sort -u); do
+    [ "$other" = "$ISSUE" ] && continue
+    orca linear status set "$other" --to Done --json >/dev/null && echo "$other → Done (closed by PR)"
+done
