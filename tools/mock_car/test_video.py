@@ -42,8 +42,10 @@ class AccessUnits(unittest.TestCase):
 
 
 class _FakeLoop:
+    now = 0.0
+
     def time(self):
-        return 0.0
+        return self.now
 
 
 class _FakeTransport:
@@ -77,8 +79,11 @@ class StopClearsHeldDatagram(unittest.TestCase):
         self.assertIsNone(v._held)
 
 
-def _view(sid="sid"):
-    return json.dumps({K["proto"]: PROTO, K["type"]: T["view"], K["session"]: sid}).encode()
+def _view(sid="sid", key=False):
+    f = {K["proto"]: PROTO, K["type"]: T["view"], K["session"]: sid}
+    if key:
+        f[K["key"]] = True
+    return json.dumps(f).encode()
 
 
 class TheSwitch(unittest.TestCase):
@@ -106,6 +111,58 @@ class TheSwitch(unittest.TestCase):
         self.assertTrue(v.tick(0.0))          # one tick of run(): stopped
         self.assertIsNone(v.peer)
         self.assertEqual(car.video_state, "idle")
+
+
+class OwnerChange(unittest.TestCase):
+    """A stream belongs to the sid it opened under (AJM-40): once another hello has taken
+    the rt session, it ends on the next tick — not at `subscribe_timeout_ms` — and the
+    new owner's `view` is not a refresh of it but the start of a stream of its own."""
+
+    def _streaming(self, sid="A"):
+        car, link = _FakeCar(), _FakeLink()
+        link.session = sid
+        v = VideoLink(car, link, SC + SPS + SC + PPS + SC + IDR + SC + P, loop=_FakeLoop())
+        v.transport = _FakeTransport()
+        v.datagram_received(_view(sid), ("127.0.0.1", 40000))
+        self.assertEqual(car.video_state, "streaming")
+        self.assertFalse(v.tick(0.0))          # one frame out: the stream is live
+        return car, link, v
+
+    def test_eviction_ends_the_stream_on_the_next_tick(self):
+        car, link, v = self._streaming("A")
+        link.session = "B"                      # another hello took the session
+        self.assertTrue(v.tick(0.1))            # well inside subscribe_timeout_ms
+        self.assertIsNone(v.peer)
+        self.assertEqual(car.video_state, "idle")
+        self.assertEqual((car.video_fps, car.video_kbps), (0, 0))
+
+    def test_session_over_still_ends_the_stream(self):
+        car, link, v = self._streaming("A")
+        link.session = None                     # bye, or idled out
+        self.assertTrue(v.tick(0.1))
+        self.assertIsNone(v.peer)
+        self.assertEqual(car.video_state, "idle")
+
+    def test_the_new_owners_view_is_not_a_refresh_of_the_old_stream(self):
+        car, link, v = self._streaming("A")
+        link.session = "B"
+        v.loop.now = 0.1
+        v.datagram_received(_view("B", key=True), ("127.0.0.1", 40001))
+        self.assertEqual(v.peer, ("127.0.0.1", 40000), "the running stream did not move")
+        self.assertEqual(v.last_view, 0.0, "nor was its deadline refreshed")
+        self.assertFalse(v.want_key, "nor did the stranger's key:true force an IDR into it")
+        self.assertTrue(v.tick(0.1), "the same tick ends it")
+
+    def test_the_new_owner_opens_a_stream_of_its_own(self):
+        car, link, v = self._streaming("A")
+        first = v.stream
+        link.session = "B"
+        self.assertTrue(v.tick(0.1))
+        v.datagram_received(_view("B"), ("127.0.0.1", 40001))
+        self.assertEqual(v.peer, ("127.0.0.1", 40001))
+        self.assertEqual(v.stream, (first + 1) & 0xFF, "a new stream number")
+        self.assertEqual((v.frame, v.pos), (0, 0), "from the top of the clip: its IDR")
+        self.assertEqual(car.video_state, "streaming")
 
 
 if __name__ == "__main__":

@@ -23,7 +23,8 @@ typedef struct {
     bool     bus_ok;      // false once a PCA9685 write failed and has not since succeeded
     const char *owner;    // which source owns the actuator: one of the MOTORS_OWNER_* words
     const char *video_state;   // one of the VIDEO_STATE_* words
-    uint32_t video_fps;        // frames encoded in the last second
+    uint32_t video_fps;        // frames sent in the last second (counted when a frame's last
+                               // chunk leaves the sender, not at the encoder)
     uint32_t video_kbps;       // kbit sent in the last second
     uint32_t video_dropped;    // frames not sent since boot
 } telemetry_t;

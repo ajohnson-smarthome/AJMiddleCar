@@ -17,7 +17,8 @@ esp_err_t video_link_start(void);
 
 typedef struct {
     const char *state;     // VIDEO_STATE_OFF / IDLE / STREAMING
-    uint32_t fps;          // frames encoded in the last second
+    uint32_t fps;          // frames sent in the last second — counted at the sender's output,
+                           // when a frame's last chunk leaves, not at the encoder
     uint32_t kbps;         // kbit sent in the last second
     uint32_t dropped;      // frames not sent since boot
 } video_link_stats_t;
