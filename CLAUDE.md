@@ -54,7 +54,9 @@ firmware/
   dongle/            the USB-Ethernet dongle — knows nothing about the car, and holds the
                      car's network in RAM only: the app tells it on every launch
 tools/               mock_car, release.sh, env-p4.sh, pm/ (tasks.md → Linear)
-openspec/            the live process: changes/<ajm-N-slug>/ and the specs they archive into
+openspec/            specs/ is the behaviour baseline (26 capabilities, written from the code
+                     2026-09-19) — a change writes a delta against it; changes/<ajm-N-slug>/
+                     is the work in flight, changes/archive/ what landed
 docs/                protocol.md, bringup.md, research/; superpowers/ is the pre-OpenSpec
                      archive of specs and plans — history, never extended
 ```
@@ -91,8 +93,9 @@ because it knows anything about the car — it knows neither the motors nor the 
 - **Провод — не в спеке.** `docs/protocol.md` и `contract/*.json` остаются источником правды;
   spec-дельта на них ссылается, а не пересказывает. Задача, трогающая провод, меняет схему и
   перегоняет генератор — `tools/check_contract.sh` ловит расхождение.
-- **`docs/superpowers/` — архив.** Спеки и планы до 2026-09-19 лежат там как история и не
-  переносятся. Новое — только в `openspec/changes/`. Superpowers-skills остаются, но
+- **`openspec/specs/` — базовая линия поведения**, 26 capabilities по коду на 2026-09-19; change пишет
+  дельту от неё (`MODIFIED`/`REMOVED`), а не спеку с нуля. **`docs/superpowers/` — архив.** Спеки и
+  планы до 2026-09-19 лежат там как история и не переносятся. Новое — только в `openspec/changes/`. Superpowers-skills остаются, но
   brainstorming заканчивается `/opsx:propose`, а не файлом в `docs/superpowers/specs`;
   writing-plans не используется — его место занимает `tasks.md`.
 - **Релиз не меняется.** `tools/release.sh` с main, как и раньше: PR → main → релиз, один релиз
