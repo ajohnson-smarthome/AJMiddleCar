@@ -253,11 +253,19 @@ static void ctl_task(void *arg) {
                 }
             }
         }
-        if (video_sub_expired(&sub, owner[0] != '\0' && enabled, t)) {
+        /* The owner is re-read every tick and compared with the sid the subscription
+           opened under: a bye leaves nobody, an eviction leaves somebody else, and either
+           ends the stream here, within a tick — not at the 3 s timeout (AJM-40). */
+        video_sub_end_t over = video_sub_expired(&sub, owner, enabled, t);
+        if (over != VS_ALIVE) {
             video_sub_end(&sub);
             s_want = false;
-            if (enabled) ESP_LOGI(TAG, "viewer gone — stream ends");
-            else         ESP_LOGI(TAG, "video switched off — stream ends");
+            switch (over) {
+            case VS_END_TIMEOUT: ESP_LOGI(TAG, "viewer gone — stream ends"); break;
+            case VS_END_OWNER:   ESP_LOGI(TAG, "%s — stream ends", owner[0] ? "owner changed" : "session over"); break;
+            case VS_END_SWITCH:  ESP_LOGI(TAG, "video switched off — stream ends"); break;
+            case VS_ALIVE:       break;
+            }
         }
     }
 }
