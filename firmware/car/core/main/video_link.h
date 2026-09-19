@@ -17,7 +17,9 @@
 esp_err_t video_link_start(void);
 
 typedef struct {
-    const char *state;     // VIDEO_STATE_OFF / IDLE / STREAMING
+    const char *state;     // VIDEO_STATE_OFF / IDLE / STREAMING — off is no sensor at boot,
+                           // or a sensor that went quiet while watched: VIDEO_RETRY_OFF_AFTER
+                           // starts in a row without a frame (video_retry.h), until one arrives
     uint32_t fps;          // frames sent in the last second — counted at the sender's output,
                            // when a frame's last chunk leaves, not at the encoder
     uint32_t kbps;         // kbit sent in the last second

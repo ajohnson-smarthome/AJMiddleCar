@@ -10,7 +10,10 @@
 //
 // camera_init runs once at boot: it brings up esp_video on the shared I2C bus and detects
 // the sensor. No sensor is not an error — the car drives without one — it is the `off`
-// state, and every later call answers ESP_ERR_INVALID_STATE.
+// state, and every later call answers ESP_ERR_INVALID_STATE. camera_present is that boot
+// answer and nothing later: a sensor that stops answering mid-run is not judged here — the
+// pipeline reports it one bounded wait at a time (camera_acquire), and the series of starts
+// that bring no frame is video_retry.h's, kept by the encode task (AJM-94).
 //
 // The pipeline (CSI DMA, ISP, the component's isp_task) runs only between camera_start
 // and camera_stop. Stopped, the sensor is in standby and nothing touches PSRAM or the
