@@ -13,7 +13,7 @@
 
 ## 2. Адаптер
 
-- [ ] 2.1 Uplink — серия тишины по времени (порог ≈ окно возврата 8 с + сторож + запас = 9 с), брошенное телефоном соединение — неотвеченное в момент броска (AJM-124, AJM-96); проверить `test_uplink.c`: серия по времени на датаграммах и на соединениях, живая связь обнуляет, толчок не раньше порога и не чаще интервала; `test_tcp_pending.c`/`test_relay_stats.c` — уход телефона в `SLOT_CONNECTING` считается; дельта уже есть — `specs/dongle/car-join/spec.md`; источники: `firmware/dongle/main/uplink.{c,h}`, `relay_tcp.c` (`SLOT_CONNECTING`, `phone_queued`), `relay_udp.c`, `udp_sess.c` (AJM-147)
+- [x] 2.1 Uplink — серия тишины по времени (порог ≈ окно возврата 8 с + сторож + запас = 9 с), брошенное телефоном соединение — неотвеченное в момент броска (AJM-124, AJM-96); проверить `test_uplink.c`: серия по времени на датаграммах и на соединениях, живая связь обнуляет, толчок не раньше порога и не чаще интервала; `test_tcp_pending.c`/`test_relay_stats.c` — уход телефона в `SLOT_CONNECTING` считается; дельта уже есть — `specs/dongle/car-join/spec.md`; источники: `firmware/dongle/main/uplink.{c,h}`, `relay_tcp.c` (`SLOT_CONNECTING`, `phone_queued`), `relay_udp.c`, `udp_sess.c` (AJM-147)
 - [x] 2.2 `POST /ota` адаптера возвращает результат `api_reply_error`, не `ESP_FAIL`, на всех путях отказа (AJM-137); проверить хост-тестом «путь отказа → возвращаемое значение» и сухим чтением `httpd`-поведения; дельта `MODIFIED` в `specs/dongle/api/spec.md` («`POST /ota` — отказ конвертом…»); источники: `firmware/dongle/main/ota_api.c`, `firmware/car/core/main/ota_api.c:65-71` (образец) (AJM-148)
 
 ## 3. Пульт

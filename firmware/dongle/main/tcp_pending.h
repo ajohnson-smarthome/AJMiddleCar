@@ -41,6 +41,19 @@ bool tcp_pending_empty(const tcp_pending_t *p);
  * backlog is non-empty — and n must not exceed TCP_PENDING_BUF_LEN. */
 void tcp_pending_stash(tcp_pending_t *p, const char *chunk, int n, int sent);
 
+/* The other way bytes get in, for a slot whose car side is not connected yet: the request a
+ * phone sends right after connect(), read for real rather than peeked so that the hangup lwIP
+ * queues behind it can be seen and scored the moment it happens (relay_tcp.c's
+ * handle_connecting says why that matters). No send() is attempted — there is nothing to send
+ * to — so the bytes go BEHIND whatever is already waiting, in order, and the whole request
+ * leaves in flush_pending's first pass once the slot is ACTIVE. `room` is how many more bytes
+ * the backlog can take; relay_tcp.c reads no more than that at a time and offers the phone
+ * for reading only while it is nonzero, which is what keeps a request longer than one backlog
+ * (a firmware upload) from spinning the task on bytes it cannot take. Precondition, not
+ * checked: 0 < n <= tcp_pending_room(p). */
+int tcp_pending_room(const tcp_pending_t *p);
+void tcp_pending_append(tcp_pending_t *p, const char *chunk, int n);
+
 /* Records that flush_pending's latest send() attempt placed `w` more bytes (0 < w <= however
  * many remain). Clears the backlog to empty — the same state tcp_pending_clear leaves it in —
  * the instant every byte has gone out; otherwise just moves the internal offset forward. */

@@ -253,10 +253,12 @@ sends it again on every launch. A new network is remembered and joined. The same
 has three outcomes, decided by what the station is doing: while it is `searching` or `joining`,
 or `connected` with a live uplink, the POST does nothing (`200`, the state exactly as it already
 was — a POST must not restart a join that is already working); after `failed` it starts a fresh
-search with a full budget; and `connected` with a **dead** uplink — `UPLINK_DEAD_AFTER` sends
-toward the car unanswered (`uplink.h`), the association the car's softAP forgot when it
-rebooted — it re-joins the same network with a full budget (`wifi_sta_rejoin`), which is what
-the relays do on their own within seconds and what «Повторить» in the app asks for sooner. The
+search with a full budget; and `connected` with a **dead** uplink — `UPLINK_DEAD_AFTER_MS` of
+sends toward the car with nothing back (`uplink.h`; the silence is measured in time, not
+sends, so a REST poll every few seconds and a 10 Hz drive stream are judged alike), the
+association the car's softAP forgot when it rebooted — it re-joins the same network with a
+full budget (`wifi_sta_rejoin`), which is what the relays do on their own within seconds and
+what «Повторить» in the app asks for sooner. The
 reply carries the `wifi` group's two words, not `{"proto":1,"ok":true}` — the point of asking
 is what the dongle now holds, the same rule `/config` and `/calibration` follow on the car.
 

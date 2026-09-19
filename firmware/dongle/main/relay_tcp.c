@@ -109,16 +109,6 @@ typedef struct {
     int phone_sock;
     int car_sock;
     uint32_t connect_started_ms;    /* meaningful only while state == SLOT_CONNECTING */
-    /* Meaningful only while state == SLOT_CONNECTING: the phone's request is already queued
-     * in the socket buffer, so the phone side is no longer offered for reading until the slot
-     * is ACTIVE and pump_read can take it. Without this the slot spun: handle_connecting peeks
-     * with MSG_PEEK and leaves the bytes where they are, lwIP's select() is level-triggered on
-     * exactly those bytes (lwip_selscan: lastdata != NULL), and every pass returned at once
-     * with nothing to do — a priority-5 task at full speed for the whole connect, five seconds
-     * per slot while the car was off and the app kept polling, starving the idle task and the
-     * display. The cost is that a phone hanging up DURING the connect is noticed only when the
-     * connect resolves or its deadline fires, which RELAY_CONNECT_TIMEOUT_MS bounds. */
-    bool phone_queued;
     /* When this slot last moved a byte, in either direction. Set when the slot is created so
      * it is never stale, refreshed on every successful read and every successful write, and
      * read only while state == SLOT_ACTIVE — the same idiom relay_udp uses for its sessions,
@@ -181,6 +171,23 @@ static void close_slot(relay_state_t *r, int idx, const char *why)
      * on the order of one per REST request, not one per 10 Hz frame — so this is logged
      * plainly every time rather than rate-limited. */
     ESP_LOGI(TAG, "slot %d closed: %s", idx, why);
+}
+
+/* A connection attempt toward the car that is now known to have gone unanswered — the SYN
+ * could not leave, the phone gave up waiting on it, or this relay's own deadline did. Scored
+ * with the UDP relay's sends (uplink.h), because during a launch gate or an update's reboot
+ * watch these polls may be the only traffic toward the car, and the association the car
+ * forgot has to be noticed from them too. Same guard, same reason as relay_udp.c: a streak
+ * while the station says `connected` is that forgotten association, and a re-join is the only
+ * exit; while it says anything else the silence has a reason wifi_state already owns. */
+static void unanswered_connect(void)
+{
+    if (uplink_failed(uplink_shared(), boot_ms()) && wifi_sta_connected()) {
+        ESP_LOGW(TAG, "tcp: the car has answered nothing for %u ms of sends while the station "
+                      "says connected — rejoining", (unsigned)UPLINK_DEAD_AFTER_MS);
+        esp_err_t jerr = wifi_sta_rejoin();
+        if (jerr != ESP_OK) ESP_LOGW(TAG, "rejoin refused: %s", esp_err_to_name(jerr));
+    }
 }
 
 /* Sends as much of a slot's already-buffered backlog as dst currently accepts. Called only
@@ -393,21 +400,10 @@ static void handle_accept(relay_state_t *r)
     } else if (errno == EINPROGRESS) {
         r->slots[idx].state = SLOT_CONNECTING;
         r->slots[idx].connect_started_ms = boot_ms();
-        r->slots[idx].phone_queued = false;
     } else {
-        /* The SYN could not even leave: scored with the UDP relay's sends (uplink.h), because
-         * during a launch gate or an update's reboot watch these polls may be the only
-         * traffic toward the car, and the association the car forgot has to be noticed from
-         * them too. Same guard, same reason as relay_udp.c. */
+        /* The SYN could not even leave — unanswered from the start (unanswered_connect). */
         int cerr = errno;
-        if (uplink_failed(uplink_shared(), boot_ms())) {
-            if (wifi_sta_connected()) {
-                ESP_LOGW(TAG, "%s: %u sends to the car went unanswered while the station says "
-                              "connected — rejoining", "tcp", (unsigned)UPLINK_DEAD_AFTER);
-                esp_err_t jerr = wifi_sta_rejoin();
-                if (jerr != ESP_OK) ESP_LOGW(TAG, "rejoin refused: %s", esp_err_to_name(jerr));
-            }
-        }
+        unanswered_connect();
         errno = cerr;
         /* Rate-limited: a car actively refusing the port (ECONNREFUSED comes back fast, no
          * SYN retries involved) fails this on every attempt a retrying client makes. */
@@ -435,12 +431,25 @@ static void handle_accept(relay_state_t *r)
  *    all — the ordinary failure mode of "the car is off", not an exotic one — leaves
  *    select() timing out with nothing ready, pass after pass; only a check that runs whether
  *    or not select() found anything can ever catch that.
- * 2. The phone hanging up while this relay is still waiting on the car. Watched via
- *    MSG_PEEK, not a real recv(): a phone that has already sent its request (an ordinary
- *    thing to do right after connect(), without waiting for anything from the far end) must
- *    not have those bytes silently discarded here — there is nowhere to stash them, since
- *    this slot has no pending backlog until it is ACTIVE. MSG_PEEK reports EOF/error without
- *    consuming a live request, leaving it queued for pump_read once this slot goes ACTIVE.
+ * 2. The phone hanging up while this relay is still waiting on the car. A phone that gave
+ *    up on the car is a connection attempt the car did not answer in time, and the moment it
+ *    gives up is when that is known — so it is scored (unanswered_connect) right then, not
+ *    when this relay's own, longer deadline fires. That is what puts the launch ladder's and
+ *    the update watch's /version polls on the same clock as the UDP relay's datagrams: the
+ *    phone abandons each one after its own timeout, and the streak grows at that pace rather
+ *    than at RELAY_CONNECT_TIMEOUT_MS per poll (AJM-124).
+ *
+ *    To see the hangup at all, the request the phone sent right after connect() (an ordinary
+ *    thing to do, without waiting for anything from the far end) has to be READ, not peeked:
+ *    lwIP queues the FIN behind the data, so a recv() sees EOF only once the bytes before it
+ *    are consumed, and a peek that leaves them in place also leaves select() level-triggered
+ *    on them — a priority-5 task returning at once on every pass, for the whole connect. The
+ *    bytes are appended to this slot's phone->car backlog, where they wait for the car exactly
+ *    as a chunk pump_read could not forward would, and flush_pending sends them the first pass
+ *    the slot is ACTIVE. The backlog's size bounds this: a request longer than one backlog (a
+ *    firmware upload) fills it, the phone side then leaves readfds until there is room again,
+ *    and a phone hanging up mid-upload is noticed when the connect resolves or its deadline
+ *    fires — the case the deadline exists for, and one no poll ever produces.
  * 3. The connect() itself resolving, via the SO_ERROR/writable check the brief describes.
  *
  * Any of the three can close the slot; each returns immediately after doing so rather than
@@ -455,40 +464,36 @@ static void handle_connecting(relay_state_t *r, int i, bool had_ready, fd_set *r
          * elapses correctly even across the millisecond counter's ~49.7-day wrap. */
         ESP_LOGW(TAG, "upstream connect timed out (slot %d)", i);
         close_slot(r, i, "connect timed out");
-        /* A SYN that left and was never answered is the same silence uplink.h scores on
-         * the UDP side (see relay_udp.c for the guard and why). */
-        if (uplink_failed(uplink_shared(), boot_ms())) {
-            if (wifi_sta_connected()) {
-                ESP_LOGW(TAG, "%s: %u sends to the car went unanswered while the station says "
-                              "connected — rejoining", "tcp", (unsigned)UPLINK_DEAD_AFTER);
-                esp_err_t jerr = wifi_sta_rejoin();
-                if (jerr != ESP_OK) ESP_LOGW(TAG, "rejoin refused: %s", esp_err_to_name(jerr));
-            }
-        }
+        /* A SYN that left and was never answered — by the relay's own clock, when the phone
+         * held on longer than it. */
+        unanswered_connect();
         return;
     }
 
     if (had_ready && FD_ISSET(s->phone_sock, rfds)) {
-        char peek;
-        int n = recv(s->phone_sock, &peek, sizeof(peek), MSG_PEEK);
-        if (n == 0) {
-            close_slot(r, i, "phone closed during connect");
+        /* Offered for reading only while the backlog has room (relay_task's fd-set build),
+         * and read no further than that room, so a segment never lands half in the backlog
+         * and half nowhere. The scratch is pump_read's, RELAY_BUF_LEN long — the backlog's
+         * own length, so the room always fits it. */
+        tcp_pending_t *p2c = &s_p2c_pending[i];
+        int n = recv(s->phone_sock, s_phone_buf, (size_t)tcp_pending_room(p2c), 0);
+        if (n > 0) {
+            tcp_pending_append(p2c, s_phone_buf, n);
+        } else if (n == 0) {
+            close_slot(r, i, "phone gave up during connect");
+            unanswered_connect();
             return;
-        }
-        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
             /* Mirrors pump_read's "recv failed" path: a real error, not an ordinary hangup,
              * so the errno is worth keeping — this whole connect-in-progress window is the
-             * least-proven part of the file. */
+             * least-proven part of the file. Scored the same: the phone is gone before the
+             * car answered, whichever way it went. */
             ESP_LOGW(TAG, "phone recv during connect failed (slot %d): errno %d", i, errno);
-            close_slot(r, i, "phone closed during connect");
+            close_slot(r, i, "phone gave up during connect");
+            unanswered_connect();
             return;
         }
-        /* n > 0: a real request byte is queued and MSG_PEEK left it untouched in the kernel
-         * buffer for pump_read to read for real once this slot goes ACTIVE — and from now on
-         * the phone side stays out of readfds, or that untouched byte would wake every pass.
-         * n < 0 with EAGAIN: a spurious wakeup: nothing to do. Either way, keep waiting on
-         * the car. */
-        if (n > 0) s->phone_queued = true;
+        /* EAGAIN: a spurious wakeup, nothing to do. Either way, keep waiting on the car. */
     }
 
     if (had_ready && FD_ISSET(s->car_sock, wfds)) {
@@ -631,11 +636,20 @@ static void relay_task(void *arg)
             } else if (s->state == SLOT_CONNECTING) {
                 /* connect() completion is observed as writability, not readability — see
                  * handle_accept's comment. The phone side is watched too, so a hangup mid-
-                 * connect is noticed rather than pinning the slot until the connect deadline
-                 * — see handle_connecting — but only until its request has arrived: after
-                 * that, offering it would make select() return at once on every pass (see
-                 * phone_queued). */
-                if (!s->phone_queued) {
+                 * connect is noticed — and scored — the moment it happens rather than at the
+                 * connect deadline (see handle_connecting). Watched while the phone->car
+                 * backlog has ROOM, not only while it is empty as an ACTIVE slot's rule has
+                 * it: the request handle_connecting reads goes into that backlog and cannot
+                 * leave it before the car is connected, so "empty" would drop the phone from
+                 * readfds the moment its request arrived and hide the hangup queued behind
+                 * it until the deadline — the very delay this exists to remove. A phone that
+                 * has sent its request and is silently waiting keeps select() waiting too
+                 * (its bytes are consumed, nothing is level-triggered); one whose request
+                 * outgrew the backlog leaves readfds until the slot is ACTIVE and
+                 * flush_pending has made room. The car side is NOT offered for writing to
+                 * flush that backlog here — writable means the connect resolved, and the
+                 * flush waits for ACTIVE. */
+                if (tcp_pending_room(&s_p2c_pending[i]) > 0) {
                     FD_SET(s->phone_sock, &rfds);
                     if (s->phone_sock > maxfd) maxfd = s->phone_sock;
                 }
