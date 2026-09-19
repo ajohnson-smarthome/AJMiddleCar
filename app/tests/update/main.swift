@@ -161,6 +161,26 @@ check(UpdateRules.flashPlan(for: .dongle, release: nil, cachedBuild: nil, hasCac
 check(UpdateRules.flashPlan(for: .dongle, release: nil, cachedBuild: 100, hasCachedFile: false) == .unavailable,
       "a recorded build with no backing file is not something to flash")
 
+// -- one release, two images: a tag is adopted only when the release carries both ------
+// `shared/release`: the release is learned once per launch, by whichever board's stage gets
+// there first, and the tag then serves both boards. So the check is per release, not per
+// stage — this takes no device, and there is nothing the adapter's stage could pass that
+// would make the car's image optional. A release with the adapter's image and no car's used
+// to be adopted on the adapter's stage (AJM-56): the car then either drove past its gate or
+// was sent to a forced update whose image did not exist.
+let carAsset = UpdateRules.Device.car.assetName
+let dongleAsset = UpdateRules.Device.dongle.assetName
+check(UpdateRules.images(in: [dongleAsset: dongleURL]) == .missing(.car),
+      "adapter image only → the missing board is the car, whichever stage asked")
+check(UpdateRules.images(in: [carAsset: carURL]) == .missing(.dongle),
+      "car image only → the missing board is the adapter")
+check(UpdateRules.images(in: [carAsset: carURL, dongleAsset: dongleURL]) == .both(car: carURL, dongle: dongleURL),
+      "both images → both URLs, each under its own board, not swapped")
+check(UpdateRules.images(in: [:]) == .missing(.car),
+      "no images at all → one board is named — the car, by convention — deterministically")
+check(UpdateRules.images(in: ["\(carAsset).sha256": carURL, dongleAsset: dongleURL]) == .missing(.car),
+      "a checksum or any other file is not the image: asset names match exactly")
+
 if failures == 0 { print("test_update: OK") } else { exit(1) }
 
 // -- the reboot watch's window is the device's, not one number for both -------------------

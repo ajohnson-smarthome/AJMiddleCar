@@ -31,8 +31,14 @@ enum L {
     static var carFaultSub: String { s("car.faultSub") }
     static var settingsFirmwareCar: String { s("settings.firmwareCar") }
     static var settingsFirmwareDongle: String { s("settings.firmwareDongle") }
-    static func gateNoReleaseTitle(_ d: UpdateRules.Device) -> String { s("gate.noReleaseTitle.\(d.rawValue)") }
-    static func gateNoReleaseSub(_ d: UpdateRules.Device, _ tag: String) -> String { s("gate.noReleaseSub.\(d.rawValue)", tag) }
+    /// `nil` is the release whose tag carries no build number — nobody's image is missing, so
+    /// no board is named.
+    static func gateNoReleaseTitle(_ d: UpdateRules.Device?) -> String {
+        s("gate.noReleaseTitle.\(d?.rawValue ?? "noBuild")")
+    }
+    static func gateNoReleaseSub(_ d: UpdateRules.Device?, _ tag: String) -> String {
+        s("gate.noReleaseSub.\(d?.rawValue ?? "noBuild")", tag)
+    }
     static var dongleFindingTitle: String { s("dongle.findingTitle") }
     static var dongleFindingSub: String { s("dongle.findingSub") }
     static var gateReleaseCheckTitle: String { s("gate.releaseCheckTitle") }

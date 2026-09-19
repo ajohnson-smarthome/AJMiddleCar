@@ -33,6 +33,32 @@ public enum UpdateRules {
         var cacheFileName: String { assetName }
     }
 
+    /// What a release read from GitHub carries for the two boards, decided over its assets
+    /// (name → download URL). Pure, so `UpdateClient.latestReleaseLookup` decides nothing on
+    /// its own and the launch gate's "which board has no image" is host-tested.
+    enum ReleaseImages: Equatable {
+        /// Both images, each under its own board — the only shape a tag is adopted from.
+        case both(car: URL, dongle: URL)
+        /// The board whose image the release lacks; the gate holds naming it (`shared/release`).
+        case missing(Device)
+    }
+
+    /// One release, two images: a release is accepted only when it carries BOTH boards'
+    /// images, whichever board's stage learned it. The release is learned once per launch and
+    /// its tag then serves both boards, so insisting only on the image of the board that asked
+    /// (what this did until AJM-56) left a window: the adapter, adopted from a release with no
+    /// car image, handed over to a car that either drove past its gate or was sent to a forced
+    /// update whose image did not exist. A half release is not a release.
+    ///
+    /// Names match exactly (`Device.assetName`) — a checksum file beside the image is not the
+    /// image. When both are missing the car is named: the hold names one board, and which one
+    /// is a convention, not a judgement.
+    static func images(in assets: [String: URL]) -> ReleaseImages {
+        guard let car = assets[Device.car.assetName] else { return .missing(.car) }
+        guard let dongle = assets[Device.dongle.assetName] else { return .missing(.dongle) }
+        return .both(car: car, dongle: dongle)
+    }
+
     /// The one file name every build before the per-device split used for the car's cached
     /// image. Nothing writes it any more; it only has to be FOUND, in either of the two
     /// directories it has lived in.
@@ -86,9 +112,9 @@ public enum UpdateRules {
     /// - Parameters:
     ///   - device: Whose image this decides for — carried into every non-`unavailable` case of
     ///     the result, unchanged.
-    ///   - release: The freshly fetched release for `device` specifically (its own tag and its
-    ///     own asset URL — `UpdateClient.latestRelease(for: device)`), or `nil` when GitHub was
-    ///     unreachable or unusable.
+    ///   - release: The freshly fetched release, narrowed to `device` (the one tag and
+    ///     `device`'s own asset URL — `UpdateClient.Release.assetURL(for: device)`), or `nil`
+    ///     when GitHub was unreachable or unusable.
     ///   - cachedBuild: `UpdateClient.cachedBuild(for: device)` — `device`'s own recorded build,
     ///     never the other device's.
     ///   - hasCachedFile: `UpdateClient.hasCachedFile(for: device)` — `device`'s own cache file.

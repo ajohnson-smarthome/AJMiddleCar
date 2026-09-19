@@ -83,7 +83,7 @@ final class FirmwareFlow: ObservableObject {
         // cleared.
         rolledBack = false
         failReason = nil
-        if let r = await client.latestRelease(for: device) {
+        if let r = await client.latestRelease() {
             release = r
             phase = UpdateClient.isUpdateAvailable(running: runningFw(), latest: r.tag)
                 ? .available : .upToDate
@@ -118,7 +118,7 @@ final class FirmwareFlow: ObservableObject {
         // disk — from an earlier forced flash, or the settings screen — is used, not fetched
         // again. Before this, a forced car update re-downloaded the 2 MB it already held and sat
         // on «Скачивание 100 %» for the whole second fetch.
-        switch UpdateRules.flashPlan(for: device, release: (tag: r.tag, assetURL: r.assetURL),
+        switch UpdateRules.flashPlan(for: device, release: (tag: r.tag, assetURL: r.assetURL(for: device)),
                                      cachedBuild: UpdateClient.cachedBuild(for: device),
                                      hasCachedFile: UpdateClient.hasCachedFile(for: device)) {
         case .useCache:
