@@ -12,6 +12,8 @@ here so the file runs in a couple of seconds; their real values are hand-mirrore
 against the app's stall guard and pinned where they are defined.
 """
 import asyncio
+import contextlib
+import io
 import json
 import os
 import sys
@@ -25,9 +27,10 @@ from aiohttp.test_utils import TestClient, TestServer   # noqa: E402
 
 import mock_car                                  # noqa: E402
 import rt_link                                   # noqa: E402
-from generated import CALIBRATION, CONFIG_PATH, ENDPOINTS   # noqa: E402
+from generated import CALIBRATION, CONFIG_PATH, DOMAINS, ENDPOINTS, STATUS_GROUPS   # noqa: E402
 from rt_link import Impairment, RTLink           # noqa: E402
-from state import CarState                       # noqa: E402
+from state import (BUS_DOWN, BUS_OK, RADIO_EXPECTED, RADIO_MISMATCH, RADIO_OK,   # noqa: E402
+                   RADIO_UNAVAILABLE, VIDEO_IDLE, VIDEO_OFF, CarState)
 from test_state import synthetic_image           # noqa: E402
 
 OLD_FW = "v1.0+9000"
@@ -180,6 +183,140 @@ class TestBodyLimits(Served):
         for path, _, _ in self.bodies():
             for raw in (b"[]", b"5", b'"wheels"', b""):
                 await self.expect_refused(path, raw, "bad_json")
+
+
+class TestDegradationFlags(Served):
+    """Each degradation flag, as the app would meet it over REST (AJM-116). The state's own
+    rules are in test_state.py; here is the plumbing — the flag reaching `CarState`, the
+    status code each refusal gets, and the two /status-only groups."""
+
+    def good_table(self):
+        k = CALIBRATION["keys"]
+        return {k["wheels"]: [{k["corner"]: c, k["pair"]: i, k["inverted"]: False}
+                              for i, c in enumerate(CALIBRATION["corners"])]}
+
+    async def status(self):
+        resp = await self.client.get(ENDPOINTS["status"])
+        self.assertEqual(resp.status, 200)
+        return await resp.json()
+
+    async def expect_error(self, resp, status, code, field=None):
+        self.assertEqual(resp.status, status)
+        err = (await resp.json())["error"]
+        self.assertEqual(err["code"], code)
+        if field is None:
+            self.assertNotIn("field", err)
+        else:
+            self.assertEqual(err["field"], field)
+
+    def test_the_parser_defaults_every_flag_off_and_car_from_args_reads_each(self):
+        """`car_from_args` is the one place the flags become state — so the mock
+        test-all.sh starts, with no flags, is the healthy car."""
+        off = mock_car.car_from_args(mock_car.parser().parse_args([]), now=0.0)
+        groups = off.status_groups(0, STATUS_GROUPS)
+        self.assertEqual(groups["motors"]["bus"], BUS_OK)
+        self.assertEqual(groups["video"]["state"], VIDEO_IDLE)
+        self.assertEqual(groups["radio"]["state"], RADIO_OK)
+        self.assertIs(groups["storage"]["reset_at_boot"], False)
+        self.assertEqual(off.write_fail, set())
+        args = mock_car.parser().parse_args(
+            ["--bus", "down", "--camera", "off", "--radio", "unavailable", "--reset-at-boot",
+             "--write-fail", "ramp", "--write-fail", "calibration", "--reboot-s", "0"])
+        on = mock_car.car_from_args(args, now=0.0)
+        groups = on.status_groups(0, STATUS_GROUPS)
+        self.assertEqual(groups["motors"]["bus"], BUS_DOWN)
+        self.assertEqual(groups["video"]["state"], VIDEO_OFF)
+        self.assertEqual(groups["radio"]["state"], RADIO_UNAVAILABLE)
+        self.assertIs(groups["storage"]["reset_at_boot"], True)
+        self.assertEqual(on.write_fail, {"ramp", "calibration"})
+        self.assertEqual(args.reboot_s, 0.0)
+        self.assertIsNone(mock_car.parser().parse_args([]).reboot_s,
+                          "unset: the link falls back to rt_link.REBOOT_QUIET_S at reboot time")
+
+    def test_the_parser_refuses_a_word_the_contract_does_not_have(self):
+        for bad in (["--bus", "broken"], ["--radio", "missing"], ["--camera", "no"],
+                    ["--write-fail", "wheels"], ["--reboot-s", "-1"]):
+            with self.assertRaises(SystemExit, msg=bad), contextlib.redirect_stderr(io.StringIO()):
+                mock_car.parser().parse_args(bad)
+
+    async def test_status_carries_radio_and_storage_in_the_contracts_order(self):
+        await self.serve()
+        doc = await self.status()
+        self.assertEqual(list(doc), ["proto"] + STATUS_GROUPS)
+        self.assertEqual(doc["radio"], {"fw": RADIO_EXPECTED, "expected": RADIO_EXPECTED,
+                                        "state": RADIO_OK})
+        self.assertEqual(doc["storage"], {"reset_at_boot": False})
+
+    async def test_bus_down_is_in_status_and_a_spin_is_409_busy(self):
+        self.car = CarState(fw=OLD_FW, now=asyncio.get_running_loop().time(), bus_ok=False)
+        self.link = RTLink(self.car, Impairment())
+        await self.serve()
+        self.assertEqual((await self.status())["motors"]["bus"], BUS_DOWN)
+        k = CALIBRATION["keys"]
+        resp = await self.client.post(ENDPOINTS["spin"], json={k["pair"]: 0, k["direction"]: CALIBRATION["directions"][0]})
+        await self.expect_error(resp, 409, "busy")
+        self.assertEqual((await resp.json())["error"]["message"], "motor bus down")
+        # ...and the car is still updatable: the flash takes the actuator and goes through.
+        await self.flash()
+
+    async def test_radio_unavailable_is_null_fw_and_mismatch_is_another_version(self):
+        self.car = CarState(fw=OLD_FW, now=asyncio.get_running_loop().time(), radio=RADIO_UNAVAILABLE)
+        self.link = RTLink(self.car, Impairment())
+        await self.serve()
+        radio = (await self.status())["radio"]
+        self.assertEqual(radio, {"fw": None, "expected": RADIO_EXPECTED, "state": RADIO_UNAVAILABLE})
+        await self.client.close()
+        self.car = CarState(fw=OLD_FW, now=asyncio.get_running_loop().time(), radio=RADIO_MISMATCH)
+        self.link = RTLink(self.car, Impairment())
+        await self.serve()
+        radio = (await self.status())["radio"]
+        self.assertEqual(radio["state"], RADIO_MISMATCH)
+        self.assertNotEqual(radio["fw"], radio["expected"])
+
+    async def test_reset_at_boot_shows_in_status_over_default_config(self):
+        self.car = CarState(fw=OLD_FW, now=asyncio.get_running_loop().time(), nvs_wiped=True)
+        self.link = RTLink(self.car, Impairment())
+        await self.serve()
+        doc = await self.status()
+        self.assertIs(doc["storage"]["reset_at_boot"], True)
+        self.assertIs(doc["motors"]["calibrated"], False)
+        resp = await self.client.get(CONFIG_PATH)
+        cfg = await resp.json()
+        defaults = CarState(now=0.0).config_wire()
+        self.assertEqual({d: cfg[d] for d in DOMAINS}, defaults)
+
+    async def test_write_fail_ramp_is_one_500_and_the_next_get_shows_the_old_value(self):
+        self.car = CarState(fw=OLD_FW, now=asyncio.get_running_loop().time(), write_fail=["ramp"])
+        self.link = RTLink(self.car, Impairment())
+        await self.serve()
+        before = (await (await self.client.get(CONFIG_PATH)).json())["ramp"]
+        body = {"ramp": {"rise_ms": before["rise_ms"] + 100}}
+        resp = await self.client.post(CONFIG_PATH, json=body)
+        await self.expect_error(resp, 500, "write_failed", field="ramp")
+        self.assertEqual((await (await self.client.get(CONFIG_PATH)).json())["ramp"], before)
+        resp = await self.client.post(CONFIG_PATH, json=body)
+        self.assertEqual(resp.status, 200)
+        self.assertEqual((await resp.json())["ramp"], body["ramp"])
+
+    async def test_write_fail_calibration_is_one_500_with_field_wheels(self):
+        self.car = CarState(fw=OLD_FW, now=asyncio.get_running_loop().time(), write_fail=["calibration"])
+        self.link = RTLink(self.car, Impairment())
+        await self.serve()
+        k = CALIBRATION["keys"]
+        resp = await self.client.post(ENDPOINTS["calibration"], json=self.good_table())
+        await self.expect_error(resp, 500, "write_failed", field=k["wheels"])
+        doc = await (await self.client.get(ENDPOINTS["calibration"])).json()
+        self.assertIs(doc[k["calibrated"]], False)
+        self.assertEqual(doc[k["wheels"]], [])
+        resp = await self.client.post(ENDPOINTS["calibration"], json=self.good_table())
+        self.assertEqual(resp.status, 200)
+        self.assertIs((await resp.json())[k["calibrated"]], True)
+
+    async def test_reboot_s_zero_leaves_rest_answering_right_after_a_flash(self):
+        self.link = RTLink(self.car, Impairment(), reboot_s=0.0)
+        await self.serve()
+        await self.flash()
+        self.assertEqual((await self.version())["fw"], NEW_FW)
 
 
 if __name__ == "__main__":

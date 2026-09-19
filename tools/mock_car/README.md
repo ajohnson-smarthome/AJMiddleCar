@@ -38,6 +38,57 @@ local-network privacy, interface pinning — is exercised against the real dongl
 | `--video-loss-pct` | drop this percentage of outbound video datagrams |
 | `--video-reorder-pct` | delay this percentage by one datagram slot |
 | `--video-dup-pct` | send this percentage twice |
+| `--bus down` | `motors.bus: down` — the PWM boards never came up (below) |
+| `--camera off` | `video.state: off` — no sensor answered at boot (below) |
+| `--radio mismatch` / `--radio unavailable` | the word in `radio.state`; `fw` is another version, or `null` (below) |
+| `--reset-at-boot` | `storage.reset_at_boot: true` — this boot wiped the settings and the calibration (below) |
+| `--write-fail <domain>` / `--write-fail calibration` | the first changing write of that domain, or of the table, answers `500 write_failed` and is rolled back; repeatable (below) |
+| `--reboot-s N` | how long every port is silent after a flash; default `rt_link.REBOOT_QUIET_S` (4 s), `0` is no silence |
+
+## Degradations
+
+The states a car can boot into and the app has to show — the drive screen's "motor
+driver not answering", the firmware screen's radio line, the settings' "reset" notice —
+used to exist only on the bench (AJM-116). Each is now a flag, all off by default, so the
+mock `tools/test-all.sh` starts is the healthy car and a rehearsal is one word on the
+command line. A degradation is a *state* and what it implies on the wire, never the cause
+behind it: nothing here simulates an I2C bus or an NVS partition. Each shows everywhere the
+car shows it, per the specs `car/status-and-version`, `car/actuator-arbiter`,
+`car/video-stream`, `car/config` and `car/calibration`:
+
+- `--bus down` — `motors.bus` is `down` in `/status` and in every telemetry frame. The car
+  stays reachable and updatable (`/ota` goes through), `hello` and `drive` are accepted —
+  the arbiter grants, `motors.owner` says `remote`, the watchdog arms — but nothing
+  reaches the wheels and no breadcrumb is recorded, so a lost link *stops* instead of
+  retracing ground never covered. `POST /calibration/spin` is `409 busy` with the message
+  `motor bus down`, asked before the arbiter as `calib_spin.h` asks it: no grant, no pulse,
+  the wizard must not advance.
+- `--camera off` — `video.state` is `off` for the whole run, `fps`/`kbps`/`dropped` zeros,
+  and every `view` is ignored: no subscription, nothing on the video port. (`GET /snapshot`
+  stays the mock's `404`.)
+- `--radio mismatch` — `radio.state: mismatch`, `radio.fw` another version than
+  `radio.expected`; `--radio unavailable` — `radio.state: unavailable`, `radio.fw: null`, the
+  only case it is null. Read once at boot on the car, constant for the run here.
+- `--reset-at-boot` — `storage.reset_at_boot: true`; the mock starts on the contract's
+  defaults with `motors.calibrated: false` anyway, which is exactly what the car reports
+  after an NVS migration erase.
+- `--write-fail ramp` (any domain of `/config`) — the first `POST` that *changes* `ramp`
+  answers `500 write_failed`, `field: ramp`, and the next `GET` shows the previous values;
+  domains earlier in the contract's order in the same body stay applied, as `cfg_api.c`
+  leaves them. The refusal is spent once: the retry goes through. An unchanged write does
+  not spend it — the car's NVS skips it and cannot fail. `--write-fail calibration` does the
+  same to `POST /calibration`: `500 write_failed`, `field: wheels`, `calibrated` and the
+  table untouched, the next save accepted. The flag repeats: `--write-fail ramp
+  --write-fail calibration`.
+- `--reboot-s N` — the silence after `/ota` on all three ports, `rt_link.REBOOT_QUIET_S`
+  (4 s) unless said otherwise. `0` is the escape hatch for a sweep that needs REST back
+  before the app's stall guard would have fired.
+
+The banner names whichever are on (`degraded  bus down, camera off`). Tests:
+`test_state.py::TestDegradation` for what each does to the state, `test_video.py::NoSensor`
+for the ignored `view`, `test_rtlink.py` for the reboot window, and
+`test_http.py::TestDegradationFlags` for the flags reaching the state, the status codes,
+and the six-group `/status`.
 
 ## Video
 
@@ -123,7 +174,8 @@ a file; `ffplay /tmp/out.h264` opens it.
 - `test_http.py` — `.venv/bin/python test_http.py`: the REST side over a real aiohttp
   server, for what only shows through a socket — the simulated reboot dropping REST
   connections unanswered for the same window UDP is deaf and mute, then `/version` with
-  the new fw (or, under `--rollback`, the old one and `rolled_back: true`).
+  the new fw (or, under `--rollback`, the old one and `rolled_back: true`); the body
+  limits; and each degradation flag as the app meets it over REST.
 - `mock_car.py` — plumbing only: it binds the UDP endpoint and the aiohttp REST server,
   whose six config domains are one route, `/config`, that walks the schema.
 - `generated.py` — **generated**. Never hand-edit it; change `contract/car-api.json` and

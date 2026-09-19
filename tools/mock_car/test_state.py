@@ -12,11 +12,13 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from generated import CALIBRATION, DOMAINS, GROUPS, PROTO, RT, TELEMETRY_GROUPS   # noqa: E402
-from state import (CHIP_ID, OWNER_CALIBRATION, OWNER_CONSOLE, OWNER_IDLE,   # noqa: E402
-                   OWNER_RECOVERING, OWNER_REMOTE, OWNER_SAFE_STOP, OWNER_UPDATE, CarState,
-                   build_number, clamp_axis, image_refusal, number, parse_frame,
-                   parse_image_version, seq_is_newer, valid_seq, valid_sid)
+from generated import (CALIBRATION, DOMAINS, GROUPS, PROTO, RT, STATUS_GROUPS,   # noqa: E402
+                       TELEMETRY_GROUPS)
+from state import (BUS_DOWN, BUS_OK, CHIP_ID, OWNER_CALIBRATION, OWNER_CONSOLE,   # noqa: E402
+                   OWNER_IDLE, OWNER_RECOVERING, OWNER_REMOTE, OWNER_SAFE_STOP, OWNER_UPDATE,
+                   RADIO_EXPECTED, RADIO_MISMATCH, RADIO_OK, RADIO_UNAVAILABLE, VIDEO_IDLE,
+                   VIDEO_OFF, CarState, build_number, clamp_axis, image_refusal, number,
+                   parse_frame, parse_image_version, seq_is_newer, valid_seq, valid_sid)
 
 DEADLINE_S = RT["watchdog_ms"] / 1000.0
 K, T = RT["keys"], RT["types"]
@@ -941,6 +943,151 @@ class TestTelemetry(unittest.TestCase):
         car = CarState(now=100.0)
         car.tick(142.0)
         self.assertEqual(car.telemetry(0)["system"]["uptime_s"], 42)
+
+
+class TestDegradation(unittest.TestCase):
+    """The states a car can boot into and the app has to show (AJM-116): each is a flag on
+    the mock, off by default, and each shows wherever the car shows it — `car/status-and-
+    version`, `car/actuator-arbiter`, `car/video-stream`, `car/config`, `car/calibration`."""
+
+    def good_table(self):
+        k = CALIBRATION["keys"]
+        return [{k["corner"]: c, k["pair"]: i, k["inverted"]: False}
+                for i, c in enumerate(CALIBRATION["corners"])]
+
+    def test_every_degradation_is_off_by_default(self):
+        car = CarState(now=0.0)
+        groups = car.status_groups(0, STATUS_GROUPS)
+        self.assertEqual(groups["motors"]["bus"], BUS_OK)
+        self.assertEqual(groups["video"]["state"], VIDEO_IDLE)
+        self.assertEqual(groups["radio"], {"fw": RADIO_EXPECTED, "expected": RADIO_EXPECTED,
+                                           "state": RADIO_OK})
+        self.assertIs(groups["storage"]["reset_at_boot"], False)
+        self.assertEqual(car.write_fail, set())
+
+    def test_status_walks_all_six_groups_in_the_contracts_order(self):
+        """`radio` and `storage` are /status-only; built by walking the schema like the
+        other four, so a field added to the contract cannot go missing on the wire."""
+        groups = CarState(now=0.0).status_groups(0, STATUS_GROUPS)
+        self.assertEqual(list(groups), STATUS_GROUPS)
+        for g in STATUS_GROUPS:
+            self.assertEqual(list(groups[g]), [f["name"] for f in GROUPS[g]["fields"]], g)
+
+    def test_bus_down_is_the_same_word_in_telemetry_and_status(self):
+        car = CarState(now=0.0, bus_ok=False)
+        self.assertEqual(car.telemetry(0)["motors"]["bus"], BUS_DOWN)
+        self.assertEqual(car.status_groups(0, STATUS_GROUPS)["motors"]["bus"], BUS_DOWN)
+
+    def test_bus_down_takes_commands_but_nothing_moves_and_nothing_is_retraced(self):
+        """`car/actuator-arbiter`: the arbiter accepts, the wheels do not turn. The stream
+        still arms the watchdog; the breadcrumbs — the path the car drove — stay empty, so
+        the trip stops instead of retracing ground never covered."""
+        car = CarState(now=0.0, bus_ok=False)
+        last = stream(car, 0.7, 0.2, 0.0, 10)
+        self.assertEqual(car.ctl, OWNER_REMOTE, "the arbiter granted the stream")
+        self.assertTrue(car.armed)
+        self.assertEqual(car.command, (0.0, 0.0), "nothing reaches the wheels")
+        self.assertEqual(car.history_len, 0, "no breadcrumb for a command that moved nothing")
+        line = car.tick(last + DEADLINE_S + 0.01)
+        self.assertIn("stopped", line)
+        self.assertFalse(car.retreating)
+        self.assertEqual(car.ctl, OWNER_IDLE)
+        self.assertEqual(car.wdt_trips, 1)
+
+    def test_bus_down_refuses_a_spin_without_a_grant(self):
+        """calib_spin.h asks the bus BEFORE the arbiter: a down bus is a 409 with no grant
+        taken, no hold, nothing to release — the wizard must not advance on a wheel that
+        did not turn (AJM-100)."""
+        car = CarState(now=0.0, bus_ok=False)
+        self.assertFalse(car.begin_spin(0.0, 0, 1))
+        self.assertEqual(car.ctl, OWNER_IDLE)
+        self.assertEqual(car.command, (0.0, 0.0))
+
+    def test_bus_down_still_takes_a_flash(self):
+        """`car/status-and-version`: a car with `bus: down` stays reachable and updatable."""
+        car = CarState(now=0.0, bus_ok=False)
+        self.assertTrue(car.begin_ota(0.0))
+        self.assertEqual(car.ctl, OWNER_UPDATE)
+
+    def test_camera_off_reports_off_with_zero_counters(self):
+        car = CarState(now=0.0, camera=False)
+        video = car.telemetry(0)["video"]
+        self.assertEqual(video["state"], VIDEO_OFF)
+        self.assertEqual((video["fps"], video["kbps"], video["dropped"]), (0, 0, 0))
+
+    def test_radio_words_follow_status_api(self):
+        """status_api.c's radio_state_word: no answer is `unavailable` with `fw` null — the
+        only case it is null; another version is `mismatch` with that version in `fw`."""
+        radio = CarState(now=0.0, radio=RADIO_MISMATCH).status_groups(0, STATUS_GROUPS)["radio"]
+        self.assertEqual(radio["state"], RADIO_MISMATCH)
+        self.assertEqual(radio["expected"], RADIO_EXPECTED)
+        self.assertIsNotNone(radio["fw"])
+        self.assertNotEqual(radio["fw"], radio["expected"])
+        radio = CarState(now=0.0, radio=RADIO_UNAVAILABLE).status_groups(0, STATUS_GROUPS)["radio"]
+        self.assertEqual(radio["state"], RADIO_UNAVAILABLE)
+        self.assertIsNone(radio["fw"])
+        self.assertEqual(radio["expected"], RADIO_EXPECTED)
+
+    def test_reset_at_boot_is_true_over_the_contracts_defaults(self):
+        """`car/status-and-version`: the one signal that the settings and the calibration
+        were wiped — every domain at its default, `motors.calibrated` false."""
+        car = CarState(now=0.0, nvs_wiped=True)
+        groups = car.status_groups(0, STATUS_GROUPS)
+        self.assertIs(groups["storage"]["reset_at_boot"], True)
+        self.assertIs(groups["motors"]["calibrated"], False)
+        self.assertEqual(car.config, {key: d["defaults"] for key, d in DOMAINS.items()})
+        self.assertEqual(car.calibration_table(), [])
+
+    def test_write_fail_refuses_the_domains_first_write_once_and_rolls_it_back(self):
+        """`car/config` → «Отказ применить или сохранить — честный»: 500 `write_failed`
+        with the domain's key, the domain back at its previous values; the next write goes
+        through, so a retry in the app is not refused forever."""
+        car = CarState(now=0.0, write_fail=["ramp"])
+        before = dict(car.config["ramp"])
+        self.assertEqual(car.apply_config({"ramp": {"rise_ms": before["rise_ms"] + 100}}),
+                         (False, ("write_failed", "ramp", "could not persist")))
+        self.assertEqual(car.config["ramp"], before, "rolled back")
+        self.assertEqual(car.write_fail, set(), "one refusal, consumed")
+        self.assertEqual(car.apply_config({"ramp": {"rise_ms": before["rise_ms"] + 100}}),
+                         (True, None))
+        self.assertEqual(car.config["ramp"]["rise_ms"], before["rise_ms"] + 100)
+
+    def test_write_fail_leaves_the_domains_before_it_applied(self):
+        """cfg_api.c applies domain by domain in the contract's order: a 500 on the second
+        does not undo the first — the next GET is the only way to learn what stuck."""
+        car = CarState(now=0.0, write_fail=["video"])
+        video = dict(car.config_wire()["video"], bitrate_kbps=1000)
+        ok, err = car.apply_config({"video": video, "ramp": {"rise_ms": 50}})
+        self.assertFalse(ok)
+        self.assertEqual(err[1], "video")
+        self.assertEqual(car.config["ramp"]["rise_ms"], 50, "ramp, earlier in order, stays applied")
+        self.assertEqual(car.config["video"], DOMAINS["video"]["defaults"], "video rolled back")
+
+    def test_write_fail_is_not_spent_on_an_unchanged_write(self):
+        """The car's NVS skips a write whose value is already stored (cfg_json.c), so it
+        cannot fail; the arm waits for a write that changes something."""
+        car = CarState(now=0.0, write_fail=["ramp"])
+        self.assertEqual(car.apply_config({"ramp": car.config_wire()["ramp"]}), (True, None))
+        self.assertEqual(car.write_fail, {"ramp"})
+
+    def test_write_fail_calibration_refuses_the_first_table_once_and_keeps_the_old(self):
+        """`car/calibration` → «Хранилище отказало»: 500 `write_failed`, `field` wheels;
+        the table the car drives by and `motors.calibrated` unchanged."""
+        car = CarState(now=0.0, write_fail=["calibration"])
+        self.assertEqual(car.save_calibration(self.good_table()),
+                         (False, ("write_failed", CALIBRATION["keys"]["wheels"], "could not persist")))
+        self.assertFalse(car.calibrated)
+        self.assertEqual(car.calibration_table(), [])
+        self.assertEqual(car.save_calibration(self.good_table()), (True, None))
+        self.assertTrue(car.calibrated)
+
+    def test_write_fail_calibration_is_not_spent_on_the_same_table(self):
+        """calibration.c: saving the table already stored does not rewrite the flash."""
+        car = CarState(now=0.0)
+        self.assertEqual(car.save_calibration(self.good_table()), (True, None))
+        car.write_fail.add("calibration")
+        self.assertEqual(car.save_calibration(self.good_table()), (True, None))
+        self.assertEqual(car.write_fail, {"calibration"})
 
 
 def synthetic_image(version=b"v9.9+123", magic=0xABCD5432, first=0xE9, size=4096, chip_id=CHIP_ID):
