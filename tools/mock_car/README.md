@@ -110,6 +110,12 @@ a file; `ffplay /tmp/out.h264` opens it.
   `datagram_received` directly. Stdlib only, like `state.py`, and for the same reason.
 - `test_state.py`, `test_rtlink.py` — `python3 test_state.py && python3 test_rtlink.py`.
   Stdlib only: no aiohttp, no sockets, no sleeping.
+- `test_mirrors.py` — `python3 test_mirrors.py`: the few behaviour constants the mock
+  mirrors by hand because the contract has no key for them (the retreat's stationary
+  threshold and segment cap, the identification pulse, the service tick, the sid length,
+  the ring of dead sids, the OTA floor, and the reboot gap against the app's stall
+  timeout), each read out of its firmware or app source with a regular expression and
+  compared with the copy. A drift fails with the constant's name and both values.
 - `test_http.py` — `.venv/bin/python test_http.py`: the REST side over a real aiohttp
   server, for what only shows through a socket — the simulated reboot dropping REST
   connections unanswered for the same window UDP is deaf and mute, then `/version` with
