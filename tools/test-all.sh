@@ -18,6 +18,11 @@ make -C firmware/car/core/test run
 make -C firmware/dongle/test run
 
 echo "== swift host tests =="
+# Per-run scratch for the compiled test binaries: several worktrees run this script at
+# once (one Orca worker each), and a shared /tmp/hosttest_<name> would have them
+# overwrite each other's binary mid-run.
+HOSTTEST_DIR="$(mktemp -d -t hosttest)"
+trap 'rm -rf "$HOSTTEST_DIR"' EXIT
 for dir in app/tests/*/; do
     name="$(basename "$dir")"
     # A test that exercises an app module lists it, one path per line, in `sources` next to
@@ -28,10 +33,10 @@ for dir in app/tests/*/; do
             [ -n "$src" ] && extra+=("app/AJMiddleCar/$src")
         done < "${dir}sources"
     fi
-    swiftc -o "/tmp/hosttest_$name" app/AJMiddleCar/Generated/CarAPI.swift \
+    swiftc -o "$HOSTTEST_DIR/hosttest_$name" app/AJMiddleCar/Generated/CarAPI.swift \
         app/AJMiddleCar/Generated/DongleAPI.swift \
         ${extra[@]+"${extra[@]}"} "${dir}main.swift"
-    "/tmp/hosttest_$name"
+    "$HOSTTEST_DIR/hosttest_$name"
 done
 
 echo "== mock host tests =="
@@ -55,11 +60,15 @@ if [ ! -x "$MOCK_PY" ]; then
         exit 1
     fi
 else
-    # Spare ports, on loopback: a mock already serving the simulator keeps the contract's
-    # ports, and this one only has to answer REST.
-    PORT=8137
-    RT_PORT=4237
-    VIDEO_PORT=4238
+    # Free ports, on loopback, chosen per run: a mock already serving the simulator keeps
+    # the contract's ports, and parallel worktrees each running this sweep must not
+    # fight over a fixed spare set either.
+    read -r PORT RT_PORT VIDEO_PORT < <(python3 -c '
+import socket
+def free(kind):
+    s = socket.socket(socket.AF_INET, kind); s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]; s.close(); return port
+print(free(socket.SOCK_STREAM), free(socket.SOCK_DGRAM), free(socket.SOCK_DGRAM))')
     LOG="$(mktemp -t mockcar)"
     # The mock reads MOCK_DEVICE and MOCK_NO_VERSION from the environment — a shell that
     # was just rehearsing the wrong-car screen or the flag day would otherwise hand the
@@ -68,7 +77,7 @@ else
         "$MOCK_PY" tools/mock_car/mock_car.py --host 127.0.0.1 --port "$PORT" \
         --rt-port "$RT_PORT" --video-port "$VIDEO_PORT" --video-loss-pct 0.3 > "$LOG" 2>&1 &
     MOCK_PID=$!
-    trap 'kill "$MOCK_PID" 2>/dev/null || true; rm -f "$LOG"' EXIT
+    trap 'kill "$MOCK_PID" 2>/dev/null || true; rm -f "$LOG"; rm -rf "$HOSTTEST_DIR"' EXIT
 
     ready=0
     for _ in $(seq 1 50); do
@@ -94,7 +103,7 @@ else
     kill "$MOCK_PID" 2>/dev/null || true
     wait "$MOCK_PID" 2>/dev/null || true
     rm -f "$LOG"
-    trap - EXIT
+    trap 'rm -rf "$HOSTTEST_DIR"' EXIT
 fi
 
 echo "== all green =="
