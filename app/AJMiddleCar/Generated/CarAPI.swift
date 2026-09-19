@@ -223,7 +223,7 @@ public struct SystemInfo: Codable, Equatable, Sendable {
     public init(uptime_s: Int, free_heap: Int) { self.uptime_s = uptime_s; self.free_heap = free_heap }
 }
 
-/// off: no sensor answered at boot; idle: sensor in standby, nobody watching; streaming: encoding for the driver
+/// off: no sensor answered at boot, or the sensor stopped answering mid-run (three failed starts in a row; retried every 5 s); idle: sensor in standby, nobody watching; streaming: encoding for the driver
 public enum VideoState: Equatable, Sendable, Codable {
     case off
     case idle
@@ -257,7 +257,7 @@ public enum VideoState: Equatable, Sendable, Codable {
 
 /// The camera and the FPV stream.
 public struct VideoInfo: Codable, Equatable, Sendable {
-    /// off: no sensor answered at boot; idle: sensor in standby, nobody watching; streaming: encoding for the driver
+    /// off: no sensor answered at boot, or the sensor stopped answering mid-run (three failed starts in a row; retried every 5 s); idle: sensor in standby, nobody watching; streaming: encoding for the driver
     public var state: VideoState
     /// frames sent in the last second, counted at the sender's output when a frame's last chunk leaves, not at the encoder
     public var fps: Int

@@ -109,9 +109,11 @@ GROUPS = {   'device': {   'swift': 'DeviceInfo',
                                    'type': 'state',
                                    'swift': 'VideoState',
                                    'values': ['off', 'idle', 'streaming'],
-                                   'doc': 'off: no sensor answered at boot; idle: sensor in '
-                                          'standby, nobody watching; streaming: encoding for '
-                                          'the driver'},
+                                   'doc': 'off: no sensor answered at boot, or the sensor '
+                                          'stopped answering mid-run (three failed starts in a '
+                                          'row; retried every 5 s); idle: sensor in standby, '
+                                          'nobody watching; streaming: encoding for the '
+                                          'driver'},
                                {   'name': 'fps',
                                    'type': 'int',
                                    'doc': 'frames sent in the last second, counted at the '

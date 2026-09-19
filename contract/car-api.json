@@ -118,7 +118,7 @@
       "doc": "The camera and the FPV stream.",
       "fields": [
         {"name": "state", "type": "state", "swift": "VideoState", "values": ["off", "idle", "streaming"],
-         "doc": "off: no sensor answered at boot; idle: sensor in standby, nobody watching; streaming: encoding for the driver"},
+         "doc": "off: no sensor answered at boot, or the sensor stopped answering mid-run (three failed starts in a row; retried every 5 s); idle: sensor in standby, nobody watching; streaming: encoding for the driver"},
         {"name": "fps", "type": "int", "doc": "frames sent in the last second, counted at the sender's output when a frame's last chunk leaves, not at the encoder"},
         {"name": "kbps", "type": "int", "doc": "kbit sent in the last second"},
         {"name": "dropped", "type": "int", "doc": "frames not sent since boot: the sender was still busy with the previous frame, the encoder overflowed, or the frame needed more than 255 chunks"}
