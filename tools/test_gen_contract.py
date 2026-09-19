@@ -120,7 +120,7 @@ class TestSchema(unittest.TestCase):
             ("wheel", "diameter_mm"): (20, 150), ("wheel", "encoder_ppr"): (1, 1000),
             ("wheel", "gear_ratio"): (100, 30000),
             ("chassis", "track_mm"): (60, 300), ("chassis", "wheelbase_mm"): (90, 360),
-            ("recovery", "window_ms"): (1000, 10000),
+            ("recovery", "window_ms"): (1000, 8000),
             ("ramp", "rise_ms"): (0, 2000), ("trim", "balance_pct"): (-30, 30),
             ("video", "bitrate_kbps"): (500, 3000),
         }

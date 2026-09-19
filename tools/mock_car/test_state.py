@@ -401,7 +401,7 @@ class TestRetreat(unittest.TestCase):
         which is the ground the car actually covered.
         """
         car = CarState(now=0.0)
-        ok, _ = car.apply_config({"recovery": {"enabled": True, "window_ms": 10000}})
+        ok, _ = car.apply_config({"recovery": {"enabled": True, "window_ms": 8000}})
         self.assertTrue(ok)
         for ts in (0.0, 0.1, 5.0, 5.1):
             car.note_command(0.9, 0.0, ts)

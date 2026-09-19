@@ -162,9 +162,11 @@ DOMAINS = {   'ramp': {   'nvs_key': 'ramp',
                                   {   'name': 'window_ms',
                                       'type': 'int',
                                       'min': 1000,
-                                      'max': 10000,
+                                      'max': 8000,
                                       'default': 5000,
-                                      'doc': 'how far back the breadcrumb history reaches',
+                                      'doc': 'how far back the breadcrumb history reaches; '
+                                             'capped below rt.session_idle_ms so a full-window '
+                                             'retrace ends before the session does',
                                       'scale': 1}]},
     'wheel': {   'nvs_key': 'wheel',
                  'defaults': {   'diameter_mm': 65,

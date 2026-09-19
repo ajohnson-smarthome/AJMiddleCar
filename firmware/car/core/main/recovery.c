@@ -11,10 +11,10 @@
 
 static const char *TAG = "recovery";
 
-#define WINDOW_MAX_S  (RECOVER_WIN_MAX_MS / 1000)          // 10
+#define WINDOW_MAX_S  (RECOVER_WIN_MAX_MS / 1000)          // 8
 // The app streams the held command at the contract's rate, so the buffer is sized from
 // it rather than from a number that would have to be remembered twice.
-#define MAX_SAMPLES   (WINDOW_MAX_S * RT_COMMAND_HZ * 3 / 2) // 150: 10 s @10 Hz + 50% headroom
+#define MAX_SAMPLES   (WINDOW_MAX_S * RT_COMMAND_HZ * 3 / 2) // 120: 8 s @10 Hz + 50% headroom
 #define TICK_MS       30                              // replay granularity / reconnect-abort latency
 #define MOVE_EPS      0.02f                           // below this a sample counts as "stationary"
 
@@ -34,8 +34,7 @@ static uint32_t now_ms(void) {
 }
 
 void recovery_set_config(bool enabled, uint16_t window_ms) {
-    if (window_ms < RECOVER_WIN_MIN_MS) window_ms = RECOVER_WIN_MIN_MS;
-    if (window_ms > RECOVER_WIN_MAX_MS) window_ms = RECOVER_WIN_MAX_MS;
+    window_ms = recovery_window_clamp(window_ms);
     taskENTER_CRITICAL(&s_mux);
     s_enabled = enabled;
     s_window_ms = window_ms;
@@ -191,8 +190,9 @@ void recovery_init(void) {
         cJSON *je = cJSON_GetObjectItemCaseSensitive(j, "enabled");
         int win;
         if (cJSON_IsBool(je)) s_enabled = cJSON_IsTrue(je);
-        if (cfg_json_int(j, "window_ms", &win) && win >= RECOVER_WIN_MIN_MS && win <= RECOVER_WIN_MAX_MS)
-            s_window_ms = (uint16_t)win;
+        /* Clamped, not defaulted, when the record is out of range: the ceiling came down
+           (AJM-129), and a window chosen at the old one should boot as the new one. */
+        if (cfg_json_int(j, "window_ms", &win)) s_window_ms = recovery_window_clamp(win);
         cJSON_Delete(j);
     }
     BaseType_t ok = xTaskCreate(retreat_task, "recovery", 3072, NULL, 5, &s_task);

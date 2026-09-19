@@ -540,22 +540,30 @@ class TestWatchdog(Quiet):
                         so each is credited in full: 48 × 0.2 s = 9.6 s)
           t=9.9         last activity — the anchor for BOTH clocks below
           t=10.25       the trip (last command + watchdog 300 ms + 50 ms). `_trip`
-                        evicts breadcrumbs older than window_ms (10 s, the contract's
-                        max) first, and the oldest sample is 9.95 s old here, so all
-                        49 survive and the retrace replays the whole path — and
-                        consumes it, as recovery.c's snapshot_consume does, so the
-                        count is read off the trip's line, not off the ring.
+                        evicts breadcrumbs older than window_ms (10 s here) first,
+                        and the oldest sample is 9.95 s old, so all 49 survive and
+                        the retrace replays the whole path — and consumes it, as
+                        recovery.c's snapshot_consume does, so the count is read off
+                        the trip's line, not off the ring.
           retrace       9.6 s of gaps + a 250 ms tail (capped from the 350 ms of
                         silence) = 9.85 s → still running until t=20.10
           t=19.95       the idle clock, anchored at t=9.9, runs out (10 s + 50 ms) —
                         150 ms before the retrace would have exhausted on its own,
                         which is the whole point: the branch under test is expiry
                         killing a live retrace, not a retrace ending by itself.
+
+        The 10 s window is written past the validator on purpose. The contract's ceiling
+        came down to 8 000 (AJM-129) precisely so that a retrace over the whole window
+        ends before the session does — watchdog + capped tail + window stays under
+        session_idle_ms — which means no window a client can set reaches this branch any
+        more. It stays as defence in depth, and the only way to exercise it is a window
+        the contract no longer allows.
         """
         idle_s = RT["session_idle_ms"] / 1000.0
         rt, car, loop = link()
-        ok, _ = car.apply_config({"recovery": {"enabled": True, "window_ms": 10000}})
+        ok, _ = car.apply_config({"recovery": {"enabled": True, "window_ms": 8000}})
         self.assertTrue(ok)
+        car.config["recovery"]["window_ms"] = 10000        # past the ceiling, see above
         loop.t = 0.0
         send(rt, hello("longtrip"))
         seq, loop.t = 1, 0.3
