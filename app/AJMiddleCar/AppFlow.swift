@@ -21,6 +21,10 @@ final class AppFlow: ObservableObject {
         /// S6. `device` is the board whose image the release lacks — `nil` when the tag has no
         /// build number, which is nobody's missing image.
         case releaseMissing(tag: String, device: UpdateRules.Device?)
+        /// The feed answered 403/429 — it is rate-limiting this address — and will be asked
+        /// again in `retryIn` seconds (`ReleaseFeed`). Its own hold, not `.releaseOffline`: the
+        /// phone's internet is fine, and «нет интернета» sent the user to fix the wrong thing.
+        case releaseRefused(retryIn: TimeInterval)
         /// The ladder is done; `CarLink` owns the screen (radar or drive).
         case awaitingCar
         /// `carIdentified` said the car may drive.
@@ -33,9 +37,13 @@ final class AppFlow: ObservableObject {
         var opensLink: Bool {
             switch self {
             case .awaitingCar, .ready: return true
-            case .stage, .releaseCheck, .releaseOffline, .releaseMissing: return false
+            case .stage, .releaseCheck, .releaseOffline, .releaseMissing, .releaseRefused: return false
             }
         }
+
+        /// The ladder has handed over: the session is open (or opening) and the post-gate guards
+        /// are the ones in charge, not a running stage.
+        var handedOver: Bool { self == .awaitingCar || self == .ready }
     }
 
     @Published var phase: Phase = .stage(.dongle, .seeking)
@@ -77,6 +85,23 @@ final class AppFlow: ObservableObject {
     /// wrong-device or rolled-back screen re-asks now rather than at the next 1.5 s tick.
     private var pollSleep: Task<Void, Never>?
 
+    /// The search watch — the third post-gate guard (`SearchGuard`). Alive while the link is
+    /// `.searching` after the gate; every `SearchGuard.threshold` it reads the adapter's
+    /// `/status`, and an adapter that has given up sends the ladder back to the car's stage,
+    /// where the network is handed over again. Cancelled the moment the link is anything else.
+    private var searchWatch: Task<Void, Never>?
+    /// When the stage parked on the car's forced update last consulted the adapter — the same
+    /// guard, paced by the same threshold, acting by `POST /wifi` (`guardParked`). Nil off park.
+    private var parkedAskedAt: Date?
+
+    /// The feed's own pace (`ReleaseFeed`, AJM-136): when it may be asked again, how many reads
+    /// in a row came back without a tag, and the hold that last read left on screen — re-shown
+    /// while the feed is not due, so a board that went silent and came back does not leave the
+    /// stage on its silent step for the rest of the hold. All three clear on a tag.
+    private var releaseAskAt: Date?
+    private var releaseMisses = 0
+    private var releaseHold: Phase?
+
     /// Guards against a second runner running while one is already in flight — a second tap on a
     /// retry button whose screen has not yet updated `phase` (a stage's first act is an `await`
     /// on `/version`, up to its timeout, before it writes anything) would otherwise spawn a second
@@ -96,6 +121,8 @@ final class AppFlow: ObservableObject {
     private var lastStatusFailure: String?
     /// The same, for `/version` of either board — see `readVersion(_:_:)`.
     private var lastVersionFailure: String?
+    /// The same, for `POST /wifi` — see `sendJoin(_:)`.
+    private var lastJoinFailure: String?
 
     /// Entry point. Re-entrant calls while a run is already in flight are ignored — see
     /// `gateRunning`'s own doc.
@@ -175,10 +202,14 @@ final class AppFlow: ObservableObject {
             if let w = wantRung { wantRung = nil; return .jump(w) }
             // Parked: FirmwareView owns the board during a forced update. Poll nothing — the car's
             // OTA reboot drops its AP and the adapter would read that as "gone" — just wait for
-            // `updateFinished` (which moves the phase off `.updating`) or a guard.
+            // `updateFinished` (which moves the phase off `.updating`) or a guard. The one
+            // exception is `guardParked`, which reads the adapter, not the car, and only acts on
+            // an adapter that has already given up.
             if case .stage(let d, .updating) = phase, d == board.identity.device {
+                await guardParked(board)
                 await pollPause(); continue
             }
+            parkedAskedAt = nil
             let reach: Reach = reached ? .reached : await board.reach()
             let version: VersionReply? = reach == .reached ? await readCarOrDongleVersion(board) : nil
             if let version {
@@ -201,7 +232,14 @@ final class AppFlow: ObservableObject {
                 await pollPause()
                 return .jump(board.reachedThrough ?? max(0, currentRung - 1))
             case .needRelease:
-                _ = await fetchRelease()                    // sets latestTag or a hold phase
+                // The board is polled every pause; the feed is not (AJM-136). A hold asks it
+                // again on its own pace — 20 → 60 s, or whatever wait a refusal named — and in
+                // between keeps the hold on screen rather than the board's last step.
+                if releaseAskAt.map({ Date() >= $0 }) ?? true {
+                    _ = await fetchRelease()                // sets latestTag or a hold phase
+                } else if let hold = releaseHold {
+                    setPhase(hold)
+                }
                 await pollPause(); continue                 // re-decide next poll with the tag
             case .ok:
                 return .advance
@@ -233,14 +271,16 @@ final class AppFlow: ObservableObject {
     ///
     /// Returns true once `latestTag` is set. Otherwise sets the holding phase — `.releaseOffline`
     /// when GitHub could not be reached, `.releaseMissing` naming the board whose image the
-    /// release lacks, or naming no board when its tag has no build number — and returns false;
-    /// the caller sleeps a poll interval and asks again. Announces `.releaseCheck` only when not
-    /// already holding: re-announcing on every failed poll made "checking" and the hold
-    /// alternate — with `PhasePacer` guaranteeing each screen its 400 ms, that is a strobe
-    /// rather than a sequence.
+    /// release lacks, or naming no board when its tag has no build number, `.releaseRefused`
+    /// when GitHub is rate-limiting this address — and returns false; the caller keeps polling
+    /// the board and asks the feed again when `releaseAskAt` says so (`ReleaseFeed`): each miss
+    /// pushes the next ask further out, a refusal pushes it out by the wait the feed named.
+    /// Announces `.releaseCheck` only when not already holding: re-announcing on every failed
+    /// poll made "checking" and the hold alternate — with `PhasePacer` guaranteeing each screen
+    /// its 400 ms, that is a strobe rather than a sequence.
     private func fetchRelease() async -> Bool {
         var holding = phase == .releaseOffline
-        if case .releaseMissing = phase { holding = true }
+        switch phase { case .releaseMissing, .releaseRefused: holding = true; default: break }
         if !holding { setPhase(.releaseCheck) }
         switch await client.latestReleaseLookup() {
         case .found(let rel):
@@ -248,18 +288,36 @@ final class AppFlow: ObservableObject {
             // validating after left an unusable tag in place, and the next poll then skipped
             // this whole block and drove on it.
             guard GateRule.canVerify(latestBuild: UpdateClient.buildNumber(rel.tag)) else {
-                setPhase(.releaseMissing(tag: rel.tag, device: nil))
+                holdRelease(.releaseMissing(tag: rel.tag, device: nil))
                 return false
             }
             latestTag = rel.tag
+            releaseMisses = 0; releaseAskAt = nil; releaseHold = nil
             return true
         case .noImage(let tag, let device):
-            setPhase(.releaseMissing(tag: tag, device: device))
+            holdRelease(.releaseMissing(tag: tag, device: device))
             return false
         case .unreachable:
-            setPhase(.releaseOffline)
+            holdRelease(.releaseOffline)
+            return false
+        case .refused(let wait):
+            // The feed's own wait, not the escalation: it said how long, and asking sooner only
+            // extends the lockout. The miss count stands — a miss after the wait resumes where
+            // the escalation was.
+            releaseHold = .releaseRefused(retryIn: wait)
+            releaseAskAt = Date().addingTimeInterval(wait)
+            setPhase(.releaseRefused(retryIn: wait))
             return false
         }
+    }
+
+    /// One read of the feed without a tag: show the hold, and push the next read out — 20 s,
+    /// then 40, then 60 for as long as the hold stands.
+    private func holdRelease(_ next: Phase) {
+        releaseMisses += 1
+        releaseHold = next
+        releaseAskAt = Date().addingTimeInterval(ReleaseFeed.holdInterval(afterMisses: releaseMisses))
+        setPhase(next)
     }
 
     /// The ladder's pause between polls — `donglePollInterval`, unless `wakePoll()` cuts it short.
@@ -278,7 +336,9 @@ final class AppFlow: ObservableObject {
 
     /// One POST asking the adapter to join the car's network. `configure` the first time,
     /// `retry` after — `DongleClient` keeps them apart on purpose. Failures are logged, never
-    /// swallowed; the credentials never reach a log.
+    /// swallowed; the credentials never reach a log. Logged once per distinct failure, like
+    /// `readDongleStatus()`: a `configure` the adapter does not take is sent again every poll
+    /// now (`CarReach`, AJM-126), and the line would otherwise repeat for as long as that lasts.
     private func sendJoin(_ ask: CarReach.Ask) async {
         do {
             let reply: DongleWifiReply
@@ -286,9 +346,57 @@ final class AppFlow: ObservableObject {
             case .configure: reply = try await dongle.join(ssid: CarContract.ssid, password: CarContract.password)
             case .retry:     reply = try await dongle.retryJoin(ssid: CarContract.ssid, password: CarContract.password)
             }
+            lastJoinFailure = nil
             print("dongle \(DongleContract.wifiPath): \(reply.state)")
         } catch {
-            print("dongle \(DongleContract.wifiPath) (\(ask == .configure ? "configure" : "retry")) failed: " + Self.describe(error))
+            let what = "dongle \(DongleContract.wifiPath) (\(ask == .configure ? "configure" : "retry")) failed: " + Self.describe(error)
+            if what != lastJoinFailure { lastJoinFailure = what; print(what) }
+        }
+    }
+
+    /// `RootView` reports the link's state after the gate: `true` while the session is open and
+    /// no car has answered, `false` the moment it is anything else. Starts (or restarts) the
+    /// search watch — the third post-gate guard, `SearchGuard`: the clock runs from here, and
+    /// when it says the search has outlasted the adapter's join budget, the adapter's `/status`
+    /// decides. An adapter that gave up (`failed`, `idle`) or lost the car's network is sent
+    /// the network again by restarting the ladder at the car's rung — the stage there already
+    /// knows how to ask once and show «не удалось подключиться / Повторить» if that does not
+    /// help either. An adapter still joining, or already joined, is left alone: the car may be
+    /// booting behind it. The watch stays alive across that restart, since the link stays
+    /// `.searching` through it; mid-ladder ticks do nothing — the running stage owns the reach.
+    /// Without an adapter there is nobody to ask, and the guard does not exist.
+    func linkSearching(_ searching: Bool) {
+        searchWatch?.cancel()
+        searchWatch = nil
+        guard searching, CarHost.viaDongle else { return }
+        searchWatch = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(SearchGuard.threshold))
+                guard let self else { return }
+                guard !Task.isCancelled, self.phase.handedOver else { continue }
+                let verdict = SearchGuard.verdict(await self.readDongleStatus(), expectedSSID: CarContract.ssid)
+                guard !Task.isCancelled, self.phase.handedOver else { continue }
+                if case .handNetwork = verdict { self.restart(from: .car) }
+            }
+        }
+    }
+
+    /// The one act a stage parked on the car's forced update is allowed (AJM-125, AJM-134): the
+    /// same search guard as after the gate — `SearchGuard.threshold` of waiting, then the
+    /// adapter's `/status` — with a `POST /wifi` as its act rather than a restart, because
+    /// parking here is deliberate (`updateFinished` is what unparks) and the screen's own wait
+    /// for the car's `/version` goes on. An adapter mid-join or already `connected` is left
+    /// alone, so the car's OTA reboot — which drops its AP for a few seconds — is never read as
+    /// a failure; only one that has already given up is asked again, once per threshold.
+    /// Nothing here changes the phase, and the car itself is not polled.
+    private func guardParked(_ board: Board) async {
+        guard board.identity.device == .car, board.reachedThrough != nil else { return }
+        let now = Date()
+        guard let since = parkedAskedAt else { parkedAskedAt = now; return }
+        guard SearchGuard.due(searchingFor: now.timeIntervalSince(since)) else { return }
+        parkedAskedAt = now
+        if case .handNetwork(let ask) = SearchGuard.verdict(await readDongleStatus(), expectedSSID: CarContract.ssid) {
+            await sendJoin(ask)
         }
     }
 
@@ -452,8 +560,10 @@ final class AppFlow: ObservableObject {
         rollbackChoice = .recheck(from: latestTag)
         // Clearing the tag is what makes the next poll re-ask GitHub: `fetchRelease` runs while
         // `latestTag == nil`, so this is the recheck actually happening — and it happens now,
-        // not at the next tick.
+        // not at the next tick. The feed's pace is cleared with it: this is one look per tap,
+        // the person's decision, not a hold re-asking on its own.
         latestTag = nil
+        releaseMisses = 0; releaseAskAt = nil; releaseHold = nil
         wakePoll()
     }
 

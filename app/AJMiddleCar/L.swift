@@ -43,6 +43,10 @@ enum L {
     static var dongleFindingSub: String { s("dongle.findingSub") }
     static var gateReleaseCheckTitle: String { s("gate.releaseCheckTitle") }
     static var gateReleaseCheckSub: String { s("gate.releaseCheckSub") }
+    static var gateFeedRefusedTitle: String { s("gate.feedRefusedTitle") }
+    /// `wait` is the seconds the feed asked for — rendered as the uptime formatter renders a
+    /// duration, so «через 45 с» and «через 30 мин» read the same way the status pill does.
+    static func gateFeedRefusedSub(_ wait: TimeInterval) -> String { s("gate.feedRefusedSub", uptime(Int(wait.rounded(.up)))) }
     static var carFindingTitle: String { s("car.findingTitle") }
     static var carFindingSub: String { s("car.findingSub") }
     static var dongleCheckingTitle: String { s("dongle.checkingTitle") }

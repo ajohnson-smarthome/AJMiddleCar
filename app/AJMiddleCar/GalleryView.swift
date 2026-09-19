@@ -101,6 +101,7 @@ struct GalleryView: View {
             ("No release for adapter",   AnyView(ConnectView(situation: .releaseMissing(tag: "v1.0+483", device: .dongle)))),
             ("No release for car",       AnyView(ConnectView(situation: .releaseMissing(tag: "v1.0+483", device: .car)))),
             ("Release without build",    AnyView(ConnectView(situation: .releaseMissing(tag: "v1.0", device: nil)))),
+            ("Feed rate-limited",        AnyView(ConnectView(situation: .releaseRefused(retryIn: 1800)))),
             // Reaching the car through the adapter
             ("Dongle sending network",   AnyView(ConnectView(situation: .stage(.car, .sendingNetwork)))),
             ("Step 4 finding car",       AnyView(ConnectView(situation: .stage(.car, .searching)))),
