@@ -60,6 +60,10 @@ if [ ! -x "$MOCK_PY" ]; then
         exit 1
     fi
 else
+    # The REST side over a real server — what only shows through a socket, such as the
+    # simulated reboot closing REST as well as UDP. aiohttp again, hence the venv.
+    "$MOCK_PY" tools/mock_car/test_http.py
+
     # Free ports, on loopback, chosen per run: a mock already serving the simulator keeps
     # the contract's ports, and parallel worktrees each running this sweep must not
     # fight over a fixed spare set either.
@@ -95,9 +99,9 @@ print(free(socket.SOCK_STREAM), free(socket.SOCK_DGRAM), free(socket.SOCK_DGRAM)
 
     python3 tools/conformance.py --write-calibration "http://127.0.0.1:$PORT"
     # Latent coupling: if conformance.py ever grows a valid-image OTA case, note
-    # that the mock's simulated reboot (rt_link.py's REBOOT_QUIET_S, 4 s) outlasts
-    # this tool's ~3 s hello-retry budget — a run started right after would see
-    # "unreachable" instead of the fresh post-reboot handshake.
+    # that the mock's simulated reboot (rt_link.py's REBOOT_QUIET_S, 4 s) silences
+    # REST too and outlasts this tool's ~3 s hello-retry budget — a run started right
+    # after would see "unreachable" instead of the fresh post-reboot handshake.
     python3 tools/conformance_rt.py "127.0.0.1:$RT_PORT"
     python3 tools/conformance_video.py 127.0.0.1 --rt-port "$RT_PORT" --video-port "$VIDEO_PORT" --http-port "$PORT" --seconds 6
     kill "$MOCK_PID" 2>/dev/null || true

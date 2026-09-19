@@ -140,11 +140,19 @@ def parse_image_version(data):
     return ver or None
 
 
+_BUILD_RE = re.compile(r"[0-9]+")
+
+
 def build_number(fw):
-    """The integer after `+` in `fw` (e.g. 9001 from `v1.0+9001`), or -1 when fw
-    carries none — `device.build` in the hello reply and in /status."""
-    _, sep, build = fw.rpartition("+")
-    return int(build) if sep and build.isdigit() else -1
+    """The digits right after the first `+` in `fw`, read up to the first non-digit —
+    9001 from `v1.0+9001` and 784 from `v1.0+784-dirty` — or -1 when there are none.
+    `device.build` in the hello reply and `build` in /version. Mirrors fw_build_number in
+    firmware/car/core/main/device_json.h: a build not made from a tag carries the
+    contract's `-<n>-g<sha>[-dirty]` tail, and the car reads past it rather than
+    refusing it — so does tools/conformance.py, which judges the car by this function."""
+    _, sep, tail = fw.partition("+")
+    m = _BUILD_RE.match(tail) if sep else None
+    return int(m.group()) if m else -1
 
 
 def parse_frame(data, max_command=None):

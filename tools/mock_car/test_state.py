@@ -186,9 +186,21 @@ class TestBuildNumber(unittest.TestCase):
         self.assertEqual(build_number("v1.0+9001"), 9001)
         self.assertEqual(build_number("v2.3+42"), 42)
 
+    def test_a_git_suffix_is_read_past_not_rejected(self):
+        """`v<semver>+<build>[-<n>-g<sha>[-dirty]]` is the contract's shape for any build
+        not made from a tag. fw_build_number (device_json.h) reads the digits after the
+        first `+` up to the first non-digit — 784 from `v1.0+784-dirty` — and
+        `test_device_json.c` pins it; the mock used to demand the whole tail be digits
+        and answer -1, which conformance then held the car to (AJM-108)."""
+        self.assertEqual(build_number("v1.0+784-dirty"), 784)
+        self.assertEqual(build_number("v1.0+9000-dirty-with-a-long-branch-name"), 9000)
+        self.assertEqual(build_number("v1.2+9100-3-gabcdef-dirty"), 9100)
+
     def test_no_usable_number_is_minus_one(self):
         self.assertEqual(build_number("v1.0"), -1)
         self.assertEqual(build_number("v1.0+dirty"), -1)
+        self.assertEqual(build_number("v1.0+"), -1)
+        self.assertEqual(build_number("v1.0+x"), -1)
         self.assertEqual(build_number(""), -1)
 
 
