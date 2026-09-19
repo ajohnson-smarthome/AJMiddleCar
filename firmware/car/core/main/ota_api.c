@@ -14,8 +14,21 @@
 #include "link.h"
 #include "api_util.h"
 #include "contract.h"
+#include "ota_reply.h"
 
 static const char *TAG = "ota_api";
+
+/* ota_reply.h carries its own copy of the one IDF code it tells apart, so the map stays
+   host-testable; this is where the copy meets the real header. */
+_Static_assert(OTA_ERR_VALIDATE_FAILED == ESP_ERR_OTA_VALIDATE_FAILED,
+               "ota_reply.h's ESP_ERR_OTA_VALIDATE_FAILED drifted from esp_ota_ops.h");
+
+/* Send the envelope ota_reply_for chose for a refused esp_ota_* call. Every refusal is a
+   reply and not ESP_FAIL — see the note at the first use. */
+static esp_err_t ota_refuse(httpd_req_t *req, ota_step_t step, esp_err_t err) {
+    ota_reply_t r = ota_reply_for(step, (int)err);
+    return api_reply_error(req, r.status, r.code, "", r.msg);
+}
 
 static esp_err_t ota_post(httpd_req_t *req) {
     // Sticky: nothing may command the motors during a flash. Every failure path below
@@ -46,7 +59,8 @@ static esp_err_t ota_post(httpd_req_t *req) {
     /* The exact length is known from Content-Length: erasing only what the image needs
        instead of OTA_SIZE_UNKNOWN's full 4 MB saves seconds of erase (and flash wear)
        per update — and a too-large image now fails here instead of after the erase. */
-    if (esp_ota_begin(part, req->content_len, &handle) != ESP_OK) {
+    esp_err_t err = esp_ota_begin(part, req->content_len, &handle);
+    if (err != ESP_OK) {
         link_release_must(LINK_SRC_OTA);
         /* The reply's result and not ESP_FAIL, here and on every failure below. ESP_FAIL
            makes httpd close the session with the body unread, and TCP answers a close with
@@ -55,7 +69,7 @@ static esp_err_t ota_post(httpd_req_t *req) {
            the rest of the body first (httpd_req_delete), which for an upload rejected at
            esp_ota_begin means reading and discarding up to the whole image; that is the
            price of the client learning why. */
-        return api_reply_error(req, "500 Internal Server Error", ERR_WRITE_FAILED, "", "ota begin failed");
+        return ota_refuse(req, OTA_STEP_BEGIN, err);
     }
     ESP_LOGI(TAG, "OTA -> %s, %d bytes", part->label, (int)req->content_len);
 
@@ -74,22 +88,26 @@ static esp_err_t ota_post(httpd_req_t *req) {
             return api_reply_error(req, "500 Internal Server Error", ERR_INTERNAL, "", "upload stalled");
         }
         timeouts = 0;  // progress resets the stall budget
-        if (esp_ota_write(handle, buf, r) != ESP_OK) {
+        err = esp_ota_write(handle, buf, r);
+        if (err != ESP_OK) {
+            // The first block's header check lives inside esp_ota_write: by its code, a
+            // body that is not an image (400) is told from a flash that refused (500).
             esp_ota_abort(handle);
             link_release_must(LINK_SRC_OTA);
-            return api_reply_error(req, "500 Internal Server Error", ERR_WRITE_FAILED, "", "ota write failed");
+            return ota_refuse(req, OTA_STEP_WRITE, err);
         }
         remaining -= r;
     }
-    if (esp_ota_end(handle) != ESP_OK) {
+    err = esp_ota_end(handle);
+    if (err != ESP_OK) {
         link_release_must(LINK_SRC_OTA);
-        return api_reply_error(req, "400 Bad Request", ERR_NOT_FIRMWARE, "", "image invalid");
+        return ota_refuse(req, OTA_STEP_END, err);
     }
-    esp_err_t berr = esp_ota_set_boot_partition(part);
-    if (berr != ESP_OK) {
-        ESP_LOGE(TAG, "set_boot_partition failed: %s (image written+valid but not booted)", esp_err_to_name(berr));
+    err = esp_ota_set_boot_partition(part);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "set_boot_partition failed: %s (image written+valid but not booted)", esp_err_to_name(err));
         link_release_must(LINK_SRC_OTA);
-        return api_reply_error(req, "500 Internal Server Error", ERR_WRITE_FAILED, "", "set boot failed");
+        return ota_refuse(req, OTA_STEP_SET_BOOT, err);
     }
     // Reboot regardless of whether the "ok" reaches the client — the image is already committed.
     if (api_reply_ok(req) != ESP_OK) ESP_LOGW(TAG, "resp send failed, rebooting anyway");
