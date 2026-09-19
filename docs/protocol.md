@@ -29,7 +29,8 @@ Every datagram is a single JSON object, and every one — either direction — c
 top-level keys that exist to make the object self-describing: `proto`, an integer, and `type`,
 a lowercase word naming the message. A car speaking `proto` 2 drops any datagram whose `proto`
 is not 2 — `hello` is the one exception, and only in that it still gets an answer (in the car's
-own `proto`, so the mismatch is visible on the wire and the forced-update gate can act on it);
+own `proto`, so the mismatch is visible on the wire — in a capture, in a log — and nothing
+more: the app does not decide by `proto`; compatibility is the release's job, see `/version`);
 the session is not adopted from it either way. A datagram whose `type` is missing or not one the
 car recognises is dropped outright: the type used to be guessed from which keys were present, and
 a client that got the guess slightly wrong was dropped with nothing to explain why. HTTP carries
@@ -186,10 +187,13 @@ Pushed to the owner's address on the same socket, unsolicited:
 ```
 
 `seq` is the push counter, so a client can drop a reordered datagram. `link.rx_hz` is `drive`
-datagrams received per second, a direct measure of the uplink. `link.rssi_dbm` is the AP-side
-signal for the connected station, `null` when it has not been measured — clients should fall
-back to their own latency measure. `link.timeouts` counts watchdog trips since boot; a rising
-count means the link is dropping.
+commands **accepted** per second — what the car actually drove on. A datagram with a foreign
+`proto`, from anyone but the owner, with a stale `seq`, or one the parser rejects is not
+counted, so a stream of rejected datagrams reads as `0` and loss or reordering shows as a
+lower number rather than being hidden by it; the conformance sweep leans on exactly this.
+`link.rssi_dbm` is the AP-side signal for the connected station, `null` when it has not been
+measured — clients should fall back to their own latency measure. `link.timeouts` counts
+watchdog trips since boot; a rising count means the link is dropping.
 
 `motors.owner` names the source that currently owns the actuator — `idle`, `recovering`,
 `console`, `remote`, `calibration`, `update`, or `safe_stop`. It is how a client tells "the car
@@ -327,11 +331,18 @@ network and the same password, and a change of address on a live subscription is
 The app sends its first `view` immediately after `hello_ack`, again on every reconnect, and
 then every `subscribe_ms` (**1000 ms**) for as long as the drive screen is open.
 **`subscribe_timeout_ms` (3000 ms)** without one and the stream stops — the encoder closes,
-the camera pipeline stops, `video.state` falls back to `idle`. The same happens the instant
-the real-time session itself ends (`bye`, eviction, idling out): one clock, two triggers.
-Leaving the drive screen is simply not sending `view` any more; the stream dies on its own
-within three seconds, which is also why firmware updates do not need to know the video channel
-exists at all — the pipeline is stopped by the time one could reach it.
+the camera pipeline stops, `video.state` falls back to `idle`, `fps` and `kbps` read zero.
+The same end comes without waiting for the timeout, on the video control task's next tick
+(≤100 ms — the same tick that serves `video.enabled`, below), in three more cases: the
+real-time session has no owner any more (`bye`, idling out); its owner has **changed** — the
+subscription remembers the sid it opened with and compares it with `rt_link`'s owner on every
+tick, so an eviction by another `hello` ends the stream rather than handing it over, and not
+one chunk goes to the displaced viewer after the switch; or `video.enabled` was turned off.
+The new owner starts from a clean slate with its own first `view`, like any first subscriber:
+a new `stream`, a keyframe first. Leaving the drive screen is simply not sending `view` any
+more; the stream dies on its own within three seconds, which is also why firmware updates do
+not need to know the video channel exists at all — the pipeline is stopped by the time one
+could reach it.
 
 `key:true` on an accepted `view` asks for an out-of-order keyframe (below); the app repeats it
 on every following `view` until a keyframe actually arrives, since the ask itself can be lost
@@ -387,11 +398,13 @@ cannot drift between them:
   runtime retry, so a physically reconnected camera needs a reboot), `idle` (sensor in
   standby, nobody watching — CSI, ISP and the encoder are all stopped), or `streaming`
   (encoding for the driver).
-- **`fps`** — frames encoded in the last second.
+- **`fps`** — frames sent in the last second: counted at the sender, when a frame's last
+  chunk leaves, not at the encoder — in steady state the two agree to within the ring's lag,
+  and a frame still in the ring when the stream stops is counted nowhere.
 - **`kbps`** — kbit sent in the last second.
 - **`dropped`** — frames not sent since boot: the sender had not finished the frames before
-  it when the next one was due (the ring holds two, and a keyframe leaves at one chunk a
-  millisecond), the encoder's output overflowed, or a frame would have needed more than 255
+  it when the next one was due (the ring holds six, and a keyframe leaves at one chunk every
+  3 ms), the encoder's output overflowed, or a frame would have needed more than 255
   chunks. Rising while `streaming` means the bitrate or the encoder's QP corridor
   needs to come down, not that anything is broken.
 
@@ -451,16 +464,19 @@ Five fields, this order, and nothing else — ever. `device` is who answers; `fw
 as the build prints it and `build` the number after its `+` (`-1` when there is none); `proto`
 is the protocol number of everything else this board serves; `rolled_back` is the bootloader's
 verdict on the last update, sticky until the next successful one. The app reads this first, for
-both boards, decides "foreign / rolled back / behind / newer than me / fine" before it parses
-anything that lives under `proto`, and updates a board that is behind — a board that answers
-404 predates the endpoint and counts as behind. The adapter serves the same document at
-`192.168.7.1:8080/version` with `proto` from its own contract.
+both boards, and decides "foreign / rolled back / behind / fine", in that order, before it
+parses anything that lives under `proto`; it updates a board that is behind — a board that
+answers 404 predates the endpoint and counts as behind — and takes a board ahead of the tag as
+current. `proto` is not an input to that decision: one release ships the app and both
+firmwares together, so the build against the release tag is the whole of compatibility, and
+`proto` stays a version of the wire format, not a verdict. The adapter serves the same
+document at `192.168.7.1:8080/version` with `proto` from its own contract.
 
 ## `GET /status` — six groups
 
 Still served — for humans, scripts, and the radio report; the app's identity test is the
-`hello_ack` reply, and liveness afterwards comes from telemetry freshness, not from polling
-this.
+launch gate's `/version` (above), run once at connect, and liveness afterwards comes from
+telemetry freshness, not from polling this.
 
 ```json
 {"proto":2,
@@ -482,9 +498,13 @@ C6's firmware equals `radio.expected` (the version this build was made for, deri
 host's own `esp_hosted` component pin), `mismatch` when it answered with something else, and
 `unavailable` when it did not answer at all — in which case `radio.fw` is `null`. That replaces
 a bool plus a magic string (`ok:false` with `fw:"unavailable"`) with one word that names all
-three cases. The version the radio must run is delivered out of band — over SDIO from the host,
-or over its UART header (`firmware/car/modem/README.md`) — never through `/ota`. Nothing else
-in the system reports this, so a client should surface it.
+three cases. The radio's image has no endpoint and no key of its own: it rides inside the
+car's image, through the same `POST /ota` (below), and the car delivers it to the radio itself
+on the next boot when the version it reads differs from `radio.expected` — then restarts, so
+one update brings both processors up together and `mismatch` clears on the boot after. The
+manual routes — over SDIO from the host, or over the radio's UART header
+(`firmware/car/modem/README.md`) — remain the bench's fallback, not the way an update travels.
+Nothing else in the system reports this, so a client should surface it.
 
 `storage.reset_at_boot` is true for the first boot after an NVS format migration erased the
 saved config: calibration and every setting are gone, and a client should say so rather than
@@ -492,17 +512,20 @@ let the car drive on defaults silently.
 
 ## Configuration — REST
 
-All bodies and responses are JSON, and every one carries `proto`. `GET /config` returns every
-domain; `POST /config` takes any subset of domains, but each domain present must be complete —
-a `wheel` object missing `quadrature` is rejected, not merged field by field with what is
-already stored, and a domain the body omits is left untouched. The whole body is validated
-before any of it is applied: if one field in one domain is out of range, nothing in the POST
-takes effect, not even the domains that were otherwise fine — a malformed body, a wrong-typed or
-fractional number, or a value outside its range all get `400`; every domain rejects, none clamp,
-and an unrecognised `quadrature` is refused, not defaulted. A successful POST answers with the
-full configuration exactly as now held — the same shape `GET /config` returns, not
-`{"proto":2,"ok":true}`, because the point of asking is to see what stuck. Every accepted POST
-persists to NVS immediately, and a POST of unchanged values does not rewrite flash.
+All bodies and responses are JSON; every response carries `proto`, and a request body carries
+only domains — `proto` at the top level of a `POST /config` body is not a domain and is refused
+like any other unknown key, `400 unknown_field` with `field: "proto"`. `GET /config` returns
+every domain; `POST /config` takes any subset of domains, but each domain present must be
+complete — a `wheel` object missing `quadrature` is rejected, not merged field by field with
+what is already stored, and a domain the body omits is left untouched. The whole body is
+validated before any of it is applied: if one field in one domain is out of range, nothing in
+the POST takes effect, not even the domains that were otherwise fine — a malformed body, a
+wrong-typed or fractional number, or a value outside its range all get `400`; every domain
+rejects, none clamp, and an unrecognised `quadrature` is refused, not defaulted. A successful
+POST answers with the full configuration exactly as now held — the same shape `GET /config`
+returns, not `{"proto":2,"ok":true}`, because the point of asking is to see what stuck. Every
+accepted POST persists to NVS immediately, and a POST of unchanged values does not rewrite
+flash.
 
 ```jsonc
 // GET /config → every domain; POST /config ← any subset of domains, each complete
@@ -512,7 +535,7 @@ persists to NVS immediately, and a POST of unchanged values does not rewrite fla
  "recovery": {"enabled":true,"window_ms":5000},
  "wheel":    {"diameter_mm":65,"encoder_ppr":11,"gear_ratio":9.0,"quadrature":4},
  "chassis":  {"track_mm":130,"wheelbase_mm":210},
- "video":    {"bitrate_kbps":2500}}
+ "video":    {"bitrate_kbps":2500,"enabled":true}}
 ```
 
 <!-- generated:endpoints -->
@@ -593,9 +616,11 @@ now, `500` for one it tried and failed at.
 
 `code` is one word from the fixed list below — the one thing a client switches on, and the one
 that can be localised; `message` is one English sentence, for a log, not for display; `field` is
-a dotted path to the offending key, present whenever a single key is at fault and absent when the
-fault is with the body as a whole. Both carry `Content-Type: application/json`, and the body may
-arrive in any number of TCP segments — the car reads until `Content-Length` is satisfied.
+a path to the offending key — dotted through objects (`ramp.rise_ms`), with a bracketed index
+for an array element (`wheels[2]` names the whole entry, not a key inside it) — present
+whenever a single key is at fault and absent when the fault is with the body as a whole. Both
+carry `Content-Type: application/json`, and the body may arrive in any number of TCP segments
+— the car reads until `Content-Length` is satisfied.
 
 Car error codes: `bad_json`, `missing_field`, `unknown_field`, `wrong_type`, `out_of_range`,
 `not_allowed` (an enum value outside its list; a repeated corner or pair), `busy` (409),
@@ -615,8 +640,13 @@ writing — so a client should expect concurrent requests to stall rather than f
 next boot the firmware marks the image valid, which cancels the bootloader's rollback — so an
 image that cannot boot far enough to do that is rolled back automatically.
 
-The radio co-processor's image is **not** delivered this way — see `/status` above and
-`firmware/car/modem/README.md`.
+The radio co-processor's image travels **inside** this one: a release image embeds the radio
+image built from the same `esp_hosted` pin that `radio.expected` is derived from, and on the
+next boot the car pushes it at the radio over SDIO if the version it reads differs, then
+restarts — see `radio` under `/status` above. There is no second endpoint and no key in this
+request for it. A developer build may carry no radio image at all; such a build leaves the
+radio alone however the versions differ. The UART header and a host-side SDIO flash
+(`firmware/car/modem/README.md`) are the bench's recovery routes, not part of this protocol.
 
 ## Not part of this protocol
 
