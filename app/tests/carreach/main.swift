@@ -22,9 +22,19 @@ let car = CarContract.ssid
 var r = CarReach()
 var out = r.next(status(ssid: "", state: "idle"), expectedSSID: car)
 check(out.reach == .hold(.sendingNetwork) && out.ask == .configure, "cold: send credentials")
-// The next poll while still unconfigured: budget spent → join failed, no more asks.
+// The next poll still shows no network: the POST never landed (lost on USB, the adapter
+// re-enumerating at that instant). A request the adapter never took is not a spent request —
+// it has no network to fail on — so the hand-over repeats, «передаю сеть» again, not «не
+// удалось подключиться» about a join that never happened (AJM-126).
 out = r.next(status(ssid: "", state: "idle"), expectedSSID: car)
-check(out.reach == .hold(.joinFailed) && out.ask == nil, "budget spent: join failed, no ask")
+check(out.reach == .hold(.sendingNetwork) && out.ask == .configure, "lost POST: hand the network over again, not join-failed")
+out = r.next(status(ssid: "", state: "idle"), expectedSSID: car)
+check(out.reach == .hold(.sendingNetwork) && out.ask == .configure, "lost twice: still handing over")
+// Once the adapter shows the network, the one request IS spent: the adapter's own budget runs,
+// and its `failed` is «не удалось подключиться» with no second request.
+check(r.next(status(ssid: car, state: "searching"), expectedSSID: car).reach == .hold(.searching), "taken: searching")
+out = r.next(status(ssid: car, state: "failed"), expectedSSID: car)
+check(out.reach == .hold(.joinFailed) && out.ask == nil, "taken and failed: join failed, no second request")
 
 // Association steps show without spending anything.
 var r2 = CarReach()

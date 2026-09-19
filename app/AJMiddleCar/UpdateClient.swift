@@ -178,6 +178,11 @@ final class UpdateClient: NSObject, ObservableObject {
         case noImage(tag: String, device: UpdateRules.Device)
         /// GitHub could not be reached, or answered something this build cannot read.
         case unreachable
+        /// GitHub answered 403 or 429: it is rate-limiting this address (`ReleaseFeed`), and the
+        /// feed is not to be asked again for `retryAfter` seconds. Its own case rather than
+        /// `.unreachable`, because the hold that reads it must say «лента отказала», not «нет
+        /// интернета» — the phone's internet is fine, and the wait is the feed's, not the user's.
+        case refused(retryAfter: TimeInterval)
     }
 
     /// The lookup's own session, bounded: `URLSession.shared` would wait the default 60 s on a
@@ -202,7 +207,18 @@ final class UpdateClient: NSObject, ObservableObject {
             return .unreachable
         }
         do {
-            let (data, _) = try await Self.lookupSession.data(from: url)
+            let (data, resp) = try await Self.lookupSession.data(from: url)
+            // The status line first (AJM-136): a 403 «API rate limit exceeded» is a JSON body
+            // without `tag_name`, and reading only the body made it «нет интернета».
+            let http = resp as? HTTPURLResponse
+            switch ReleaseFeed.classify(status: http?.statusCode ?? 200,
+                                        retryAfter: http?.value(forHTTPHeaderField: "retry-after"),
+                                        rateLimitReset: http?.value(forHTTPHeaderField: "x-ratelimit-reset"),
+                                        now: Date().timeIntervalSince1970) {
+            case .document: break
+            case .refused(let wait): return .refused(retryAfter: wait)
+            case .unusable: return .unreachable
+            }
             guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tag = j["tag_name"] as? String,
                   let assets = j["assets"] as? [[String: Any]] else { return .unreachable }

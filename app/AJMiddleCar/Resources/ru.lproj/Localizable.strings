@@ -221,5 +221,11 @@
 "gate.noReleaseTitle.noBuild" = "Выпуск без номера сборки";
 "gate.noReleaseSub.noBuild"   = "Последний выпуск (%@) помечен без номера сборки, поэтому сверить версии плат не с чем. Пока не опубликован выпуск с номером, ехать нельзя.";
 
+/* The feed answered, but with a rate limit (403/429): a wait, not a network problem — the
+   internet is fine, and «нет интернета» would send the user to fix the wrong thing. The
+   argument is the wait the feed named, formatted as a duration. */
+"gate.feedRefusedTitle"      = "Лента выпусков отказала";
+"gate.feedRefusedSub"        = "GitHub ограничил запросы с этого адреса — так бывает, когда его спрашивают слишком часто. Спрошу снова через %@ и продолжу сам.";
+
 "settings.firmwareCar"    = "Прошивка машинки";
 "settings.firmwareDongle" = "Прошивка адаптера";

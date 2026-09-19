@@ -23,6 +23,11 @@ struct ConnectView: View {
         /// number in its tag. Carries the tag, because the only person who can act on this is
         /// the one who publishes releases, and the tag is what tells them which one to look at.
         case releaseMissing(tag: String, device: UpdateRules.Device?)
+        /// The feed answered 403/429 — it is rate-limiting this address — and will be asked
+        /// again in `retryIn` seconds. Not «нет интернета»: the phone's internet is fine, and
+        /// that screen sent the user to fix the wrong thing (AJM-136). No button: the wait is
+        /// the feed's, and the ladder clears this itself when it is over.
+        case releaseRefused(retryIn: TimeInterval)
         /// Step 3: asking GitHub for the newest release — the one tag both boards are compared
         /// against. Had no screen at all before — `dongleGate()` did this silently, so a launch
         /// that stopped here looked like a launch that had stopped for no reason.
@@ -62,6 +67,10 @@ struct ConnectView: View {
             // simply no image to compare it against.
             DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
                         chip: (glyph: "xmark", tint: p.warn)) { AdapterBody(palette: p) }
+        case .releaseRefused:
+            // An hourglass: nothing is wrong on this side, the feed has asked for time.
+            DeviceScene(palette: p, rings: .deco, ringTint: p.warn,
+                        chip: (glyph: "hourglass", tint: p.warn)) { AdapterBody(palette: p) }
         case .releaseCheck:
             DeviceScene(palette: p, rings: .inward,
                         chip: (glyph: "arrow.down", tint: p.accent)) { AdapterBody(palette: p) }
@@ -118,6 +127,7 @@ struct ConnectView: View {
         case .searching: return L.connectTitle
         case .releaseOffline: return L.gateNoInternetTitle
         case .releaseMissing(_, let device): return L.gateNoReleaseTitle(device)
+        case .releaseRefused: return L.gateFeedRefusedTitle
         case .releaseCheck: return L.gateReleaseCheckTitle
         case .stage(let d, let step): return L.stageTitle(step, d)
         }
@@ -128,6 +138,7 @@ struct ConnectView: View {
         case .searching: return L.connectBody
         case .releaseOffline: return L.gateOfflineSub
         case .releaseMissing(let tag, let device): return L.gateNoReleaseSub(device, tag)
+        case .releaseRefused(let wait): return L.gateFeedRefusedSub(wait)
         case .releaseCheck: return L.gateReleaseCheckSub
         case .stage(let d, let step): return L.stageSub(step, d)
         }
@@ -162,7 +173,7 @@ struct ConnectView: View {
             default:
                 EmptyView()
             }
-        case .searching, .releaseCheck, .releaseOffline, .releaseMissing:
+        case .searching, .releaseCheck, .releaseOffline, .releaseMissing, .releaseRefused:
             EmptyView()
         }
     }

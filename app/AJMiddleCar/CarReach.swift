@@ -46,7 +46,17 @@ public struct CarReach {
             return (.lost, nil)
         }
         switch DongleLink.next(status: s, expectedSSID: expectedSSID) {
-        case .sendCredentials: return charge(.configure, showing: .sendingNetwork)
+        case .sendCredentials:
+            // The car's network is not in the adapter's `/status`. On the first poll that is
+            // simply "not told yet"; on a later one it means the POST never landed — lost on
+            // USB, or the adapter re-enumerated at that instant. A request the adapter never
+            // took is not a spent request: it has no network to fail on, and «не удалось
+            // подключиться» would describe a join that never happened (AJM-126). So the first
+            // hand-over spends the one budget, and every later one, while the network is still
+            // not there, is free — «передаю сеть» again, until `/status` shows it was taken.
+            // Only then does the adapter's own `failed` become «не удалось подключиться».
+            guard !gaveUp else { return (.hold(.sendingNetwork), .configure) }
+            return charge(.configure, showing: .sendingNetwork)
         case .searchingCar: return (.hold(.searching), nil)
         case .waiting: return (.hold(.joining), nil)
         case .retryJoin: return charge(.retry, showing: .searching)

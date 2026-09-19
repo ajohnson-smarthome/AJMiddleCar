@@ -74,12 +74,14 @@ struct RootView: View {
             .onChange(of: link.fw) { _, fw in flow.carIdentified(fw: fw) }
             // Post-gate guards: once the ladder has handed over (`.awaitingCar`/`.ready`), these
             // are the only signals that send it back. Everywhere mid-ladder, `restart` is a no-op
-            // or a fall-back the running stage already owns.
+            // or a fall-back the running stage already owns. `.searching` is the third guard's
+            // clock (`SearchGuard`): a search that outlasts the adapter's join budget asks the
+            // adapter, and one that has given up sends the ladder back to the car's rung.
             .onChange(of: link.state) { _, new in
                 switch new {
-                case .noDongle, .localNetworkDenied: flow.restart(from: .dongle)
-                case .live:                          flow.carIdentified(fw: link.fw)
-                case .searching:                     break
+                case .noDongle, .localNetworkDenied: flow.linkSearching(false); flow.restart(from: .dongle)
+                case .live:                          flow.linkSearching(false); flow.carIdentified(fw: link.fw)
+                case .searching:                     flow.linkSearching(true)
                 }
             }
             // Every hand-over to the car re-asks its identity with whatever the link already
@@ -88,10 +90,13 @@ struct RootView: View {
             // adapter that came back, and a forced update that finished all hand over here.
             // The wrong-car guard was here too — cleared through the transport's hold — but that
             // guard is gone: identity is no longer judged in the live session, the gate's
-            // `/version` check is the one identity gate.
+            // `/version` check is the one identity gate. A link not yet live at the hand-over
+            // starts the search clock here: `.searching` is the link's state from birth, so no
+            // change of it will — and the threshold is "after the gate", not since launch.
             .onChange(of: flow.phase) { _, phase in
                 if phase == .awaitingCar {
                     if link.isLive { flow.carIdentified(fw: link.fw) }
+                    else { flow.linkSearching(link.state == .searching) }
                 }
             }
     }
@@ -115,6 +120,8 @@ struct RootView: View {
             ConnectView(situation: .releaseOffline)
         case .releaseMissing(let tag, let dev):
             ConnectView(situation: .releaseMissing(tag: tag, device: dev))
+        case .releaseRefused(let wait):
+            ConnectView(situation: .releaseRefused(retryIn: wait))
         case .awaitingCar, .ready:
             // The link opens when the ladder hands over, not at launch: until then there is
             // nothing to say to the car, and the ladder is talking to GitHub.
