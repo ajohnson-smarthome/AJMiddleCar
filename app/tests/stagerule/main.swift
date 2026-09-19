@@ -29,6 +29,11 @@ check(decide(.hold(.joinFailed), nil, car) == .show(.joinFailed), "reach hold jo
 check(decide(.reached, .absent, dongle, tag: nil) == .needRelease, "404 + no tag: fetch release")
 check(decide(.reached, doc("ajdongle", fw: "v1.0+100", proto: 1), dongle, tag: nil) == .needRelease,
       "document + no tag: fetch release")
+// The second board: the tag learned on the adapter's stage serves the car — no second fetch, the
+// rule is applied. The release was adopted only with both images (`UpdateRules.images(in:)`), so
+// the car's image is in it by construction; nothing here re-checks that per board.
+check(decide(.reached, doc("ajmiddlecar", fw: "v1.0+100", proto: 2), car, tag: latest) != .needRelease,
+      "document + known tag: the rule runs, the release is not asked for again")
 // Silence is not "answered": no release fetch, straight to the board's silent step.
 check(decide(.reached, .silent, dongle, tag: nil) == .show(.absent), "silence + no tag: adapter absent, no fetch")
 check(decide(.reached, .silent, car, tag: nil) == .show(.seeking), "silence + no tag: car seeking, no fetch")

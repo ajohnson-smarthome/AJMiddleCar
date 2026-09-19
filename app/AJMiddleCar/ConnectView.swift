@@ -19,10 +19,10 @@ struct ConnectView: View {
         /// The newest release could not be established, so nothing may proceed. No button: the
         /// gate loop is still asking and clears this itself the moment the network returns.
         case releaseOffline
-        /// A release exists and carries no image for `device` (or no build number). Carries the
-        /// tag, because the only person who can act on this is the one who publishes releases,
-        /// and the tag is what tells them which one to look at.
-        case releaseMissing(tag: String, device: UpdateRules.Device)
+        /// A release exists and carries no image for `device` — or, with `device` nil, no build
+        /// number in its tag. Carries the tag, because the only person who can act on this is
+        /// the one who publishes releases, and the tag is what tells them which one to look at.
+        case releaseMissing(tag: String, device: UpdateRules.Device?)
         /// Step 3: asking GitHub for the newest release — the one tag both boards are compared
         /// against. Had no screen at all before — `dongleGate()` did this silently, so a launch
         /// that stopped here looked like a launch that had stopped for no reason.

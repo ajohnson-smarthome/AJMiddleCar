@@ -18,7 +18,9 @@ final class AppFlow: ObservableObject {
         case stage(UpdateRules.Device, GateStep)
         case releaseCheck                                            // S4
         case releaseOffline                                          // S5
-        case releaseMissing(tag: String, device: UpdateRules.Device) // S6
+        /// S6. `device` is the board whose image the release lacks — `nil` when the tag has no
+        /// build number, which is nobody's missing image.
+        case releaseMissing(tag: String, device: UpdateRules.Device?)
         /// The ladder is done; `CarLink` owns the screen (radar or drive).
         case awaitingCar
         /// `carIdentified` said the car may drive.
@@ -199,8 +201,8 @@ final class AppFlow: ObservableObject {
                 await pollPause()
                 return .jump(board.reachedThrough ?? max(0, currentRung - 1))
             case .needRelease:
-                _ = await fetchRelease(for: board.identity.device)   // sets latestTag or a hold phase
-                await pollPause(); continue                          // re-decide next poll with the tag
+                _ = await fetchRelease()                    // sets latestTag or a hold phase
+                await pollPause(); continue                 // re-decide next poll with the tag
             case .ok:
                 return .advance
             case .show(let step):
@@ -223,31 +225,35 @@ final class AppFlow: ObservableObject {
     /// Step 3, one attempt: ask GitHub for the newest release and adopt its tag. The release is
     /// one for both boards — one tag, two images — so this runs once per launch, and `StageRule`
     /// compares both boards against the tag it leaves in `latestTag`, and so does `carIdentified`
-    /// on every hello that changes `fw`, and on every hand-over. `device` only says which image's
-    /// presence to insist on.
+    /// on every hello that changes `fw`, and on every hand-over. Because the tag serves both
+    /// boards, the release is accepted only with both images (`UpdateRules.images(in:)`),
+    /// whichever board's stage asked: this used to insist only on the asking board's image, and
+    /// a release with the adapter's image and no car's was adopted on the adapter's stage and
+    /// handed to the car (AJM-56).
     ///
     /// Returns true once `latestTag` is set. Otherwise sets the holding phase — `.releaseOffline`
-    /// when GitHub could not be reached, `.releaseMissing` when the release carries no image for
-    /// `device` or no build number — and returns false; the caller sleeps a poll interval and
-    /// asks again. Announces `.releaseCheck` only when not already holding: re-announcing on
-    /// every failed poll made "checking" and the hold alternate — with `PhasePacer` guaranteeing
-    /// each screen its 400 ms, that is a strobe rather than a sequence.
-    private func fetchRelease(for device: UpdateRules.Device) async -> Bool {
+    /// when GitHub could not be reached, `.releaseMissing` naming the board whose image the
+    /// release lacks, or naming no board when its tag has no build number — and returns false;
+    /// the caller sleeps a poll interval and asks again. Announces `.releaseCheck` only when not
+    /// already holding: re-announcing on every failed poll made "checking" and the hold
+    /// alternate — with `PhasePacer` guaranteeing each screen its 400 ms, that is a strobe
+    /// rather than a sequence.
+    private func fetchRelease() async -> Bool {
         var holding = phase == .releaseOffline
         if case .releaseMissing = phase { holding = true }
         if !holding { setPhase(.releaseCheck) }
-        switch await client.latestReleaseLookup(for: device) {
+        switch await client.latestReleaseLookup() {
         case .found(let rel):
             // The tag is only adopted once it can be compared against. Setting it first and
             // validating after left an unusable tag in place, and the next poll then skipped
             // this whole block and drove on it.
             guard GateRule.canVerify(latestBuild: UpdateClient.buildNumber(rel.tag)) else {
-                setPhase(.releaseMissing(tag: rel.tag, device: device))
+                setPhase(.releaseMissing(tag: rel.tag, device: nil))
                 return false
             }
             latestTag = rel.tag
             return true
-        case .noImage(let tag):
+        case .noImage(let tag, let device):
             setPhase(.releaseMissing(tag: tag, device: device))
             return false
         case .unreachable:

@@ -3,7 +3,20 @@ import Foundation
 /// Fetches the latest firmware from GitHub Releases and uploads it to the car's /ota.
 @MainActor
 final class UpdateClient: NSObject, ObservableObject {
-    struct Release { let tag: String; let assetURL: URL }
+    /// The newest release: one tag, and one image per board. Built only once both images have
+    /// been found (`UpdateRules.images(in:)`), which is what makes `assetURL(for:)` total — a
+    /// caller never has to ask whether the release it holds has the image it is about to flash.
+    struct Release {
+        let tag: String
+        let carURL: URL
+        let dongleURL: URL
+        func assetURL(for device: UpdateRules.Device) -> URL {
+            switch device {
+            case .car: return carURL
+            case .dongle: return dongleURL
+            }
+        }
+    }
     @Published var uploadProgress: Double = 0
     @Published var downloadProgress: Double = 0
 
@@ -18,12 +31,6 @@ final class UpdateClient: NSObject, ObservableObject {
     }
 
     private let repo = "ajohnson-smarthome/AJMiddleCar"
-    /// Exact asset name for `device` (`UpdateRules.Device.assetName`). A release has carried
-    /// both `ajmiddlecar.bin` and `ajdongle.bin` under one tag since branch P3
-    /// (`tools/release.sh`); matching "first file ending in .bin" would silently hand back
-    /// whichever the GitHub API happened to list first. That is the live situation on every
-    /// release now, not a hazard being guarded against.
-    static func assetName(for device: UpdateRules.Device) -> String { device.assetName }
 
     /// Normalize a version like "v1.2" / "v1.2-3-gabc" → "1.2" for comparison.
     static func normalize(_ v: String?) -> String { UpdateRules.normalize(v) }
@@ -156,20 +163,19 @@ final class UpdateClient: NSObject, ObservableObject {
         UserDefaults.standard.set(tag, forKey: kTag(device))
     }
 
-    /// Defaults to the car — the only device this asked about before branch P4's dongle images.
-    /// One release carries both under the same tag, so a caller after the dongle's own asset
-    /// passes `device: .dongle` and gets the same tag back with a different `assetURL`.
     /// What a release lookup can come back as.
     ///
     /// These used to be one `nil`, and collapsing them was expensive the day the launch gate
     /// became strict: the newest release carried only the car's image, so the adapter's lookup
     /// returned nothing forever, the gate refused to hand over — correctly — and the screen said
     /// "no internet" at a phone whose internet was fine. Unreachable is the user's problem to
-    /// fix; a release with no image for this device is nobody's, until one is published.
+    /// fix; a release with no image for a board is nobody's, until one is published.
     enum ReleaseLookup {
+        /// A release with both images — the only shape a tag is adopted from.
         case found(Release)
-        /// A release exists and was read, and it carries no image for this device.
-        case noImage(tag: String)
+        /// A release exists and was read, and it carries no image for `device`. Named so the
+        /// hold can say which board — the person who publishes releases is the one who acts.
+        case noImage(tag: String, device: UpdateRules.Device)
         /// GitHub could not be reached, or answered something this build cannot read.
         case unreachable
     }
@@ -186,7 +192,12 @@ final class UpdateClient: NSObject, ObservableObject {
         return URLSession(configuration: cfg)
     }()
 
-    func latestReleaseLookup(for device: UpdateRules.Device = .car) async -> ReleaseLookup {
+    /// One lookup for both boards. This used to take a `device` saying whose image's presence
+    /// to insist on, and the launch gate passed the board whose stage asked — so a release with
+    /// the adapter's image and no car's was adopted on the adapter's stage and served the car
+    /// too (AJM-56). The release is one for both boards; `UpdateRules.images(in:)` insists on
+    /// both images, and a caller that wants one board's URL asks the `Release` for it.
+    func latestReleaseLookup() async -> ReleaseLookup {
         guard let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest") else {
             return .unreachable
         }
@@ -195,16 +206,24 @@ final class UpdateClient: NSObject, ObservableObject {
             guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tag = j["tag_name"] as? String,
                   let assets = j["assets"] as? [[String: Any]] else { return .unreachable }
-            let bin = assets.first { ($0["name"] as? String) == UpdateClient.assetName(for: device) }
-            guard let s = bin?["browser_download_url"] as? String, let u = URL(string: s) else {
-                return .noImage(tag: tag)
+            // Asset name → download URL, for the assets that have one. An asset listed under
+            // the right name but without a usable URL is an asset the phone cannot fetch, which
+            // for the gate is the same as no asset.
+            var byName: [String: URL] = [:]
+            for a in assets {
+                guard let name = a["name"] as? String,
+                      let s = a["browser_download_url"] as? String, let u = URL(string: s) else { continue }
+                byName[name] = u
             }
-            return .found(Release(tag: tag, assetURL: u))
+            switch UpdateRules.images(in: byName) {
+            case .missing(let device): return .noImage(tag: tag, device: device)
+            case .both(let car, let dongle): return .found(Release(tag: tag, carURL: car, dongleURL: dongle))
+            }
         } catch { return .unreachable }
     }
 
-    func latestRelease(for device: UpdateRules.Device = .car) async -> Release? {
-        if case .found(let r) = await latestReleaseLookup(for: device) { return r }
+    func latestRelease() async -> Release? {
+        if case .found(let r) = await latestReleaseLookup() { return r }
         return nil
     }
 

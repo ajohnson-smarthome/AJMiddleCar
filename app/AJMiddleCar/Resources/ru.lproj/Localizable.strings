@@ -211,12 +211,15 @@
 "car.findingSub"          = "Адаптер готов. Он осматривает эфир: включена ли машинка и видно ли её сеть.";
 
 /* Not a network problem and not the user's to fix: a release exists and has no image for the
-   board in question (adapter or car). Naming the tag is what makes it actionable for the one
-   person who can publish one. */
+   board in question (adapter or car), or its tag carries no build number (noBuild — nobody's
+   image is missing, so no board is named). Naming the tag is what makes it actionable for the
+   one person who can publish one. */
 "gate.noReleaseTitle.dongle" = "Нет выпуска для адаптера";
 "gate.noReleaseTitle.car"    = "Нет выпуска для машинки";
 "gate.noReleaseSub.dongle"   = "В последнем выпуске (%@) нет прошивки адаптера, поэтому сверить его версию не с чем. Пока такой выпуск не опубликован, ехать нельзя.";
 "gate.noReleaseSub.car"      = "В последнем выпуске (%@) нет прошивки машинки, поэтому сверить её версию не с чем. Пока такой выпуск не опубликован, ехать нельзя.";
+"gate.noReleaseTitle.noBuild" = "Выпуск без номера сборки";
+"gate.noReleaseSub.noBuild"   = "Последний выпуск (%@) помечен без номера сборки, поэтому сверить версии плат не с чем. Пока не опубликован выпуск с номером, ехать нельзя.";
 
 "settings.firmwareCar"    = "Прошивка машинки";
 "settings.firmwareDongle" = "Прошивка адаптера";
