@@ -415,6 +415,48 @@ class TestRetreat(unittest.TestCase):
         self.assertEqual(car.command, (0.0, 0.0))
         self.assertEqual(car.ctl, OWNER_IDLE)
 
+    def test_a_trip_consumes_the_path_it_retraces(self):
+        """recovery.c's `snapshot_consume`: the crumbs a trip takes are cleared with it.
+
+        The retreat's own motion is never recorded, so a ring that survives the trip
+        replays, on the next loss inside window_ms, ground the first retreat already
+        covered — on top of it. The firmware fixed that in 3551f74; the mock kept
+        evicting by window alone, so a second dropout reversed the whole 5 s.
+        """
+        car = CarState(now=0.0)
+        last = stream(car, 0.5, 0.0, 0.0, 20)              # 2 s forward, then silence
+        trip = last + DEADLINE_S + 0.01
+        self.assertIn("retracing 20 samples", car.tick(trip))
+        self.assertEqual(car.history_len, 0, "the path was consumed at the trip")
+        now = trip
+        while now < 4.4:                                   # 0.25 + 1.9 s of replay is over by 4.36
+            now += 0.02
+            end = car.tick(now)
+            if end:
+                self.assertIn("exhausted", end)
+        self.assertFalse(car.retreating)
+        # The driver is back at 4.5 s — inside the 5 s window of the first run — and
+        # drives 1 s more before losing the link again.
+        last = stream(car, 0.5, 0.0, 4.5, 10)
+        trip = last + DEADLINE_S + 0.01
+        self.assertIn("retracing 10 samples", car.tick(trip),
+                      "only the ground driven after the first retreat")
+        self.assertIsNone(car.tick(trip + 1.10), "0.25 + 0.9 s of replay is not over at 1.10")
+        self.assertIn("exhausted", car.tick(trip + 1.20))
+
+    def test_a_second_trip_retraces_nothing_the_first_already_did(self):
+        car = CarState(now=0.0)
+        last = stream(car, 0.5, 0.0, 0.0, 20)
+        trip = last + DEADLINE_S + 0.01
+        self.assertIn("retracing 20 samples", car.tick(trip))
+        car.note_command(0.0, 0.0, trip + 0.1)             # the driver is back, holding still
+        self.assertFalse(car.retreating)
+        line = car.tick(trip + 0.1 + DEADLINE_S + 0.01)    # ... and drops out again
+        self.assertIn("nothing to retrace", line)
+        self.assertFalse(car.retreating)
+        self.assertEqual(car.command, (0.0, 0.0))
+        self.assertEqual(car.wdt_trips, 2)
+
 
 class TestGoodbye(unittest.TestCase):
     def test_bye_stops_without_a_trip(self):
@@ -608,9 +650,12 @@ class TestActuatorOwnership(unittest.TestCase):
         last = stream(car, 0.8, 0.0, 0.0, 20)
         car.begin_ota(last + 0.01)
         line = car.tick(last + DEADLINE_S + 0.5)
-        self.assertIsNone(line, "an OTA silences the watchdog entirely")
+        self.assertIsNotNone(line, "the flash does not disarm the watchdog")
+        self.assertIn("refused", line)
+        self.assertFalse(car.retreating)
+        self.assertEqual(car.ctl, OWNER_UPDATE)
 
-        # The real sequence: the app's send loop does not stop for an OTA, so the
+        # The usual sequence: the app's send loop does not stop for an OTA, so the
         # stream keeps arriving (refused, but re-arming the watchdog) and then stops.
         car = CarState(now=0.0)
         last = stream(car, 0.8, 0.0, 0.0, 20)
@@ -648,12 +693,29 @@ class TestActuatorOwnership(unittest.TestCase):
         self.assertEqual(car.ctl, OWNER_CALIBRATION)
         self.assertEqual(car.command, (1.0, 0.0))
 
-    def test_ota_silences_the_watchdog(self):
+    def test_ota_leaves_the_watchdog_armed(self):
+        """ota_api.c takes the actuator through car_stop(LINK_SRC_OTA) and touches
+        nothing else: rt_link's silence check keeps running under the flash. A pult
+        that stops streaming as the flash begins trips it after rt.watchdog_ms —
+        `link.timeouts` grows by one, the retrace is refused by the sticky grant, and
+        the wheels stay at the flash's zero. The mock used to disarm on begin_ota, so
+        the same pult saw no timeout in the simulator and one on the car."""
         car = CarState(now=0.0)
         last = stream(car, 0.5, 0.0, 0.0, 20)
         car.begin_ota(last + 0.01)
-        self.assertIsNone(car.tick(last + 1.0))
-        self.assertEqual(car.wdt_trips, 0)
+        self.assertIsNone(car.tick(last + DEADLINE_S), "not yet past the deadline")
+        line = car.tick(last + DEADLINE_S + 0.01)
+        self.assertIsNotNone(line, "silence under a flash is still a trip")
+        self.assertIn("refused", line)
+        self.assertEqual(car.wdt_trips, 1)
+        self.assertEqual(car.telemetry(0)["link"]["timeouts"], 1)
+        self.assertEqual(car.ctl, OWNER_UPDATE, "the flash keeps its grant")
+        self.assertFalse(car.retreating)
+        self.assertEqual(car.command, (0.0, 0.0))
+        self.assertEqual(car.history_len, 0, "the trip consumed the path even though refused")
+        for k in range(1, 20):
+            self.assertIsNone(car.tick(last + DEADLINE_S + 0.01 + k * 0.05))
+        self.assertEqual(car.wdt_trips, 1, "one trip per silence, under a flash as anywhere")
 
     def test_end_spin_releases_the_pulse_and_only_the_pulse(self):
         """calib_api.c sleeps the pulse out and releases before replying, so the

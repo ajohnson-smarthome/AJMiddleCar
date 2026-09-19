@@ -298,7 +298,7 @@ class CarState:
     @property
     def armed(self):
         """The control watchdog is armed — a command was accepted since the last
-        adopt, trip, goodbye or flash."""
+        adopt, trip or goodbye."""
         return self._armed
 
     # ---- configuration ---------------------------------------------------------
@@ -469,9 +469,18 @@ class CarState:
         head = f"wdt: no control frame for {silent} ms"
 
         if not self.config["recovery"]["enabled"]:
+            # recovery_on_link_lost stops and returns without reaching the ring, so
+            # the crumbs outlive a trip with auto-return off, as they do on the car.
             self._stop(now)
             return f"{head} — stopped (auto-return off)"
-        if not self._history or not self._any_motion():
+        # recovery.c's `snapshot_consume`: the in-window samples are what this trip
+        # retraces, and the ring is cleared with them — whether the replay then runs,
+        # is refused, or there is nothing to replay. The retreat's own motion is never
+        # recorded, so a ring that survived the trip made a second loss inside
+        # window_ms replay ground the first retreat had already covered, on top of it.
+        path = list(self._history)
+        self._history.clear()
+        if not path or not self._any_motion(path):
             # A history of nothing but zeros retraces to where the car already is, so
             # the honest answer is to stop rather than to perform a retreat.
             self._stop(now)
@@ -484,13 +493,13 @@ class CarState:
             # side still reports that they hold the wheels.
             return f"{head} — retrace refused ({self._owner} holds the actuator)"
         self._retreating = True
-        self._retreat_until = now + self._retreat_duration(now)
-        t, y, _ = self._history[-1]
+        self._retreat_until = now + self._retreat_duration(path, now)
+        t, y, _ = path[-1]
         self._t, self._y = -t, -y
-        return f"{head} — retracing {len(self._history)} samples in reverse"
+        return f"{head} — retracing {len(path)} samples in reverse"
 
-    def _retreat_duration(self, now):
-        """How long the reverse replay takes, as recovery.c computes it.
+    def _retreat_duration(self, path, now):
+        """How long the reverse replay of `path` takes, as recovery.c computes it.
 
         Each sample is held for the gap to the next-newer one — the newest for the
         time it was held until the link went quiet — and **every** one of those
@@ -500,16 +509,16 @@ class CarState:
         replayed that pause in full, reversing long after it had retraced the ground
         it actually covered.
         """
-        ts = [s[2] for s in self._history]
+        ts = [s[2] for s in path]
         cap = self.SEG_MAX_MS / 1000.0
         total = min(now - ts[-1], cap)
         for older, newer in zip(ts, ts[1:]):
             total += min(newer - older, cap)
         return total
 
-    def _any_motion(self):
+    def _any_motion(self, path):
         return any(abs(t) > self.MOVE_EPS or abs(y) > self.MOVE_EPS
-                   for t, y, _ in self._history)
+                   for t, y, _ in path)
 
     def _evict(self, now):
         window = self.config["recovery"]["window_ms"] / 1000.0
@@ -646,13 +655,18 @@ class CarState:
         a refusal is the firmware's 409 "actuator busy", and the simulator must
         be able to exhibit it. Returns False without touching anything when a
         higher-priority holder refuses.
+
+        The control watchdog is left as it is — car_stop is all ota_api.c does, and
+        rt_link's silence check keeps running under the flash. A stream that stops
+        as the flash begins trips it after rt.watchdog_ms: `link.timeouts` grows,
+        the retrace is refused by this sticky grant (`_trip`), the wheels stay at
+        zero. Disarming here hid that timeout from the simulator alone.
         """
         self._now = now
         self._expire(now)
         if not self._take(OWNER_UPDATE, now, None):
             return False
         self._t = self._y = 0.0
-        self._armed = False
         self._retreating = False
         return True
 
