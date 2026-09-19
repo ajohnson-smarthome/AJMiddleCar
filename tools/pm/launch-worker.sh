@@ -39,14 +39,14 @@ for ISSUE in "$@"; do
 
     PROMPT="Ты воркер по CLAUDE.md → «Роль „воркер“». Твоя задача — $ISSUE: пункт $NUM в $TASKS. \
 Начни с \`orca linear issue --current --full --json\` и переведи задачу в In Progress. Прочитай proposal.md, design.md, tasks.md \
-и образец specs/car/rt-link/spec.md в каталоге change, затем напиши спеку из своего пункта по его списку источников. \
-Правила — design.md: только наблюдаемое поведение и инварианты, на которые опираются соседи; числа по ключу контракта, \
-байты провода — ссылкой на раздел docs/protocol.md; без имён файлов и функций в спеке; код — правда, расхождение с \
-документом — отдельный issue через \`orca linear create --parent-current\`, не чинить; 6–12 требований, вне бюджета — \
-сказать в PR. Проверка: \`openspec validate ajm-2-baseline-specs --strict\` и \`CONFORMANCE=required tools/test-all.sh\` \
-(venv для мока — по подсказке скрипта). Отметь свой пункт [x], закоммить, PR с заголовком \`$ISSUE: ...\` и строкой \
-\`Closes $ISSUE\`, в описании — таблица источников по каждому требованию. Заверши по skill orca-linear: attach PR, \
-один итоговый комментарий, статус In Review."
+и все spec-дельты в каталоге change ($CHANGE), затем сделай ровно свой пункт — его источники, его проверка, ничего сверх: \
+чужие пункты не трогать, соседнее «раз уж тут» не чинить. Код — правда о текущем поведении, дельта спеки — о целевом; \
+если пункт меняет поведение, после починки код делает то, что написано в дельте. Тест, который падал бы до починки, — \
+в хост-наборе. Расхождение вне scope — отдельный issue через \`orca linear create --parent-current\`, не чинить. \
+Проверка: то, что написано в пункте, плюс \`openspec validate $(basename "$CHANGE") --strict\` и \`CONFORMANCE=required tools/test-all.sh\` \
+(venv для мока — по подсказке скрипта). Отметь свой пункт [x], закоммить, PR с заголовком \`$ISSUE: ...\`, строкой \
+\`Closes $ISSUE\` (и \`Closes\` исходных issues, если пункт их называет), в описании — что и почему, как проверено. \
+Заверши по skill orca-linear: attach PR, один итоговый комментарий, статус In Review."
 
     OUT="$(orca worktree create --repo "id:$REPO_ID" --name "$NAME" --no-parent --linear-issue "$ISSUE" \
         --agent claude --comment "$ISSUE: спека ${CAP:-$NUM}" --prompt "$PROMPT" --json 2>&1 || true)"
