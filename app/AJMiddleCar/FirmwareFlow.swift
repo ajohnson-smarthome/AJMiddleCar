@@ -24,8 +24,9 @@ final class FirmwareFlow: ObservableObject {
     @Published private(set) var offlineCache = false
     /// The device came back running what it ran before — a bootloader rollback, never success.
     @Published private(set) var rolledBack = false
-    /// The device's own words for why it refused the image, when it gave any.
-    @Published private(set) var failReason: String?
+    /// Why the last upload was refused: the device's own envelope when it answered with one,
+    /// classified by `FlashRefusal` the same way for both devices. Rendered by `L.fwFailLine`.
+    @Published private(set) var failReason: FlashRefusal?
     /// Whether an upload has been attempted this session. The rolled-back copy is only honest
     /// after one.
     @Published private(set) var flashAttempted = false
@@ -187,6 +188,10 @@ final class FirmwareFlow: ObservableObject {
             phase = .downloaded
             return
         case .failed(let reason):
+            // The one place the reason is logged, for either device: the envelope's `message`
+            // is for here, not the screen (`docs/protocol.md` → Errors), and a transport's
+            // description names nothing on screen either.
+            print("flash refused by \(device.rawValue): \(reason.logDescription)")
             failReason = reason
             phase = .failed
             return
@@ -257,7 +262,9 @@ extension FirmwareFlow {
                             isReachable: { state.reachable },
                             refresh: { await state.refresh() },
                             push: { url, _, progress in
-            guard let data = try? Data(contentsOf: url) else { return .failed(nil) }
+            guard let data = try? Data(contentsOf: url) else {
+                return .failed(.transport("no image at \(url.lastPathComponent)"))
+            }
             do {
                 try await dongle.uploadFirmware(data) { p in
                     Task { @MainActor in progress(p) }
@@ -266,9 +273,11 @@ extension FirmwareFlow {
             } catch is CancellationError {
                 return .cancelled
             } catch {
-                // The adapter's own words when it gave any; nil when nothing answered, which the
-                // screen renders as the generic failure rather than quoting silence.
-                return .failed((error as? CarError).map { String(describing: $0) })
+                // The same classification as the car's `UpdateClient.upload`: the adapter is
+                // quoted only when it answered with the envelope. This used to stringify any
+                // `CarError` — `timeout(60.0)`, `noDongle(…)` — and the screen captioned Swift's
+                // description of silence as «Адаптер ответил: …».
+                return .failed(FlashRefusal.of(error))
             }
         })
     }

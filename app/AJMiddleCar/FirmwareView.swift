@@ -114,8 +114,7 @@ struct FirmwareView: View {
                 if forced { Color.clear.frame(width: 0, height: 0).onAppear { onDone?() } }
             case .failed:
                 title(L.fwFailTitle)
-                sub(flow.rolledBack ? L.fwRollbackSub(device)
-                    : flow.failReason.map { L.fwFailReason(device, $0) } ?? L.fwFailSub)
+                sub(flow.rolledBack ? L.fwRollbackSub(device) : L.fwFailLine(device, flow.failReason))
                 fwButton(L.fwRetry, prominent: true) { Task { await flow.check() } }
             }
         }

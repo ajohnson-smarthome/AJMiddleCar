@@ -242,22 +242,23 @@ final class UpdateClient: NSObject, ObservableObject {
         } catch { return nil }
     }
 
-    /// `failed`'s payload is the reason the CAR gave, when it gave one — only the
-    /// `CarError.http` envelope branch below populates it. Every transport-level failure (no
-    /// firmware file on disk, no dongle, timeout, refused, malformed/truncated stream) carries
-    /// `nil`: the car never answered, so there is no car-authored reason to quote, and
-    /// `fw.failReason`'s "Машинка ответила: …" framing would be a lie for those.
-    enum UploadOutcome: Equatable { case ok, cancelled, failed(String?) }
+    /// `failed`'s payload is `FlashRefusal` — the one classification both boards' uploads share:
+    /// the envelope the board answered with (its `code` is what the screen names, its `message`
+    /// what the log keeps), a bare HTTP status, or a transport that never reached the board and
+    /// gets no quote. The screen renders it through `L.fwFailLine`.
+    enum UploadOutcome: Equatable { case ok, cancelled, failed(FlashRefusal) }
 
     /// Uploads over `CarTransport`, pinned to the dongle's interface like every request to the
     /// car (`CarNet.tcpParams()`, which asks `CarInterface` which wire that is) — the phone
     /// reaches the car through the dongle, not over Wi-Fi. The wait scales with the image — see
     /// `UpdateRules.uploadTimeout`, and why a flat 45 s stopped being safe. The car's error envelope is
     /// surfaced, not swallowed (decision 14) — but only when it really is the car's own
-    /// envelope; see `UploadOutcome`.
+    /// envelope; `FlashRefusal.of` draws that line, and `FirmwareFlow.flash` logs the outcome.
     func upload(_ binURL: URL) async -> UploadOutcome {
         uploadProgress = 0
-        guard let data = try? Data(contentsOf: binURL) else { return .failed(nil) }
+        guard let data = try? Data(contentsOf: binURL) else {
+            return .failed(.transport("no image at \(binURL.lastPathComponent)"))
+        }
         do {
             _ = try await CarTransport.shared.post(CarContract.otaPath, body: data,
                                                    contentType: "application/octet-stream",
@@ -267,19 +268,8 @@ final class UpdateClient: NSObject, ObservableObject {
             return .ok
         } catch is CancellationError {
             return .cancelled
-        } catch let CarError.http(status, body) {
-            // The contract's envelope: `error` is an object, and `message` is the car's own
-            // words (`too_small`, `not_firmware`, `busy`). Reading it as a bare string found
-            // nothing and captioned every rejection with the status code alone.
-            let msg = (try? JSONDecoder().decode(CarAPIError.self, from: body))?.error.message
-            return .failed(msg ?? "HTTP \(status)")
         } catch {
-            // `CarError` (`.noDongle`, `.denied`, `.refused`, `.timeout`, `.malformed`,
-            // `.truncated`) or anything else unexpected: none of these are the car speaking,
-            // they're the transport never reaching it — generic copy, not a fabricated quote.
-            // Nothing on screen names the reason, so it goes to the log instead.
-            print("upload failed: \((error as? CarError)?.logDescription ?? String(describing: error))")
-            return .failed(nil)
+            return .failed(FlashRefusal.of(error))
         }
     }
 }
