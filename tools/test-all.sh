@@ -89,7 +89,13 @@ print(free(socket.SOCK_STREAM), free(socket.SOCK_DGRAM), free(socket.SOCK_DGRAM)
         "$MOCK_PY" tools/mock_car/mock_car.py --host 127.0.0.1 --port "$PORT" \
         --rt-port "$RT_PORT" --video-port "$VIDEO_PORT" --video-loss-pct 0.3 > "$LOG" 2>&1 &
     MOCK_PID=$!
-    trap 'kill "$MOCK_PID" 2>/dev/null || true; rm -f "$LOG"; rm -rf "$HOSTTEST_DIR"' EXIT
+    # A sweep that fails leaves the script through this trap (set -e). The mock's log is
+    # the only server-side trace of what it saw — AJM-86 was a one-off `Connection refused`
+    # from the REST port mid-video, and the log had already been rm'd — so a run that
+    # exits non-zero keeps the log and names it; a green run still cleans up below.
+    trap 'status=$?; kill "$MOCK_PID" 2>/dev/null || true; wait "$MOCK_PID" 2>/dev/null || true
+          if [ "$status" -ne 0 ]; then echo "mock log kept: $LOG" >&2; else rm -f "$LOG"; fi
+          rm -rf "$HOSTTEST_DIR"' EXIT
 
     ready=0
     for _ in $(seq 1 50); do
