@@ -11,6 +11,16 @@ as real datagrams against a real socket. The audit found the RT channel had no
 cross-implementation check at all: the mock tested itself, the firmware tested
 itself, and only REST was compared. This is the comparison.
 
+It also asks what happens after the app goes quiet — the part of the channel a
+driver depends on most and no cross-implementation check used to read: the
+control watchdog (silence after zeros: `link.timeouts` +1, `motors.owner` idle,
+the session alive without a new hello), a repeated hello leaving the sequence
+gate alone, and the retreat (a second at 30 % throttle, then silence:
+`recovering` in the first frame, `idle` when the path is retraced). Every legend
+is safe for a car on a stand: the retreat legend is the only one that moves the
+wheels, for one second forward and the same path back. Session mortality
+(`rt.session_idle_ms` of silence) costs ~13 s and runs only with `--slow`.
+
 The dropped-frames check does not just look for aliveness (some push arriving):
 a mock that quietly accepts one of the bad datagrams still looks "alive" to a
 check that only wants any push at all. It reads the car's own `link.rx_hz`
@@ -38,13 +48,23 @@ from generated import DEVICE, GROUPS, PROTO, RT, TELEMETRY_GROUPS   # noqa: E402
 
 K = RT["keys"]
 TYPES = RT["types"]
-OWNER_VALUES = GROUPS["motors"]["fields"][2]["values"]
+_OWNER_FIELD = next(f for f in GROUPS["motors"]["fields"] if f["name"] == "owner")
+OWNER_VALUES = _OWNER_FIELD["values"]
+# The three words the watchdog and retreat legends read, by position: the list is
+# link_src_t's order on all three sides, and tools/mock_car/state.py unpacks it the
+# same way. A rename in the schema moves these with it; a reorder breaks both.
+OWNER_IDLE, OWNER_RECOVERING, OWNER_REMOTE = (OWNER_VALUES[0], OWNER_VALUES[1],
+                                              OWNER_VALUES[3])
 
 # A literal worth naming once: the contract has no field-name constant for a
 # malformed-hello probe's own sid — it is just this tool's own probe value, used
 # from more than one place below, and a typo in one copy would silently un-test
 # the thing it was checking.
 BAD_HELLO_SID = "abcd1234"
+
+# How long one receive waits for the car when nothing bounds it tighter: one
+# telemetry period, so a silent car costs a scan one missed push, not a hang.
+SOCK_TIMEOUT_S = 1.0 / RT["telemetry_hz"]
 
 # rule 6: both sides drop these whole, and neither carries a usable seq — a hello
 # is never subject to the owned-traffic seq gate at all, and a bye missing its
@@ -102,6 +122,14 @@ def rx_hz_of(f):
     return (f.get("link") or {}).get("rx_hz")
 
 
+def timeouts_of(f):
+    return (f.get("link") or {}).get("timeouts")
+
+
+def is_count(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
 def padded_frame(seq_value, total_len):
     """A valid drive frame, padded via an ignored "p" key to exactly total_len bytes.
 
@@ -119,9 +147,10 @@ def padded_frame(seq_value, total_len):
 
 
 class RTConformance:
-    def __init__(self, host, port, verbose=False):
+    def __init__(self, host, port, verbose=False, slow=False):
         self.addr = (host, port)
         self.verbose = verbose
+        self.slow = slow
         self.failures = []
 
     def check(self, ok, what):
@@ -146,26 +175,39 @@ class RTConformance:
 
     def sock(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(0.2)
+        s.settimeout(SOCK_TIMEOUT_S)
         return s
 
     def recv_frame(self, s, deadline_s):
-        """The next parseable frame within deadline_s, or None."""
+        """The next parseable frame within deadline_s, or None.
+
+        The socket's timeout is bounded to what is left of the deadline while this
+        runs, and restored after: a caller streaming at rt.command_hz waits for a
+        push only until its next send is due, not for the socket's full
+        SOCK_TIMEOUT_S — which used to hold the stream to half the contract's rate,
+        and a retreat legend's path to half its crumbs.
+        """
         end = time.monotonic() + deadline_s
-        while time.monotonic() < end:
-            try:
-                data, _ = s.recvfrom(RT["max_datagram"])
-            except socket.timeout:
-                continue
-            try:
-                frame = json.loads(data)
-            except ValueError:
-                self.check(False, f"unparseable datagram from the car: {data[:60]!r}")
-                continue
-            if self.verbose:
-                print(f"    <- {frame}")
-            return frame
-        return None
+        try:
+            while True:
+                left = end - time.monotonic()
+                if left <= 0:
+                    return None
+                s.settimeout(min(SOCK_TIMEOUT_S, left))
+                try:
+                    data, _ = s.recvfrom(RT["max_datagram"])
+                except socket.timeout:
+                    continue
+                try:
+                    frame = json.loads(data)
+                except ValueError:
+                    self.check(False, f"unparseable datagram from the car: {data[:60]!r}")
+                    continue
+                if self.verbose:
+                    print(f"    <- {frame}")
+                return frame
+        finally:
+            s.settimeout(SOCK_TIMEOUT_S)
 
     def recv_matching(self, s, pred, deadline_s):
         """The first frame matching pred within deadline_s — everything else read
@@ -217,6 +259,36 @@ class RTConformance:
             if reply is not None:
                 return reply
         raise Unreachable(f"no hello reply from {self.addr[0]}:{self.addr[1]}")
+
+    def drive(self, seq, throttle=0.0):
+        return enc({K["proto"]: PROTO, K["type"]: TYPES["drive"], K["seq"]: seq,
+                    K["throttle"]: throttle, K["turn"]: 0.0})
+
+    def stream(self, s, seq, seconds, throttle=0.0):
+        """Hold one command on the wire at rt.command_hz for `seconds`, numbering
+        from seq + 1 — the way the app streams the held stick — and return (the
+        telemetry frames heard meanwhile, the last seq sent).
+
+        Every legend that needs the watchdog armed, or a breadcrumb path worth
+        retracing, goes through here, so the axes this tool ever drives are
+        visible in one place: zeros everywhere except the retreat legend's one
+        second at 0.3.
+        """
+        frames = []
+        end = time.monotonic() + seconds
+        next_send = 0.0
+        while time.monotonic() < end:
+            now = time.monotonic()
+            if now >= next_send:
+                seq += 1
+                s.sendto(self.drive(seq, throttle), self.addr)
+                next_send = now + 1.0 / RT["command_hz"]
+            # Listen exactly until the next send is due, so the cadence is the
+            # contract's and not a function of when pushes happen to arrive.
+            f = self.recv_frame(s, min(next_send, end) - time.monotonic())
+            if f is not None and is_telemetry(f):
+                frames.append(f)
+        return frames, seq
 
     def run(self):
         sid = secrets.token_hex(4)
@@ -284,20 +356,7 @@ class RTConformance:
                                f"{bad_rx or [0]}, want all 0 — the car accepted one")
 
         print("telemetry")
-        seq = 0
-        frames = []
-        end = time.monotonic() + 1.5
-        next_send = 0.0
-        while time.monotonic() < end:
-            now = time.monotonic()
-            if now >= next_send:
-                seq += 1
-                s.sendto(enc({K["proto"]: PROTO, K["type"]: TYPES["drive"], K["seq"]: seq,
-                              K["throttle"]: 0.0, K["turn"]: 0.0}), self.addr)
-                next_send = now + 1.0 / RT["command_hz"]
-            f = self.recv_frame(s, 0.05)
-            if f is not None and is_telemetry(f):
-                frames.append(f)
+        frames, seq = self.stream(s, 0, 1.5)
         self.check(len(frames) >= 3,
                    f"telemetry: {len(frames)} frames in 1.5 s of streaming, want >= 3")
         if frames:
@@ -333,11 +392,142 @@ class RTConformance:
             self.check(owner_of(f) in OWNER_VALUES,
                        f"telemetry motors.owner {owner_of(f)!r} not in {OWNER_VALUES}")
 
+        print("watchdog (silence after zeros: link.timeouts +1, idle, the session lives on)")
+        # The stream above just stopped, and every quiet stretch of this tool used
+        # to trip the car's watchdog unread. Read it: silence past rt.watchdog_ms
+        # after an accepted command is a loss, counted once in link.timeouts, and
+        # the path it would retrace is all zeros — so the honest answer is a stop,
+        # not a retreat, and the actuator falls to idle. The session is not over:
+        # telemetry keeps coming, and the stream resumes on the same session with
+        # fresh seqs — no new hello — which is what a driver walking back into
+        # range relies on. All of it stationary on the bench.
+        before = timeouts_of(frames[-1]) if frames else None
+        if not self.check(is_count(before),
+                          f"link.timeouts while streaming is {before!r}, want a count"):
+            before = None
+        if frames:
+            self.check(owner_of(frames[-1]) == OWNER_REMOTE,
+                       f"motors.owner while the zero stream is held is "
+                       f"{owner_of(frames[-1])!r}, want {OWNER_REMOTE!r}")
+        # Two half-second windows rather than one: the trip lands in the first
+        # (rt.watchdog_ms plus a push period), so the second is proof on its own
+        # that the session outlives it — one frame there is one frame after.
+        early = [f for f in self.scan_window(s, 0.5) if is_telemetry(f)]
+        late = [f for f in self.scan_window(s, 0.5) if is_telemetry(f)]
+        self.check(bool(early), "telemetry keeps coming while the tool is silent")
+        self.check(bool(late), "telemetry keeps coming past rt.watchdog_ms of silence — "
+                               "a watchdog trip is not the end of the session")
+        quiet = early + late
+        if quiet and before is not None:
+            trips = [timeouts_of(f) for f in quiet]
+            self.check(before + 1 in trips,
+                       f"link.timeouts within 1 s of silence was {trips}, want "
+                       f"{before + 1} — the watchdog must trip at rt.watchdog_ms")
+            self.check(all(t in (before, before + 1) for t in trips),
+                       f"link.timeouts within 1 s of silence was {trips}, want no more "
+                       f"than one trip — a trip disarms until the stream resumes")
+            owners = [owner_of(f) for f in quiet if timeouts_of(f) == before + 1]
+            self.check(all(o == OWNER_IDLE for o in owners),
+                       f"motors.owner after the trip was {owners}, want all "
+                       f"{OWNER_IDLE!r} — a path of zeros stops, it does not retrace")
+        resumed, seq = self.stream(s, seq, 0.6)
+        self.check(bool(resumed), "telemetry keeps coming when the stream resumes")
+        if resumed:
+            rx = [rx_hz_of(f) for f in resumed]
+            self.check(any(rx), f"link.rx_hz after the stream resumed without a hello was "
+                                f"{rx}, want > 0 — the trip must not end the session")
+            self.check(owner_of(resumed[-1]) == OWNER_REMOTE,
+                       f"motors.owner once the stream resumed is {owner_of(resumed[-1])!r}, "
+                       f"want {OWNER_REMOTE!r} — the driver is back")
+
+        print("repeat hello keeps the gate")
+        # The session is live and was just driving. A hello with the same sid from
+        # the same socket is what the app sends when a reply was lost; answered, it
+        # must change nothing — a replay of the last accepted seq stays refused.
+        # The fresh seq right after is accepted, so the zero is the gate's verdict
+        # and not a dead session's silence. Quiesced first, for a fixed half
+        # second rather than until a gap: the push counting the resumed stream's
+        # last commands may still be in flight, and over WiFi it may be late.
+        self.scan_window(s, 0.5)
+        try:
+            again = self.handshake(s, sid)
+        except Unreachable:
+            # Reachability is long proven: a named FAIL, not exit 2, as with the
+            # foreign-proto handshake above.
+            self.check(False, "the owner's repeated hello mid-session gets no reply")
+        else:
+            self.check(again.get(K["session"]) == sid,
+                       "the owner's repeated hello mid-session is answered")
+        s.sendto(self.drive(seq), self.addr)       # the last accepted seq, replayed
+        seen = [f for f in self.scan_window(s, 0.6) if is_telemetry(f)]
+        self.check(bool(seen), "telemetry keeps flowing after a repeated hello")
+        bad_rx = [rx_hz_of(f) for f in seen if rx_hz_of(f)]
+        self.check(not bad_rx,
+                   f"link.rx_hz after replaying seq {seq} behind a repeated hello was "
+                   f"{bad_rx or [0]}, want 0 — the repeat reset the sequence gate")
+        if seen and before is not None:
+            # This silence is the second one since the stream first resumed: the
+            # resumed stream re-armed the watchdog, or the counter would sit at +1.
+            self.check(timeouts_of(seen[-1]) == before + 2,
+                       f"link.timeouts after the resumed stream went quiet is "
+                       f"{timeouts_of(seen[-1])}, want {before + 2} — a resumed stream "
+                       f"must re-arm the watchdog without a new hello")
+        seq += 1
+        for _ in range(3):                         # as the cap probe below: WiFi may lose one
+            s.sendto(self.drive(seq), self.addr)
+        after_fresh = [rx_hz_of(f) for f in self.scan_window(s, 0.6) if is_telemetry(f)]
+        self.check(any(after_fresh),
+                   f"link.rx_hz after a fresh seq behind the repeated hello was "
+                   f"{after_fresh}, want > 0 — the session is alive, so the zero above "
+                   f"was the gate's doing")
+
+        print("retreat (1 s at throttle 0.3, then silence: recovering, then idle)")
+        # The one legend that moves the wheels, and by design the only one: a
+        # second of 30 % throttle is the path, and the retreat that follows is its
+        # reverse, segment for segment — a short roll forward and the same roll
+        # back on the bench, never a drive longer than the second it was given.
+        # The earlier silences consumed their own (motionless) paths at their
+        # trips, so what this trip retraces is exactly these ten crumbs.
+        moving, seq = self.stream(s, seq, 1.0, throttle=0.3)
+        self.check(bool(moving), "telemetry arrives while the 0.3 stream is held")
+        before_move = timeouts_of(moving[-1]) if moving else None
+        if is_count(before_move):
+            # The trip at rt.watchdog_ms, ~1.15 s of retrace (ten 100 ms segments
+            # and the capped newest one), then the stop — all inside 2.5 s.
+            silent = [f for f in self.scan_window(s, 2.5) if is_telemetry(f)]
+            tripped = [f for f in silent if timeouts_of(f) == before_move + 1]
+            owners = [owner_of(f) for f in tripped]
+            if self.check(bool(tripped),
+                          f"link.timeouts after the 0.3 stream went quiet was "
+                          f"{[timeouts_of(f) for f in silent]}, want {before_move + 1}"):
+                # The first frame after the trip names the retreat. The car gets one
+                # push of grace: its retreat task sits one priority below rt_task,
+                # so a push that shares the trip's tick leaves before the first
+                # reverse step lands — that frame is idle (the RT grant is revoked
+                # at the trip), and the next one is recovering. The mock trips and
+                # retreats in one tick.
+                self.check(owners[:1] == [OWNER_RECOVERING]
+                           or owners[:2] == [OWNER_IDLE, OWNER_RECOVERING],
+                           f"motors.owner in the first frames after the trip was "
+                           f"{owners[:2]}, want {OWNER_RECOVERING!r} — a path with motion "
+                           f"is retraced, and telemetry names the retreat")
+                self.check(OWNER_REMOTE not in owners,
+                           f"motors.owner during the silence was {owners}, want no "
+                           f"{OWNER_REMOTE!r} — the trip revokes the driver's grant")
+            if OWNER_RECOVERING in owners:
+                rest = owners[owners.index(OWNER_RECOVERING):]
+                if self.check(OWNER_IDLE in rest,
+                              f"motors.owner after the trip was {owners}, want {OWNER_IDLE!r} "
+                              f"within 2.5 s — a 1 s path retraces in about 1.15 s"):
+                    stopped = rest[rest.index(OWNER_IDLE):]
+                    self.check(all(o == OWNER_IDLE for o in stopped),
+                               f"motors.owner after the retrace ended was {stopped}, want all "
+                               f"{OWNER_IDLE!r} — one retreat per loss")
+
         print("dropped datagrams (rejection is measured via link.rx_hz, not just aliveness)")
-        # Quiesce: the telemetry loop above already stopped sending. Read one
-        # push before doing anything else, so the backlog left by the streaming
-        # tail is flushed and the pushes we inspect below are ones generated
-        # after this point, not stale carryover from the loop.
+        # Quiesce: the retreat legend above ended in silence, and the car is idle.
+        # Read one push before doing anything else, so the pushes we inspect
+        # below are ones generated after this point, not stale carryover.
         flushed = self.recv_matching(s, is_telemetry, 1.0)
         self.check(flushed is not None, "a push still arrives once streaming stops")
 
@@ -451,6 +641,67 @@ class RTConformance:
             self.check(after is None, "telemetry stops after a goodbye")
         s.close()
         s3.close()
+
+        idle_s = RT["session_idle_ms"] / 1000.0
+        if not self.slow:
+            print(f"  skipped: session idle ({idle_s:g} s of silence ends the session) — "
+                  f"pass --slow to run it; it adds ~{idle_s + 3:.0f} s")
+            return self.failures
+
+        print(f"session idle (--slow: {idle_s:g} s of silence ends the session)")
+        # A fresh session: hello, half a second of zeros so the watchdog is armed
+        # (the driver-vanished-after-a-trip case, not the never-commanded one),
+        # then nothing. The trip disarms at rt.watchdog_ms; mortality counts from
+        # the last accepted command, and at rt.session_idle_ms the session ends:
+        # the pushes stop, a drive gets nothing, and the same sid — dead, but with
+        # no live session to protect — is adopted again. Nothing moves.
+        s5 = self.sock()
+        sid5 = secrets.token_hex(4)
+        try:
+            self.handshake(s5, sid5)
+        except Unreachable:
+            self.check(False, "a fresh session's hello gets no reply at all "
+                              "(session idle cannot be exercised without it)")
+            s5.close()
+            return self.failures
+        _, seq5 = self.stream(s5, 0, 0.5)
+        quiet_from = time.monotonic()               # the last command went out just before
+        last_push = None
+        end = quiet_from + idle_s + 1.5
+        while time.monotonic() < end:
+            f = self.recv_frame(s5, end - time.monotonic())
+            if f is not None and is_telemetry(f):
+                last_push = time.monotonic() - quiet_from
+        if self.check(last_push is not None, "telemetry ran on after the stream stopped"):
+            # Not later: a session that outlives the deadline pushes to a vanished
+            # address and keeps a stale datagram's window open. Not earlier: a
+            # session ended before it means a driver mid-stall loses the car for
+            # nothing. One push period of slack past the deadline; a second before
+            # it, since WiFi may lose the final push.
+            self.check(idle_s - 1.0 <= last_push <= idle_s + 0.5,
+                       f"the last push came {last_push:.2f} s after the last command, "
+                       f"want about {idle_s:g} s — rt.session_idle_ms ends the session, "
+                       f"not earlier and not later")
+        seq5 += 1
+        for _ in range(3):
+            s5.sendto(self.drive(seq5), self.addr)
+        revived = self.recv_matching(s5, is_telemetry, 1.0)
+        self.check(revived is None, "after the session idled out a drive is dropped and "
+                                    "nothing is pushed — the next driver says hello")
+        try:
+            back = self.handshake(s5, sid5)
+        except Unreachable:
+            self.check(False, "a hello with the dead session's sid gets no reply at all")
+        else:
+            self.check(back.get(K["session"]) == sid5,
+                       "a hello with the dead session's sid is answered")
+            readopted = self.recv_matching(s5, is_telemetry, 1.0)
+            self.check(readopted is not None,
+                       "with no live session, the dead sid's hello is adopted again — "
+                       "telemetry resumes")
+            s5.sendto(enc({K["proto"]: PROTO, K["type"]: TYPES["bye"], K["seq"]: 1}),
+                      self.addr)
+        s5.close()
         return self.failures
 
 
@@ -458,9 +709,12 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("target", help="host:port, e.g. 127.0.0.1:4237 (the mock) or 192.168.7.1:4210 (the car, through the dongle)")
     p.add_argument("-v", "--verbose", action="store_true", help="log every frame")
+    p.add_argument("--slow", action="store_true",
+                   help="also wait out rt.session_idle_ms of silence to see the session "
+                        "end (~13 s more); skipped by default so test-all.sh stays short")
     args = p.parse_args()
     host, _, port = args.target.partition(":")
-    suite = RTConformance(host, int(port or RT["port"]), args.verbose)
+    suite = RTConformance(host, int(port or RT["port"]), args.verbose, slow=args.slow)
     print(f"rt conformance against udp://{host}:{suite.addr[1]}")
     try:
         failures = suite.run()
