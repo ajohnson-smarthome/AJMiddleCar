@@ -16,10 +16,25 @@
  * and today's behaviour is a car that drives. Giving up is the safe direction. */
 #define RADIO_OTA_MAX_ATTEMPTS 3
 
+/* The budget that applies to THIS boot's target. The stored counter was charged against one
+ * particular expected version — `charged_for`, persisted beside it — and it bounds the loop
+ * for that version only. A build expecting a different one (a release with a newer radio pin,
+ * or the same pin behind a fixed delivery route) starts with a fresh budget: otherwise three
+ * interrupted deliveries would leave a car unable to accept the very release that could have
+ * fixed its radio, until someone reached it with a cable (AJM-97). A counter with no record of
+ * its target — the byte an older firmware left behind — counts as fresh for the same reason.
+ * The same target keeps its counter, so per version the loop is still three. */
+int radio_ota_attempts_for(const char *charged_for, const char *expected, int attempts);
+
 /* Refuses on every unknown. An unreadable running version is not a mismatch, a build with no
- * image cannot act on one, and a spent budget must stop rather than loop. */
+ * image cannot act on one, a spent budget must stop rather than loop — and an image whose
+ * rollback could not be cancelled must not flash at all: the gate ends in a restart the car
+ * chose, and under PENDING_VERIFY the bootloader would take that restart for a crash and put
+ * the previous image back (AJM-138). `app_confirmed` is false only when the cancel was tried
+ * and refused; an ordinary boot of an already-confirmed image is confirmed. */
 bool radio_ota_should_flash(const char *running, const char *expected,
-                            int attempts, int max_attempts, bool have_image);
+                            int attempts, int max_attempts, bool have_image,
+                            bool app_confirmed);
 
 /* The counter's next value. A match clears it — including when the match came from a bench
  * reflash rather than from anything this car did, so the budget is fresh for the next real
