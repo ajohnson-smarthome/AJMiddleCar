@@ -80,10 +80,13 @@ class Impairment:
 class RTLink(asyncio.DatagramProtocol):
     """The real-time channel: one owner, learned from `recvfrom` and evicted by `hello`."""
 
-    def __init__(self, car, impair, verbose=False, loop=None):
+    def __init__(self, car, impair, verbose=False, loop=None, reboot_s=None):
         self.car = car
         self.impair = impair
         self.verbose = verbose
+        # How long a "reboot" silences every port: `--reboot-s`, or REBOOT_QUIET_S — read
+        # at reboot time, not here, so a test that patches the module constant still wins.
+        self.reboot_s = reboot_s
         self.transport = None
         # Injectable so a test can hold the clock still; None means the running loop,
         # which is what mock_car.py passes by not passing anything.
@@ -297,8 +300,9 @@ class RTLink(asyncio.DatagramProtocol):
             self.dead_sids.append(self.session)
         self.owner, self.session, self.last_seq = None, None, None
         self._last_activity = None
-        self._quiet_until = now + REBOOT_QUIET_S
-        print(f"rt: 'rebooting' — deaf and mute for {REBOOT_QUIET_S:g} s")
+        quiet = REBOOT_QUIET_S if self.reboot_s is None else self.reboot_s
+        self._quiet_until = now + quiet
+        print(f"rt: 'rebooting' — deaf and mute for {quiet:g} s")
 
     def rebooting(self, now):
         """True inside the reboot window `simulate_reboot` opened.

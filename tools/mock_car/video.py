@@ -15,7 +15,7 @@ import bisect
 import random
 
 from generated import PROTO, RT, VIDEO
-from state import parse_frame
+from state import VIDEO_IDLE, VIDEO_OFF, VIDEO_STREAMING, parse_frame
 from video_wire import chunks
 
 K, T = RT["keys"], RT["types"]
@@ -99,6 +99,8 @@ class VideoLink(asyncio.DatagramProtocol):
             return
         if self.link.session is None or f[K["session"]] != self.link.session:
             return
+        if self.car.video_state == VIDEO_OFF:
+            return                          # no sensor since boot (`--camera off`): every view ignored
         if not self.car.config["video"]["enabled"]:
             return                          # the switch: a view opens nothing, whoever sends it
         now = self.loop.time()
@@ -107,7 +109,7 @@ class VideoLink(asyncio.DatagramProtocol):
             self.frame = 0
             self.pos = 0
             self.sid = f[K["session"]]
-            self.car.video_state = "streaming"
+            self.car.video_state = VIDEO_STREAMING
             print(f"video: view from {addr[0]}:{addr[1]} — streaming (stream {self.stream})")
         elif f[K["session"]] != self.sid:
             # The stream belongs to the sid it opened under (video_sub.h, AJM-40): the new
@@ -128,7 +130,7 @@ class VideoLink(asyncio.DatagramProtocol):
         self.peer = None
         self.sid = None
         self.last_view = None
-        self.car.video_state = "idle"
+        self.car.video_state = VIDEO_IDLE
         self.car.video_fps = self.car.video_kbps = 0
         # A datagram held for reordering must not survive into the next stream — flushed
         # by a future _emit, it would carry this stream's (now stale) `stream` number.

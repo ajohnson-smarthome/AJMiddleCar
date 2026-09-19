@@ -714,6 +714,27 @@ class TestReboot(Quiet):
                          "and the hello reply carries the bumped fw")
 
 
+    def test_the_reboot_gap_is_a_flag_with_the_mirrored_default(self):
+        """`--reboot-s N` (AJM-116): the window is the link's own number, REBOOT_QUIET_S
+        unless the flag says otherwise; 0 is no silence at all — the sweep's escape hatch
+        should a /ota step ever need REST back before the app's stall guard fires."""
+        loop = FakeLoop()
+        rt = RTLink(CarState(now=0.0), Impairment(), loop=loop, reboot_s=0.5)
+        rt.connection_made(Recorder())
+        rt.simulate_reboot(10.0)
+        self.assertTrue(rt.rebooting(10.4))
+        self.assertFalse(rt.rebooting(10.6))
+        rt = RTLink(CarState(now=0.0), Impairment(), loop=loop, reboot_s=0.0)
+        rt.connection_made(Recorder())
+        rt.simulate_reboot(10.0)
+        self.assertFalse(rt.rebooting(10.0), "no window at all")
+        rt = RTLink(CarState(now=0.0), Impairment(), loop=loop)
+        rt.connection_made(Recorder())
+        rt.simulate_reboot(10.0)
+        self.assertTrue(rt.rebooting(10.0 + REBOOT_QUIET_S - 0.1))
+        self.assertFalse(rt.rebooting(10.0 + REBOOT_QUIET_S))
+
+
 class TestTwoPhones(Quiet):
     def test_last_hello_wins_and_nobody_is_told(self):
         """Rule 11: the audit flagged silent hijack and the ~3 s two-phone

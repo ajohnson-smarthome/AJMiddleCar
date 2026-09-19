@@ -212,6 +212,23 @@ class TheSwitch(unittest.TestCase):
         self.assertEqual(car.video_state, "idle")
 
 
+class NoSensor(unittest.TestCase):
+    """`car/video-stream`: no sensor at boot is `video.state: off` until the next reboot,
+    and in `off` every `view` is ignored — no subscription, nothing on the port (AJM-116)."""
+
+    def test_off_ignores_the_owners_view(self):
+        car = _FakeCar()
+        car.video_state = "off"
+        v = VideoLink(car, _FakeLink(), SC + SPS + SC + PPS + SC + IDR, loop=_FakeLoop())
+        v.transport = _FakeTransport()
+        v.datagram_received(_view(key=True), ("127.0.0.1", 40000))
+        self.assertIsNone(v.peer)
+        self.assertFalse(v.want_key)
+        self.assertEqual(car.video_state, "off")
+        self.assertTrue(v.tick(0.0), "nothing to send")
+        self.assertEqual(car.video_state, "off", "a tick does not turn off into idle")
+
+
 class OwnerChange(unittest.TestCase):
     """A stream belongs to the sid it opened under (AJM-40): once another hello has taken
     the rt session, it ends on the next tick — not at `subscribe_timeout_ms` — and the

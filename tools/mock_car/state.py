@@ -31,6 +31,27 @@ _owner_field = next(f for f in GROUPS["motors"]["fields"] if f["name"] == "owner
  OWNER_UPDATE, OWNER_SAFE_STOP) = _owner_field["values"]
 PRIORITY = tuple(_owner_field["values"])
 
+
+def _words(group, field):
+    """The state words of one enum field of a status group, in the schema's order."""
+    return next(f for f in GROUPS[group]["fields"] if f["name"] == field)["values"]
+
+
+# The other state words the mock speaks — spelled by the schema, like the owners above,
+# so a literal here cannot drift from what the car and the app agree on. Each is also
+# the vocabulary of a degradation flag (mock_car.py): `--bus down`, `--camera off`,
+# `--radio mismatch|unavailable` name the word the car would show (AJM-116).
+BUS_OK, BUS_DOWN = _words("motors", "bus")
+RADIO_OK, RADIO_MISMATCH, RADIO_UNAVAILABLE = _words("radio", "state")
+VIDEO_OFF, VIDEO_IDLE, VIDEO_STREAMING = _words("video", "state")
+
+# The radio's two version strings. On the car `expected` derives from the esp_hosted
+# pin and `fw` is what the C6 answered at boot (status_api.c); the mock has no radio,
+# so both are placeholders — what a client acts on is the three-way verdict in
+# `radio.state`, and `--radio mismatch` only needs `fw` to be some other version.
+RADIO_EXPECTED = "mock"
+RADIO_OTHER_FW = "mock-old"
+
 # The session id, as `parse_sid` in firmware/car/core/main/control_proto.c accepts it:
 # non-empty, alphanumeric, and short enough to fit that file's CONTROL_SID_MAX with its
 # NUL. Not in contract/car-api.json on any of the three sides, so it is mirrored here by
@@ -273,12 +294,25 @@ class CarState:
     SEG_MAX_MS = 250       # firmware/car/core/main/recovery.h RECOVER_SEG_MAX_MS: per-segment cap
     CALIB_HOLD_MS = 600    # firmware/car/core/main/link.h LINK_HOLD_CALIB_MS: one pulse
 
-    def __init__(self, device=DEVICE, fw="v1.0+9000", now=0.0):
+    def __init__(self, device=DEVICE, fw="v1.0+9000", now=0.0, bus_ok=True, camera=True,
+                 radio=RADIO_OK, nvs_wiped=False, write_fail=()):
+        """The last five are the degradations (AJM-116): states the car can boot into and
+        the app has to show, each off by default. A degradation is a state and what it
+        implies on the wire, never the cause behind it: `bus_ok=False` is `motors.bus:
+        down` and wheels that do not turn, not a simulated I2C; `camera=False` is
+        `video.state: off` and `view` ignored; `radio` is the word in `radio.state`;
+        `nvs_wiped` is `storage.reset_at_boot` over a car that starts on the contract's
+        defaults anyway; `write_fail` names the domains (and/or `calibration`) whose next
+        changing write answers `write_failed` — once each."""
         self.device = device
         self.fw = fw
         self.rollback = False    # the previous "OTA" was rolled back — /status mirrors it
-        self.nvs_wiped = False   # one-boot flag after a simulated NVS migration erase
+        self.nvs_wiped = nvs_wiped   # this boot's NVS migration erased every setting
         self.rssi = -58
+        # What the radio answered at boot, read once (status_api.c): None is no answer.
+        self.radio_fw = {RADIO_OK: RADIO_EXPECTED, RADIO_MISMATCH: RADIO_OTHER_FW,
+                         RADIO_UNAVAILABLE: None}[radio]
+        self.write_fail = set(write_fail)
         self.heap = 200000
         # Internal integers throughout — a `fixed` field (gear_ratio) is held as ratio x100,
         # exactly as `defaults` already is in the schema; `to_wire`/`from_wire` are the only
@@ -299,11 +333,12 @@ class CarState:
         self._owner_until = None       # None means the grant is sticky
         self._calibrated = False
         self._calibration = {}         # corner -> (pair, inverted)
-        self._bus_ok = True
+        self._bus_ok = bus_ok
         self._tele_seq = 0
         # The video channel's counters, written by video.py: `idle` and zeros until a
-        # viewer subscribes, then whatever the looped clip is sending.
-        self.video_state = "idle"
+        # viewer subscribes, then whatever the looped clip is sending. `off` — no sensor
+        # answered at boot — is for the whole run: video.py opens nothing in it.
+        self.video_state = VIDEO_IDLE if camera else VIDEO_OFF
         self.video_fps = 0
         self.video_kbps = 0
         self.video_dropped = 0
@@ -321,6 +356,14 @@ class CarState:
     @property
     def bus_ok(self):
         return self._bus_ok
+
+    @property
+    def radio_state(self):
+        """status_api.c's radio_state_word: no answer is `unavailable` — the only case
+        `fw` is null — and any answer is `ok` or `mismatch` against `expected`."""
+        if self.radio_fw is None:
+            return RADIO_UNAVAILABLE
+        return RADIO_OK if self.radio_fw == RADIO_EXPECTED else RADIO_MISMATCH
 
     @property
     def calibrated(self):
@@ -351,12 +394,25 @@ class CarState:
         """Validate the WHOLE body, then apply every present domain. Returns (True, None)
         or (False, (code, field, message)) — the car's two-pass rule: a body that is
         half right changes nothing.
+
+        Pass two runs domain by domain in the contract's order, as cfg_api.c walks
+        CFG_DOMAINS: a domain armed by `--write-fail` refuses its first *changing* write
+        — cfg_json.c skips the flash for a value already stored, so an unchanged write
+        cannot fail — with `write_failed`, rolled back to its previous values, and the
+        domains before it stay applied. The 500 does not mean nothing changed; the next
+        GET is the only way to learn what did (`car/config`).
         """
         ok, err = validate_config(body)
         if not ok:
             return False, err
-        for key in body:
-            self.config[key] = from_wire(key, body[key])
+        for key in DOMAINS:
+            if key not in body:
+                continue
+            new = from_wire(key, body[key])
+            if key in self.write_fail and new != self.config[key]:
+                self.write_fail.discard(key)
+                return False, ("write_failed", key, "could not persist")
+            self.config[key] = new
         return True, None
 
     def config_wire(self):
@@ -392,7 +448,11 @@ class CarState:
         # takes OWNER_RECOVERING and sets the reversed command — before `_expire` ever
         # looks at the lapsed grant, so there is no window to cover and no invented
         # tick in a mock that has none.
-        if self._take(OWNER_REMOTE, now, RT["watchdog_ms"] / 1000.0):
+        if self._take(OWNER_REMOTE, now, RT["watchdog_ms"] / 1000.0) and self._bus_ok:
+            # With the bus down the arbiter still grants (`car/actuator-arbiter`: the car
+            # stays reachable and updatable) but nothing reaches the wheels, and a command
+            # that moved the car nowhere is no breadcrumb: the path is only the ground
+            # driven, so a trip stops rather than retraces (`car/recovery`).
             self._t, self._y = t, y
             self._history.append((t, y, now))
         self._evict(now)
@@ -620,9 +680,14 @@ class CarState:
     # ---- calibration, OTA ------------------------------------------------------
 
     def begin_spin(self, now, pair, direction):
-        """Take the actuator for one identification pulse. False when something outranks."""
+        """Take the actuator for one identification pulse. False when something outranks
+        — or when the bus is down, asked BEFORE the arbiter as calib_spin.h asks it: no
+        grant, no hold, nothing to release, and the wizard's 409 says the wheel did not
+        turn (AJM-100)."""
         self._now = now
         self._expire(now)
+        if not self._bus_ok:
+            return False
         if not self._take(OWNER_CALIBRATION, now, self.CALIB_HOLD_MS / 1000.0):
             return False
         # Taking the actuator from a retreat is what aborts it on the car: the next
@@ -680,6 +745,13 @@ class CarState:
             table[corner] = (int(pair), inverted)
         if {p for p, _ in table.values()} != set(range(CALIBRATION["pairs"])):
             return False, ("not_allowed", keys["wheels"], "pairs must be 0..3, each once")
+        # calib_api.c saves first, applies second: a persist that fails is `write_failed`
+        # with the table the car drives by and `calibrated` untouched. Armed by
+        # `--write-fail calibration`, once; and only for a table that differs from the
+        # stored one — calibration.c does not rewrite the flash for the same table.
+        if "calibration" in self.write_fail and (not self._calibrated or table != self._calibration):
+            self.write_fail.discard("calibration")
+            return False, ("write_failed", keys["wheels"], "could not persist")
         self._calibration = table
         self._calibrated = True
         return True, None
@@ -724,21 +796,25 @@ class CarState:
 
     # ---- telemetry -------------------------------------------------------------
 
-    def status_groups(self, rx_hz):
-        """The link/motors/system/video groups, built by walking the schema so a field added to
-        the contract and not to the map below raises here rather than going missing on
-        the wire.
+    def status_groups(self, rx_hz, groups=TELEMETRY_GROUPS):
+        """The status groups named, in that order — telemetry's four by default, all six
+        of `STATUS_GROUPS` for a `/status` poll — built by walking the schema so a field
+        added to the contract and not to the map below raises here rather than going
+        missing on the wire. `radio` and `storage` are /status-only diagnostics, read
+        once at boot on the car and constant here but for the degradation flags.
         """
         values = {
             "link": {"rx_hz": int(rx_hz), "rssi_dbm": self.rssi if self.rssi != 0 else None,
                      "timeouts": self._wdt_trips},
-            "motors": {"bus": "ok" if self._bus_ok else "down", "calibrated": self._calibrated,
+            "motors": {"bus": BUS_OK if self._bus_ok else BUS_DOWN, "calibrated": self._calibrated,
                        "owner": self._owner},
+            "radio": {"fw": self.radio_fw, "expected": RADIO_EXPECTED, "state": self.radio_state},
+            "storage": {"reset_at_boot": self.nvs_wiped},
             "system": {"uptime_s": int(self._now - self._started), "free_heap": self.heap},
             "video": {"state": self.video_state, "fps": self.video_fps, "kbps": self.video_kbps,
                       "dropped": self.video_dropped},
         }
-        return {g: {f["name"]: values[g][f["name"]] for f in GROUPS[g]["fields"]} for g in TELEMETRY_GROUPS}
+        return {g: {f["name"]: values[g][f["name"]] for f in GROUPS[g]["fields"]} for g in groups}
 
     def telemetry(self, rx_hz, bump=True):
         """The 5 Hz frame, built by walking the schema (via `status_groups`).

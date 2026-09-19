@@ -23,6 +23,13 @@ so it is repeatable only for a run driven the same way from the same moment.
     python3 mock_car.py                       # LAN, contract ports
     python3 mock_car.py --loss-pct 10         # verify a dropped datagram costs one tick
     python3 mock_car.py --host 127.0.0.1      # simulator only
+    python3 mock_car.py --bus down            # a car whose PWM boards never came up
+
+The degradation flags — `--bus down`, `--camera off`, `--radio mismatch|unavailable`,
+`--reset-at-boot`, `--write-fail <domain|calibration>`, `--reboot-s N` — are states the
+car can boot into and the app has to show (AJM-116). Each is a field of `CarState` that
+the places already reporting it read, all off by default; `car_from_args` is where the
+flags become state.
 """
 import argparse
 import asyncio
@@ -35,9 +42,10 @@ import sys
 from aiohttp import web
 
 from generated import (CALIBRATION, CONFIG_PATH, DEVICE, DOMAINS, ENDPOINTS, ENVELOPE,
-                       PROTO, RT, VIDEO)
-from rt_link import Impairment, RTLink, service_loop
-from state import CarState, build_number, image_refusal, parse_image_version
+                       PROTO, RT, STATUS_GROUPS, VIDEO)
+from rt_link import REBOOT_QUIET_S, Impairment, RTLink, service_loop
+from state import (BUS_DOWN, BUS_OK, RADIO_MISMATCH, RADIO_OK, RADIO_UNAVAILABLE, CarState,
+                   build_number, image_refusal, parse_image_version)
 from video import VideoLink
 
 # A flash is the one REST call that takes real time; the mock spends it so a client's
@@ -111,6 +119,14 @@ def json_error(status, code, message, field=""):
     return web.json_response({ENVELOPE["proto"]: PROTO, ENVELOPE["error"]: err}, status=status)
 
 
+def reply_refusal(err):
+    """A (code, field, message) the state refused a body with, as the car answers it —
+    the status follows the code (`car/status-and-version`): 500 for `write_failed`,
+    which the state raises only under `--write-fail`, 400 for everything it validates."""
+    code, field, message = err
+    return json_error(500 if code == "write_failed" else 400, code, message, field)
+
+
 async def read_object(request, limit):
     """The body as the car's JSON handlers see it, or the rejection they answer instead.
 
@@ -179,8 +195,7 @@ async def cfg_post(request):
         return refused
     ok, err = car.apply_config(body)
     if not ok:
-        code, field, message = err
-        return json_error(400, code, message, field)
+        return reply_refusal(err)
     print(f"{CONFIG_PATH}: {car.config_wire()}")
     return reply(car.config_wire())
 
@@ -188,19 +203,9 @@ async def cfg_post(request):
 async def status(request):
     car, link = request.app["car"], request.app["link"]
     now = asyncio.get_running_loop().time()
-    # Schema order (STATUS_GROUPS): link, motors, radio, storage, system, video —
-    # `radio` and `storage` are /status-only diagnostics the schema does not describe,
-    # inserted between link/motors and system/video, the groups `status_groups` already
-    # returns in order.
-    groups = car.status_groups(link.rx_fps(now, "status"))
-    return reply({
-        "link": groups["link"],
-        "motors": groups["motors"],
-        "radio": {"fw": "mock", "expected": "mock", "state": "ok"},
-        "storage": {"reset_at_boot": car.nvs_wiped},
-        "system": groups["system"],
-        "video": groups["video"],
-    })
+    # All six of the schema's groups in its order — telemetry's four plus `radio` and
+    # `storage`, the /status-only diagnostics, walked from the same schema by the state.
+    return reply(car.status_groups(link.rx_fps(now, "status"), STATUS_GROUPS))
 
 
 async def version(request):
@@ -259,9 +264,11 @@ async def calib_spin(request):
     forward = direction == CALIBRATION["directions"][0]
     now = asyncio.get_running_loop().time()
     if not car.begin_spin(now, int(pair), 1 if forward else 0):
-        # The request is fine; the actuator is taken. The wizard must not advance — the
-        # wheel did not turn, and four blind taps produce a table nothing can reject.
-        return json_error(409, "busy", "actuator busy")
+        # The request is fine; the actuator is taken — or the bus is down and nothing
+        # would reach the wheel. Both are 409 busy without a field (calib_spin.h): the
+        # wizard must not advance either way — the wheel did not turn, and four blind
+        # taps produce a table nothing can reject. Only the message tells the log which.
+        return json_error(409, "busy", "actuator busy" if car.bus_ok else "motor bus down")
     print(f"calib: spin pair={int(pair)} {direction}")
     # The firmware's order (calib_api.c): sleep the pulse out, release, then answer.
     # The reply lands after the wheel has stopped — the wizard's next step assumes
@@ -284,8 +291,7 @@ async def calib_save(request):
             return json_error(400, "unknown_field", "no such field", key)
     ok, err = car.save_calibration(body[k["wheels"]])
     if not ok:
-        code, field, message = err
-        return json_error(400, code, message, field)
+        return reply_refusal(err)
     print(f"calib: saved {car.calibration_table()}")
     return reply({k["calibrated"]: car.calibrated, k["wheels"]: car.calibration_table()})
 
@@ -373,14 +379,43 @@ def build_app(car, link, rollback_mode=False, no_version=False):
     return app
 
 
+def car_from_args(args, now):
+    """The car the flags describe. The one place a command-line word becomes state, so
+    that a mock started with no flags — `tools/test-all.sh`'s — is the healthy car."""
+    car = CarState(device=args.device, now=now, bus_ok=args.bus == BUS_OK,
+                   camera=args.camera == "on", radio=args.radio, nvs_wiped=args.reset_at_boot,
+                   write_fail=args.write_fail or ())
+    car.rssi = args.rssi
+    return car
+
+
+def degradations(args):
+    """The flags that are on, for the banner — so a mock left running from a rehearsal
+    of the bus-down screen says so at a glance."""
+    on = []
+    if args.bus != BUS_OK:
+        on.append(f"bus {args.bus}")
+    if args.camera != "on":
+        on.append(f"camera {args.camera}")
+    if args.radio != RADIO_OK:
+        on.append(f"radio {args.radio}")
+    if args.reset_at_boot:
+        on.append("reset-at-boot")
+    for name in args.write_fail or ():
+        on.append(f"write-fail {name}")
+    if args.reboot_s is not None:
+        on.append(f"reboot {args.reboot_s:g} s")
+    return on
+
+
 async def serve(args):
     loop = asyncio.get_running_loop()
-    car = CarState(device=args.device, now=loop.time())
-    car.rssi = args.rssi
+    car = car_from_args(args, loop.time())
     impair = Impairment(args.loss_pct, args.rtt_ms, args.stall_ms, args.seed)
 
     _, link = await loop.create_datagram_endpoint(
-        lambda: RTLink(car, impair, args.verbose), local_addr=(args.host, args.rt_port))
+        lambda: RTLink(car, impair, args.verbose, reboot_s=args.reboot_s),
+        local_addr=(args.host, args.rt_port))
     runner = web.AppRunner(build_app(car, link, rollback_mode=args.rollback, no_version=args.no_version),
                            access_log=None)
     await runner.setup()
@@ -404,11 +439,20 @@ async def serve(args):
           f"auto-return {car.config['recovery']['window_ms']} ms")
     print(f"  video     udp://{where}:{args.video_port}   view -> {VIDEO['width']}x{VIDEO['height']} "
           f"@{VIDEO['fps']}, loss {args.video_loss_pct}%")
+    if degradations(args):
+        print(f"  degraded  {', '.join(degradations(args))}")
 
     await service_loop(link)
 
 
-def main():
+def nonnegative(text):
+    v = float(text)
+    if v < 0:
+        raise argparse.ArgumentTypeError("must be 0 or more")
+    return v
+
+
+def parser():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--host", default="0.0.0.0",
                    help="bind address; the default is reachable from the LAN")
@@ -441,7 +485,31 @@ def main():
     p.add_argument("--video-loss-pct", type=float, default=0.0, help="drop this share of video datagrams")
     p.add_argument("--video-reorder-pct", type=float, default=0.0, help="delay this share by one datagram")
     p.add_argument("--video-dup-pct", type=float, default=0.0, help="send this share twice")
-    args = p.parse_args()
+    # Degradations (AJM-116): each names the word the car shows in the state it degrades.
+    p.add_argument("--bus", choices=(BUS_OK, BUS_DOWN), default=BUS_OK,
+                   help="motors.bus: `down` is a car whose PWM boards never came up — reachable "
+                        "and updatable, drive accepted, nothing moves, spin is 409 busy")
+    p.add_argument("--camera", choices=("on", "off"), default="on",
+                   help="`off` is no sensor at boot: video.state off, every view ignored")
+    p.add_argument("--radio", choices=(RADIO_OK, RADIO_MISMATCH, RADIO_UNAVAILABLE), default=RADIO_OK,
+                   help="radio.state: `mismatch` is another version in radio.fw, `unavailable` "
+                        "is radio.fw null")
+    p.add_argument("--reset-at-boot", action="store_true",
+                   help="storage.reset_at_boot true: this boot wiped the settings and the "
+                        "calibration, and the car runs on the contract's defaults")
+    p.add_argument("--write-fail", action="append", choices=tuple(DOMAINS) + ("calibration",),
+                   metavar="{" + ",".join(DOMAINS) + ",calibration}",
+                   help="the first changing write of this domain (or of the calibration table) "
+                        "answers 500 write_failed and is rolled back; repeatable")
+    p.add_argument("--reboot-s", type=nonnegative, default=None,
+                   help=f"how long every port is silent after a flash (default {REBOOT_QUIET_S:g}, "
+                        "rt_link.py's REBOOT_QUIET_S, longer than the app's stall timeout); "
+                        "0 is no silence at all")
+    return p
+
+
+def main():
+    args = parser().parse_args()
     # Line buffering, so `mock_car.py > log &` shows the banner and the drops as they
     # happen rather than in 8 KB batches when something finally flushes.
     sys.stdout.reconfigure(line_buffering=True)
