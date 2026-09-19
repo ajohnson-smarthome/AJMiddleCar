@@ -49,6 +49,9 @@ python3 tools/mock_car/test_state.py
 python3 tools/mock_car/test_rtlink.py
 python3 tools/mock_car/test_video_wire.py
 python3 tools/mock_car/test_video.py
+# The constants the mock mirrors by hand (no key in the contract), checked against the
+# firmware's and the app's sources — a drift there would otherwise stay green here.
+python3 tools/mock_car/test_mirrors.py
 
 echo "== conformance =="
 # The REST matrix needs a running mock, which needs aiohttp, which needs the venv. A
