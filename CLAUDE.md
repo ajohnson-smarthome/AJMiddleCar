@@ -79,7 +79,8 @@ because it knows anything about the car — it knows neither the motors nor the 
   change; archive закрывает проект.
 
 Статусы: Backlog → Todo → In Progress → In Review → Done.
-`Todo` — очередь для агентов; в него двигает только человек.
+`Todo` — очередь для агентов; туда двигает PM-сессия, когда пользователь говорит, что задача
+готова к запуску — сама она задачи в очередь не ставит.
 
 ### Чем машинка отличается от портала
 
