@@ -27,9 +27,11 @@
 "dongle.wrongSub"         = "К телефону подключён другой USB-адаптер (%@). Нужен адаптер машинки.";
 "config.notRead"     = "Не прочитано";
 "config.retry"       = "Прочитать снова";
+"config.resetNotice" = "Настройки и калибровка машинки сброшены";
 "calib.spinFailTitle"= "Машинка не ответила";
 "calib.spinFailSub"  = "Колесо не крутилось. Проверь связь и нажми «Крутить» ещё раз.";
 "common.close"       = "Закрыть";
+"common.done"        = "Готово";
 "settings.title"     = "Настройки";
 "settings.calibration"= "Калибровка";
 "calib.title"        = "Калибровка";
@@ -48,6 +50,7 @@
 "calib.failTitle"    = "Не удалось";
 "calib.failSub"      = "Проверь связь и повтори.";
 "calib.retry"        = "Повторить";
+"calib.busDownSub"   = "Платы моторов не отвечают — крутить нечего. Проверь их питание и провод: кнопка вернётся, как только машинка их увидит.";
 "drive.connected"    = "На связи";
 "drive.searching"    = "Поиск…";
 "uptime.sec"         = "%d с";

@@ -14,6 +14,13 @@ import Foundation
 /// `false` within `grace` of that moment is that stale frame, not a verdict. Value type, so the
 /// memory lives exactly as long as the drive screen that holds it: a new session starts with
 /// none and is judged by its own first frame, never by what the previous session saw.
+///
+/// `motors.bus` is the other half of the verdict: the wizard exists to spin a pair and ask
+/// which wheel turned, and with the PWM boards not answering none can. It used to open on the
+/// flag alone, and on a car with unpowered boards it was a sheet with no way out — the spin
+/// answered `200` (now `409`, `car/calibration`), nothing moved, and the reason sat under it
+/// (AJM-93). Not required while the bus is not `ok`: the drive screen's own warning names the
+/// reason, and the wizard returns with the bus, the car still uncalibrated.
 struct CalibGate: Equatable {
     /// Seconds after the car was last known calibrated during which a `false` frame is stale.
     static let grace: TimeInterval = 2
@@ -25,10 +32,13 @@ struct CalibGate: Equatable {
     init(preview: Bool = false) { self.preview = preview }
 
     /// One frame's verdict. `nil` is no frame at all — nothing to judge, not an uncalibrated car.
-    mutating func frame(calibrated: Bool?, now: TimeInterval) -> Bool {
+    mutating func frame(calibrated: Bool?, bus: MotorsBus?, now: TimeInterval) -> Bool {
         guard let calibrated, !preview else { return false }
         if calibrated { calibratedAt = now; return false }
         if let at = calibratedAt, now - at <= Self.grace { return false }
+        // Nothing to spin. Not a verdict on the calibration, so no memory is left behind: the
+        // bus coming back is judged by the flag alone, with no grace from the outage.
+        guard bus == .ok else { return false }
         return true
     }
 

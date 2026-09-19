@@ -57,10 +57,12 @@ enum L {
     static func dongleWrongSub(_ found: String) -> String { s("dongle.wrongSub", found) }
     static var configNotRead: String { s("config.notRead") }
     static var configRetry: String { s("config.retry") }
+    static var configResetNotice: String { s("config.resetNotice") }
     static var calibSpinFailTitle: String { s("calib.spinFailTitle") }
     static var calibSpinFailSub: String { s("calib.spinFailSub") }
     static var openSettings: String { s("common.openSettings") }
     static var close: String { s("common.close") }
+    static var done: String { s("common.done") }
     static var settingsTitle: String { s("settings.title") }
     static var settingsCalibration: String { s("settings.calibration") }
     static var settingsGroupSetup: String { s("settings.groupSetup") }
@@ -80,6 +82,7 @@ enum L {
     static var calibFailTitle: String { s("calib.failTitle") }
     static var calibFailSub: String { s("calib.failSub") }
     static var calibRetry: String { s("calib.retry") }
+    static var calibBusDownSub: String { s("calib.busDownSub") }
     static func calibWheel(_ w: String) -> String { s("calib.wheel", w) }
     static var driveSearching: String { s("drive.searching") }
     static var schemeArcade: String { s("scheme.arcade") }

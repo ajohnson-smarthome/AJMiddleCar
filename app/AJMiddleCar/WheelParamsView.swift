@@ -8,6 +8,11 @@ import SwiftUI
 /// The cards appear only once the car's own values have been read. They used to be drawn from
 /// the app's fallback whether or not the GET landed, so a single stepper tap POSTed 65/11/2100/4
 /// over whatever the car actually had.
+///
+/// Every write is a control's own doing — a stepper's setter, the picker's, the preset menu,
+/// the gear field finishing — never an `.onChange` of the state behind a control, which could
+/// not tell the car's value being adopted from the user's hand (AJM-106). The gear ratio is
+/// the one typed field, and it writes once, when the input is over (`GearEntry`, AJM-112).
 struct WheelParamsView: View {
     let palette: Palette
     var wizard: Bool = false
@@ -15,11 +20,25 @@ struct WheelParamsView: View {
     private var p: Palette { palette }
 
     @ObservedObject private var store = ConfigStore.shared.wheel
-    @State private var diameterMm = Wheel.default.diameter_mm
-    @State private var ppr = Wheel.default.encoder_ppr
-    @State private var gearX100 = Int((Wheel.default.gear_ratio * 100).rounded())
-    @State private var quad = Wheel.default.quadrature
-    @State private var gearText = WheelParamsView.gearString(Wheel.default.gear_ratio)
+    @State private var diameterMm: Int
+    @State private var ppr: Int
+    @State private var gearX100: Int
+    @State private var quad: Int
+    @State private var gear: GearEntry
+    @FocusState private var gearFocused: Bool
+
+    init(palette: Palette, wizard: Bool = false) {
+        self.palette = palette
+        self.wizard = wizard
+        // The first frame is the car's value when it is already read — not the app's default
+        // for a frame (AJM-106); an unread domain draws no cards at all.
+        let w = ConfigStore.shared.wheel.value ?? .default
+        _diameterMm = State(initialValue: w.diameter_mm)
+        _ppr = State(initialValue: w.encoder_ppr)
+        _gearX100 = State(initialValue: Int((w.gear_ratio * 100).rounded()))
+        _quad = State(initialValue: w.quadrature)
+        _gear = State(initialValue: GearEntry(ratio: w.gear_ratio))
+    }
 
     private var preset: MotorPreset? { MotorPresets.match(ppr: ppr, gearX100: gearX100, quad: quad) }
     private var cpr: Double { MotorPresets.cpr(ppr: ppr, gearX100: gearX100, quad: quad) }
@@ -50,16 +69,28 @@ struct WheelParamsView: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        // The decimal pad has no return key: this is the gear field's «Готово».
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button(L.done) { gearFocused = false }.foregroundStyle(p.accent)
+            }
+        }
         .task { await store.loadIfNeeded(); adopt() }
+        // The input is over when the focus leaves the field — «Готово», a tap elsewhere — or
+        // the screen is left with it still focused («Далее» in the wizard, the back chevron).
+        .onChange(of: gearFocused) { _, focused in if !focused { commitGear() } }
+        .onDisappear { commitGear() }
     }
 
+    /// The car's value into the controls. Not a write.
     private func adopt() {
         guard let w = store.value else { return }
         diameterMm = w.diameter_mm
         ppr = w.encoder_ppr
         gearX100 = Int((w.gear_ratio * 100).rounded())
         quad = w.quadrature
-        gearText = Self.gearString(w.gear_ratio)
+        gear.adopt(w.gear_ratio)
     }
 
     // MARK: header
@@ -97,9 +128,11 @@ struct WheelParamsView: View {
     private var wheelsCard: some View {
         card(L.wheelSectionWheels) {
             row(L.wheelDiameter) {
-                Stepper("\(diameterMm) \(L.mmUnit)", value: $diameterMm, in: Wheel.diameter_mmRange)
+                Stepper("\(diameterMm) \(L.mmUnit)", value: Binding(
+                    get: { diameterMm },
+                    set: { diameterMm = $0; save() }   // the tap, and only that, writes
+                ), in: Wheel.diameter_mmRange)
                     .fixedSize().foregroundStyle(p.text)
-                    .onChange(of: diameterMm) { _, _ in save() }
             }
             divider
             infoRow(L.wheelCirc, String(format: "%.0f %@", circMm, L.mmUnit))
@@ -123,24 +156,34 @@ struct WheelParamsView: View {
             }
             divider
             row(L.wheelPpr) {
-                Stepper("\(ppr)", value: $ppr, in: Wheel.encoder_pprRange)
+                Stepper("\(ppr)", value: Binding(
+                    get: { ppr },
+                    set: { ppr = $0; save() }
+                ), in: Wheel.encoder_pprRange)
                     .fixedSize().foregroundStyle(p.text)
-                    .onChange(of: ppr) { _, _ in save() }
             }
             divider
             row(L.wheelGear) {
-                TextField("", text: $gearText)
+                // Keystrokes only move the text and its tint; the number goes to the car when
+                // the input is over (`commitGear`), not per character (AJM-112).
+                TextField("", text: Binding(
+                    get: { gear.text },
+                    set: { gear.typed($0) }
+                ))
                     .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-                    .frame(width: 70).foregroundStyle(p.text)
-                    .onChange(of: gearText) { _, _ in commitGear() }
+                    .frame(width: 70).foregroundStyle(gear.valid ? p.text : p.warn)
+                    .focused($gearFocused)
+                    .onSubmit { gearFocused = false }
             }
             divider
             row(L.wheelQuad) {
-                Picker("", selection: $quad) {
+                Picker("", selection: Binding(
+                    get: { quad },
+                    set: { quad = $0; save() }
+                )) {
                     ForEach(Wheel.quadratureAllowed, id: \.self) { q in Text("×\(q)").tag(q) }
                 }
                 .pickerStyle(.segmented).frame(width: 150)
-                .onChange(of: quad) { _, _ in save() }
             }
             divider
             infoRow("CPR", String(format: "%.0f", cpr))
@@ -150,14 +193,14 @@ struct WheelParamsView: View {
     // MARK: actions
     private func apply(_ m: MotorPreset) {
         ppr = m.ppr; gearX100 = m.gearX100; quad = m.quad
-        gearText = Self.gearString(Double(m.gearX100) / 100)
+        gear.adopt(Double(m.gearX100) / 100)
         save()
     }
 
+    /// The gear input is over: one write if the text meant a new number; otherwise the field
+    /// is back on the car's ratio and nothing is sent.
     private func commitGear() {
-        let norm = gearText.replacingOccurrences(of: ",", with: ".")
-        guard let g = Double(norm) else { return }
-        guard Wheel.gear_ratioRange.contains(g) else { return }   // the car rejects, so don't ask
+        guard let g = gear.finished() else { return }
         gearX100 = Int((g * 100).rounded())
         save()
     }
@@ -168,10 +211,6 @@ struct WheelParamsView: View {
             await store.save(Wheel(diameter_mm: diameterMm, encoder_ppr: ppr,
                                    gear_ratio: Double(gearX100) / 100, quadrature: quad))
         }
-    }
-
-    static func gearString(_ g: Double) -> String {
-        String(format: "%.2f", g)
     }
 
     // MARK: row/card builders

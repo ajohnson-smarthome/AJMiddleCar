@@ -5,10 +5,19 @@ import SwiftUI
 struct TrimView: View {
     let palette: Palette
     @ObservedObject private var store = ConfigStore.shared.trim
-    @State private var trimPct = Trim.default.balance_pct    // live slider value
-    @State private var demoPct = Trim.default.balance_pct    // illustration only, applied on release
+    @State private var trimPct: Int    // live slider value
+    @State private var demoPct: Int    // illustration only, applied on release
     @Environment(\.dismiss) private var dismiss
     private var p: Palette { palette }
+
+    init(palette: Palette) {
+        self.palette = palette
+        // The first frame is the car's value when it is already read — not the app's default
+        // for a frame (AJM-106); an unread domain draws no slider at all.
+        let pct = ConfigStore.shared.trim.value?.balance_pct ?? Trim.default.balance_pct
+        _trimPct = State(initialValue: pct)
+        _demoPct = State(initialValue: pct)
+    }
 
     var body: some View {
         SplitScreen(palette: p, title: L.trimTitle, onBack: { dismiss() }) {

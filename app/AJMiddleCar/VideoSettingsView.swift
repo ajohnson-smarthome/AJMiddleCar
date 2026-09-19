@@ -5,9 +5,16 @@ import SwiftUI
 struct VideoSettingsView: View {
     let palette: Palette
     @ObservedObject private var store = ConfigStore.shared.video
-    @State private var kbps = Video.default.bitrate_kbps
+    @State private var kbps: Int
     @Environment(\.dismiss) private var dismiss
     private var p: Palette { palette }
+
+    init(palette: Palette) {
+        self.palette = palette
+        // The first frame is the car's value when it is already read — not the app's default
+        // for a frame (AJM-106); an unread domain draws no slider at all.
+        _kbps = State(initialValue: ConfigStore.shared.video.value?.bitrate_kbps ?? Video.default.bitrate_kbps)
+    }
 
     var body: some View {
         SplitScreen(palette: p, title: L.videoTitle, onBack: { dismiss() }) {
