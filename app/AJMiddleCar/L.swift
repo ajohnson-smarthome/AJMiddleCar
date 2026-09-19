@@ -94,6 +94,13 @@ enum L {
     static var fwRetry: String { s("fw.retry") }
     static var fwCancel: String { s("fw.cancel") }
     static func fwFailReason(_ d: UpdateRules.Device, _ r: String) -> String { s("fw.failReason.\(d.rawValue)", r) }
+    /// The line under «Не удалось», for either device. A board that answered is quoted — its
+    /// `code` as the phrase from the table (`err.<code>`, one per code of both contracts), an
+    /// unknown code as the word itself, `HTTP <status>` for a body without the envelope; a
+    /// board that did not answer gets the generic line, the same for the car and the adapter.
+    static func fwFailLine(_ d: UpdateRules.Device, _ r: FlashRefusal?) -> String {
+        r?.quote { s("err." + $0) }.map { fwFailReason(d, $0) } ?? fwFailSub
+    }
     static func fwCurrent(_ v: String) -> String { s("fw.current", v) }
     static func fwVersionLine(_ v: String) -> String { s("fw.versionLine", v) }
     static func fwTransition(_ a: String, _ b: String) -> String { s("fw.transition", a, b) }
