@@ -11,7 +11,8 @@ import Network
 /// stops the views, which stops the stream within `videoSubscribeTimeoutMs` on the car.
 ///
 /// Reassembly runs on `queue`, and `onFrame` is called there: the view enqueues sample
-/// buffers straight from it. Only the counters cross to the main actor, once a second.
+/// buffers straight from it. What crosses to the main actor is the counters, once a second,
+/// and `hasPicture` the moment a picture appears — once per appearance, not per frame.
 @MainActor
 final class VideoLink: ObservableObject {
     @Published private(set) var fps = 0
@@ -60,7 +61,8 @@ final class VideoLink: ObservableObject {
         var needKey = true
         var frames = 0
         var lostWindow: [Int] = Array(repeating: 0, count: lossSamples)
-        var lastFrameAt: Date = .distantPast
+        /// Whether there is a picture, and the frame that made one (`PicturePresence`).
+        var presence = PicturePresence()
         var lastKeyAskAt: Date = .distantPast
 
         /// Back to the state a fresh socket deserves — every field, not just the receiver. A
@@ -72,7 +74,7 @@ final class VideoLink: ObservableObject {
             needKey = true
             frames = 0
             lostWindow = Array(repeating: 0, count: Self.lossSamples)
-            lastFrameAt = .distantPast
+            presence.reset()
             lastKeyAskAt = .distantPast
         }
     }
@@ -207,7 +209,17 @@ final class VideoLink: ObservableObject {
                 switch state.receiver.feed(data) {
                 case .frame(let frame, let key):
                     state.frames += 1
-                    state.lastFrameAt = Date()
+                    if state.presence.frame(at: Date()) {
+                        // The picture appeared: the placard leaves with this frame, not with
+                        // the stats tick up to a second later (AJM-175). Once per appearance,
+                        // and only for the live socket — a frame of one `close` already
+                        // cancelled, still queued behind the cancel, must not revive the flag
+                        // `close` just cleared; the same test `socketFailed` makes.
+                        Task { @MainActor in
+                            guard self.conn === c else { return }
+                            self.hasPicture = true
+                        }
+                    }
                     if key { state.needKey = false }
                     state.onFrame?(frame, key)
                 case .loss:
@@ -235,10 +247,13 @@ final class VideoLink: ObservableObject {
             state.lostWindow.removeFirst()
             state.lostWindow.append(state.receiver.dropped)
             let lost = state.lostWindow.last! - state.lostWindow.first!
-            return (f, lost, Date().timeIntervalSince(state.lastFrameAt) < 2)
+            return (f, lost, state.presence.present(at: Date()))
         }
         fps = f
         lostLast10s = max(0, lost)
+        // The reverse transition — `staleAfter` without a frame — is decided here, once a
+        // second, as it always was; the forward one is raised by the receiver and only
+        // confirmed by this write.
         hasPicture = fresh
     }
 }
