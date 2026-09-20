@@ -150,9 +150,9 @@ struct GalleryView: View {
             ("Drive warning",           AnyView(DriveView(link: mockLink(wdtTrips: 3), intent: intent, preview: true))),
             ("Drive bus/ctl warning",   AnyView(DriveView(link: mockLink(busOk: false, owner: .recovering), intent: intent, preview: true))),
             ("Drive tricks open",       AnyView(DriveView(link: mockLink(), intent: intent, preview: true, previewTricksOpen: true))),
-            // The layout from before video, which the car's switch brings back: seeded off for
-            // this frame only — the gallery seeds the domain on at start, one launch per frame.
-            ("Drive classic (video off)", AnyView(DriveView(link: mockLink(), intent: intent, preview: true)
+            // The same layout with the window empty — the car's switch off: seeded off for this
+            // frame only — the gallery seeds the domain on at start, one launch per frame.
+            ("Drive video off",         AnyView(DriveView(link: mockLink(), intent: intent, preview: true)
                                             .onAppear { ConfigStore.shared.video.seed(Video(bitrate_kbps: 2500, enabled: false)) })),
             ("Settings",                AnyView(NavigationStack { SettingsView(palette: p, link: mockLink()) })),
             ("Calibration spin",        calib(.spin)),

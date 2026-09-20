@@ -1,13 +1,13 @@
-/// Which drive screen to show, whether to ask the car for video, and whether the driver's
-/// input is taken. Pure, host-tested (`app/tests/drivemode`): the car's `video` config and
-/// whether something covers the screen in, the layout, the subscription gate and the input
-/// gate out — the one place all three are decided, so the screen cannot show the HUD while
-/// not watching, watch while showing the old layout, or drive from under a sheet.
+/// Whether to ask the car for video, and whether the driver's input is taken. Pure,
+/// host-tested (`app/tests/drivemode`): the car's `video` config and whether something covers
+/// the screen in, the subscription gate and the input gate out — the one place both are
+/// decided, so the screen cannot watch from under a sheet, or drive from under one. The
+/// layout is not decided here: the drive screen has one (`openspec/specs/app/drive-hud`), and
+/// the car's switch only says whether its window is live.
 ///
-/// `nil` — the config has not been read yet — is the layout from before video, and no
-/// views: the car ignores them when the switch is off, and the HUD would flash on and then
-/// switch away if it is. The config is prefetched when the car is met, so this is a moment
-/// at most (docs/superpowers/specs/2026-09-15-video-switch-design.md, §3).
+/// `nil` — the config has not been read yet — is no views: the car ignores them when the
+/// switch is off, and the window would light up and go dark again if it is on. The config is
+/// prefetched when the car is met, so this is a moment at most (`app/drive-session`).
 ///
 /// `covered` is anything drawn over the drive screen: the settings sheet, the mandatory
 /// calibration wizard, the «Поиск…» veil of a telemetry pause inside a live session. Under
@@ -15,23 +15,17 @@
 /// gamepad and the stick are ignored until it is gone (AJM-101). Before, `covered` only
 /// decided the subscription, and a deflected gamepad drove an uncalibrated car between the
 /// wizard's spin pulses.
-enum DriveMode: Equatable {
-    /// The picture as the screen, instruments on its edges (drive-hud-design).
-    case hud
-    /// The screen from before video: diagram in the middle, sticks and tricks below.
-    case classic
-}
-
 struct DriveScreenState: Equatable {
-    let mode: DriveMode
+    /// Whether `view` datagrams go to the car: the switch confirmed on, and nothing over the
+    /// screen. The window itself stays live under a sheet — only the subscription lapses.
     let watching: Bool
     /// Whether the joystick and the gamepad move the intent. False exactly while covered.
     let inputAllowed: Bool
 }
 
 /// What a tap on the video button does. The domain unread, the button used to be dead, and
-/// the classic layout has no other path to a retry: one failed `GET /config` at session
-/// start left the driver without a picture and without a word why (AJM-120).
+/// the drive screen has no other path to a retry: one failed `GET /config` at session start
+/// left the driver with an empty window and without a word why (AJM-120).
 enum VideoTap: Equatable {
     /// The domain is not read: re-read it — a GET, never a write over a value nobody saw.
     case reread
@@ -41,10 +35,8 @@ enum VideoTap: Equatable {
 
 enum DriveModeRule {
     static func state(config: Video?, covered: Bool) -> DriveScreenState {
-        guard let config, config.enabled else {
-            return DriveScreenState(mode: .classic, watching: false, inputAllowed: !covered)
-        }
-        return DriveScreenState(mode: .hud, watching: !covered, inputAllowed: !covered)
+        let on = config?.enabled ?? false
+        return DriveScreenState(watching: on && !covered, inputAllowed: !covered)
     }
 
     static func videoTap(config: Video?) -> VideoTap {
