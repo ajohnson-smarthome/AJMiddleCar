@@ -36,6 +36,7 @@
 #include "camera.h"
 #include "snapshot_api.h"
 #include "video_link.h"
+#include "battery.h"
 
 static const char *TAG = "main";
 
@@ -218,6 +219,14 @@ void app_main(void) {
                       "a second; until it succeeds the car will not drive, but the network "
                       "and OTA will. Check I2C wiring and power.");
     }
+    /* The pack monitor shares the bus with the PWM boards and, like the camera, its absence
+       is a state word, not a boot failure: no chip, a foreign id, a bus that never came up —
+       the group says `absent` and the car drives. Deliberately outside motors_ok, which is
+       about the PWM boards (motors.bus), and before the network, so the first telemetry
+       frame already carries the pack. */
+    esp_err_t err;
+    if ((err = battery_init()) != ESP_OK)
+        ESP_LOGE(TAG, "battery_init failed: %s — battery absent this boot", esp_err_to_name(err));
 
     esp_err_t nvs = nvs_flash_init();
     if (nvs == ESP_ERR_NVS_NO_FREE_PAGES || nvs == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -246,7 +255,6 @@ void app_main(void) {
        with no cable attached. The call is short — an SCCB probe and a task, no frame buffers —
        so the window in which a stray reset would revert a good image is milliseconds, nothing
        like the 5 s radio RPC that put the mark where it is. */
-    esp_err_t err;
     if ((err = camera_init()) != ESP_OK)
         ESP_LOGE(TAG, "camera_init failed: %s — no camera this boot", esp_err_to_name(err));
     /* OTA rollback: the property rollback protects is "the car is reachable" — the AP is

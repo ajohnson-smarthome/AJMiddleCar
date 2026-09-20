@@ -14,6 +14,7 @@ Both are alive; they share a protocol and a design language, and their code dive
 | Radio | **ESP32-C6 on the same board**, over SDIO. The P4 has no radio of its own. |
 | PWM driver | **2× PCA9685** on the header's I2C (SDA `GPIO7` pin 3, SCL `GPIO8` pin 5) — `0x40` front axle, `0x60` rear |
 | Motor driver | 4× BTS7960 full H-bridge |
+| Pack monitor | **INA260** in the pack's plus lead, on the same I2C at `0x41` (A0 bridged; without the bridge it would clash with the front PCA at `0x40`), 100 kHz; answered on the first scan, 2026-09-20 (`docs/bringup.md`). Pack: 3S3P LG HG2, 9000 mAh (`battery_pack.h`) |
 | Camera | MIPI-CSI, 2-lane, connector `J4`; SCCB shares the header's I2C 0 with both PCA9685 boards (`i2c_bus.c` owns the bus, `BOARD_SCCB_HZ` on the camera, 400 kHz on the PWM boards); sensor **OV5647** (Aitewin 5MP night-vision fisheye), confirmed on the bench 2026-09-14; no reset/pwdn pin wired. `esp_ipa`'s IDF-6 archive is built for revision ≥3.0 (Zba/Zbb) and panics on this chip — `firmware/car/core/CMakeLists.txt` links its IDF-5.5 archive instead whenever the <3.0 family is selected |
 | Framework | ESP-IDF **6.0.2** at `~/esp/esp-idf-v6.0.2` |
 
@@ -173,8 +174,10 @@ runs it alongside the tests.
 The pure modules have **zero ESP-IDF dependencies** and are host-tested with plain `cc`.
 
 - `board.h` — **every** assumption about the physical board: I2C pins, bus speed, PWM frequency,
-  the radio's delivery route (its expected version is derived from the esp_hosted component).
-  Bring-up edits this file and nothing else.
+  the pack monitor's address and bus speed (`BOARD_INA260_ADDR`, `BOARD_INA260_HZ`), the
+  radio's delivery route (its expected version is derived from the esp_hosted component).
+  Bring-up edits this file and nothing else. The pack itself is not the board: its cells,
+  capacity and thresholds are `battery_pack.h`.
 - `identity.h` — which car this is: `CAR_DEVICE_ID`, SSID, password. Distinct from `board.h`,
   which is about which board it runs on.
 - `mixer.{c,h}` — *pure*. Tank-turn mixing: `left = t+y`, `right = t−y`, normalised to keep
@@ -240,6 +243,26 @@ The pure modules have **zero ESP-IDF dependencies** and are host-tested with pla
   app or subscription involved. `409` while the stream owns the pipeline (this silicon's
   hardware JPEG block cannot take the stream's YUV420 buffers), `500` when there is no sensor
   to ask.
+- `power_monitor.h` + `ina260.c` — the pack monitor's driver behind a chip-neutral interface
+  (`power_monitor_init`, `power_monitor_read` → `{mv, ma, mw}`): detect by the TI ids at
+  `0xFE`/`0xFF`, `CONFIG` = 16 samples × 1.1 ms continuous (the motors' 1 kHz PWM puts a
+  sawtooth on the current), three 16-bit reads at LSB 1.25 mA / 1.25 mV / 10 mW, current
+  two's complement — discharge positive. A failed read makes the next one re-detect and
+  re-configure, so a module power-cycled on the bench does not come back at its defaults.
+  An INA226/INA228 would be a second file behind the same header, chosen in `board.h`.
+- `battery_pack.h` — the pack's constants: 3S, 3P, 9000 mAh, `low` at 20 % with the clear at
+  23 %, rest at < 500 mA, 30 s to trust a rest voltage, 3 s of it to start, and the Li-ion
+  rest table per cell. Constants, not `/config`: a pack is swapped with a soldering iron.
+- `battery_soc.{c,h}` — *pure*: the remainder without a memory — the start window's rest
+  voltage off the table, coulombs from there (`mA·ms`, int64), a long rest pulling the count
+  back toward the table at ≤ 1 %/s. `-1` until the window closes; nothing in NVS.
+- `battery.{c,h}` — the monitor task (priority 3, with video; 200 ms) and the verdict as
+  *pure* arithmetic in the header (`battery_rule_t`, host-tested): three failed reads in a
+  row are `absent`, the next good one is `ok` and restarts the remainder, `low` is the
+  hysteresis. One snapshot `{state, present, mv, ma, mw, soc}` under a critical section for
+  `telemetry_gather`, which decides the wire's `null`s. Knows nothing of the actuator:
+  `grep 'link_\|motors_'` over `battery.c` and `ina260.c` is empty, and `main.c` calls
+  `battery_init()` outside `motors_ok` — `motors.bus` is about the PWM boards.
 - `pca9685`, `wifi_ap`, `http_server`, `telemetry`, `calibration`, `wheel`, `dims`,
   `trim`, `cfg_json` and the four `*_api` modules — driver, transport, config, persistence.
   `cfg_api.c` serves one route, `/config`, for all six domains — GET walks every domain,
