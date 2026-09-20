@@ -123,7 +123,8 @@ int main(void) {
     /* --- telemetry: every field of every group the schema lists, in its group ---- */
     telemetry_t t = { .seq = 88, .rssi = -55, .rx_hz = 10, .timeouts = 2, .uptime_s = 123,
                       .free_heap = 198000, .calibrated = true, .owner = MOTORS_OWNER_REMOTE,
-                      .bus_ok = true };
+                      .bus_ok = true, .battery_state = BATTERY_STATE_OK, .battery_mv = 12310,
+                      .battery_ma = 3100, .battery_mw = 38200, .battery_soc = 72 };
     char frame[RT_MAX_DATAGRAM];
     assert(telemetry_datagram(frame, sizeof(frame), &t) > 0);
 
@@ -174,9 +175,32 @@ int main(void) {
             n_fields++;
         }
     }
-    assert(n_groups == 4);
-    assert(n_fields == 12);
+    assert(n_groups == 5);
+    assert(n_fields == 17);
     assert(strstr(frame, "\"proto\":2,\"type\":\"telemetry\",\"seq\":88,"));
+
+    /* --- null where the schema allows it, and only there ------------------------- */
+    /* The battery group's numbers are nullable (car/battery-monitor: `absent`, or the
+       remainder not yet determined); TELEMETRY_NULL is the printer's "no value". The key
+       must still be inside the group, spelled `null` — a field that vanished instead
+       would be a missing key to the app's decoder, not a nil. */
+    t.battery_state = BATTERY_STATE_ABSENT;
+    t.battery_mv = t.battery_ma = t.battery_mw = t.battery_soc = INT32_MIN;
+    assert(telemetry_datagram(frame, sizeof(frame), &t) > 0);
+    assert(in_group(frame, KEY_GROUP_BATTERY, KEY_BATTERY_VOLTAGE_MV));
+    assert(strstr(frame, "\"" KEY_GROUP_BATTERY "\":{\"" KEY_BATTERY_VOLTAGE_MV "\":null,\""
+                         KEY_BATTERY_CURRENT_MA "\":null,\"" KEY_BATTERY_POWER_MW "\":null,\""
+                         KEY_BATTERY_SOC_PCT "\":null,\"" KEY_BATTERY_STATE "\":\"" BATTERY_STATE_ABSENT "\"}"));
+    /* Only soc_pct undetermined: the three measurements print, the remainder is null. */
+    t.battery_state = BATTERY_STATE_OK;
+    t.battery_mv = 12600; t.battery_ma = 120; t.battery_mw = 1512; t.battery_soc = INT32_MIN;
+    assert(telemetry_datagram(frame, sizeof(frame), &t) > 0);
+    assert(strstr(frame, "\"" KEY_BATTERY_POWER_MW "\":1512,\"" KEY_BATTERY_SOC_PCT "\":null,\""
+                         KEY_BATTERY_STATE "\":\"" BATTERY_STATE_OK "\"}"));
+    /* The charge direction is a sign on the wire, not a word. */
+    t.battery_ma = -850;
+    assert(telemetry_datagram(frame, sizeof(frame), &t) > 0);
+    assert(strstr(frame, "\"" KEY_BATTERY_CURRENT_MA "\":-850,"));
 
     free(json);
     printf("test_contract_wire: OK (%d telemetry fields in %d groups, device \"%s\")\n",

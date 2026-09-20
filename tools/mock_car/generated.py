@@ -6,7 +6,7 @@ DEVICE = 'ajmiddlecar'
 ENVELOPE = {'proto': 'proto', 'ok': 'ok', 'error': 'error', 'code': 'code', 'message': 'message', 'field': 'field'}
 ENDPOINTS = {'root': '/', 'status': '/status', 'version': '/version', 'config': '/config', 'calibration': '/calibration', 'spin': '/calibration/spin', 'ota': '/ota', 'snapshot': '/snapshot'}
 ERRORS = ['bad_json', 'missing_field', 'unknown_field', 'wrong_type', 'out_of_range', 'not_allowed', 'busy', 'too_small', 'not_firmware', 'write_failed', 'internal']
-STATUS_GROUPS = ['link', 'motors', 'radio', 'storage', 'system', 'video']
+STATUS_GROUPS = ['link', 'motors', 'radio', 'storage', 'system', 'video', 'battery']
 VERSION_FIELDS = [   {   'name': 'device',
         'type': 'str',
         'doc': "the device name — this contract's own device constant"},
@@ -127,10 +127,48 @@ GROUPS = {   'device': {   'swift': 'DeviceInfo',
                                    'doc': 'frames not sent since boot: the sender was still '
                                           'busy with the previous frame, the encoder '
                                           'overflowed, or the frame needed more than 255 '
-                                          'chunks'}]}}
+                                          'chunks'}]},
+    'battery': {   'swift': 'BatteryInfo',
+                   'doc': 'The pack as the power monitor on its positive lead sees it. '
+                          'Measurement only: nothing here has a say in the drive.',
+                   'fields': [   {   'name': 'voltage_mv',
+                                     'type': 'int',
+                                     'nullable': True,
+                                     'doc': 'pack voltage in millivolts; null when the monitor '
+                                            'is absent'},
+                                 {   'name': 'current_ma',
+                                     'type': 'int',
+                                     'nullable': True,
+                                     'doc': 'pack current in milliamps, discharge positive, '
+                                            'charge negative; null when the monitor is absent'},
+                                 {   'name': 'power_mw',
+                                     'type': 'int',
+                                     'nullable': True,
+                                     'doc': 'power in milliwatts as the monitor computes it on '
+                                            'its own averaged samples, not V x I of two '
+                                            'independently averaged numbers; null when the '
+                                            'monitor is absent'},
+                                 {   'name': 'soc_pct',
+                                     'type': 'int',
+                                     'nullable': True,
+                                     'doc': 'remaining charge, 0..100: a rest-voltage start in '
+                                            'the first seconds after boot, then coulomb '
+                                            'counting, pulled toward the rest table when the '
+                                            'pack idles; null until the start is determined, '
+                                            'and when the monitor is absent'},
+                                 {   'name': 'state',
+                                     'type': 'state',
+                                     'swift': 'BatteryState',
+                                     'values': ['ok', 'low', 'absent'],
+                                     'doc': 'ok: the monitor answers; low: soc_pct fell to the '
+                                            "firmware's threshold (20 %) and has not yet risen "
+                                            'past it by three (23 %); absent: nothing answered '
+                                            "at the monitor's address at boot, or three reads "
+                                            'in a row failed — the car drives on, every number '
+                                            'of the group null'}]}}
 NETWORK = {'ssid': 'AJMiddleCar', 'password': 'drive1234'}
-RT = {'port': 4210, 'max_datagram': 320, 'max_command': 96, 'command_hz': 10, 'telemetry_hz': 5, 'watchdog_ms': 300, 'session_idle_ms': 10000, 'keys': {'proto': 'proto', 'type': 'type', 'session': 'session', 'seq': 'seq', 'throttle': 'throttle', 'turn': 'turn', 'key': 'key'}, 'types': {'hello': 'hello', 'hello_ack': 'hello_ack', 'drive': 'drive', 'bye': 'bye', 'telemetry': 'telemetry', 'view': 'view'}, 'doc': 'Every datagram carries proto and type. session is the session id: producers send 8 hex characters; acceptors take 1-15 alphanumerics. drive and bye carry seq; hello and view do not. view (on the video port) may carry key:true to ask for a keyframe.'}
-TELEMETRY_GROUPS = ['link', 'motors', 'system', 'video']
+RT = {'port': 4210, 'max_datagram': 512, 'max_command': 96, 'command_hz': 10, 'telemetry_hz': 5, 'watchdog_ms': 300, 'session_idle_ms': 10000, 'keys': {'proto': 'proto', 'type': 'type', 'session': 'session', 'seq': 'seq', 'throttle': 'throttle', 'turn': 'turn', 'key': 'key'}, 'types': {'hello': 'hello', 'hello_ack': 'hello_ack', 'drive': 'drive', 'bye': 'bye', 'telemetry': 'telemetry', 'view': 'view'}, 'doc': 'Every datagram carries proto and type. session is the session id: producers send 8 hex characters; acceptors take 1-15 alphanumerics. drive and bye carry seq; hello and view do not. view (on the video port) may carry key:true to ask for a keyframe.'}
+TELEMETRY_GROUPS = ['link', 'motors', 'system', 'video', 'battery']
 CALIBRATION = {'swift': 'Calibration', 'wheel_swift': 'CalibWheel', 'corners': ['front_left', 'front_right', 'rear_left', 'rear_right'], 'directions': ['forward', 'reverse'], 'pairs': 4, 'keys': {'calibrated': 'calibrated', 'wheels': 'wheels', 'corner': 'corner', 'pair': 'pair', 'inverted': 'inverted', 'direction': 'direction'}, 'doc': 'GET /calibration returns calibrated and the wheels table (empty when not calibrated). POST /calibration takes wheels: four corners, each once, pairs 0..3 each once, inverted per wheel. POST /calibration/spin takes pair and direction.'}
 VIDEO = {'port': 4211, 'width': 1280, 'height': 720, 'sensor_height': 960, 'fps': 22, 'sensor_fps': 45, 'chunk_bytes': 1400, 'header_bytes': 12, 'wire_proto': 1, 'subscribe_ms': 1000, 'subscribe_timeout_ms': 3000, 'keyframe_s': 10, 'idr_min_ms': 250, 'rotation': 0, 'mirror': False, 'doc': "The FPV stream: H.264 Annex B chunks on UDP `port`, one chunk per datagram. Header, big-endian: u8 proto (wire_proto), u8 flags (bit0 keyframe), u8 stream (+1 per stream start), u8 reserved (0), u16 frame (from 0 per stream, modulo 2^16), u8 chunk, u8 count, u32 captured_ms. Every chunk but the last is exactly chunk_bytes. width x height is the encoded picture: the middle `height` rows of the sensor's `sensor_height`-row frame (the fisheye's top and bottom, which the viewer would crop anyway, are never encoded). fps is nominal — the car encodes every sensor_fps/fps-th sensor frame (rounded down), so 22 is really 22.5. The phone subscribes with a `view` datagram on the same port every subscribe_ms; subscribe_timeout_ms without one stops the stream. keyframe_s is the planned IDR period; a `view` with key:true forces one, at most every idr_min_ms. rotation/mirror are applied by the viewer.", 'vectors': [{'name': 'keyframe, first chunk', 'header': {'proto': 1, 'flags': 1, 'stream': 3, 'frame': 7, 'chunk': 0, 'count': 30, 'captured_ms': 812345}, 'bytes': '010103000007001e000c6539', 'valid': True}, {'name': "p-frame at the counter's edge, last chunk", 'header': {'proto': 1, 'flags': 0, 'stream': 255, 'frame': 65535, 'chunk': 2, 'count': 3, 'captured_ms': 4294967295}, 'bytes': '0100ff00ffff0203ffffffff', 'valid': True}, {'name': 'foreign proto', 'bytes': '020103000007001e000c6539', 'valid': False}, {'name': 'chunk not below count', 'bytes': '0101030000071e1e000c6539', 'valid': False}, {'name': 'count zero', 'bytes': '010103000007000000000000', 'valid': False}, {'name': 'reserved byte set', 'bytes': '010103010007001e000c6539', 'valid': False}, {'name': 'unknown flag', 'bytes': '010203000007001e000c6539', 'valid': False}]}
 CONFIG_PATH = '/config'

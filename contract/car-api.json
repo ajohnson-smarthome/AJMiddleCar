@@ -7,7 +7,7 @@
   },
   "rt": {
     "port": 4210,
-    "max_datagram": 320,
+    "max_datagram": 512,
     "max_command": 96,
     "command_hz": 10,
     "telemetry_hz": 5,
@@ -123,16 +123,28 @@
         {"name": "kbps", "type": "int", "doc": "kbit sent in the last second"},
         {"name": "dropped", "type": "int", "doc": "frames not sent since boot: the sender was still busy with the previous frame, the encoder overflowed, or the frame needed more than 255 chunks"}
       ]
+    },
+    "battery": {
+      "swift": "BatteryInfo",
+      "doc": "The pack as the power monitor on its positive lead sees it. Measurement only: nothing here has a say in the drive.",
+      "fields": [
+        {"name": "voltage_mv", "type": "int", "nullable": true, "doc": "pack voltage in millivolts; null when the monitor is absent"},
+        {"name": "current_ma", "type": "int", "nullable": true, "doc": "pack current in milliamps, discharge positive, charge negative; null when the monitor is absent"},
+        {"name": "power_mw", "type": "int", "nullable": true, "doc": "power in milliwatts as the monitor computes it on its own averaged samples, not V x I of two independently averaged numbers; null when the monitor is absent"},
+        {"name": "soc_pct", "type": "int", "nullable": true, "doc": "remaining charge, 0..100: a rest-voltage start in the first seconds after boot, then coulomb counting, pulled toward the rest table when the pack idles; null until the start is determined, and when the monitor is absent"},
+        {"name": "state", "type": "state", "swift": "BatteryState", "values": ["ok", "low", "absent"],
+         "doc": "ok: the monitor answers; low: soc_pct fell to the firmware's threshold (20 %) and has not yet risen past it by three (23 %); absent: nothing answered at the monitor's address at boot, or three reads in a row failed — the car drives on, every number of the group null"}
+      ]
     }
   },
   "telemetry": {
     "swift": "Telemetry",
-    "groups": ["link", "motors", "system", "video"],
+    "groups": ["link", "motors", "system", "video", "battery"],
     "doc": "The 5 Hz push: proto, type, seq, then these groups."
   },
   "status": {
     "swift": "CarStatus",
-    "groups": ["link", "motors", "radio", "storage", "system", "video"],
+    "groups": ["link", "motors", "radio", "storage", "system", "video", "battery"],
     "doc": "GET /status: proto, then these groups."
   },
   "config": {

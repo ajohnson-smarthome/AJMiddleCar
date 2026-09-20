@@ -44,7 +44,7 @@ mixed-version bench should never need the source next to it to know which dialec
 | `drive` | app → car | `seq` (monotonic `uint32`), `throttle` (float, `[-1,1]`), `turn` (float, `[-1,1]`) |
 | `bye` | app → car | `seq` (monotonic `uint32`) |
 | `hello_ack` | car → app | `session` (string, echoed), `device` (group — see below) |
-| `telemetry` | car → app | `seq` (`uint32`, push counter), `link`, `motors`, `system`, `video` (groups — see below) |
+| `telemetry` | car → app | `seq` (`uint32`, push counter), `link`, `motors`, `system`, `video`, `battery` (groups — see below) |
 
 ```jsonc
 // app → car
@@ -54,9 +54,10 @@ mixed-version bench should never need the source next to it to know which dialec
 ```
 
 Two size limits answer different questions: the car accepts an app→car datagram of at most
-**96 bytes** (`max_command`) and drops anything larger; a receiver must be sized for **320
-bytes** (`max_datagram`), because a telemetry frame runs up to ~190 bytes and a buffer sized
-from the command cap would not fit one.
+**96 bytes** (`max_command`) and drops anything larger; a receiver must be sized for **512
+bytes** (`max_datagram`), because a telemetry frame runs to ~300 bytes (428 with every
+counter at its widest — `test_telemetry.c` measures it) and a buffer sized from the command
+cap would not fit one. The cap was 320 until the `battery` group joined the frame.
 
 Datagrams are parsed strictly: keys are read at the top level only, numbers follow JSON
 grammar (no leading `+`, no bare `.` mantissa, no leading zeros), and a datagram that spells
@@ -183,7 +184,8 @@ Pushed to the owner's address on the same socket, unsolicited:
  "link":   {"rx_hz":10,"rssi_dbm":-58,"timeouts":0},
  "motors": {"bus":"ok","calibrated":true,"owner":"remote"},
  "system": {"uptime_s":812,"free_heap":200000},
- "video":  {"state":"idle","fps":0,"kbps":0,"dropped":0}}
+ "video":  {"state":"idle","fps":0,"kbps":0,"dropped":0},
+ "battery":{"voltage_mv":12310,"current_ma":3100,"power_mw":38200,"soc_pct":72,"state":"ok"}}
 ```
 
 `seq` is the push counter, so a client can drop a reordered datagram. `link.rx_hz` is `drive`
@@ -204,6 +206,20 @@ under its own command reports `recovering`, which is the only way to show that h
 succeeded, `"ok"` otherwise. A car with `motors.bus: "down"` is reachable, updatable and
 undriveable — a state worth distinguishing from being offline, and the one a car boots into
 when its I2C bus is unplugged.
+
+`battery` is the pack as the power monitor on its positive lead sees it — an INA260 on the
+car's I2C bus (`docs/research/2026-09-20-ina260-compat-and-wiring.md`): `voltage_mv`;
+`current_ma`, discharge positive and charge negative; `power_mw` as the monitor computes it
+on its own averaged samples, not a product of two independently averaged numbers; and
+`soc_pct`, the remaining charge — a rest-voltage start in the first seconds after boot, then
+coulomb counting, pulled toward the rest table when the pack idles, nothing kept across a
+reboot. `state` is `ok`, `low` (`soc_pct` reached 20 % and has not yet risen past 23 %) or
+`absent` (nothing answered at the monitor's address at boot, or three reads in a row failed
+— the car keeps trying). The four numbers are **nullable**: all four `null` while `absent`,
+and `soc_pct` alone `null` while `ok` until the start is determined. Measurement only —
+nothing in this group has a say in the drive, and `absent` is not a fault: the car drives
+without a monitor the way it drives without a camera. The group appears in the frame and in
+`/status` last, so a client that predates it reads everything before it unchanged.
 
 A failed push does **not** stop the pushing: a full send buffer is a moment, not a
 disconnection. The push stops when the session ends — on `bye`, on eviction, or when the
@@ -389,8 +405,8 @@ A bench route, not part of the app's flow: one JPEG of whatever the camera curre
 ### Status and telemetry — the `video` group
 
 `video` is the sixth group in `GET /status`, appended after `system`, and the fourth group
-telemetry pushes (`link`, `motors`, `system`, `video`) — the same printer serves both, so it
-cannot drift between them:
+telemetry pushes (`link`, `motors`, `system`, `video`, `battery`) — the same printer serves
+both, so it cannot drift between them:
 
 ```json
 "video": {"state":"idle","fps":0,"kbps":0,"dropped":0}
@@ -478,7 +494,7 @@ firmwares together, so the build against the release tag is the whole of compati
 `proto` stays a version of the wire format, not a verdict. The adapter serves the same
 document at `192.168.7.1:8080/version` with `proto` from its own contract.
 
-## `GET /status` — six groups
+## `GET /status` — seven groups
 
 Still served — for humans, scripts, and the radio report; the app's identity test is the
 launch gate's `/version` (above), run once at connect, and liveness afterwards comes from
@@ -491,11 +507,12 @@ telemetry freshness, not from polling this.
  "radio":  {"fw":"3.0.6","expected":"3.0.6","state":"ok"},
  "storage":{"reset_at_boot":false},
  "system": {"uptime_s":812,"free_heap":200000},
- "video":  {"state":"idle","fps":0,"kbps":0,"dropped":0}}
+ "video":  {"state":"idle","fps":0,"kbps":0,"dropped":0},
+ "battery":{"voltage_mv":12310,"current_ma":3100,"power_mw":38200,"soc_pct":72,"state":"ok"}}
 ```
 
-`link`, `motors`, `system` and `video` are the same groups the 5 Hz telemetry push carries —
-one printer per group, several call sites, so a rename cannot drift between them. The one
+`link`, `motors`, `system`, `video` and `battery` are the same groups the 5 Hz telemetry push
+carries — one printer per group, several call sites, so a rename cannot drift between them. The one
 difference to know: here `link.rx_hz` is a poll-to-poll window (`0` on the first poll after
 boot, and after a gap of 10 s or more), where the push's is continuous.
 

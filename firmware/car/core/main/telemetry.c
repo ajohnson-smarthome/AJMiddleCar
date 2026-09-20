@@ -140,6 +140,16 @@ void telemetry_gather(telemetry_t *out, telem_consumer_t who) {
     out->video_fps     = vs.fps;
     out->video_kbps    = vs.kbps;
     out->video_dropped = vs.dropped;
+
+    /* The pack monitor is not on the bus yet (AJM-182 brings the INA260 driver and the
+       battery task): until then the group says what a car without one says — absent, and
+       every number null. The wire shape is already the final one, so the app and the mock
+       can be built against it. */
+    out->battery_state = BATTERY_STATE_ABSENT;
+    out->battery_mv  = TELEMETRY_NULL;
+    out->battery_ma  = TELEMETRY_NULL;
+    out->battery_mw  = TELEMETRY_NULL;
+    out->battery_soc = TELEMETRY_NULL;
 }
 
 int telemetry_json(char *buf, size_t n) {

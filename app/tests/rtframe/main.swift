@@ -60,18 +60,26 @@ check(RTFrame.parse(#"{"proto":2,"type":"hello_ack","session":"7f3a91c2"}"#) == 
 check(RTFrame.parse(#"{"proto":1,"hello":"7f3a91c2","device":"ajmiddlecar","fw":"v1.0+784"}"#) == nil,
       "a v1 reply is ignored")
 
-let tele = #"{"proto":2,"type":"telemetry","seq":88,"link":{"rx_hz":10,"rssi_dbm":-58,"timeouts":0},"motors":{"bus":"ok","calibrated":true,"owner":"remote"},"system":{"uptime_s":812,"free_heap":200000},"video":{"state":"idle","fps":0,"kbps":0,"dropped":0}}"#
+let tele = #"{"proto":2,"type":"telemetry","seq":88,"link":{"rx_hz":10,"rssi_dbm":-58,"timeouts":0},"motors":{"bus":"ok","calibrated":true,"owner":"remote"},"system":{"uptime_s":812,"free_heap":200000},"video":{"state":"idle","fps":0,"kbps":0,"dropped":0},"battery":{"voltage_mv":12310,"current_ma":3100,"power_mw":38200,"soc_pct":72,"state":"ok"}}"#
 if case .telemetry(let t)? = RTFrame.parse(tele) {
     check(t.seq == 88 && t.link.rx_hz == 10 && t.link.rssi_dbm == -58 && t.link.timeouts == 0, "telemetry link")
     check(t.motors.bus == .ok && t.motors.calibrated && t.motors.owner == .remote, "telemetry motors")
     check(t.system.uptime_s == 812 && t.system.free_heap == 200000, "telemetry system")
+    check(t.battery.voltage_mv == 12310 && t.battery.current_ma == 3100 && t.battery.power_mw == 38200
+          && t.battery.soc_pct == 72 && t.battery.state == .ok, "telemetry battery")
 } else { check(false, "telemetry parses") }
-if case .telemetry(let t)? = RTFrame.parse(#"{"proto":2,"type":"telemetry","seq":1,"link":{"rx_hz":0,"rssi_dbm":null,"timeouts":3},"motors":{"bus":"down","calibrated":false,"owner":"hover"},"system":{"uptime_s":1,"free_heap":1},"video":{"state":"idle","fps":0,"kbps":0,"dropped":0}}"#) {
+if case .telemetry(let t)? = RTFrame.parse(#"{"proto":2,"type":"telemetry","seq":1,"link":{"rx_hz":0,"rssi_dbm":null,"timeouts":3},"motors":{"bus":"down","calibrated":false,"owner":"hover"},"system":{"uptime_s":1,"free_heap":1},"video":{"state":"idle","fps":0,"kbps":0,"dropped":0},"battery":{"voltage_mv":null,"current_ma":null,"power_mw":null,"soc_pct":null,"state":"absent"}}"#) {
     check(t.link.rssi_dbm == nil, "null rssi is nil")
     check(t.motors.bus == .down, "bus down")
     check(t.motors.owner == .unknown("hover"), "an owner word this build does not know is kept, not dropped")
+    check(t.battery.state == .absent && t.battery.voltage_mv == nil && t.battery.current_ma == nil
+          && t.battery.power_mw == nil && t.battery.soc_pct == nil, "no monitor: absent, every number nil")
 } else { check(false, "telemetry with nulls parses") }
-if case .telemetry(let t)? = RTFrame.parse(#"{"proto":1,"type":"telemetry","seq":1,"link":{"rx_hz":0,"rssi_dbm":null,"timeouts":0},"motors":{"bus":"ok","calibrated":true,"owner":"idle"},"system":{"uptime_s":1,"free_heap":1},"video":{"state":"idle","fps":0,"kbps":0,"dropped":0}}"#) {
+if case .telemetry(let t)? = RTFrame.parse(#"{"proto":2,"type":"telemetry","seq":2,"link":{"rx_hz":0,"rssi_dbm":null,"timeouts":0},"motors":{"bus":"ok","calibrated":true,"owner":"idle"},"system":{"uptime_s":2,"free_heap":1},"video":{"state":"idle","fps":0,"kbps":0,"dropped":0},"battery":{"voltage_mv":12600,"current_ma":-850,"power_mw":10710,"soc_pct":null,"state":"ok"}}"#) {
+    check(t.battery.soc_pct == nil && t.battery.voltage_mv == 12600, "remainder not yet determined: soc nil, the measurements present")
+    check(t.battery.current_ma == -850, "a charging pack is a negative current, not a word")
+} else { check(false, "telemetry with a null soc parses") }
+if case .telemetry(let t)? = RTFrame.parse(#"{"proto":1,"type":"telemetry","seq":1,"link":{"rx_hz":0,"rssi_dbm":null,"timeouts":0},"motors":{"bus":"ok","calibrated":true,"owner":"idle"},"system":{"uptime_s":1,"free_heap":1},"video":{"state":"idle","fps":0,"kbps":0,"dropped":0},"battery":{"voltage_mv":null,"current_ma":null,"power_mw":null,"soc_pct":null,"state":"absent"}}"#) {
     check(t.seq == 1, "telemetry in a foreign proto still parses — proto is not judged here")
 } else { check(false, "telemetry in a foreign proto still parses") }
 check(RTFrame.parse(#"{"proto":2,"type":"telemetry","seq":1}"#) == nil, "telemetry without its groups is dropped")

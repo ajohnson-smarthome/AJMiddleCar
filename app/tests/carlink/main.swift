@@ -11,7 +11,9 @@ let fresh = Telemetry(proto: 2, seq: 1,
                       link: LinkInfo(rx_hz: 10, rssi_dbm: -58, timeouts: 0),
                       motors: MotorsInfo(bus: .ok, calibrated: true, owner: .remote),
                       system: SystemInfo(uptime_s: 10, free_heap: 200000),
-                      video: VideoInfo(state: .idle, fps: 0, kbps: 0, dropped: 0))
+                      video: VideoInfo(state: .idle, fps: 0, kbps: 0, dropped: 0),
+                      battery: BatteryInfo(voltage_mv: 12310, current_ma: 3100, power_mw: 38200,
+                                           soc_pct: 72, state: .ok))
 
 let adopted = SessionState.adopted(device: CarContract.device, fw: "v1.0+517")
 func compose(_ p: PathState, _ s: SessionState, _ t: Telemetry?, _ age: TimeInterval?) -> Link {
