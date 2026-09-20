@@ -51,17 +51,25 @@ struct GalleryView: View {
         .statusBarHidden(true)
     }
 
+    /// The pack the drive frames carry unless told otherwise: the spec's «Пак на три четверти».
+    nonisolated private static let packOk = BatteryInfo(voltage_mv: 12310, current_ma: 3100, power_mw: 38200,
+                                            soc_pct: 72, state: .ok)
+    nonisolated private static let packLow = BatteryInfo(voltage_mv: 11100, current_ma: 2600, power_mw: 28900,
+                                             soc_pct: 18, state: .low)
+    nonisolated private static let packAbsent = BatteryInfo(voltage_mv: nil, current_ma: nil, power_mw: nil,
+                                                soc_pct: nil, state: .absent)
+
     /// A link frozen in `.live` with plausible numbers — the gallery has no transport behind it.
     @MainActor private func mockLink(calibrated: Bool = true, fw: String? = "v1.0+264",
                                      rssi: Int? = -55, wdtTrips: Int = 0,
-                                     busOk: Bool = true, owner: MotorsOwner = .remote) -> CarLink {
+                                     busOk: Bool = true, owner: MotorsOwner = .remote,
+                                     battery: BatteryInfo = Self.packOk) -> CarLink {
         let t = Telemetry(proto: CarContract.proto, seq: 1,
                           link: LinkInfo(rx_hz: 10, rssi_dbm: rssi, timeouts: wdtTrips),
                           motors: MotorsInfo(bus: busOk ? .ok : .down, calibrated: calibrated, owner: owner),
                           system: SystemInfo(uptime_s: 3847, free_heap: 131072),
                           video: VideoInfo(state: .idle, fps: 0, kbps: 0, dropped: 0),
-                          battery: BatteryInfo(voltage_mv: nil, current_ma: nil, power_mw: nil,
-                                               soc_pct: nil, state: .absent))
+                          battery: battery)
         return CarLink.preview(.live(t), fw: fw, radio: .known(RadioInfo(fw: "3.0.6", expected: "3.0.6", state: .ok)))
     }
 
@@ -156,6 +164,11 @@ struct GalleryView: View {
             // frame only — the gallery seeds the domain on at start, one launch per frame.
             ("Drive video off",         AnyView(DriveView(link: mockLink(), intent: intent, preview: true)
                                             .onAppear { ConfigStore.shared.video.seed(Video(bitrate_kbps: 2500, enabled: false)) })),
+            // The pack's two other faces: `low` — the badge in `warn` and the placard under the
+            // row; `absent` — an empty icon and «—», and no placard, since a car without a
+            // monitor is the norm.
+            ("Drive battery low",       AnyView(DriveView(link: mockLink(battery: Self.packLow), intent: intent, preview: true))),
+            ("Drive battery absent",    AnyView(DriveView(link: mockLink(battery: Self.packAbsent), intent: intent, preview: true))),
             ("Settings",                AnyView(NavigationStack { SettingsView(palette: p, link: mockLink()) })),
             ("Calibration spin",        calib(.spin)),
             ("Calibration spinning",    calib(.spinning)),

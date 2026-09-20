@@ -168,6 +168,13 @@ enum L {
     static func videoStats(fps: Int, lost: Int) -> String { s("video.stats", fps, lost) }
     static var videoOn: String { s("video.on") }
     static var videoOff: String { s("video.off") }
+    static var batteryLow: String { s("battery.low") }
+    static var batteryAbsent: String { s("battery.absent") }
+    /// The pack's caption; `pct` is `nil` while the car has not determined the start yet, and
+    /// the percent slot then reads «—» — the numbers keep their places.
+    static func batteryStats(pct: Int?, v: String, w: Int) -> String {
+        s("battery.stats", pct.map(String.init) ?? batteryAbsent, v, w)
+    }
     /// The actuator owner, by the generated vocabulary — an unknown value is shown as the car
     /// said it rather than silently dropped.
     static func ctlOwner(_ raw: String) -> String {

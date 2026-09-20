@@ -157,6 +157,9 @@
 "video.value"        = "%d кбит/с";
 "video.on"           = "Видео включено";
 "video.off"          = "Видео выключено";
+"battery.low"        = "Батарея разряжена";
+"battery.stats"      = "%@ %% · %@ В · %d Вт";
+"battery.absent"     = "—";
 "ctl.idle"           = "никто";
 "ctl.recovering"     = "авто-возврат";
 "ctl.console"        = "консоль";
