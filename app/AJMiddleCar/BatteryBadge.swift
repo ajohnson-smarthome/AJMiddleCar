@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// The pack in the top row, next to the link: a 22 × 11 battery icon filled to `soc_pct` and
-/// the caption «P % · V В · W Вт» in the same 10-pt as the picture's numbers. What it shows is
+/// The pack in the top row, the last instrument of the left cluster: a 22 × 11 battery icon
+/// filled to `soc_pct` in a `HudItem`'s glyph box, and the caption «P % · V В · W Вт» by the
+/// cluster's one rule — the same size and gap as the link's and the picture's. What it shows is
 /// `BatteryGauge`'s verdict, not its own: `low` turns the whole badge `warn`, no monitor is an
 /// empty icon in `muted` with «—», a start not yet determined is an empty icon over live volts
 /// and watts, and current into the pack wears the bolt. Part of the row, nothing of the layout
@@ -17,13 +18,8 @@ struct BatteryBadge: View {
     var body: some View {
         let g = BatteryGauge.make(battery)
         let tint = colour(g.tone)
-        HStack(spacing: 5) {
-            icon(g, tint)
-            Text(caption(g))
-                .font(.system(size: 10))
-                .foregroundStyle(tint)
-        }
-        .accessibilityElement(children: .combine)
+        HudItem(glyph: icon(g, tint), caption: caption(g), tint: tint)
+            .accessibilityElement(children: .combine)
     }
 
     private func colour(_ tone: BatteryGauge.Tone) -> Color {

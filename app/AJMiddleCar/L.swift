@@ -165,7 +165,10 @@ enum L {
     static var videoNoPicture: String { s("video.noPicture") }
     static var videoStateOff: String { s("video.stateOff") }
     static var videoStateIdle: String { s("video.stateIdle") }
-    static func videoStats(fps: Int, lost: Int) -> String { s("video.stats", fps, lost) }
+    /// The picture's caption, «N к/с»; the losses are a second pair (`VideoBadge`), not part
+    /// of it. `videoLost` is the word for VoiceOver only — the row shows a glyph instead.
+    static func videoStats(fps: Int) -> String { s("video.stats", fps) }
+    static func videoLost(_ n: Int) -> String { s("video.lost", n) }
     static var videoOn: String { s("video.on") }
     static var videoOff: String { s("video.off") }
     static var batteryLow: String { s("battery.low") }

@@ -45,8 +45,9 @@ final class CarLink: ObservableObject {
     /// for screens that legitimately show the last known reading (uptime, firmware, trips).
     @Published private(set) var lastTelemetry: Telemetry?
     /// Owned here because the subscription is tied to the session: the link knows when one
-    /// opens and with which sid.
-    let video = VideoLink()
+    /// opens and with which sid. Settable only so the gallery can hand in a frozen one
+    /// (`preview`); nothing else ever replaces it.
+    private(set) var video = VideoLink()
 
     /// Optional so the debug gallery can hold a frozen link without a real `NWPathMonitor`
     /// running behind every frame it builds.
@@ -295,8 +296,11 @@ final class CarLink: ObservableObject {
     func refreshRadio() { fetchRadio() }
 
     #if DEBUG
-    /// One screen's worth of link, for the gallery. Nothing runs behind it.
-    static func preview(_ state: Link, fw: String? = "v1.0+517", radio: RadioStatus? = nil) -> CarLink {
+    /// One screen's worth of link, for the gallery. Nothing runs behind it. `video` is the
+    /// picture's readings for the top row (`VideoLink.preview`); nil leaves them at zero, no
+    /// picture.
+    static func preview(_ state: Link, fw: String? = "v1.0+517", radio: RadioStatus? = nil,
+                        video: VideoLink? = nil) -> CarLink {
         let l = CarLink(monitorsPath: false)
         l.frozen = true
         l.state = state
@@ -305,6 +309,7 @@ final class CarLink: ObservableObject {
         l.device = CarContract.device
         l.radio = radio
         l.lastTelemetry = state.telemetry
+        if let video { l.video = video }
         return l
     }
     #endif

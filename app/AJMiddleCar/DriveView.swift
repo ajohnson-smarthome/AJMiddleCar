@@ -211,20 +211,22 @@ struct DriveView: View {
                 bottomScrim
 
                 HStack(alignment: .center) {
-                    HStack(spacing: 12) {
-                        HStack(spacing: 7) {
-                            SignalBars(level: linkUp ? signalLevel : 0, color: linkUp ? signalColor : .red)
-                            // One truth: the label, the bars and the drive screen's existence
-                            // all come from `CarLink`, so it cannot say connected while the
-                            // joysticks do nothing.
-                            Text(linkUp ? L.driveConnected : L.driveSearching)
-                                .font(.system(size: 12)).foregroundStyle(p.text)
-                        }
-                        // The picture's own numbers live next to the link, not in a pill of
-                        // their own, and in `text` like the link's label.
+                    // The left cluster: three instruments by one rule (`HudItem`), a line
+                    // between neighbours — link · picture · pack, the picture only while there
+                    // is one, and it takes its divider with it, so the pack closes up to the
+                    // link like a removed segment.
+                    HStack(spacing: HudCluster.spacing) {
+                        // One truth: the label, the bars and the drive screen's existence all
+                        // come from `CarLink`, so it cannot say connected while the joysticks
+                        // do nothing. The bars keep their own level colour; the caption is `text`.
+                        HudItem(glyph: SignalBars(level: linkUp ? signalLevel : 0, color: linkUp ? signalColor : .red),
+                                caption: linkUp ? L.driveConnected : L.driveSearching, tint: p.text)
+                        HudDivider(palette: p)
+                        // The picture's own numbers, next to the link: «N к/с», and the losses
+                        // only while there are any (`VideoBadge`).
                         if video.hasPicture {
-                            statusItem("video", L.videoStats(fps: video.fps, lost: video.lostLast10s), p.text)
-                                .font(.system(size: 10)).opacity(0.8)
+                            VideoBadge(fps: video.fps, lost: video.lostLast10s, palette: p)
+                            HudDivider(palette: p)
                         }
                         // The pack, from the same frame: always there, since a car without a
                         // monitor is the empty icon, not a gap in the row.
@@ -446,7 +448,7 @@ struct DriveView: View {
             if config.resetNotice {
                 Button { config.dismissResetNotice() } label: {
                     HStack(spacing: 6) {
-                        statusItem("arrow.counterclockwise.circle", L.configResetNotice, p.warn)
+                        noticeItem("arrow.counterclockwise.circle", L.configResetNotice, p.warn)
                         Image(systemName: "xmark").foregroundStyle(p.warn.opacity(0.7))
                     }
                     .font(.system(size: 10))
@@ -473,23 +475,23 @@ struct DriveView: View {
     private var warnings: some View {
         HStack(spacing: 16) {
             if let trips = telemetry?.link.timeouts, trips > 0 {
-                statusItem("exclamationmark.triangle", L.driveWdtTrips(trips), p.warn)
+                noticeItem("exclamationmark.triangle", L.driveWdtTrips(trips), p.warn)
             }
             // A PCA9685 that stopped answering is the one failure that looks exactly like a
             // working car from up here: green pill, green bars, moving diagram, still wheels.
             // The car reports it five times a second, so it gets said.
             if let bus = telemetry?.motors.bus, bus != .ok {
-                statusItem("bolt.trianglebadge.exclamationmark", L.driveBusFail, p.warn)
+                noticeItem("bolt.trianglebadge.exclamationmark", L.driveBusFail, p.warn)
             }
             // The app can be streaming and *not* be the source the car is obeying — a retreat, a
             // calibration pulse or an OTA outranks the pult. Naming the owner is the difference
             // between "the joystick is broken" and "the car is busy doing something else".
             if let owner = telemetry?.motors.owner, owner != .remote, owner != .idle {
-                statusItem("hand.raised", L.driveCtlOther(L.ctlOwner(owner.rawValue)), p.warn)
+                noticeItem("hand.raised", L.driveCtlOther(L.ctlOwner(owner.rawValue)), p.warn)
             }
             // Only `low`: a car without a monitor is the badge's empty icon, not a warning.
             if telemetry?.battery.state == .low {
-                statusItem("battery.25", L.batteryLow, p.warn)
+                noticeItem("battery.25", L.batteryLow, p.warn)
             }
         }
         .font(.system(size: 10))
@@ -497,7 +499,9 @@ struct DriveView: View {
         .background(hasWarnings ? p.bg.opacity(0.45) : .clear)
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
-    private func statusItem(_ icon: String, _ text: String, _ color: Color) -> some View {
+    /// One line of the notices: an icon and its text, in the placard's own colour. The top
+    /// row's instruments are `HudItem`s, by the cluster's rule; this is the placard's, unchanged.
+    private func noticeItem(_ icon: String, _ text: String, _ color: Color) -> some View {
         HStack(spacing: 4) {
             Image(systemName: icon).foregroundStyle(color.opacity(0.85))
             Text(text).foregroundStyle(color)
