@@ -39,6 +39,9 @@ Ali** (§ 5, B), и от него три вещи, которые и делаю�
 в контракте появляется `video.night` (§ 6).
 
 **Если клон окажется «неразборным»** (нет пада, драйвер запаян в LDR-цепь без доступа) —
+два запасных пути. Дешёвый: на Alibaba те же фабрики продают клон исходной Waveshare
+IR-CUT-камеры с **«Automatically / Manually switch»** в названии — пад под GPIO выведен, MOQ 1,
+€3–8, объектив узкий, но M12 — заменить на 170° за €2–4 (§ 5, F). Документированный:
 **Arducam B003507**: 140° по горизонтали, моторный IR-cut, ИК-платы, ручное управление
 задокументировано (снять фоторезистор, пады `IR`/`GND`). Но на Ali он только у реселлеров за
 €76–92 — с сайта Arducam ~$25–30 (§ 5, A).
@@ -82,18 +85,18 @@ Ali** (§ 5, B), и от него три вещи, которые и делаю�
 | Сенсор | Режим 720p | Полный кадр только в… | Модули на 15-pin Pi |
 |---|---|---|---|
 | **OV5647** 1/4", 1,4 мкм | **1280×960 binning 2×2, 45 fps — весь сенсор** (наш режим) | — | сотни: IR-cut, фишаи, M12, ИК-платы |
-| SC2336 1/3", 2,7 мкм | 1280×720 = **кроп** окна 1312×728 из 1920×1080 (регистры `0x3200…0x320b`): ×⅔ по обеим осям | 1920×1080 25/30 fps | модуль «для P4» есть (§ 5, D), IR-cut — нет |
+| SC2336 1/3", 2,7 мкм | 1280×720 = **кроп** окна 1312×728 из 1920×1080 (регистры `0x3200…0x320b`): ×⅔ по обеим осям | 1920×1080 25/30 fps | модуль «для P4» есть (§ 5, E); IR-cut — только на Alibaba, 24-pin (§ 5, F) |
 | OV2710 1/2,7", 3 мкм | 1280×720 = кроп (`0x3804/0x3808` = 1280) | 1920×1080 25 fps, **1 лейн** | модуль «для P4» есть (P4-EYE), IR-cut — нет |
-| OS04C10 1/3", 2 мкм | 1280×720 = **binning 2×2** окна 2592×1472 из 2688×1520 (`0x3814/0x3816 = 3`) — 96 % кадра | — | **нет ни одного** на Ali |
+| OS04C10 1/3", 2 мкм | 1280×720 = **binning 2×2** окна 2592×1472 из 2688×1520 (`0x3814/0x3816 = 3`) — 96 % кадра | — | на Ali нет; на Alibaba — 24-pin, есть с IR-cut (§ 5, F) |
 | OS02N10 1/3,27" | 1280×720 50 fps (кроп), 960×540 binning | 1920×1080 25 fps | нет |
 | OV5640 | только RGB565 1280×720 **14 fps** | — | не годится |
-| OV9281 1/4", моно, глобальный затвор | 1280×720 RAW8 моно | — | есть (22-pin, переходник) — § 5, D |
+| OV9281 1/4", моно, глобальный затвор | 1280×720 RAW8 моно | — | есть (22-pin, переходник) — § 5, E |
 
-Вывод таблицы: **шире 720p без потери угла на этой плате даёт только OV5647 (и OS04C10,
-которого не купить)**. SC2336/OV2710 полное поле дают лишь в 1080p — энкодер P4 это тянет
-(1080p30 по спецификации `esp_h264`), но при тех же 2500–3000 кбит/с (USB-потолок донгла
-~4 Мбит/с, `bringup.md`) на 2,25× пикселей качество в движении падает, а IR-cut-модулей на
-них всё равно нет.
+Вывод таблицы: **шире 720p без потери угла на этой плате дают только OV5647 и OS04C10** —
+второй лишь на Alibaba, под 24-pin и со своей распиновкой (§ 5, F). SC2336/OV2710 полное поле
+дают лишь в 1080p — энкодер P4 это тянет (1080p30 по спецификации `esp_h264`), но при тех же
+2500–3000 кбит/с (USB-потолок донгла ~4 Мбит/с, `bringup.md`) на 2,25× пикселей качество в
+движении падает; IR-cut-версия SC2336 есть, но тоже 24-pin и тоже Alibaba (§ 5, F).
 
 **Шина I²C.** Камера на `0x36` (100 кГц, `BOARD_SCCB_HZ`), PCA9685 на `0x40`/`0x60`, кодек
 `0x18`. BH1750 — `0x23` (ADDR на землю) или `0x5C`: конфликтов нет; ещё одна подтяжка на шине
@@ -246,6 +249,59 @@ B0151 (100°H). Цена у Arducam ~$24–30; **на Ali — только ре�
   частей, ИК проходит всегда — и днём цвет опять плывёт, слабее, чем у NoIR, но плывёт.
   Не то, что просили.
 
+### F. Alibaba — те же модули у производителей, и три вещи, которых на Ali нет
+
+Проверено 2026-09-20 (выдача поиска; карточки товаров — за капчей, открывать руками).
+MOQ 1–2 у большинства, цены — диапазон «от … до» по объёму, доставка отдельно.
+
+**Клоны OV5647 с IR-cut напрямую, €3–13.** Два семейства:
+
+- **«IR-Cut Camera 5MP OV5647 Automatically / Manually Switch Day and Night Mode, with
+  Light»** — клон исходной Waveshare RPi IR-CUT Camera (3,6 мм, 75°, M12), у которой
+  переключение фильтра выведено на пад под GPIO. «Manually» в названии — почти наверняка
+  этот пад; подтвердить в чате одним вопросом. Продавцы:
+  [Bxf, 8 лет, «Automatically/Manually»](https://www.alibaba.com/product-detail/IR-Cut-Camera-5-Mp-Ov5647_1600223540705.html)
+  €7,3–8,1, MOQ 2, reorder 31 %;
+  [Dongxinda, 7 лет](https://www.alibaba.com/product-detail/High-Quality-IR-Cut-Camera-5_1600107706772.html)
+  €4,4–8,7, MOQ 1;
+  [Tongze](https://www.alibaba.com/product-detail/High-Quality-IR-Cut-Camera-5_1601588592171.html)
+  €4,4–8,7, MOQ 1, reorder 34 %;
+  [Chipskey, 15 лет](https://www.alibaba.com/product-detail/-44168-75-Degree-IR-Cut_1600280954799.html)
+  €3,3–6,4, MOQ 1. Объектив узкий, но это M12: **свой 1,7–1,8 мм 170° за €2–4** (§ D) — и
+  получается «пад под GPIO + широкий угол» дешевле любого готового модуля. Фокус после замены
+  ловится вращением объектива.
+- **«OV5647 175° wide angle IR cut filter»** — тот же клон, что B на Ali, у пяти фабрик по
+  €9,7–11,6 при MOQ 1:
+  [Kaisheng Century, 45 отзывов, reorder 31 %](https://www.alibaba.com/product-detail/Hot-Selling-5MP-Cmos-Sensor-OV5647_1601715680699.html),
+  [Huiber Vision, 9 лет](https://www.alibaba.com/product-detail/Hot-Selling-5MP-Cmos-Sensor-OV5647_1600710087713.html),
+  [Zhoukong](https://www.alibaba.com/product-detail/Hot-Selling-5MP-Cmos-Sensor-OV5647_1601730970717.html);
+  плюс [Huashi Chengjin — «175° automatic switching IR-CUT»](https://www.alibaba.com/product-detail/5MP-OV5647-Night-Vision-Camera-Module_1601431151437.html)
+  €8,1–13,2, MOQ 5, и [Chenyusheng — «75/130/175/220/160° / IR-CUT»](https://www.alibaba.com/product-detail/OV5647-Raspberry-Pi-camera-Adjustable-Focus_1601123893400.html)
+  €2,5–11, MOQ 2, 25 продаж. Про пад — спросить; «automatic» без «manual» скорее значит LDR
+  без вывода.
+
+**SC2336 с IR-cut «для ESP32» — есть, €4,3–13.**
+[AU-STAR — «SC2336 IR-CUT automatic switching MIPI 1080P ESP32»](https://www.alibaba.com/product-detail/Factory-Supply-SC2336-IR-CUT-Infrared_1601114943655.html)
+€4,3–5,8, MOQ 2, **277 продаж**; [Film Source — то же, «wide angle lens optional»](https://www.alibaba.com/product-detail/ESP32-2MP-SC2336-1080P-IR-CUT_1601046806921.html)
+€4,3–5,8, MOQ 2; [Ruised, 9 лет](https://www.alibaba.com/product-detail/SC2336-IR-CUT-Infrared-Automatic-Switching_1600335435888.html)
+€11,4–13,2. Это снимает возражение «IR-cut на SC2336 нет» из § 2 — но не возражение про
+720p-кроп: полное поле у SC2336 только в 1080p. Разъём у «ESP32»-модулей — 24-pin 0,5 мм под
+Function-EV-Board, к нашему `J4` — через переходник ([Ali, «CSI to ESP32-P4 adapter, SC2336»](https://www.aliexpress.com/item/1005012641758625.html)
+€6,59; распиновку сверить с продавцом). Путь на случай, если когда-нибудь решим уйти в 1080p:
+тогда это базовый кандидат, а не OV5647.
+
+**OS04C10 — единственный сенсор, который бьёт OV5647 в темноте при полном поле в 720p, и на
+Alibaba он есть.** 2,0 мкм → 4,0 мкм в биннинге против 2,8 у OV5647 — вдвое больше света на
+пиксель; в `esp_cam_sensor` режим 1280×720 25 fps 2-lane — биннинг 96 % кадра (§ 2).
+[AU-STAR — «4MP OS04C10 60–240 fps IR-Cut night vision»](https://www.alibaba.com/product-detail/Wide-Dynamic-Range-4MP-OS04C10-60fps_1601575613579.html)
+€11,75–14,1, MOQ 2 — **с IR-cut**; [Film Source — OS04C10/GC4653/SC4336 «customised»](https://www.alibaba.com/product-detail/Customised-Wholesale-GC4603-OS04C10-GC4663-GC4653_1601039485664.html)
+€9,4–11,6, MOQ 2; [Camemake CM_MIPI_OS04C10_RPI](https://www.camemake.eu/shop/cm-mipi-os04c10-rpi-os04c10-4mp-ff-for-raspberry-pi-1084)
+— Pi-формат, объектив **152°H**, но 4-lane под Pi 5 и $52 при MOQ 10. Минусы: у 24-pin
+модулей распиновка своя у каждой фабрики (стандарта нет) — нужен переходник по их
+распиновке или заказной FPC, и тюнинг ISP (`os04c10_default.json` в драйвере) сделан под референсный модуль Espressif, не
+под этот объектив. **Итерация 2**: спросить у AU-STAR распиновку и
+фото платы, когда OV5647-вариант поедет и упрётся в шумы ночью.
+
 ## 6. Что меняется в машинке
 
 Драйвер, режим 1280×960, `video_wire`, контракт видео-канала — без изменений. Меняется:
@@ -305,4 +361,4 @@ Arducam (A), если дойдёт до него: доступен ли B003507 
 - Osoyoo IR-CUT: [страница товара](https://osoyoo.store/products/ir-cut-camera-for-raspberry-pi) («manual settings are not required»).
 - ESP32-P4-EYE: [user guide](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32p4/esp32-p4-eye/user_guide.html) (модуль HDF2710-47-MIPI); ESP32-P4-Function-EV-Board: [user guide](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32p4/esp32-p4-function-ev-board/user_guide.html) (разъём 15-pin 1,0 мм).
 - Olimex, OV5647 для P4 с объективами 75/90/130°: [пост](https://olimex.wordpress.com/2026/05/25/six-new-models-of-ov5647-5-megapixel-cameras-with-adjustable-lenses-for-esp32-p4-devkit-and-esp32-p4-pc-are-in-stock/).
-- Листинги AliExpress — по ссылкам в § 5, поиск 2026-09-20.
+- Листинги AliExpress и Alibaba — по ссылкам в § 5, поиск 2026-09-20; [Camemake CM_MIPI_OS04C10_RPI](https://www.camemake.eu/shop/cm-mipi-os04c10-rpi-os04c10-4mp-ff-for-raspberry-pi-1084); `esp_cam_sensor/sensors/os04c10/cfg/os04c10_default.json`.
