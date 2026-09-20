@@ -4,7 +4,7 @@ LDLIBS = -lm
 # The schema itself, for the two wire values the C generator emits no symbol for.
 CONTRACT = $(abspath ../../../../contract/car-api.json)
 
-all: test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel test_cfg_table test_cfg_value test_calib_wire test_link test_rt_session test_rt_glue test_contract_wire test_radio_ota test_device_json test_video_wire test_video_sub test_video_retry test_frame_crop test_ota_reply test_calib_spin
+all: test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_telemetry test_recovery test_wheel test_cfg_table test_cfg_value test_calib_wire test_link test_rt_session test_rt_glue test_contract_wire test_radio_ota test_device_json test_video_wire test_video_sub test_video_retry test_frame_crop test_ota_reply test_calib_spin test_battery_soc
 
 test_mixer: test_mixer.c ../main/mixer.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
@@ -23,6 +23,11 @@ test_calibration: test_calibration.c
 
 test_ramp: test_ramp.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+# The state-of-charge rule of car/battery-monitor (start window, coulombs, rest pull-in),
+# in the numbers of its scenarios — the pack's constants are battery_pack.h's.
+test_battery_soc: test_battery_soc.c ../main/battery_soc.c ../main/battery_soc.h ../main/battery_pack.h
+	$(CC) $(CFLAGS) -o $@ test_battery_soc.c ../main/battery_soc.c $(LDLIBS)
 
 test_trim: test_trim.c
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
@@ -94,7 +99,7 @@ test_rt_glue: test_rt_glue.c ../main/rt_glue.h ../main/rt_link.h ../main/link.h
 	$(CC) $(CFLAGS) -o $@ test_rt_glue.c $(LDLIBS)
 
 run: all
-	./test_mixer && ./test_motors && ./test_control_proto && ./test_watchdog && ./test_calibration && ./test_ramp && ./test_trim && ./test_radio_ota && ./test_telemetry && ./test_recovery && ./test_wheel && ./test_cfg_table && ./test_cfg_value && ./test_calib_wire && ./test_link && ./test_rt_session && ./test_rt_glue && ./test_contract_wire && ./test_device_json && ./test_video_wire && ./test_video_sub && ./test_video_retry && ./test_frame_crop && ./test_ota_reply && ./test_calib_spin
+	./test_mixer && ./test_motors && ./test_control_proto && ./test_watchdog && ./test_calibration && ./test_ramp && ./test_trim && ./test_radio_ota && ./test_telemetry && ./test_recovery && ./test_wheel && ./test_cfg_table && ./test_cfg_value && ./test_calib_wire && ./test_link && ./test_rt_session && ./test_rt_glue && ./test_contract_wire && ./test_device_json && ./test_video_wire && ./test_video_sub && ./test_video_retry && ./test_frame_crop && ./test_ota_reply && ./test_calib_spin && ./test_battery_soc
 
 clean:
-	rm -f test_contract_wire test_rt_session test_rt_glue test_link test_cfg_table test_cfg_value test_calib_wire test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_radio_ota test_telemetry test_recovery test_wheel test_device_json test_video_wire test_video_sub test_video_retry test_frame_crop test_ota_reply test_calib_spin
+	rm -f test_contract_wire test_rt_session test_rt_glue test_link test_cfg_table test_cfg_value test_calib_wire test_mixer test_motors test_control_proto test_watchdog test_calibration test_ramp test_trim test_radio_ota test_telemetry test_recovery test_wheel test_device_json test_video_wire test_video_sub test_video_retry test_frame_crop test_ota_reply test_calib_spin test_battery_soc
