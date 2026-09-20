@@ -178,9 +178,10 @@ struct DriveView: View {
     // One layout: the window is the screen, and everything else keeps to its edges whether or
     // not there is a picture in it. The places are `DriveLayout`'s — derived from the screen
     // and its safe area, host-tested — and nothing here sits in the middle of the window with
-    // a scrim behind it: the two gradients from the top and bottom edges are the only tint,
-    // and the instruments read against them. The car's switch decides only whether the
-    // window is live; no instrument moves on it.
+    // a scrim behind it: the top row stands on the band (`HudBand`) while the window is live,
+    // the bottom instruments read against the one gradient from the bottom edge. The car's
+    // switch decides only whether the window is live — and with it the band; no instrument
+    // moves on it.
     var body: some View {
         GeometryReader { geo in
             let lay = DriveLayout(
@@ -202,10 +203,12 @@ struct DriveView: View {
                         .position(x: lay.picture.midX, y: lay.picture.midY)
                     if !video.hasPicture { noPicture.position(lay.pictureCentre) }
                 }
-                // Always, picture or not: over the plain background they are invisible, and the
-                // instruments read the same the moment a frame appears — nothing rebuilds.
-                scrim(.top)
-                scrim(.bottom)
+                // The band only while the window is live: over the plain background it would be
+                // `bg` on `bg`, and its line a box under nothing. The bottom scrim always —
+                // invisible over the plain background, and the instruments read the same the
+                // moment a frame appears. Neither moves the row: both lie over the window.
+                if windowLive { band }
+                bottomScrim
 
                 HStack(alignment: .center) {
                     HStack(spacing: 12) {
@@ -218,8 +221,7 @@ struct DriveView: View {
                                 .font(.system(size: 12)).foregroundStyle(p.text)
                         }
                         // The picture's own numbers live next to the link, not in a pill of
-                        // their own. `text` rather than `muted`: over the light theme's haze
-                        // `muted` disappears.
+                        // their own, and in `text` like the link's label.
                         if video.hasPicture {
                             statusItem("video", L.videoStats(fps: video.fps, lost: video.lostLast10s), p.text)
                                 .font(.system(size: 10)).opacity(0.8)
@@ -272,8 +274,9 @@ struct DriveView: View {
                 // Warnings are the one thing allowed over the picture, and only while there are
                 // any. Under the top row rather than beside it: two at once («драйвер» and
                 // «управляет») are wider than the gap between the link and the scheme toggle.
+                // Under the band's line, clear of the row — the same place with the band gone.
                 notices
-                    .padding(.top, 52)
+                    .padding(.top, HudBand.height + 8)
                     .frame(maxHeight: .infinity, alignment: .top)
 
                 // A telemetry pause inside a live session is drawn over the screen, not instead
@@ -408,13 +411,27 @@ struct DriveView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    /// The tint the instruments read against: a gradient from the edge inward, nothing boxed.
-    private func scrim(_ edge: VerticalEdge) -> some View {
-        let top = edge == .top
-        return LinearGradient(colors: [p.bg.opacity(top ? 0.78 : 0), p.bg.opacity(top ? 0 : 0.82)],
-                              startPoint: .top, endPoint: .bottom)
-            .frame(height: top ? 64 : 130)
-            .frame(maxHeight: .infinity, alignment: top ? .top : .bottom)
+    /// The ground under the top row while the window is live: `bg` across the whole screen —
+    /// over the window and the fields beside it — with a 1 pt `line` along its bottom edge, so
+    /// the row reads in the theme's own colours over a light frame and a dark one alike, and
+    /// the warnings stand below the line. Opaque to the picture, transparent to touches, and
+    /// laid over the window rather than shrinking it: the layout and its points do not move.
+    private var band: some View {
+        Rectangle().fill(p.bg)
+            .frame(height: HudBand.height)
+            .overlay(alignment: .bottom) { Rectangle().fill(p.line).frame(height: 1) }
+            .frame(maxHeight: .infinity, alignment: .top)
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+    }
+
+    /// The tint the bottom instruments read against: a gradient from the bottom edge inward,
+    /// nothing boxed. The only tint left — the top has the band.
+    private var bottomScrim: some View {
+        LinearGradient(colors: [p.bg.opacity(0), p.bg.opacity(0.82)],
+                       startPoint: .top, endPoint: .bottom)
+            .frame(height: 130)
+            .frame(maxHeight: .infinity, alignment: .bottom)
             .ignoresSafeArea()
             .allowsHitTesting(false)
     }
@@ -486,4 +503,12 @@ struct DriveView: View {
             Text(text).foregroundStyle(color)
         }
     }
+}
+
+/// The band under the top row: 12 pt above the row, the row's 32, 12 below — its bottom line is
+/// where the warnings begin. A constant beside the row rather than a field of `DriveLayout`:
+/// the layout of the window and its points does not change for it, and `drivelayout` has
+/// nothing to say about it.
+enum HudBand {
+    static let height: CGFloat = 56
 }
