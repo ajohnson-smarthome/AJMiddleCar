@@ -42,9 +42,10 @@ Ali** (§ 5, B), и от него три вещи, которые и делаю�
 два запасных пути. Дешёвый: на Alibaba те же фабрики продают клон исходной Waveshare
 IR-CUT-камеры с **«Automatically / Manually switch»** в названии — пад под GPIO выведен, MOQ 1,
 €3–8, объектив узкий, но M12 — заменить на 170° за €2–4 (§ 5, F). Документированный:
-**Arducam B003507**: 140° по горизонтали, моторный IR-cut, ИК-платы, ручное управление
-задокументировано (снять фоторезистор, пады `IR`/`GND`). Но на Ali он только у реселлеров за
-€76–92 — с сайта Arducam ~$25–30 (§ 5, A).
+**оригинал Waveshare RPi IR-CUT Camera** ($25,99 с сайта, пад и полярность в wiki, объектив
+50° → заменить на M12 170°; § 5, A′) или **Arducam B003507**: 140° по горизонтали, моторный
+IR-cut, ИК-платы, ручное управление задокументировано (снять фоторезистор, пады `IR`/`GND`) —
+но на Ali он только у реселлеров за €76–92, с сайта Arducam ~$25–30 (§ 5, A).
 
 **Про «шире».** Цифра в листинге — диагональ, а на экран доезжает горизонталь 16:9-окна:
 широкий OV5647-модуль даёт **~140–150° по горизонтали и ~80–90° по вертикали после нашей
@@ -138,7 +139,7 @@ IR-CUT-камеры с **«Automatically / Manually switch»** в названи
 |---|---|---|
 | Arducam B003503 (старые) | линия «LED» шлейфа (pin 12) | было через `disable_camera_led` + скрипт; у нас pin 12 в воздухе → провод |
 | **Arducam B003504/B003507/B0151 (текущие)** | **фоторезистор на плате камеры**, автомат | документировано: «remove the photoresistor first… connect the Camera **IR** and **GND** pins to the GPIO» — пады есть, уровень 3,3 В |
-| Waveshare RPi IR-CUT (B) — снят с производства | линия «LED» + пад на плате | «HIGH → Normal, LOW → Night-vision», пад под GPIO — но объектив 8 мм / 42°, не наш случай |
+| **Waveshare RPi IR-CUT Camera** (в продаже, $25,99; (B) 8 мм / 42° снята) | линия «LED» + пад на плате | «HIGH → Normal, LOW → Night-vision», пад под GPIO задокументирован в wiki — единственный модуль с известной полярностью; объектив 3,6 мм / 50° (§ 5, A′) |
 | Клоны «IR-CUT auto day/night» (§ 5, B) | фоторезистор на плате камеры + драйвер ICR; «manual settings are not required» (Osoyoo) | не документировано; схема та же, что у Arducam — снять LDR, подать логику на его узел/пад; проверяется на стенде и одним вопросом продавцу (§ 8) |
 
 Что важно: **ни у кого «кодом» не работает из коробки** — везде либо фоторезистор, либо
@@ -188,6 +189,22 @@ B0151 (100°H). Цена у Arducam ~$24–30; **на Ali — только ре�
 [NoIR + motorized IR-cut M12 LS1820](https://www.aliexpress.com/item/1005008630479775.html)
 €92, [B003504-тип](https://www.aliexpress.com/item/1005008630789074.html) €76. Трёхкратная
 наценка за задокументированные пады — запасной вариант, если B не разбирается.
+
+### A′. Waveshare RPi IR-CUT Camera — оригинал, с которого сняты «manual»-клоны
+
+OV5647, 3,6 мм F2.0, **50° по диагонали**, manual focus, две ИК-платы (850 нм, 0,15 А),
+31×32 мм, **$25,99 на waveshare.com, в наличии** ([товар](https://www.waveshare.com/rpi-ir-cut-camera.htm),
+[wiki](https://www.waveshare.com/wiki/RPi_IR-CUT_Camera_(B)) — та же плата, что у (B)).
+Это единственный модуль, у которого управление IR-cut описано производителем до уровня
+«к этому паду — GPIO, HIGH — день, LOW — ночь»: никакого фоторезистора снимать не нужно.
+Два «но»: объектив — самый узкий из всех кандидатов (50° против 140–175°), и на AliExpress
+Waveshare его не выкладывает (в их Ali-магазине из IR-cut только IMX462 «starlight»
+127,9°/100°/90° за €43–96 и IMX477 (B) за €78 — оба без драйвера в `esp_cam_sensor`) —
+только с сайта, доставка как у NFP в ресерче моторов. Объектив в держателе резьбовой (у (B)
+стоит 8 мм F1.6 — типичный M12 CCTV), так что замена на 170° M12 за €2–4 скорее всего
+работает, но это «скорее всего»: спросить Waveshare или мерить резьбу. Если доставка с сайта
+устраивает — **самый предсказуемый путь**: оригинал + широкий M12-объектив; клоны из § F —
+тот же путь на €20 дешевле и с одним вопросом продавцу вместо гарантии.
 
 ### B. Клоны «OV5647 IR-CUT 175° auto day/night» — базовый выбор
 
@@ -357,7 +374,7 @@ Arducam (A), если дойдёт до него: доступен ли B003507 
 - Драйверы и режимы: [esp_cam_sensor 2.4.0 — README](https://components.espressif.com/components/espressif/esp_cam_sensor/versions/2.4.0/readme), [changelog](https://components.espressif.com/components/espressif/esp_cam_sensor/versions/2.4.0/changelog); таблицы регистров — `esp-video-components/esp_cam_sensor/sensors/{ov5647,sc2336,ov2710,os04c10,os02n10,ov5640,gc2607,sc2331}/`.
 - Энкодер: [ESP-H264 (esp-techpedia)](https://docs.espressif.com/projects/esp-techpedia/en/latest/esp-friends/solution-introduction/multimedia/component-description/esp-h264.html) — 1080p30 аппаратно.
 - Arducam: [5MP OV5647 — таблица моделей и углов](https://docs.arducam.com/Raspberry-Pi-Camera/Native-camera/5MP-OV5647/), [IR Sensitive Camera with IRCUT — quick start (ручное управление)](https://docs.arducam.com/Raspberry-Pi-Camera/IR-Sensitive-Camera-with-IRCUT/quick-start/), [B003503 datasheet (uctronics)](https://www.uctronics.com/download/Amazon/B003503.pdf), [B003504 product page](https://www.arducam.com/blog/product/arducam-for-raspberry-pi-noir-5mp-ov5647-camera-module-motorized-ir-cut-filter-for-daylight-and-night-vision-support-pi-4-zero-pi-3/), [The Pi Hut — B003504](https://thepihut.com/products/5mp-motorised-ir-cut-ov5647-camera-for-raspberry-pi), [форум: manual control + BH1750](https://forum.arducam.com/t/manual-control-of-ir-cut-filter/1513).
-- Waveshare: [RPi IR-CUT Camera (B) — wiki](https://www.waveshare.com/wiki/RPi_IR-CUT_Camera_(B)) (GPIO-пад, HIGH/LOW, ИК 0,15 А), [страница товара](https://www.waveshare.com/rpi-ir-cut-camera-b.htm) (8 мм / 42°, discontinued).
+- Waveshare: [RPi IR-CUT Camera — товар](https://www.waveshare.com/rpi-ir-cut-camera.htm) ($25,99, 3,6 мм / 50°, таблица OV5647-моделей), [RPi IR-CUT Camera (B) — wiki](https://www.waveshare.com/wiki/RPi_IR-CUT_Camera_(B)) (GPIO-пад, HIGH/LOW, ИК 0,15 А), [страница товара](https://www.waveshare.com/rpi-ir-cut-camera-b.htm) (8 мм / 42°, discontinued).
 - Osoyoo IR-CUT: [страница товара](https://osoyoo.store/products/ir-cut-camera-for-raspberry-pi) («manual settings are not required»).
 - ESP32-P4-EYE: [user guide](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32p4/esp32-p4-eye/user_guide.html) (модуль HDF2710-47-MIPI); ESP32-P4-Function-EV-Board: [user guide](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32p4/esp32-p4-function-ev-board/user_guide.html) (разъём 15-pin 1,0 мм).
 - Olimex, OV5647 для P4 с объективами 75/90/130°: [пост](https://olimex.wordpress.com/2026/05/25/six-new-models-of-ov5647-5-megapixel-cameras-with-adjustable-lenses-for-esp32-p4-devkit-and-esp32-p4-pc-are-in-stock/).
