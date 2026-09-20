@@ -28,9 +28,10 @@ struct DriveView: View {
     @ObservedObject private var config = ConfigStore.shared
     /// The switch as the car last confirmed it — deliberately not `videoCfg.value`: the store
     /// shows what it is *sending* while a save is in flight and nothing at all after a failed
-    /// one, and the screen must move on the car's answer alone (spec §3): a tap that did not
-    /// land leaves the picture as it was, and never strands the driver on the old layout with
-    /// a dead button while the car still streams. Fed from the store's `.loaded` state only.
+    /// one, and the window must light up and go dark on the car's answer alone
+    /// (`app/drive-hud`): a tap that did not land leaves the picture as it was, and never
+    /// strands the driver with an empty window and a dead button while the car still
+    /// streams. Fed from the store's `.loaded` state only.
     @State private var confirmed: Video?
     /// The last save failed — the button wears `warn` for 600 ms, and that is all the drive
     /// screen says about it.
@@ -47,7 +48,7 @@ struct DriveView: View {
         _intent = ObservedObject(wrappedValue: intent)
         _video = ObservedObject(wrappedValue: link.video)
         // Seeded here, not only on appear: the domain is prefetched when the car is met, so
-        // the first body already draws the right layout rather than classic for a frame.
+        // the first body already lights the window rather than drawing it empty for a frame.
         if case .loaded(let v) = ConfigStore.shared.video.state { _confirmed = State(initialValue: v) }
         _calib = State(initialValue: CalibGate(preview: preview))
         self.preview = preview
@@ -73,9 +74,16 @@ struct DriveView: View {
         DriveModeRule.state(config: confirmed, covered: covered)
     }
 
+    /// Whether the window holds a picture at all: the car confirmed the switch on. Not
+    /// `screen.watching` — a sheet over the screen lapses the subscription, but the window
+    /// under it stays live, so the last frame is still there when the sheet closes. Off, or
+    /// the domain not read yet, the window is empty: no layer, no «Нет картинки» — that is
+    /// the driver's choice, and the video button's glyph says so.
+    private var windowLive: Bool { confirmed?.enabled == true }
+
     /// The video switch: same shape as the gear next to it. Read, the tap posts the whole
     /// domain (bitrate as the car has it); unread, it re-reads — a dead button over an unread
-    /// domain left the driver in the classic layout with no way back to the picture but the
+    /// domain left the driver with an empty window and no way back to the picture but the
     /// settings sheet (AJM-120). Disabled only while an answer is on its way.
     private var videoButton: some View {
         let on = confirmed?.enabled ?? false
@@ -164,18 +172,107 @@ struct DriveView: View {
         ControlModel.sides(t: intent.t, y: intent.y)
     }
 
+    // One layout: the window is the screen, and everything else keeps to its edges whether or
+    // not there is a picture in it. The places are `DriveLayout`'s — derived from the screen
+    // and its safe area, host-tested — and nothing here sits in the middle of the window with
+    // a scrim behind it: the two gradients from the top and bottom edges are the only tint,
+    // and the instruments read against them. The car's switch decides only whether the
+    // window is live; no instrument moves on it.
     var body: some View {
-        // A `ZStack`, not a `Group`: the branch swap must not be this view disappearing and
-        // reappearing, or a tap on the video button would fire `.onDisappear` — and stop a
-        // running trick — for a layout change.
-        ZStack {
-            if screen.mode == .hud { hud } else { classic }
-            // A telemetry pause inside a live session is drawn over the screen, not instead of
-            // it: the root keeps this view while the session stands (`CarLink.inSession`), so the
-            // sheets on it — the wizard mid-table, the settings stack — survive what used to be
-            // a swap to the radar and back (AJM-107). The veil also covers the screen for the
-            // rule above: nothing under it drives.
-            if !linkUp && !preview { searchingVeil }
+        GeometryReader { geo in
+            let lay = DriveLayout(
+                screen: CGSize(width: geo.size.width + geo.safeAreaInsets.leading + geo.safeAreaInsets.trailing,
+                               height: geo.size.height + geo.safeAreaInsets.top + geo.safeAreaInsets.bottom),
+                insets: .init(top: geo.safeAreaInsets.top, leading: geo.safeAreaInsets.leading,
+                              bottom: geo.safeAreaInsets.bottom, trailing: geo.safeAreaInsets.trailing))
+            ZStack {
+                p.bg.ignoresSafeArea()
+                if !preview && windowLive {
+                    // A 16:9 window for a frame the car already cropped to 16:9 (the fisheye's
+                    // top and bottom eighths never reach the wire): the layer fills it rather
+                    // than pillarboxing, so only a squatter screen trims anything, at the sides.
+                    // Mounted only while the window is live: the switch turned off must not
+                    // leave the last frame hanging, and the layer forgets it on dismantle.
+                    VideoView(link: video)
+                        .frame(width: lay.picture.width, height: lay.picture.height)
+                        .clipped()
+                        .position(x: lay.picture.midX, y: lay.picture.midY)
+                    if !video.hasPicture { noPicture.position(lay.pictureCentre) }
+                }
+                // Always, picture or not: over the plain background they are invisible, and the
+                // instruments read the same the moment a frame appears — nothing rebuilds.
+                scrim(.top)
+                scrim(.bottom)
+
+                HStack(alignment: .center) {
+                    HStack(spacing: 12) {
+                        HStack(spacing: 7) {
+                            SignalBars(level: linkUp ? signalLevel : 0, color: linkUp ? signalColor : .red)
+                            // One truth: the label, the bars and the drive screen's existence
+                            // all come from `CarLink`, so it cannot say connected while the
+                            // joysticks do nothing.
+                            Text(linkUp ? L.driveConnected : L.driveSearching)
+                                .font(.system(size: 12)).foregroundStyle(p.text)
+                        }
+                        // The picture's own numbers live next to the link, not in a pill of
+                        // their own. `text` rather than `muted`: over the light theme's haze
+                        // `muted` disappears.
+                        if video.hasPicture {
+                            statusItem("video", L.videoStats(fps: video.fps, lost: video.lostLast10s), p.text)
+                                .font(.system(size: 10)).opacity(0.8)
+                        }
+                    }
+                    Spacer()
+                    SchemeToggle(scheme: $schemeRaw, palette: p)
+                    videoButton.padding(.leading, 8)
+                    gearButton
+                }
+                .frame(height: 32)
+                .padding(.horizontal, lay.edge).padding(.top, 12)
+                .frame(maxHeight: .infinity, alignment: .top)
+
+                // The car on the bottom edge, its rails running up over the picture's floor.
+                HStack(spacing: 28) {
+                    PowerBar(value: sides.left, palette: p)
+                    DriveDiagram(t: intent.t, y: intent.y, palette: p)
+                    PowerBar(value: sides.right, palette: p)
+                }
+                .position(lay.diagram)
+
+                // Sticks astride the window's edges: half on the band, half on the picture's
+                // corner, which a fisheye has already darkened. Arcade leaves the left place
+                // empty — tank fills it — so nothing wanders between the schemes.
+                if scheme == .arcade {
+                    JoystickView(palette: p) { x, y in
+                        if arcX == 0 && arcY == 0 && (x != 0 || y != 0) { haptics.tick() }
+                        arcX = x; arcY = y; push()
+                    }
+                    .position(lay.rightStick)
+                } else {
+                    JoystickView(vertical: true, palette: p) { _, y in leftY = y; push() }.position(lay.leftStick)
+                    JoystickView(vertical: true, palette: p) { _, y in rightY = y; push() }.position(lay.rightStick)
+                }
+
+                TricksControl(palette: p, running: intent.runningTrick, startedAt: intent.trickStartedAt,
+                              onSelect: { intent.startTrick($0) },
+                              onStop: { intent.stopTrick() },
+                              debugOpen: previewTricksOpen)
+                .position(lay.tricks)
+
+                // Warnings are the one thing allowed over the picture, and only while there are
+                // any. Under the top row rather than beside it: two at once («драйвер» and
+                // «управляет») are wider than the gap between the link and the scheme toggle.
+                notices
+                    .padding(.top, 52)
+                    .frame(maxHeight: .infinity, alignment: .top)
+
+                // A telemetry pause inside a live session is drawn over the screen, not instead
+                // of it: the root keeps this view while the session stands (`CarLink.inSession`),
+                // so the sheets on it — the wizard mid-table, the settings stack — survive what
+                // used to be a swap to the radar and back (AJM-107). The veil also covers the
+                // screen for the rule above: nothing under it drives.
+                if !linkUp && !preview { searchingVeil }
+            }
         }
         .task { if !preview { await videoCfg.loadIfNeeded() } }
         .onChange(of: videoCfg.state, initial: true) { old, st in
@@ -284,162 +381,9 @@ struct DriveView: View {
         }
     }
 
-    // The picture is the screen; everything else keeps to its edges. The layout is
-    // `DriveLayout`'s — the design's numbers, host-tested — and nothing here sits in the middle
-    // of the picture with a scrim behind it: the two gradients from the top and bottom edges are
-    // the only tint, and the instruments read against them.
-    private var hud: some View {
-        GeometryReader { geo in
-            let lay = DriveLayout(
-                screen: CGSize(width: geo.size.width + geo.safeAreaInsets.leading + geo.safeAreaInsets.trailing,
-                               height: geo.size.height + geo.safeAreaInsets.top + geo.safeAreaInsets.bottom),
-                insets: .init(top: geo.safeAreaInsets.top, leading: geo.safeAreaInsets.leading,
-                              bottom: geo.safeAreaInsets.bottom, trailing: geo.safeAreaInsets.trailing))
-            ZStack {
-                p.bg.ignoresSafeArea()
-                if !preview {
-                    // A 16:9 window for a frame the car already cropped to 16:9 (the fisheye's
-                    // top and bottom eighths never reach the wire): the layer fills it rather
-                    // than pillarboxing, so only a squatter screen trims anything, at the sides.
-                    VideoView(link: video)
-                        .frame(width: lay.picture.width, height: lay.picture.height)
-                        .clipped()
-                        .position(x: lay.picture.midX, y: lay.picture.midY)
-                    if !video.hasPicture { noPicture.position(lay.pictureCentre) }
-                    scrim(.top)
-                    scrim(.bottom)
-                }
-
-                HStack(alignment: .center) {
-                    HStack(spacing: 12) {
-                        HStack(spacing: 7) {
-                            SignalBars(level: linkUp ? signalLevel : 0, color: linkUp ? signalColor : .red)
-                            // One truth: the label, the bars and the drive screen's existence
-                            // all come from `CarLink`, so it cannot say connected while the
-                            // joysticks do nothing.
-                            Text(linkUp ? L.driveConnected : L.driveSearching)
-                                .font(.system(size: 12)).foregroundStyle(p.text)
-                        }
-                        // The picture's own numbers live next to the link, not in a pill of
-                        // their own. `text` rather than `muted`: over the light theme's haze
-                        // `muted` disappears.
-                        if video.hasPicture {
-                            statusItem("video", L.videoStats(fps: video.fps, lost: video.lostLast10s), p.text)
-                                .font(.system(size: 10)).opacity(0.8)
-                        }
-                    }
-                    Spacer()
-                    SchemeToggle(scheme: $schemeRaw, palette: p)
-                    videoButton.padding(.leading, 8)
-                    gearButton
-                }
-                .frame(height: 32)
-                .padding(.horizontal, lay.edge).padding(.top, 12)
-                .frame(maxHeight: .infinity, alignment: .top)
-
-                // The car on the bottom edge, its rails running up over the picture's floor.
-                HStack(spacing: 28) {
-                    PowerBar(value: sides.left, palette: p)
-                    DriveDiagram(t: intent.t, y: intent.y, palette: p)
-                    PowerBar(value: sides.right, palette: p)
-                }
-                .position(lay.diagram)
-
-                // Sticks astride the picture's edges: half on the band, half on the picture's
-                // corner, which a fisheye has already darkened.
-                if scheme == .arcade {
-                    JoystickView(palette: p) { x, y in
-                        if arcX == 0 && arcY == 0 && (x != 0 || y != 0) { haptics.tick() }
-                        arcX = x; arcY = y; push()
-                    }
-                    .position(lay.rightStick)
-                } else {
-                    JoystickView(vertical: true, palette: p) { _, y in leftY = y; push() }.position(lay.leftStick)
-                    JoystickView(vertical: true, palette: p) { _, y in rightY = y; push() }.position(lay.rightStick)
-                }
-
-                TricksControl(palette: p, running: intent.runningTrick, startedAt: intent.trickStartedAt,
-                              onSelect: { intent.startTrick($0) },
-                              onStop: { intent.stopTrick() },
-                              debugOpen: previewTricksOpen)
-                .position(lay.tricks)
-
-                // Warnings are the one thing allowed over the picture, and only while there are
-                // any. Under the top row rather than beside it: two at once («драйвер» and
-                // «управляет») are wider than the gap between the link and the scheme toggle.
-                notices
-                    .padding(.top, 52)
-                    .frame(maxHeight: .infinity, alignment: .top)
-            }
-        }
-    }
-
-    /// The screen from before video (81b96ae), for when the car's switch is off: diagram in
-    /// the middle, sticks in the corners, tricks and the warnings below. Same components as
-    /// the HUD; only the arrangement is its own.
-    private var classic: some View {
-        ZStack {
-            p.bg.ignoresSafeArea()
-
-            VStack {
-                HStack {
-                    HStack(spacing: 7) {
-                        SignalBars(level: linkUp ? signalLevel : 0, color: linkUp ? signalColor : .red)
-                        Text(linkUp ? L.driveConnected : L.driveSearching)
-                            .font(.system(size: 12)).foregroundStyle(p.muted)
-                    }
-                    Spacer()
-                    SchemeToggle(scheme: $schemeRaw, palette: p)
-                    videoButton.padding(.leading, 8)
-                    gearButton
-                }
-                .padding(.horizontal, 18).padding(.top, 8)
-                Spacer()
-            }
-
-            HStack(spacing: 28) {
-                PowerBar(value: sides.left, palette: p)
-                DriveDiagram(t: intent.t, y: intent.y, palette: p)
-                PowerBar(value: sides.right, palette: p)
-            }
-
-            if scheme == .arcade {
-                HStack {
-                    Spacer()
-                    JoystickView(palette: p) { x, y in
-                        if arcX == 0 && arcY == 0 && (x != 0 || y != 0) { haptics.tick() }
-                        arcX = x; arcY = y; push()
-                    }
-                    .padding(.trailing, 24)
-                }
-                .padding(.bottom, 16)
-                .frame(maxHeight: .infinity, alignment: .bottom)
-            } else {
-                HStack {
-                    JoystickView(vertical: true, palette: p) { _, y in leftY = y; push() }.padding(.leading, 24)
-                    Spacer()
-                    JoystickView(vertical: true, palette: p) { _, y in rightY = y; push() }.padding(.trailing, 24)
-                }
-                .padding(.bottom, 16)
-                .frame(maxHeight: .infinity, alignment: .bottom)
-            }
-
-            VStack(spacing: 6) {
-                Spacer()
-                TricksControl(palette: p, running: intent.runningTrick, startedAt: intent.trickStartedAt,
-                              onSelect: { intent.startTrick($0) },
-                              onStop: { intent.stopTrick() },
-                              cardEdge: .top,   // the FAB is bottom-centre: the card opens upward, as before video
-                              debugOpen: previewTricksOpen)
-                notices           // amber only, and only while something is wrong — under the FAB, as before video
-            }
-            .padding(.bottom, 16)
-        }
-    }
-
     /// Shown over the last frame (the layer keeps it) rather than instead of it: the driver
     /// still sees where the car was, and the car still obeys the sticks — a lost picture is
-    /// never a stop.
+    /// never a stop. Only while the window is live: an empty window is not a lost picture.
     private var noPicture: some View {
         VStack(spacing: 4) {
             Image(systemName: "video.slash").font(.system(size: 22))

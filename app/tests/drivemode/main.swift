@@ -1,7 +1,8 @@
-// Host test for DriveModeRule — which drive screen to show, whether to subscribe to video,
-// and whether the driver's input is taken, from the car's `video` config and whether
-// something covers the screen (openspec `app/drive-session`, «Режим экрана вождения и
-// подписка решаются вместе»; docs/superpowers/specs/2026-09-15-video-switch-design.md, §3).
+// Host test for DriveModeRule — whether to subscribe to video and whether the driver's input
+// is taken, from the car's `video` config and whether something covers the screen (openspec
+// `app/drive-session`, «Режим экрана вождения и подписка решаются вместе»). The layout is
+// not the rule's to pick: the drive screen has one, and the switch only decides whether its
+// window is live (`app/drive-hud`).
 import Foundation
 
 var failures = 0
@@ -12,23 +13,23 @@ func check(_ ok: Bool, _ what: String) {
 let on = Video(bitrate_kbps: 2500, enabled: true)
 let off = Video(bitrate_kbps: 2500, enabled: false)
 
-// The config not read yet: the layout from before video, and no subscription — the car
-// would ignore the views if the switch is off, and the HUD would flash if it is on.
+// The config not read yet: no subscription — the car would ignore the views if the switch is
+// off, and the window would light up and go dark again if it is on. Driving as usual.
 check(DriveModeRule.state(config: nil, covered: false)
-      == DriveScreenState(mode: .classic, watching: false, inputAllowed: true),
-      "no config yet: classic, not watching, driving")
+      == DriveScreenState(watching: false, inputAllowed: true),
+      "no config yet: not watching, driving")
 
-// Off: classic, not watching, sheet or no sheet.
+// Off: not watching, sheet or no sheet.
 check(DriveModeRule.state(config: off, covered: false)
-      == DriveScreenState(mode: .classic, watching: false, inputAllowed: true), "off: classic, not watching")
+      == DriveScreenState(watching: false, inputAllowed: true), "off: not watching, driving")
 check(DriveModeRule.state(config: off, covered: true)
-      == DriveScreenState(mode: .classic, watching: false, inputAllowed: false), "off under a sheet: still classic")
+      == DriveScreenState(watching: false, inputAllowed: false), "off under a sheet: not watching, not driving")
 
-// On: the HUD; a sheet over it stops the views but not the layout underneath.
+// On: watching; a sheet over the screen stops the views.
 check(DriveModeRule.state(config: on, covered: false)
-      == DriveScreenState(mode: .hud, watching: true, inputAllowed: true), "on: hud, watching")
+      == DriveScreenState(watching: true, inputAllowed: true), "on: watching, driving")
 check(DriveModeRule.state(config: on, covered: true)
-      == DriveScreenState(mode: .hud, watching: false, inputAllowed: false), "on under a sheet: hud, not watching")
+      == DriveScreenState(watching: false, inputAllowed: false), "on under a sheet: not watching, not driving")
 
 // The bug (AJM-101): a covered screen kept taking the gamepad, so a deflected stick drove an
 // uncalibrated car under the mandatory wizard. Covered is covered — whatever the config says,
@@ -38,8 +39,8 @@ check(!DriveModeRule.state(config: off, covered: true).inputAllowed, "covered, v
 check(!DriveModeRule.state(config: on, covered: true).inputAllowed, "covered, video on: input refused")
 check(DriveModeRule.state(config: on, covered: false).inputAllowed, "uncovered: input taken again")
 
-// The video button (AJM-120): with the domain never read it used to be dead, and the classic
-// layout has no other path to a retry. A tap on an unread domain re-reads; a tap on a read one
+// The video button (AJM-120): with the domain never read it used to be dead, and the drive
+// screen has no other path to a retry. A tap on an unread domain re-reads; a tap on a read one
 // toggles the switch and keeps the car's bitrate.
 check(DriveModeRule.videoTap(config: nil) == .reread, "domain unread: the tap re-reads")
 check(DriveModeRule.videoTap(config: on) == .toggle(Video(bitrate_kbps: 2500, enabled: false)),
