@@ -387,13 +387,19 @@ it. While the window is live, the top row stands on a **band** (`HudBand.height`
 theme's `bg` across the whole screen with a 1 pt `line` along its bottom edge — the one ground
 the row has over a light frame or a dark one; the warnings sit under that line. Without a
 picture there is no band, and the row does not move; the only gradient left is the one from
-the bottom edge. The top row is the link on the left and, on the right, the scheme toggle plus
+the bottom edge. The top row is the left cluster and, on the right, the scheme toggle plus
 `ControlBar` — one capsule of three segments, tricks · video · settings, with the tricks card
-opening below it; there is no tricks button anywhere else. The toggle and the bar are two
-pills of one height and one radius (`HudPill`, 32 / 10), bodies their own; every glyph in the
-bar is `text`, and the tricks ✦ turns `warn` only while a trick runs. `DriveLayout` (pure,
-host-tested) is where the rest goes, derived from the screen and its safe area, not from one
-model's numbers; `openspec/specs/app/drive-hud` says why each piece is where it is.
+opening below it; there is no tricks button anywhere else. The cluster is three instruments by
+one rule — `HudItem` (glyph in a 14 pt box, 11 pt tabular caption, one colour for the whole
+instrument; the numbers are `HudCluster`'s) with a `HudDivider` between neighbours: the link,
+the picture only while there is one (`VideoBadge` over the pure `VideoGauge`, host-tested:
+«N к/с», and a second pair «dashed frame · M» in `warn` only while M > 0 — «потеряно» is
+VoiceOver's word, never the row's), and the pack (`BatteryBadge` over `BatteryGauge`). The
+toggle and the bar are two pills of one height and one radius (`HudPill`, 32 / 10), bodies
+their own; every glyph in the bar is `text`, and the tricks ✦ turns `warn` only while a trick
+runs. `DriveLayout` (pure, host-tested) is where the rest goes, derived from the screen and its
+safe area, not from one model's numbers; `openspec/specs/app/drive-hud` says why each piece is
+where it is.
 
 Pure Swift modules are host-tested with `swiftc` directly — no XCTest runtime needed.
 

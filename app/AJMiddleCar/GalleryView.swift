@@ -60,17 +60,22 @@ struct GalleryView: View {
                                                 soc_pct: nil, state: .absent)
 
     /// A link frozen in `.live` with plausible numbers — the gallery has no transport behind it.
+    /// `picture` is what the picture's instrument reads (`VideoLink.preview`): by default 25 fps
+    /// without losses, so the instrument is in the drive frames at all — a preview never opens
+    /// a socket, so nothing would set `hasPicture` otherwise; `nil` is no picture.
     @MainActor private func mockLink(calibrated: Bool = true, fw: String? = "v1.0+264",
                                      rssi: Int? = -55, wdtTrips: Int = 0,
                                      busOk: Bool = true, owner: MotorsOwner = .remote,
-                                     battery: BatteryInfo = Self.packOk) -> CarLink {
+                                     battery: BatteryInfo = Self.packOk,
+                                     picture: (fps: Int, lost: Int)? = (25, 0)) -> CarLink {
         let t = Telemetry(proto: CarContract.proto, seq: 1,
                           link: LinkInfo(rx_hz: 10, rssi_dbm: rssi, timeouts: wdtTrips),
                           motors: MotorsInfo(bus: busOk ? .ok : .down, calibrated: calibrated, owner: owner),
                           system: SystemInfo(uptime_s: 3847, free_heap: 131072),
                           video: VideoInfo(state: .idle, fps: 0, kbps: 0, dropped: 0),
                           battery: battery)
-        return CarLink.preview(.live(t), fw: fw, radio: .known(RadioInfo(fw: "3.0.6", expected: "3.0.6", state: .ok)))
+        return CarLink.preview(.live(t), fw: fw, radio: .known(RadioInfo(fw: "3.0.6", expected: "3.0.6", state: .ok)),
+                               video: picture.map { VideoLink.preview(fps: $0.fps, lost: $0.lost, hasPicture: true) })
     }
 
     @MainActor private func makeFrames(_ p: Palette) -> [(label: String, view: AnyView)] {
@@ -161,14 +166,19 @@ struct GalleryView: View {
             ("Drive bus/ctl warning",   AnyView(DriveView(link: mockLink(busOk: false, owner: .recovering), intent: intent, preview: true))),
             ("Drive tricks open",       AnyView(DriveView(link: mockLink(), intent: intent, preview: true, previewTricksOpen: true))),
             // The same layout with the window empty — the car's switch off: seeded off for this
-            // frame only — the gallery seeds the domain on at start, one launch per frame.
-            ("Drive video off",         AnyView(DriveView(link: mockLink(), intent: intent, preview: true)
+            // frame only — the gallery seeds the domain on at start, one launch per frame. No
+            // picture's readings either: a closed socket publishes none, and the instrument is
+            // gone from the row, the pack closed up to the link.
+            ("Drive video off",         AnyView(DriveView(link: mockLink(picture: nil), intent: intent, preview: true)
                                             .onAppear { ConfigStore.shared.video.seed(Video(bitrate_kbps: 2500, enabled: false)) })),
             // The pack's two other faces: `low` — the badge in `warn` and the placard under the
             // row; `absent` — an empty icon and «—», and no placard, since a car without a
             // monitor is the norm.
             ("Drive battery low",       AnyView(DriveView(link: mockLink(battery: Self.packLow), intent: intent, preview: true))),
             ("Drive battery absent",    AnyView(DriveView(link: mockLink(battery: Self.packAbsent), intent: intent, preview: true))),
+            // The picture losing frames: the spec's «Кадры теряются» — «22 к/с» in `text`, and
+            // the pair «пунктирный кадр · 7» in `warn` beside it; the neighbours keep their colours.
+            ("Drive picture lost",      AnyView(DriveView(link: mockLink(picture: (22, 7)), intent: intent, preview: true))),
             ("Settings",                AnyView(NavigationStack { SettingsView(palette: p, link: mockLink()) })),
             ("Calibration spin",        calib(.spin)),
             ("Calibration spinning",    calib(.spinning)),

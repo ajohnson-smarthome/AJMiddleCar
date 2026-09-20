@@ -240,6 +240,19 @@ final class VideoLink: ObservableObject {
         }
     }
 
+    #if DEBUG
+    /// One screen's worth of picture readings, for the gallery: the three published values set
+    /// by hand, no socket behind them — a `DriveView` in preview never watches, so nothing here
+    /// ever opens one. How the instrument's states are photographed without a car.
+    static func preview(fps: Int, lost: Int, hasPicture: Bool) -> VideoLink {
+        let v = VideoLink()
+        v.fps = fps
+        v.lostLast10s = lost
+        v.hasPicture = hasPicture
+        return v
+    }
+    #endif
+
     private func publishStats() {
         let (f, lost, fresh) = queue.sync { () -> (Int, Int, Bool) in
             let f = state.frames
