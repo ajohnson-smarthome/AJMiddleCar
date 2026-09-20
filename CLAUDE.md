@@ -353,15 +353,18 @@ an `AVSampleBufferDisplayLayer` frame by frame. Reassembly runs on `VideoLink`'s
 `onFrame` is confined there — never called from the main actor, which only reads the published
 counters back across that same queue.
 
-The drive screen is a HUD: the picture is a 16:9 window the full height of the screen, filled
-`resizeAspectFill` with a frame that is already 16:9 — since 2026-09-15 the car crops the
-fisheye's 4:3 sensor frame to its middle `video.height` rows at the encoder's input
+The drive screen is one layout, picture or not: a 16:9 window the full height of the screen,
+filled `resizeAspectFill` with a frame that is already 16:9 — since 2026-09-15 the car crops
+the fisheye's 4:3 sensor frame to its middle `video.height` rows at the encoder's input
 (`frame_crop.h`, `sensor_height` in the contract), so the top and bottom eighths never reach
 the wire, and the app only trims the sides on a screen squatter than 16:9 — and every
 instrument keeps to its edges — nothing sits in the middle of the picture with a scrim behind
-it. `DriveLayout` (pure, host-tested) is where the pieces go, derived from the screen and its
-safe area, not from one model's numbers; `docs/superpowers/specs/2026-09-15-drive-hud-design.md`
-says why each piece is where it is.
+it. The car's `video.enabled` decides only whether the window is live; no instrument moves on
+it. The top row is the link on the left and, on the right, the scheme toggle plus `ControlBar`
+— one capsule of three segments, tricks · video · settings, with the tricks card opening
+below it; there is no tricks button anywhere else. `DriveLayout` (pure, host-tested) is where
+the rest goes, derived from the screen and its safe area, not from one model's numbers;
+`openspec/specs/app/drive-hud` says why each piece is where it is.
 
 Pure Swift modules are host-tested with `swiftc` directly — no XCTest runtime needed.
 
