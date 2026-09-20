@@ -158,6 +158,32 @@ are the closing sweep, run once stage 4 itself passes.
 
 _Record anything surprising here — it is the raw material for the next spec._
 
+### The battery monitor answered on the first scan, at the address it was told to (2026-09-20)
+
+An INA260 module went onto the bus through the rear PCA9685's pass-through header — four
+wires (3V3, GND, SDA, SCL) and a solder bridge A0→VCC — and its shunt into the pack's plus
+lead after the BMS, before the split to the drivers and the board's DC-DC
+(`docs/research/2026-09-20-ina260-compat-and-wiring.md` § 4). A bench build with a probe
+loop after `pca9685_init` (not committed; ten lines of `i2c_master_probe` over 0x08–0x77 and
+six register reads at 0x41) said, on the first boot:
+
+```
+SCAN: 0x18 (ES8311)  0x36 (OV5647)  0x40 (front PCA)  0x41 (INA260)  0x60 (rear PCA)
+INA260  0xFE = 0x5449 (TI)   0xFF = 0x2270 (INA260)   0x00 = 0x6127 (power-on default)
+        0x01 = 56   → 70 mA      0x02 = 8733 → 10.92 V      0x03 = 77 → 0.77 W
+```
+
+So: no address clash (the module would have sat on 0x40 over the front PCA without the
+bridge — this is the whole reason for it), the IDs are the chip's own, and the bus at
+100 kHz for this device is fine alongside the PCAs at 400. Two numbers to hold against a
+multimeter: 10.92 V on the pack (3.64 V per cell — a pack about a third full, resting), and
+70 mA — small because the board itself was on the laptop's USB, so the monitor saw only
+what hangs on the battery side (the PCAs' logic, the bridges at rest). Note the All-Call
+0x70 did not answer this time, where the 2026-08-21 scan listed it; nothing depends on it.
+
+The pack: 3S3P of LG HG2 (LGDBHG21865, LiitoKala rewrap) — 3000 mAh, 20 A each, so 9000 mAh
+and a 60 A pack behind a BMS that limits first. `battery_pack.h` gets 3S, 3P, 9000 mAh.
+
 ### 254 commits of review fixes went on both boards with no hands (2026-09-20)
 
 v1.0+1133 — the first release since 879 on the 15th, carrying the logic-review batch
