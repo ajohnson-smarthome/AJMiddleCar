@@ -12,6 +12,7 @@
 #include "rt_link.h"
 #include "link.h"
 #include "video_link.h"
+#include "battery.h"
 
 static const char *TAG = "telemetry";
 
@@ -141,15 +142,16 @@ void telemetry_gather(telemetry_t *out, telem_consumer_t who) {
     out->video_kbps    = vs.kbps;
     out->video_dropped = vs.dropped;
 
-    /* The pack monitor is not on the bus yet (AJM-182 brings the INA260 driver and the
-       battery task): until then the group says what a car without one says — absent, and
-       every number null. The wire shape is already the final one, so the app and the mock
-       can be built against it. */
-    out->battery_state = BATTERY_STATE_ABSENT;
-    out->battery_mv  = TELEMETRY_NULL;
-    out->battery_ma  = TELEMETRY_NULL;
-    out->battery_mw  = TELEMETRY_NULL;
-    out->battery_soc = TELEMETRY_NULL;
+    /* The pack, as the battery task last saw it — one snapshot, so the word and the numbers
+       are from the same read. The wire's `null` is decided here: every number when the
+       monitor is absent, and the remainder alone while its start window has not closed. */
+    battery_snapshot_t b;
+    battery_snapshot(&b);
+    out->battery_state = b.state;
+    out->battery_mv  = b.present ? b.mv : TELEMETRY_NULL;
+    out->battery_ma  = b.present ? b.ma : TELEMETRY_NULL;
+    out->battery_mw  = b.present ? b.mw : TELEMETRY_NULL;
+    out->battery_soc = (b.present && b.soc >= 0) ? b.soc : TELEMETRY_NULL;
 }
 
 int telemetry_json(char *buf, size_t n) {

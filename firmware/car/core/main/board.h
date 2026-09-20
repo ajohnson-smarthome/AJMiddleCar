@@ -51,6 +51,16 @@
 #define BOARD_PCA_ADDR_REAR   0x60
 #define BOARD_PCA_CH_PER_CHIP 4
 
+// The pack monitor — an INA260 module in the pack's plus lead, on the same bus through the
+// rear PCA9685's pass-through header. 0x41 is A0 bridged to VCC on the module: without the
+// bridge it would sit on 0x40, over the front PCA (docs/research/2026-09-20-ina260-compat-
+// and-wiring.md § 4). Answered there on the first scan, 2026-09-20 (bringup.md). 100 kHz for
+// the same reason as the camera's SCCB: this wire already carries four devices' worth of
+// pull-ups and capacitance, and the monitor is read five times a second — speed buys nothing.
+// The chip is the driver's business (power_monitor.h → ina260.c); this file holds only where it is.
+#define BOARD_INA260_ADDR     0x41
+#define BOARD_INA260_HZ       100000
+
 // The C6 runs esp_hosted's slave image, delivered out of band (firmware/car/modem/README.md) —
 // over SDIO from the host is the recorded route, the UART header the fallback. The
 // EXPECTED slave version is no longer pinned here by hand: status_api derives it at
