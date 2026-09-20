@@ -31,10 +31,10 @@ check(near(phone.edge, 34.667), "top row hangs 14 pt inside the picture's edge")
 check(near(phone.leftStick, CGPoint(x: 20.667, y: 304)), "left stick centred on the picture's left edge")
 check(near(phone.rightStick, CGPoint(x: 735.333, y: 304)), "right stick centred on the picture's right edge")
 
-// The diagram group on the bottom edge, 50 pt above the safe bottom; the tricks button in the
-// middle of the right band; the no-picture panel in the middle of the picture.
+// The diagram group on the bottom edge, 50 pt above the safe bottom; the no-picture panel in
+// the middle of the picture. The tricks button has no point of its own: it is a segment of
+// the control bar in the top row, whose place `edge` already sets.
 check(near(phone.diagram, CGPoint(x: 378, y: 331)), "diagram group centred 50 pt above the safe bottom")
-check(near(phone.tricks, CGPoint(x: 775.167, y: 190.5)), "tricks button centred in the right band")
 check(near(phone.pictureCentre, CGPoint(x: 378, y: 190.5)), "no-picture panel in the middle of the picture")
 
 // A narrower phone (iPhone 16, 852×393) gets a proportionally narrower picture — nothing here

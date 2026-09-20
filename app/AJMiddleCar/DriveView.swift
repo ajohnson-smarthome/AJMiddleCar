@@ -81,10 +81,12 @@ struct DriveView: View {
     /// the driver's choice, and the video button's glyph says so.
     private var windowLive: Bool { confirmed?.enabled == true }
 
-    /// The video switch: same shape as the gear next to it. Read, the tap posts the whole
-    /// domain (bitrate as the car has it); unread, it re-reads — a dead button over an unread
-    /// domain left the driver with an empty window and no way back to the picture but the
-    /// settings sheet (AJM-120). Disabled only while an answer is on its way.
+    /// The video switch: the middle segment of the control bar, a glyph in a slot the bar
+    /// frames. Read, the tap posts the whole domain (bitrate as the car has it); unread, it
+    /// re-reads — a dead button over an unread domain left the driver with an empty window and
+    /// no way back to the picture but the settings sheet (AJM-120). Disabled only while an
+    /// answer is on its way. A refusal is said by this segment's own stroke wearing `warn`
+    /// for 650 ms, inside the bar's outline — the neighbours do not change.
     private var videoButton: some View {
         let on = confirmed?.enabled ?? false
         let glyph = confirmed == nil ? "questionmark.video" : (on ? "video" : "video.slash")
@@ -109,30 +111,31 @@ struct DriveView: View {
                 }
             }
         } label: {
-            Image(systemName: glyph)
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(p.text)
-                .frame(width: 40, height: 32)
-                .background(p.panel)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(videoToggleFailed ? p.warn : p.line))
+            segmentGlyph(glyph)
+                .overlay {
+                    if videoToggleFailed {
+                        RoundedRectangle(cornerRadius: 8).stroke(p.warn).padding(2)
+                    }
+                }
         }
         .disabled(videoCfg.isBusy)
         .accessibilityLabel(confirmed == nil ? L.configRetry : (on ? L.videoOn : L.videoOff))
     }
 
+    /// The settings segment: the bar's rightmost.
     private var gearButton: some View {
-        Button { showSettings = true } label: {
-            Image(systemName: "gearshape")
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(p.text)
-                .frame(width: 40, height: 32)
-                .background(p.panel)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(p.line))
-        }
-        .padding(.leading, 8)
-        .disabled(showCalib)   // can't bypass mandatory calibration via Settings
+        Button { showSettings = true } label: { segmentGlyph("gearshape") }
+            .disabled(showCalib)   // can't bypass mandatory calibration via Settings
+    }
+
+    /// A bar segment's label: the glyph in `text`, filling the slot so the whole segment
+    /// takes the tap. No frame of its own — the bar draws the body and the outline.
+    private func segmentGlyph(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 18, weight: .medium))
+            .foregroundStyle(p.text)
+            .frame(width: ControlBarSegment.size.width, height: ControlBarSegment.size.height)
+            .contentShape(Rectangle())
     }
 
     /// The simulator reports a phantom controller that is always "connected", so an idle stick
@@ -224,8 +227,18 @@ struct DriveView: View {
                     }
                     Spacer()
                     SchemeToggle(scheme: $schemeRaw, palette: p)
-                    videoButton.padding(.leading, 8)
-                    gearButton
+                    // Tricks · video · settings in one capsule; the tricks card opens below it.
+                    ControlBar(palette: p) {
+                        TricksControl(palette: p, running: intent.runningTrick, startedAt: intent.trickStartedAt,
+                                      onSelect: { intent.startTrick($0) },
+                                      onStop: { intent.stopTrick() },
+                                      debugOpen: previewTricksOpen)
+                    } video: {
+                        videoButton
+                    } settings: {
+                        gearButton
+                    }
+                    .padding(.leading, 8)
                 }
                 .frame(height: 32)
                 .padding(.horizontal, lay.edge).padding(.top, 12)
@@ -252,12 +265,6 @@ struct DriveView: View {
                     JoystickView(vertical: true, palette: p) { _, y in leftY = y; push() }.position(lay.leftStick)
                     JoystickView(vertical: true, palette: p) { _, y in rightY = y; push() }.position(lay.rightStick)
                 }
-
-                TricksControl(palette: p, running: intent.runningTrick, startedAt: intent.trickStartedAt,
-                              onSelect: { intent.startTrick($0) },
-                              onStop: { intent.stopTrick() },
-                              debugOpen: previewTricksOpen)
-                .position(lay.tricks)
 
                 // Warnings are the one thing allowed over the picture, and only while there are
                 // any. Under the top row rather than beside it: two at once («драйвер» and

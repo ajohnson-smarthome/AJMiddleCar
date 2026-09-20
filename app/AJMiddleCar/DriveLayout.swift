@@ -33,7 +33,9 @@ struct DriveLayout {
     }
 
     /// Padding from the safe frame's leading (and trailing — the picture is centred) edge to the
-    /// top row, which hangs 14 pt inside the picture.
+    /// top row, which hangs 14 pt inside the picture. The row holds the link on the left and,
+    /// on the right, the scheme toggle and the control bar (tricks · video · settings) — the
+    /// tricks button has no point of its own here.
     var edge: CGFloat { picture.minX + 14 }
 
     /// Sticks astride the picture's edges, 16 pt above the safe bottom as before.
@@ -43,10 +45,6 @@ struct DriveLayout {
     /// The PowerBar · DriveDiagram · PowerBar group, centred 50 pt above the safe bottom — the
     /// car body sits on the bottom edge, the rails run up over the picture's floor.
     var diagram: CGPoint { CGPoint(x: safeWidth / 2, y: safeHeight - 50) }
-
-    /// The tricks button, in the middle of the band between the picture and the screen's edge —
-    /// the screen's, not the safe frame's: nothing on the right side needs avoiding.
-    var tricks: CGPoint { CGPoint(x: (picture.maxX + safeWidth + insets.trailing) / 2, y: safeHeight / 2) }
 
     /// Where the no-picture panel goes: the middle of the picture.
     var pictureCentre: CGPoint { CGPoint(x: safeWidth / 2, y: safeHeight / 2) }
