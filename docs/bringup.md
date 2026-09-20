@@ -158,6 +158,30 @@ are the closing sweep, run once stage 4 itself passes.
 
 _Record anything surprising here — it is the raw material for the next spec._
 
+### The pack reached the pult through a release, with no wire (2026-09-20, late)
+
+`v1.0+1158` — the battery monitor (AJM-178), the one-layout HUD (AJM-172) and the placard fix
+(AJM-175) — went onto both boards by the simulator through the dongle: launched 23:02:30,
+dongle on `v1.0+1158` and `wifi.connected` by 23:02:59, the car answering `/version` with
+`v1.0+1158` by 23:03:42. First `/status` after that:
+
+```
+battery  {voltage_mv: 10882, current_ma: 82, power_mw: 890, soc_pct: 25, state: ok}
+motors   {bus: ok, calibrated: true}   link {rssi_dbm: -52, timeouts: 0}
+```
+
+and the drive screen showing «▮ 25 % · 10,9 В · 1 Вт» next to «На связи». The multimeter
+on the pack terminals said 10.92 V a few minutes earlier — 40 mV apart, inside the ±50 mV
+the bench item asked for. 25 % is the rest-table start at 3.63 V per cell, three seconds
+after boot, as designed; the current is the electronics on the battery side only (82 mA:
+PCA logic, bridges at rest — the P4 was on the pack this time, through its DC-DC, so this
+also says the board's own draw is not on this rail… or the DC-DC feeds from before the
+shunt; worth a look at the wiring before trusting `soc_pct` over a long session).
+
+**Not measured, deliberately left open:** current under load against a clamp meter (the car
+was not on a stand), and the HG2 rest table at four charge levels (`battery_pack.h` keeps
+the typical NMC points). Both are a session's work when the pack is being cycled anyway.
+
 ### The battery monitor answered on the first scan, at the address it was told to (2026-09-20)
 
 An INA260 module went onto the bus through the rear PCA9685's pass-through header — four
