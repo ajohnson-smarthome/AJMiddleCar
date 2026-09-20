@@ -224,6 +224,9 @@ struct DriveView: View {
                             statusItem("video", L.videoStats(fps: video.fps, lost: video.lostLast10s), p.text)
                                 .font(.system(size: 10)).opacity(0.8)
                         }
+                        // The pack, from the same frame: always there, since a car without a
+                        // monitor is the empty icon, not a gap in the row.
+                        BatteryBadge(battery: telemetry?.battery, palette: p)
                     }
                     Spacer()
                     SchemeToggle(scheme: $schemeRaw, palette: p)
@@ -445,6 +448,7 @@ struct DriveView: View {
         (telemetry?.link.timeouts ?? 0) > 0
             || telemetry.map { $0.motors.bus != .ok } ?? false
             || telemetry.map { $0.motors.owner != .remote && $0.motors.owner != .idle } ?? false
+            || telemetry.map { $0.battery.state == .low } ?? false
     }
 
     // Only amber, and only while something is wrong: the picture's own numbers moved up next to
@@ -465,6 +469,10 @@ struct DriveView: View {
             // between "the joystick is broken" and "the car is busy doing something else".
             if let owner = telemetry?.motors.owner, owner != .remote, owner != .idle {
                 statusItem("hand.raised", L.driveCtlOther(L.ctlOwner(owner.rawValue)), p.warn)
+            }
+            // Only `low`: a car without a monitor is the badge's empty icon, not a warning.
+            if telemetry?.battery.state == .low {
+                statusItem("battery.25", L.batteryLow, p.warn)
             }
         }
         .font(.system(size: 10))
