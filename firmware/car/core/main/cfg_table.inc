@@ -44,7 +44,7 @@ static const cfg_domain_t CFG_DOMAINS[] = {
 
 #define RT_PROTO 2
 #define RT_PORT 4210
-#define RT_MAX_DATAGRAM 320
+#define RT_MAX_DATAGRAM 512
 #define RT_MAX_COMMAND 96
 #define RT_COMMAND_HZ 10
 #define RT_TELEMETRY_HZ 5
@@ -138,6 +138,17 @@ static const cfg_domain_t CFG_DOMAINS[] = {
 #define KEY_VIDEO_FPS "fps"
 #define KEY_VIDEO_KBPS "kbps"
 #define KEY_VIDEO_DROPPED "dropped"
+
+#define KEY_GROUP_BATTERY "battery"
+#define KEY_BATTERY_VOLTAGE_MV "voltage_mv"
+#define KEY_BATTERY_CURRENT_MA "current_ma"
+#define KEY_BATTERY_POWER_MW "power_mw"
+#define KEY_BATTERY_SOC_PCT "soc_pct"
+#define KEY_BATTERY_STATE "state"
+#define BATTERY_STATE_OK "ok"
+#define BATTERY_STATE_LOW "low"
+#define BATTERY_STATE_ABSENT "absent"
+#define BATTERY_STATE_COUNT 3
 
 #define ERR_BAD_JSON "bad_json"
 #define ERR_MISSING_FIELD "missing_field"

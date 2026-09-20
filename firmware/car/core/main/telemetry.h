@@ -11,7 +11,7 @@
 // reported was a function of how the callers interleaved rather than of the uplink.
 typedef enum { TELEM_PUSH, TELEM_STATUS, TELEM_CONSUMERS } telem_consumer_t;
 
-// Live telemetry snapshot: the three groups every push and every /status carries.
+// Live telemetry snapshot: the five groups every push and every /status carries.
 typedef struct {
     uint32_t seq;         // push counter, so the app can drop a reordered datagram
     int      rssi;        // dBm, 0 = not measured (printed as null)
@@ -27,14 +27,36 @@ typedef struct {
                                // chunk leaves the sender, not at the encoder)
     uint32_t video_kbps;       // kbit sent in the last second
     uint32_t video_dropped;    // frames not sent since boot
+    const char *battery_state; // one of the BATTERY_STATE_* words; NULL reads absent
+    // The pack's numbers, TELEMETRY_NULL when there is nothing to report — the monitor is
+    // absent, or the remainder is not yet determined. The wire's sign is the value's: a
+    // charging pack is a negative battery_ma, and 0 is a genuine zero, not "no data".
+    int32_t  battery_mv;       // pack voltage, mV
+    int32_t  battery_ma;       // pack current, mA, discharge positive
+    int32_t  battery_mw;       // power, mW, as the monitor computes it
+    int32_t  battery_soc;      // remaining charge, 0..100
 } telemetry_t;
 
-// Pure: the "link", "motors", "system" and "video" members (NO surrounding braces, no
-// trailing comma). Shared by the real-time push and /status. Every key is a generated
-// macro, so a rename in the schema cannot survive here; test_contract_wire checks the
-// nesting. Returns the length, or -1 on truncation.
+// The "no value" of a nullable int32 field — printed as JSON null. INT32_MIN rather than
+// 0 or -1: every one of the pack's numbers can legitimately be zero, and current can be
+// negative.
+#define TELEMETRY_NULL INT32_MIN
+
+// A nullable int32 as the wire spells it: the number, or `null`. `buf` must hold 12.
+static inline const char *telemetry_opt(char *buf, size_t n, int32_t v) {
+    if (v == TELEMETRY_NULL) return "null";
+    snprintf(buf, n, "%ld", (long)v);
+    return buf;
+}
+
+// Pure: the "link", "motors", "system", "video" and "battery" members (NO surrounding
+// braces, no trailing comma), in the schema's telemetry order — battery last, so /status
+// can splice its own two groups in before "system" and keep the tail whole. Shared by the
+// real-time push and /status. Every key is a generated macro, so a rename in the schema
+// cannot survive here; test_contract_wire checks the nesting. Returns the length, or -1
+// on truncation.
 static inline int telemetry_groups(char *buf, size_t n, const telemetry_t *t) {
-    char rssi[12];
+    char rssi[12], mv[12], ma[12], mw[12], soc[12];
     if (t->rssi != 0) snprintf(rssi, sizeof(rssi), "%d", t->rssi);
     else              snprintf(rssi, sizeof(rssi), "null");
     int r = snprintf(buf, n,
@@ -44,13 +66,19 @@ static inline int telemetry_groups(char *buf, size_t n, const telemetry_t *t) {
             "\"" KEY_MOTORS_OWNER "\":\"%s\"},"
         "\"" KEY_GROUP_SYSTEM "\":{\"" KEY_SYSTEM_UPTIME_S "\":%ld,\"" KEY_SYSTEM_FREE_HEAP "\":%u},"
         "\"" KEY_GROUP_VIDEO "\":{\"" KEY_VIDEO_STATE "\":\"%s\",\"" KEY_VIDEO_FPS "\":%u,"
-            "\"" KEY_VIDEO_KBPS "\":%u,\"" KEY_VIDEO_DROPPED "\":%u}",
+            "\"" KEY_VIDEO_KBPS "\":%u,\"" KEY_VIDEO_DROPPED "\":%u},"
+        "\"" KEY_GROUP_BATTERY "\":{\"" KEY_BATTERY_VOLTAGE_MV "\":%s,\"" KEY_BATTERY_CURRENT_MA "\":%s,"
+            "\"" KEY_BATTERY_POWER_MW "\":%s,\"" KEY_BATTERY_SOC_PCT "\":%s,"
+            "\"" KEY_BATTERY_STATE "\":\"%s\"}",
         t->rx_hz, rssi, (unsigned)t->timeouts,
         t->bus_ok ? MOTORS_BUS_OK : MOTORS_BUS_DOWN, t->calibrated ? "true" : "false",
         t->owner ? t->owner : MOTORS_OWNER_IDLE,
         t->uptime_s, (unsigned)t->free_heap,
         t->video_state ? t->video_state : VIDEO_STATE_OFF, (unsigned)t->video_fps,
-        (unsigned)t->video_kbps, (unsigned)t->video_dropped);
+        (unsigned)t->video_kbps, (unsigned)t->video_dropped,
+        telemetry_opt(mv, sizeof(mv), t->battery_mv), telemetry_opt(ma, sizeof(ma), t->battery_ma),
+        telemetry_opt(mw, sizeof(mw), t->battery_mw), telemetry_opt(soc, sizeof(soc), t->battery_soc),
+        t->battery_state ? t->battery_state : BATTERY_STATE_ABSENT);
     if (r < 0 || r >= (int)n) return -1;
     return r;
 }

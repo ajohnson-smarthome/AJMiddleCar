@@ -44,6 +44,7 @@ def _words(group, field):
 BUS_OK, BUS_DOWN = _words("motors", "bus")
 RADIO_OK, RADIO_MISMATCH, RADIO_UNAVAILABLE = _words("radio", "state")
 VIDEO_OFF, VIDEO_IDLE, VIDEO_STREAMING = _words("video", "state")
+BATTERY_OK, BATTERY_LOW, BATTERY_ABSENT = _words("battery", "state")
 
 # The radio's two version strings. On the car `expected` derives from the esp_hosted
 # pin and `fw` is what the C6 answered at boot (status_api.c); the mock has no radio,
@@ -797,7 +798,7 @@ class CarState:
     # ---- telemetry -------------------------------------------------------------
 
     def status_groups(self, rx_hz, groups=TELEMETRY_GROUPS):
-        """The status groups named, in that order — telemetry's four by default, all six
+        """The status groups named, in that order — telemetry's five by default, all seven
         of `STATUS_GROUPS` for a `/status` poll — built by walking the schema so a field
         added to the contract and not to the map below raises here rather than going
         missing on the wire. `radio` and `storage` are /status-only diagnostics, read
@@ -813,6 +814,10 @@ class CarState:
             "system": {"uptime_s": int(self._now - self._started), "free_heap": self.heap},
             "video": {"state": self.video_state, "fps": self.video_fps, "kbps": self.video_kbps,
                       "dropped": self.video_dropped},
+            # No pack model yet (AJM-181 brings it): the car without a monitor, exactly as
+            # telemetry.c reports it until its own driver lands — `absent`, every number null.
+            "battery": {"voltage_mv": None, "current_ma": None, "power_mw": None, "soc_pct": None,
+                        "state": BATTERY_ABSENT},
         }
         return {g: {f["name"]: values[g][f["name"]] for f in GROUPS[g]["fields"]} for g in groups}
 

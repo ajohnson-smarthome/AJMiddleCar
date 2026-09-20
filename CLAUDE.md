@@ -150,17 +150,17 @@ because it knows anything about the car — it knows neither the motors nor the 
 `contract/car-api.json` is the source of truth for everything both sides agree on: the
 protocol version, the real-time channel's constants, the video channel's own section (port,
 the 12-byte wire header, timing, the header vectors all three receivers are tested against),
-the six status groups (`link`, `motors`, `radio`, `storage`, `system`, `video`) and the frozen
-`/version` document (`device`, `fw`, `build`, `proto`, `rolled_back`) both boards serve, the
-state words each group's enum fields take (`motors.owner`, `motors.bus`,
-`radio.state`, `video.state`), the six config domains with their ranges and defaults, and the
-car's error codes. `tools/gen_contract.py` emits all four expressions of it — the firmware's
-descriptor table (`main/cfg_table.inc`, plus the key, type-word and error-code macros the
-printers in `telemetry.h`, `device_json.h`, `status_api.c` and `calib_api.c` build their
-format strings from), the app's Swift structs (`app/AJMiddleCar/Generated/CarAPI.swift`, which
-now includes the generated `Telemetry` and `CarStatus` structs alongside the config ones), the
-mock's table and validator (`tools/mock_car/generated.py`), and the endpoint table inside
-`docs/protocol.md`. The dongle's side of the same idea is `contract/dongle-api.json` and
+the seven status groups (`link`, `motors`, `radio`, `storage`, `system`, `video`, `battery`)
+and the frozen `/version` document (`device`, `fw`, `build`, `proto`, `rolled_back`) both
+boards serve, the state words each group's enum fields take (`motors.owner`, `motors.bus`,
+`radio.state`, `video.state`, `battery.state`), the six config domains with their ranges and
+defaults, and the car's error codes. `tools/gen_contract.py` emits all four expressions of it
+— the firmware's descriptor table (`main/cfg_table.inc`, plus the key, type-word and
+error-code macros the printers in `telemetry.h`, `device_json.h`, `status_api.c` and
+`calib_api.c` build their format strings from), the app's Swift structs
+(`app/AJMiddleCar/Generated/CarAPI.swift`, which now includes the generated `Telemetry` and
+`CarStatus` structs alongside the config ones), the mock's table and validator
+(`tools/mock_car/generated.py`), and the endpoint table inside `docs/protocol.md`. The dongle's side of the same idea is `contract/dongle-api.json` and
 `tools/gen_dongle.py`, now carrying `relay.video_port`, `relay.video_max_kbps` and the three
 nullable `relay.video_*` status fields alongside the real-time ones.
 

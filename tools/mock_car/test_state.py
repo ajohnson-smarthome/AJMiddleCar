@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from generated import (CALIBRATION, DOMAINS, GROUPS, PROTO, RT, STATUS_GROUPS,   # noqa: E402
                        TELEMETRY_GROUPS)
-from state import (BUS_DOWN, BUS_OK, CHIP_ID, OWNER_CALIBRATION, OWNER_CONSOLE,   # noqa: E402
+from state import (BATTERY_ABSENT, BUS_DOWN, BUS_OK, CHIP_ID, OWNER_CALIBRATION, OWNER_CONSOLE,   # noqa: E402
                    OWNER_IDLE, OWNER_RECOVERING, OWNER_REMOTE, OWNER_SAFE_STOP, OWNER_UPDATE,
                    RADIO_EXPECTED, RADIO_MISMATCH, RADIO_OK, RADIO_UNAVAILABLE, VIDEO_IDLE,
                    VIDEO_OFF, CarState, build_number, clamp_axis, image_refusal, number,
@@ -965,13 +965,25 @@ class TestDegradation(unittest.TestCase):
         self.assertIs(groups["storage"]["reset_at_boot"], False)
         self.assertEqual(car.write_fail, set())
 
-    def test_status_walks_all_six_groups_in_the_contracts_order(self):
+    def test_status_walks_all_seven_groups_in_the_contracts_order(self):
         """`radio` and `storage` are /status-only; built by walking the schema like the
-        other four, so a field added to the contract cannot go missing on the wire."""
+        other five, so a field added to the contract cannot go missing on the wire."""
         groups = CarState(now=0.0).status_groups(0, STATUS_GROUPS)
         self.assertEqual(list(groups), STATUS_GROUPS)
         for g in STATUS_GROUPS:
             self.assertEqual(list(groups[g]), [f["name"] for f in GROUPS[g]["fields"]], g)
+
+    def test_battery_is_absent_with_null_numbers_in_telemetry_and_status(self):
+        """`car/battery-monitor` → «Монитора нет — absent, числа null»: the group is on
+        the wire in both places, last, and reads the same in each. No pack model yet — the
+        monitor's absence is the one state the wire has for a car with nothing to report."""
+        car = CarState(now=0.0)
+        absent = {"voltage_mv": None, "current_ma": None, "power_mw": None, "soc_pct": None,
+                  "state": BATTERY_ABSENT}
+        self.assertEqual(car.telemetry(0)["battery"], absent)
+        self.assertEqual(car.status_groups(0, STATUS_GROUPS)["battery"], absent)
+        self.assertEqual(list(car.telemetry(0))[-1], "battery")
+        self.assertEqual(list(car.status_groups(0, STATUS_GROUPS))[-1], "battery")
 
     def test_bus_down_is_the_same_word_in_telemetry_and_status(self):
         car = CarState(now=0.0, bus_ok=False)

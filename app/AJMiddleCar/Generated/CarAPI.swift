@@ -8,7 +8,7 @@ public enum CarContract {
     public static let ssid = "AJMiddleCar"
     public static let password = "drive1234"
     public static let rtPort: UInt16 = 4210
-    public static let maxDatagram = 320
+    public static let maxDatagram = 512
     public static let maxCommand = 96
     public static let commandHz = 10
     public static let telemetryHz = 5
@@ -268,6 +268,53 @@ public struct VideoInfo: Codable, Equatable, Sendable {
     public init(state: VideoState, fps: Int, kbps: Int, dropped: Int) { self.state = state; self.fps = fps; self.kbps = kbps; self.dropped = dropped }
 }
 
+/// ok: the monitor answers; low: soc_pct fell to the firmware's threshold (20 %) and has not yet risen past it by three (23 %); absent: nothing answered at the monitor's address at boot, or three reads in a row failed — the car drives on, every number of the group null
+public enum BatteryState: Equatable, Sendable, Codable {
+    case ok
+    case low
+    case absent
+    case unknown(String)
+    public var rawValue: String {
+        switch self {
+        case .ok: return "ok"
+        case .low: return "low"
+        case .absent: return "absent"
+        case .unknown(let raw): return raw
+        }
+    }
+    public init(rawValue: String) {
+        switch rawValue {
+        case "ok": self = .ok
+        case "low": self = .low
+        case "absent": self = .absent
+        default: self = .unknown(rawValue)
+        }
+    }
+    public init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+    public static let all: [BatteryState] = [.ok, .low, .absent]
+}
+
+/// The pack as the power monitor on its positive lead sees it. Measurement only: nothing here has a say in the drive.
+public struct BatteryInfo: Codable, Equatable, Sendable {
+    /// pack voltage in millivolts; null when the monitor is absent
+    public var voltage_mv: Int?
+    /// pack current in milliamps, discharge positive, charge negative; null when the monitor is absent
+    public var current_ma: Int?
+    /// power in milliwatts as the monitor computes it on its own averaged samples, not V x I of two independently averaged numbers; null when the monitor is absent
+    public var power_mw: Int?
+    /// remaining charge, 0..100: a rest-voltage start in the first seconds after boot, then coulomb counting, pulled toward the rest table when the pack idles; null until the start is determined, and when the monitor is absent
+    public var soc_pct: Int?
+    /// ok: the monitor answers; low: soc_pct fell to the firmware's threshold (20 %) and has not yet risen past it by three (23 %); absent: nothing answered at the monitor's address at boot, or three reads in a row failed — the car drives on, every number of the group null
+    public var state: BatteryState
+    public init(voltage_mv: Int?, current_ma: Int?, power_mw: Int?, soc_pct: Int?, state: BatteryState) { self.voltage_mv = voltage_mv; self.current_ma = current_ma; self.power_mw = power_mw; self.soc_pct = soc_pct; self.state = state }
+}
+
 /// The 5 Hz push: proto, type, seq, then these groups.
 public struct Telemetry: Codable, Equatable, Sendable {
     /// the protocol version the device speaks
@@ -282,7 +329,9 @@ public struct Telemetry: Codable, Equatable, Sendable {
     public var system: SystemInfo
     /// The camera and the FPV stream.
     public var video: VideoInfo
-    public init(proto: Int, seq: Int, link: LinkInfo, motors: MotorsInfo, system: SystemInfo, video: VideoInfo) { self.proto = proto; self.seq = seq; self.link = link; self.motors = motors; self.system = system; self.video = video }
+    /// The pack as the power monitor on its positive lead sees it. Measurement only: nothing here has a say in the drive.
+    public var battery: BatteryInfo
+    public init(proto: Int, seq: Int, link: LinkInfo, motors: MotorsInfo, system: SystemInfo, video: VideoInfo, battery: BatteryInfo) { self.proto = proto; self.seq = seq; self.link = link; self.motors = motors; self.system = system; self.video = video; self.battery = battery }
 }
 
 /// GET /status: proto, then these groups.
@@ -301,7 +350,9 @@ public struct CarStatus: Codable, Equatable, Sendable {
     public var system: SystemInfo
     /// The camera and the FPV stream.
     public var video: VideoInfo
-    public init(proto: Int, link: LinkInfo, motors: MotorsInfo, radio: RadioInfo, storage: StorageInfo, system: SystemInfo, video: VideoInfo) { self.proto = proto; self.link = link; self.motors = motors; self.radio = radio; self.storage = storage; self.system = system; self.video = video }
+    /// The pack as the power monitor on its positive lead sees it. Measurement only: nothing here has a say in the drive.
+    public var battery: BatteryInfo
+    public init(proto: Int, link: LinkInfo, motors: MotorsInfo, radio: RadioInfo, storage: StorageInfo, system: SystemInfo, video: VideoInfo, battery: BatteryInfo) { self.proto = proto; self.link = link; self.motors = motors; self.radio = radio; self.storage = storage; self.system = system; self.video = video; self.battery = battery }
 }
 
 /// Slew-rate limit on acceleration. Rise is bounded, fall is instant, so stopping is never delayed.

@@ -98,22 +98,24 @@ static esp_err_t version_get(httpd_req_t *req) {
 static esp_err_t status_get(httpd_req_t *req) {
     telemetry_t t;
     telemetry_gather(&t, TELEM_STATUS);
-    char groups[384];
+    /* Sized for test_telemetry's widest frame (428 bytes with the datagram's own
+       prefix) — the groups alone were within a byte of the previous 384. */
+    char groups[512];
     if (telemetry_groups(groups, sizeof(groups), &t) < 0) {
         ESP_LOGE(TAG, "/status could not render its telemetry groups");
         return api_reply_error(req, "500 Internal Server Error", ERR_INTERNAL, "", "telemetry unavailable");
     }
-    /* telemetry_groups prints link, motors, system, video. The schema's status order is
-       link, motors, radio, storage, system, video — so the tail from the system
-       member on is split off, radio/storage go in before it, and video rides with it.
-       Splitting on the system group's opening key keeps all four groups spelled by the
-       one printer telemetry uses. */
+    /* telemetry_groups prints link, motors, system, video, battery. The schema's status
+       order is link, motors, radio, storage, system, video, battery — so the tail from
+       the system member on is split off, radio/storage go in before it, and video and
+       battery ride with it. Splitting on the system group's opening key keeps all five
+       groups spelled by the one printer telemetry uses. */
     char *sys = strstr(groups, "\"" KEY_GROUP_SYSTEM "\":{");
     if (!sys || sys == groups || sys[-1] != ',') {
         ESP_LOGE(TAG, "/status could not find the system group");
         return api_reply_error(req, "500 Internal Server Error", ERR_INTERNAL, "", "status malformed");
     }
-    sys[-1] = '\0';                       /* groups is now link,motors; sys is system,video */
+    sys[-1] = '\0';                       /* groups is now link,motors; sys is system,video,battery */
     char radio_fw[32];
     if (s_radio_fw[0]) snprintf(radio_fw, sizeof(radio_fw), "\"%s\"", s_radio_fw);
     else               snprintf(radio_fw, sizeof(radio_fw), "null");

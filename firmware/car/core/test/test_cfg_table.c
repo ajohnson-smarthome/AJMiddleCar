@@ -24,7 +24,7 @@ int main(void) {
     assert(RT_PORT == 4210);
     assert(RT_WATCHDOG_MS == 300);
     assert(RT_MAX_COMMAND == 96);
-    assert(RT_MAX_DATAGRAM == 320);
+    assert(RT_MAX_DATAGRAM == 512);
     assert(RT_MAX_COMMAND < RT_MAX_DATAGRAM);
     assert(RT_PROTO == 2);
     for (int i = 0; i < CFG_DOMAIN_COUNT; i++) assert(CFG_DOMAINS[i].n_fields <= CFG_MAX_FIELDS);

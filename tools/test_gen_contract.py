@@ -30,7 +30,7 @@ class TestSchema(unittest.TestCase):
     def test_rt_constants_and_vocabulary(self):
         rt = load()["rt"]
         self.assertEqual(rt["port"], 4210)
-        self.assertEqual(rt["max_datagram"], 320)
+        self.assertEqual(rt["max_datagram"], 512)
         self.assertEqual(rt["max_command"], 96)
         self.assertLess(rt["max_command"], rt["max_datagram"])
         self.assertEqual(rt["command_hz"], 10)
@@ -47,7 +47,8 @@ class TestSchema(unittest.TestCase):
 
     def test_groups(self):
         g = load()["groups"]
-        self.assertEqual(list(g), ["device", "link", "motors", "radio", "storage", "system", "video"])
+        self.assertEqual(list(g), ["device", "link", "motors", "radio", "storage", "system", "video",
+                                   "battery"])
         names = {k: [f["name"] for f in v["fields"]] for k, v in g.items()}
         self.assertEqual(names["device"], ["id", "fw", "build", "rolled_back"])
         self.assertEqual(names["link"], ["rx_hz", "rssi_dbm", "timeouts"])
@@ -55,6 +56,7 @@ class TestSchema(unittest.TestCase):
         self.assertEqual(names["radio"], ["fw", "expected", "state"])
         self.assertEqual(names["storage"], ["reset_at_boot"])
         self.assertEqual(names["system"], ["uptime_s", "free_heap"])
+        self.assertEqual(names["battery"], ["voltage_mv", "current_ma", "power_mw", "soc_pct", "state"])
         owner = next(f for f in g["motors"]["fields"] if f["name"] == "owner")
         self.assertEqual(owner["type"], "state")
         self.assertEqual(owner["values"], ["idle", "recovering", "console", "remote",
@@ -62,6 +64,16 @@ class TestSchema(unittest.TestCase):
         self.assertEqual(owner["swift"], "MotorsOwner")
         rssi = next(f for f in g["link"]["fields"] if f["name"] == "rssi_dbm")
         self.assertTrue(rssi.get("nullable"))
+        # The pack's numbers are null without a monitor (car/battery-monitor); the word
+        # never is — `absent` IS the word for that case.
+        for f in g["battery"]["fields"]:
+            if f["name"] == "state":
+                self.assertEqual((f["type"], f["swift"], f["values"]),
+                                 ("state", "BatteryState", ["ok", "low", "absent"]))
+                self.assertFalse(f.get("nullable"))
+            else:
+                self.assertEqual(f["type"], "int", f["name"])
+                self.assertTrue(f.get("nullable"), f["name"])
         for k, v in g.items():
             self.assertTrue(v["swift"], k)
             for f in v["fields"]:
@@ -73,9 +85,9 @@ class TestSchema(unittest.TestCase):
 
     def test_telemetry_and_status_pick_groups_that_exist(self):
         s = load()
-        self.assertEqual(s["telemetry"]["groups"], ["link", "motors", "system", "video"])
+        self.assertEqual(s["telemetry"]["groups"], ["link", "motors", "system", "video", "battery"])
         self.assertEqual(s["status"]["groups"],
-                         ["link", "motors", "radio", "storage", "system", "video"])
+                         ["link", "motors", "radio", "storage", "system", "video", "battery"])
         for name in s["telemetry"]["groups"] + s["status"]["groups"]:
             self.assertIn(name, s["groups"])
         self.assertEqual(s["telemetry"]["swift"], "Telemetry")
@@ -360,7 +372,8 @@ class TestCommonEmitters(unittest.TestCase):
         lines = [l for l in out.splitlines() if l.startswith("    public var ")]
         self.assertEqual(lines[0], "    public var proto: Int")
         self.assertEqual(lines[1], "    public var link: LinkInfo")
-        self.assertEqual(lines[-1], "    public var video: VideoInfo")
+        self.assertEqual(lines[-2], "    public var video: VideoInfo")
+        self.assertEqual(lines[-1], "    public var battery: BatteryInfo")
 
     def test_lround_is_half_away_from_zero(self):
         self.assertEqual(self.c.lround(900.5), 901)
@@ -394,7 +407,7 @@ class TestCEmitter(unittest.TestCase):
         self.assertIn("#define CFG_MAX_FIELDS 4", self.out)
 
     def test_rt_symbols(self):
-        for line in ("#define RT_PORT 4210", "#define RT_MAX_DATAGRAM 320", "#define RT_MAX_COMMAND 96",
+        for line in ("#define RT_PORT 4210", "#define RT_MAX_DATAGRAM 512", "#define RT_MAX_COMMAND 96",
                      "#define RT_PROTO 2", '#define RT_KEY_TYPE "type"', '#define RT_KEY_SESSION "session"',
                      '#define RT_KEY_THROTTLE "throttle"', '#define RT_KEY_TURN "turn"',
                      '#define RT_TYPE_HELLO_ACK "hello_ack"', '#define RT_TYPE_DRIVE "drive"',
@@ -418,6 +431,14 @@ class TestCEmitter(unittest.TestCase):
                      '#define KEY_VIDEO_DROPPED "dropped"'):
             self.assertIn(line, self.out.splitlines(), line)
         self.assertNotIn("vectors", self.out)
+
+    def test_battery_symbols(self):
+        for line in ('#define KEY_GROUP_BATTERY "battery"', '#define KEY_BATTERY_VOLTAGE_MV "voltage_mv"',
+                     '#define KEY_BATTERY_CURRENT_MA "current_ma"', '#define KEY_BATTERY_POWER_MW "power_mw"',
+                     '#define KEY_BATTERY_SOC_PCT "soc_pct"', '#define KEY_BATTERY_STATE "state"',
+                     '#define BATTERY_STATE_OK "ok"', '#define BATTERY_STATE_LOW "low"',
+                     '#define BATTERY_STATE_ABSENT "absent"', "#define BATTERY_STATE_COUNT 3"):
+            self.assertIn(line, self.out.splitlines(), line)
 
     def test_groups_envelope_errors_paths_and_calibration(self):
         for line in ('#define KEY_GROUP_MOTORS "motors"', '#define KEY_MOTORS_OWNER "owner"',
@@ -461,14 +482,20 @@ class TestSwiftEmitter(unittest.TestCase):
         self.assertIn("    public var rssi_dbm: Int?", self.lines())
         self.assertIn("public struct Telemetry: Codable, Equatable, Sendable {", self.out)
         self.assertIn("    public init(proto: Int, seq: Int, link: LinkInfo, motors: MotorsInfo, "
-                      "system: SystemInfo, video: VideoInfo) { self.proto = proto; self.seq = seq; "
-                      "self.link = link; self.motors = motors; self.system = system; "
-                      "self.video = video }", self.lines())
+                      "system: SystemInfo, video: VideoInfo, battery: BatteryInfo) { self.proto = proto; "
+                      "self.seq = seq; self.link = link; self.motors = motors; self.system = system; "
+                      "self.video = video; self.battery = battery }", self.lines())
         self.assertIn("public struct CarStatus: Codable, Equatable, Sendable {", self.out)
         self.assertIn("    public var radio: RadioInfo", self.lines())
         self.assertIn("    public var fw: String?", self.lines())   # RadioInfo.fw is nullable
         self.assertIn("public enum VideoState: Equatable, Sendable, Codable {", self.out)
         self.assertIn("    public var video: VideoInfo", self.lines())
+        self.assertIn("public enum BatteryState: Equatable, Sendable, Codable {", self.out)
+        self.assertIn("    case absent", self.lines())
+        self.assertIn("public struct BatteryInfo: Codable, Equatable, Sendable {", self.out)
+        self.assertIn("    public var soc_pct: Int?", self.lines())      # null without a monitor
+        self.assertIn("    public var state: BatteryState", self.lines())
+        self.assertIn("    public var battery: BatteryInfo", self.lines())
 
     def test_config_structs(self):
         self.assertIn("public struct Wheel: Codable, Equatable, Sendable {", self.out)
@@ -533,7 +560,8 @@ class TestPythonEmitter(unittest.TestCase):
         self.assertEqual(m.CONFIG_PATH, "/config")
         self.assertEqual(list(m.DOMAINS), ["ramp", "trim", "recovery", "wheel", "chassis", "video"])
         self.assertEqual(m.DOMAINS["wheel"]["defaults"]["gear_ratio"], 900)
-        self.assertEqual(m.TELEMETRY_GROUPS, ["link", "motors", "system", "video"])
+        self.assertEqual(m.TELEMETRY_GROUPS, ["link", "motors", "system", "video", "battery"])
+        self.assertEqual(m.STATUS_GROUPS[-1], "battery")
         self.assertEqual(m.GROUPS["motors"]["fields"][2]["values"][3], "remote")
         self.assertEqual(m.CALIBRATION["corners"][0], "front_left")
         self.assertIn("busy", m.ERRORS)

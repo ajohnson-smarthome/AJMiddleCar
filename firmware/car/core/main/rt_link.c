@@ -232,8 +232,9 @@ static void check_idle(void) {
 
 static void push_telemetry(int sock) {
     if (!s_ses.have_owner) return;
-    /* The wide direction of the wire: a telemetry frame runs to ~160 bytes, which is
-       why the schema's receive cap (RT_MAX_DATAGRAM) is not the command cap. */
+    /* The wide direction of the wire: a telemetry frame runs to ~300 bytes (428 at its
+       widest — test_telemetry.c), which is why the schema's receive cap (RT_MAX_DATAGRAM)
+       is not the command cap. */
     char buf[RT_MAX_DATAGRAM];
     int n = telemetry_json(buf, sizeof(buf));
     if (n <= 0) return;

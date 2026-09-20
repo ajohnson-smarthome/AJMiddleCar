@@ -59,7 +59,9 @@ struct GalleryView: View {
                           link: LinkInfo(rx_hz: 10, rssi_dbm: rssi, timeouts: wdtTrips),
                           motors: MotorsInfo(bus: busOk ? .ok : .down, calibrated: calibrated, owner: owner),
                           system: SystemInfo(uptime_s: 3847, free_heap: 131072),
-                          video: VideoInfo(state: .idle, fps: 0, kbps: 0, dropped: 0))
+                          video: VideoInfo(state: .idle, fps: 0, kbps: 0, dropped: 0),
+                          battery: BatteryInfo(voltage_mv: nil, current_ma: nil, power_mw: nil,
+                                               soc_pct: nil, state: .absent))
         return CarLink.preview(.live(t), fw: fw, radio: .known(RadioInfo(fw: "3.0.6", expected: "3.0.6", state: .ok)))
     }
 
