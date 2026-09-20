@@ -383,11 +383,17 @@ the fisheye's 4:3 sensor frame to its middle `video.height` rows at the encoder'
 the wire, and the app only trims the sides on a screen squatter than 16:9 — and every
 instrument keeps to its edges — nothing sits in the middle of the picture with a scrim behind
 it. The car's `video.enabled` decides only whether the window is live; no instrument moves on
-it. The top row is the link on the left and, on the right, the scheme toggle plus `ControlBar`
-— one capsule of three segments, tricks · video · settings, with the tricks card opening
-below it; there is no tricks button anywhere else. `DriveLayout` (pure, host-tested) is where
-the rest goes, derived from the screen and its safe area, not from one model's numbers;
-`openspec/specs/app/drive-hud` says why each piece is where it is.
+it. While the window is live, the top row stands on a **band** (`HudBand.height`, 56 pt) of the
+theme's `bg` across the whole screen with a 1 pt `line` along its bottom edge — the one ground
+the row has over a light frame or a dark one; the warnings sit under that line. Without a
+picture there is no band, and the row does not move; the only gradient left is the one from
+the bottom edge. The top row is the link on the left and, on the right, the scheme toggle plus
+`ControlBar` — one capsule of three segments, tricks · video · settings, with the tricks card
+opening below it; there is no tricks button anywhere else. The toggle and the bar are two
+pills of one height and one radius (`HudPill`, 32 / 10), bodies their own; every glyph in the
+bar is `text`, and the tricks ✦ turns `warn` only while a trick runs. `DriveLayout` (pure,
+host-tested) is where the rest goes, derived from the screen and its safe area, not from one
+model's numbers; `openspec/specs/app/drive-hud` says why each piece is where it is.
 
 Pure Swift modules are host-tested with `swiftc` directly — no XCTest runtime needed.
 

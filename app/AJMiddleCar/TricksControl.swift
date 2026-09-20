@@ -7,7 +7,9 @@ import SwiftUI
 /// side with room.
 /// Presentational — the parent owns playback state and passes `running` + `startedAt`.
 /// Segment: idle ✦ (toggle popover) · open ✕ (close) · running ⏹ (stop, with a time-progress
-/// ring around the glyph).
+/// ring around the glyph). The glyph is `text`, like the bar's other two; only a running trick
+/// turns it — and its ring — `warn`: an idle ✦ in the accent colour read as a trick already
+/// under way (`app/drive-hud`, «Бар в покое»).
 struct TricksControl: View {
     let palette: Palette
     let running: Trick?
@@ -40,7 +42,7 @@ struct TricksControl: View {
         .onChange(of: running?.id) { _, _ in if running != nil { open = false } }
     }
 
-    private var tint: Color { isRunning ? p.warn : p.accent }
+    private var tint: Color { isRunning ? p.warn : p.text }
     private var icon: String { isRunning ? "stop.fill" : ((open || debugOpen) ? "xmark" : "sparkles") }
 
     /// The whole slot is the button — a tap anywhere in the segment counts, not only on the
