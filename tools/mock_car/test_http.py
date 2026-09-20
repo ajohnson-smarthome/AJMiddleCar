@@ -40,8 +40,8 @@ from generated import CALIBRATION, CONFIG_PATH, DOMAINS, ENDPOINTS, STATUS_GROUP
 import state                                     # noqa: E402
 from generated import CALIBRATION, CONFIG_PATH, DOMAINS, ENDPOINTS, ENVELOPE   # noqa: E402
 from rt_link import Impairment, RTLink           # noqa: E402
-from state import (BUS_DOWN, BUS_OK, RADIO_EXPECTED, RADIO_MISMATCH, RADIO_OK,   # noqa: E402
-                   RADIO_UNAVAILABLE, VIDEO_IDLE, VIDEO_OFF, CarState)
+from state import (BATTERY_ABSENT, BATTERY_OK, BUS_DOWN, BUS_OK, RADIO_EXPECTED,   # noqa: E402
+                   RADIO_MISMATCH, RADIO_OK, RADIO_UNAVAILABLE, VIDEO_IDLE, VIDEO_OFF, CarState)
 from test_state import synthetic_image           # noqa: E402
 
 OLD_FW = "v1.0+9000"
@@ -230,9 +230,12 @@ class TestDegradationFlags(Served):
         self.assertEqual(groups["radio"]["state"], RADIO_OK)
         self.assertIs(groups["storage"]["reset_at_boot"], False)
         self.assertEqual(off.write_fail, set())
+        self.assertEqual((groups["battery"]["state"], groups["battery"]["soc_pct"]), (BATTERY_OK, 80))
+        self.assertEqual(off.battery.drain_x, 1.0)
         args = mock_car.parser().parse_args(
             ["--bus", "down", "--camera", "off", "--radio", "unavailable", "--reset-at-boot",
-             "--write-fail", "ramp", "--write-fail", "calibration", "--reboot-s", "0"])
+             "--write-fail", "ramp", "--write-fail", "calibration", "--reboot-s", "0",
+             "--battery", "absent"])
         on = mock_car.car_from_args(args, now=0.0)
         groups = on.status_groups(0, STATUS_GROUPS)
         self.assertEqual(groups["motors"]["bus"], BUS_DOWN)
@@ -241,12 +244,21 @@ class TestDegradationFlags(Served):
         self.assertIs(groups["storage"]["reset_at_boot"], True)
         self.assertEqual(on.write_fail, {"ramp", "calibration"})
         self.assertEqual(args.reboot_s, 0.0)
+        self.assertEqual(groups["battery"]["state"], BATTERY_ABSENT)
+        self.assertEqual(set(mock_car.degradations(args)),
+                         {"bus down", "camera off", "radio unavailable", "reset-at-boot",
+                          "write-fail ramp", "write-fail calibration", "reboot 0 s", "battery absent"})
+        pack = mock_car.car_from_args(
+            mock_car.parser().parse_args(["--battery-soc", "25", "--battery-drain-x", "600"]), now=0.0)
+        self.assertEqual(pack.status_groups(0, STATUS_GROUPS)["battery"]["soc_pct"], 25)
+        self.assertEqual(pack.battery.drain_x, 600.0)
         self.assertIsNone(mock_car.parser().parse_args([]).reboot_s,
                           "unset: the link falls back to rt_link.REBOOT_QUIET_S at reboot time")
 
     def test_the_parser_refuses_a_word_the_contract_does_not_have(self):
         for bad in (["--bus", "broken"], ["--radio", "missing"], ["--camera", "no"],
-                    ["--write-fail", "wheels"], ["--reboot-s", "-1"]):
+                    ["--write-fail", "wheels"], ["--reboot-s", "-1"], ["--battery", "low"],
+                    ["--battery-soc", "101"], ["--battery-soc", "-1"], ["--battery-drain-x", "-1"]):
             with self.assertRaises(SystemExit, msg=bad), contextlib.redirect_stderr(io.StringIO()):
                 mock_car.parser().parse_args(bad)
 

@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import rt_link                                                       # noqa: E402
 from rt_link import Impairment, RTLink                                # noqa: E402
-from state import SID_MAX_CHARS, CarState                             # noqa: E402
+from state import SID_MAX_CHARS, Battery, CarState                    # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -103,6 +103,16 @@ class Mirrors(unittest.TestCase):
         copy = literal(HERE / "mock_car.py", r"^OTA_MIN_BYTES\s*=\s*(\d+)\b", int)
         src = literal(MAIN / "ota_api.c", r"content_len\s*<\s*(\d+)\b", int)
         self.mirror("OTA_MIN_BYTES", copy, src, "ota_api.c content_len <")
+
+    def test_pack_constants(self):
+        """The pack is not on the wire, so the contract has no key for it: the mock's model
+        drains at the firmware's capacity and says `low` at the firmware's two thresholds
+        (battery_pack.h), or the bar in the simulator tells a story the car's does not."""
+        for name, copy in (("BATTERY_CAPACITY_MAH", Battery.CAPACITY_MAH),
+                           ("BATTERY_LOW_PCT", Battery.LOW_PCT),
+                           ("BATTERY_LOW_CLEAR_PCT", Battery.LOW_CLEAR_PCT)):
+            src = define(name, MAIN / "battery_pack.h", int)
+            self.mirror(name, copy, src, f"battery_pack.h {name}")
 
     def test_reboot_gap_outlasts_the_app_stall(self):
         """The mock's simulated reboot must exceed the app's stall timeout, or the app never

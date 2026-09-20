@@ -282,6 +282,75 @@ def parse_frame(data, max_command=None):
     return out
 
 
+class Battery:
+    """The pack, as the mock's monitor would read it — `car/battery-monitor` in arithmetic.
+
+    Not a simulated INA260: like the other degradations, a state and what it implies on
+    the wire. The current follows the command the actuator holds (the car's own idle draw
+    plus up to 8 A at full throttle), the voltage follows the percent and sags under the
+    current, the power is their product, and the percent falls by coulombs at the
+    firmware's capacity — the numbers the app's badge is drawn from, moving the way the
+    bench's do. `drain_x` is the rehearsal's knob: at x1 the pack takes the real hour to
+    empty, and nobody watches a bar for an hour. `absent` is the monitor missing, not the
+    pack: the group reads `absent` with every number null, and nothing else changes.
+
+    `low` is the firmware's rule: in at LOW_PCT, out only at LOW_CLEAR_PCT. The mock's
+    pack only ever drains, so the way back up is for a test that writes `soc` directly.
+    """
+
+    # Mirrored by hand from firmware/car/core/main/battery_pack.h — a pack is not on the
+    # wire, so the contract has no key for it; test_mirrors.py pins the copies.
+    CAPACITY_MAH = 9000       # battery_pack.h BATTERY_CAPACITY_MAH
+    LOW_PCT = 20              # battery_pack.h BATTERY_LOW_PCT
+    LOW_CLEAR_PCT = 23        # battery_pack.h BATTERY_LOW_CLEAR_PCT
+
+    # The model's own numbers (`shared/mock-and-conformance`): a car at rest draws IDLE_MA,
+    # full throttle adds FULL_THROTTLE_MA; the rest voltage runs from EMPTY_MV at 0 % to
+    # EMPTY_MV + SPAN_MV at 100 %, less SAG_MV_PER_A for every ampere drawn.
+    IDLE_MA = 300
+    FULL_THROTTLE_MA = 8000
+    EMPTY_MV = 11000
+    SPAN_MV = 1600
+    SAG_MV_PER_A = 50
+    DEFAULT_SOC = 80          # `--battery-soc` unless said otherwise
+
+    def __init__(self, soc=DEFAULT_SOC, absent=False, drain_x=1.0):
+        self.soc = float(soc)             # percent, unrounded — the coulombs accumulate here
+        self.absent = absent
+        self.drain_x = float(drain_x)
+        self.low = False
+        self.ma = self.mv = self.mw = 0
+        self.step(0.0, 0.0)               # a reading before the first tick: at rest
+
+    @property
+    def soc_pct(self):
+        """The percent on the wire: nearest, halves up — battery_soc.c's mams_to_pct."""
+        return int(self.soc + 0.5)
+
+    def step(self, dt, throttle):
+        """`dt` seconds under `throttle` (the actuator's, so a retreat draws like a drive
+        and a bus that is down draws nothing past idle): coulombs, then the reading."""
+        self.ma = self.IDLE_MA + int(self.FULL_THROTTLE_MA * abs(throttle) + 0.5)
+        self.soc -= self.ma * dt / 3600.0 / self.CAPACITY_MAH * 100.0 * self.drain_x
+        self.soc = max(0.0, min(100.0, self.soc))
+        self.mv = int(self.EMPTY_MV + self.SPAN_MV * self.soc / 100.0
+                      - self.SAG_MV_PER_A * self.ma / 1000.0 + 0.5)
+        self.mw = self.mv * self.ma // 1000
+        pct = self.soc_pct
+        if pct <= self.LOW_PCT:
+            self.low = True
+        elif pct >= self.LOW_CLEAR_PCT:
+            self.low = False
+
+    def group(self):
+        """The `battery` group's values, as telemetry and /status both carry them."""
+        if self.absent:
+            return {"voltage_mv": None, "current_ma": None, "power_mw": None, "soc_pct": None,
+                    "state": BATTERY_ABSENT}
+        return {"voltage_mv": self.mv, "current_ma": self.ma, "power_mw": self.mw,
+                "soc_pct": self.soc_pct, "state": BATTERY_LOW if self.low else BATTERY_OK}
+
+
 class CarState:
     """Config, the control watchdog, the retreat, and everything telemetry reports."""
 
@@ -296,15 +365,18 @@ class CarState:
     CALIB_HOLD_MS = 600    # firmware/car/core/main/link.h LINK_HOLD_CALIB_MS: one pulse
 
     def __init__(self, device=DEVICE, fw="v1.0+9000", now=0.0, bus_ok=True, camera=True,
-                 radio=RADIO_OK, nvs_wiped=False, write_fail=()):
-        """The last five are the degradations (AJM-116): states the car can boot into and
-        the app has to show, each off by default. A degradation is a state and what it
-        implies on the wire, never the cause behind it: `bus_ok=False` is `motors.bus:
-        down` and wheels that do not turn, not a simulated I2C; `camera=False` is
-        `video.state: off` and `view` ignored; `radio` is the word in `radio.state`;
-        `nvs_wiped` is `storage.reset_at_boot` over a car that starts on the contract's
-        defaults anyway; `write_fail` names the domains (and/or `calibration`) whose next
-        changing write answers `write_failed` — once each."""
+                 radio=RADIO_OK, nvs_wiped=False, write_fail=(), battery_soc=Battery.DEFAULT_SOC,
+                 battery_absent=False, battery_drain_x=1.0):
+        """`bus_ok` through `write_fail` are the degradations (AJM-116): states the car
+        can boot into and the app has to show, each off by default. A degradation is a
+        state and what it implies on the wire, never the cause behind it: `bus_ok=False`
+        is `motors.bus: down` and wheels that do not turn, not a simulated I2C;
+        `camera=False` is `video.state: off` and `view` ignored; `radio` is the word in
+        `radio.state`; `nvs_wiped` is `storage.reset_at_boot` over a car that starts on
+        the contract's defaults anyway; `write_fail` names the domains (and/or
+        `calibration`) whose next changing write answers `write_failed` — once each.
+        The `battery_*` three are the pack (`Battery`): where it starts, whether the
+        monitor is there at all, and how much faster than life it drains."""
         self.device = device
         self.fw = fw
         self.rollback = False    # the previous "OTA" was rolled back — /status mirrors it
@@ -343,6 +415,8 @@ class CarState:
         self.video_fps = 0
         self.video_kbps = 0
         self.video_dropped = 0
+        self.battery = Battery(battery_soc, battery_absent, battery_drain_x)
+        self._battery_at = now         # the pack's last step, on the telemetry beat
 
     # ---- what the outside reads ------------------------------------------------
 
@@ -564,6 +638,14 @@ class CarState:
             self._release(OWNER_RECOVERING)
             line = "recover: retrace exhausted — stopped"
         self._expire(now)
+        # The pack steps on the telemetry beat — the monitor's own period on the car — from
+        # the command the actuator holds after everything above has had its say: a retreat
+        # draws like a drive, a lapsed grant draws idle. Here and not in the push, because
+        # the pack drains with no session watching, and not in `status_groups`, because a
+        # /status poll must read the pack, not age it (the same reason as `bump=False`).
+        if now - self._battery_at >= 1.0 / RT["telemetry_hz"]:
+            self.battery.step(now - self._battery_at, self._t)
+            self._battery_at = now
         return line
 
     def _trip(self, now):
@@ -814,10 +896,7 @@ class CarState:
             "system": {"uptime_s": int(self._now - self._started), "free_heap": self.heap},
             "video": {"state": self.video_state, "fps": self.video_fps, "kbps": self.video_kbps,
                       "dropped": self.video_dropped},
-            # No pack model yet (AJM-181 brings it): the car without a monitor, exactly as
-            # telemetry.c reports it until its own driver lands — `absent`, every number null.
-            "battery": {"voltage_mv": None, "current_ma": None, "power_mw": None, "soc_pct": None,
-                        "state": BATTERY_ABSENT},
+            "battery": self.battery.group(),
         }
         return {g: {f["name"]: values[g][f["name"]] for f in GROUPS[g]["fields"]} for g in groups}
 
