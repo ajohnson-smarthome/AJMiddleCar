@@ -158,6 +158,24 @@ are the closing sweep, run once stage 4 itself passes.
 
 _Record anything surprising here — it is the raw material for the next spec._
 
+### 254 commits of review fixes went on both boards with no hands (2026-09-20)
+
+v1.0+1133 — the first release since 879 on the 15th, carrying the logic-review batch
+(AJM-91…139), the mock's degradation flags and the drive-screen guards — cut from main and
+put on both boards by the simulator through the dongle: `xcrun simctl launch booted
+com.adamjohnson.ajmiddlecar -viaDongle` at 16:05:54, the dongle silent on its USB address
+from 16:06:12 while it took the image and rebooted, both boards answering `/version` with
+`v1.0+1133` and the drive screen showing the picture by 16:07:20 — under 90 s for the whole
+ladder including two OTAs. Afterwards: dongle `wifi.connected` at −46 dBm on channel 1, relay
+10 Hz to the car and 5 Hz back, one video session at 2.58 Mbit/s with 0 dropped; car
+`motors.bus:"ok"`, calibrated, `radio.state:"ok"` 3.0.6, `video.streaming` 23 fps at
+2.5–2.7 Mbit/s, `link.timeouts` 0, `link.rx_hz` 10.
+
+One thing worth knowing about that last number: `/status` measures `rx_hz` between two of
+*its own* polls, and only when they are less than 10 s apart — the first poll, or a poll after
+a long pause, reads 0 while the dongle is plainly relaying 10 Hz. Poll twice, three seconds
+apart, before believing a zero.
+
 ### A quarter of every frame was for nobody (2026-09-15)
 
 v1.0+879, put on both boards by the simulator through the dongle (the whole ladder: adapter
