@@ -44,6 +44,9 @@ local-network privacy, interface pinning — is exercised against the real dongl
 | `--reset-at-boot` | `storage.reset_at_boot: true` — this boot wiped the settings and the calibration (below) |
 | `--write-fail <domain>` / `--write-fail calibration` | the first changing write of that domain, or of the table, answers `500 write_failed` and is rolled back; repeatable (below) |
 | `--reboot-s N` | how long every port is silent after a flash; default `rt_link.REBOOT_QUIET_S` (4 s), `0` is no silence |
+| `--battery absent` | `battery.state: absent` — no power monitor on the bus, every number of the group `null` (below) |
+| `--battery-soc N` | where the pack starts, 0…100, default 80; 20 or less is `battery.state: low` (below) |
+| `--battery-drain-x N` | drain N times faster than life, default 1; `600` is 15 % a second at full throttle (below) |
 
 ## Degradations
 
@@ -83,12 +86,39 @@ car shows it, per the specs `car/status-and-version`, `car/actuator-arbiter`,
 - `--reboot-s N` — the silence after `/ota` on all three ports, `rt_link.REBOOT_QUIET_S`
   (4 s) unless said otherwise. `0` is the escape hatch for a sweep that needs REST back
   before the app's stall guard would have fired.
+- `--battery absent` — `battery.state: absent` and `null` in `voltage_mv`, `current_ma`,
+  `power_mw` and `soc_pct`, in telemetry and `/status` alike: the power monitor did not
+  answer, the car drives on, and the app draws an empty badge with a dash and no warning
+  (`car/battery-monitor`). Everything else is as without the flag.
 
 The banner names whichever are on (`degraded  bus down, camera off`). Tests:
 `test_state.py::TestDegradation` for what each does to the state, `test_video.py::NoSensor`
 for the ignored `view`, `test_rtlink.py` for the reboot window, and
 `test_http.py::TestDegradationFlags` for the flags reaching the state, the status codes,
-and the six-group `/status`.
+and the seven-group `/status`.
+
+## The pack
+
+The `battery` group is a model, not a constant (`state.Battery`, `shared/mock-and-conformance`):
+the current is the car's idle draw, 300 mA, plus up to 8 A in proportion to `|throttle|` of
+the command the actuator holds — so a retreat draws like a drive, and a bus that is `down`
+draws idle whatever the stream asks; the voltage runs from 11.0 V at 0 % to 12.6 V at 100 %
+at rest and sags 50 mV per ampere; the power is their product; the percent falls by
+coulombs at the firmware's capacity (`battery_pack.h`'s 9000 mAh — `test_mirrors.py` pins
+the copy, with the two `low` thresholds); `state` is `low` from 20 % and `ok` again only
+from 23 %, the firmware's hysteresis. The pack steps on the telemetry beat (`CarState.tick`),
+whether or not anyone is watching, and a `/status` poll reads it without ageing it.
+
+- `--battery-soc N` — where it starts, default 80. `--battery-soc 15` is the low-battery
+  screen from the first frame.
+- `--battery-drain-x N` — how much faster than life it drains, default 1: at x1 full throttle
+  takes the pack down about 1.5 % a minute, which is the bench, not a bar anyone watches.
+  `--battery-soc 25 --battery-drain-x 600` under full throttle is `low` within a second and
+  an empty pack in seven; `x60` is the whole bar in a minute at full throttle; `x6` is `low`
+  from 25 % in half a minute — pick the pace the rehearsal needs.
+
+Tests: `test_state.py::TestDegradation` — the spec's «Пак тает под газом» and «Без монитора»,
+the hysteresis, the pace at x1.
 
 ## Video
 

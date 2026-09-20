@@ -26,10 +26,12 @@ so it is repeatable only for a run driven the same way from the same moment.
     python3 mock_car.py --bus down            # a car whose PWM boards never came up
 
 The degradation flags — `--bus down`, `--camera off`, `--radio mismatch|unavailable`,
-`--reset-at-boot`, `--write-fail <domain|calibration>`, `--reboot-s N` — are states the
-car can boot into and the app has to show (AJM-116). Each is a field of `CarState` that
-the places already reporting it read, all off by default; `car_from_args` is where the
-flags become state.
+`--reset-at-boot`, `--write-fail <domain|calibration>`, `--reboot-s N`, `--battery absent`
+— are states the car can boot into and the app has to show (AJM-116). Each is a field of
+`CarState` that the places already reporting it read, all off by default; `car_from_args`
+is where the flags become state. The pack itself is a model (`state.Battery`): `--battery-soc N`
+is where it starts and `--battery-drain-x N` how much faster than life it drains, for a
+bar someone can watch melt.
 """
 import argparse
 import asyncio
@@ -44,8 +46,9 @@ from aiohttp import web
 from generated import (CALIBRATION, CONFIG_PATH, DEVICE, DOMAINS, ENDPOINTS, ENVELOPE,
                        PROTO, RT, STATUS_GROUPS, VIDEO)
 from rt_link import REBOOT_QUIET_S, Impairment, RTLink, service_loop
-from state import (BUS_DOWN, BUS_OK, RADIO_MISMATCH, RADIO_OK, RADIO_UNAVAILABLE, CarState,
-                   build_number, image_refusal, parse_image_version)
+from state import (BATTERY_ABSENT, BATTERY_OK, BUS_DOWN, BUS_OK, RADIO_MISMATCH, RADIO_OK,
+                   RADIO_UNAVAILABLE, Battery, CarState, build_number, image_refusal,
+                   parse_image_version)
 from video import VideoLink
 
 # A flash is the one REST call that takes real time; the mock spends it so a client's
@@ -384,7 +387,8 @@ def car_from_args(args, now):
     that a mock started with no flags — `tools/test-all.sh`'s — is the healthy car."""
     car = CarState(device=args.device, now=now, bus_ok=args.bus == BUS_OK,
                    camera=args.camera == "on", radio=args.radio, nvs_wiped=args.reset_at_boot,
-                   write_fail=args.write_fail or ())
+                   write_fail=args.write_fail or (), battery_soc=args.battery_soc,
+                   battery_absent=args.battery == BATTERY_ABSENT, battery_drain_x=args.battery_drain_x)
     car.rssi = args.rssi
     return car
 
@@ -405,6 +409,12 @@ def degradations(args):
         on.append(f"write-fail {name}")
     if args.reboot_s is not None:
         on.append(f"reboot {args.reboot_s:g} s")
+    if args.battery != BATTERY_OK:
+        on.append(f"battery {args.battery}")
+    if args.battery_soc != Battery.DEFAULT_SOC:
+        on.append(f"battery-soc {args.battery_soc:g}")
+    if args.battery_drain_x != 1.0:
+        on.append(f"battery-drain-x {args.battery_drain_x:g}")
     return on
 
 
@@ -449,6 +459,13 @@ def nonnegative(text):
     v = float(text)
     if v < 0:
         raise argparse.ArgumentTypeError("must be 0 or more")
+    return v
+
+
+def percent(text):
+    v = float(text)
+    if not 0 <= v <= 100:
+        raise argparse.ArgumentTypeError("must be 0..100")
     return v
 
 
@@ -505,6 +522,17 @@ def parser():
                    help=f"how long every port is silent after a flash (default {REBOOT_QUIET_S:g}, "
                         "rt_link.py's REBOOT_QUIET_S, longer than the app's stall timeout); "
                         "0 is no silence at all")
+    p.add_argument("--battery", choices=(BATTERY_OK, BATTERY_ABSENT), default=BATTERY_OK,
+                   help="`absent` is no power monitor on the bus: battery.state absent, every "
+                        "number of the group null, the car drives on; `low` is not a flag — "
+                        "start the pack under the threshold with --battery-soc")
+    p.add_argument("--battery-soc", type=percent, default=Battery.DEFAULT_SOC, metavar="PCT",
+                   help=f"where the pack starts, 0..100 (default {Battery.DEFAULT_SOC}); "
+                        f"{Battery.LOW_PCT} or less is battery.state low")
+    p.add_argument("--battery-drain-x", type=nonnegative, default=1.0, metavar="N",
+                   help="drain N times faster than life (default 1: full throttle empties the "
+                        f"{Battery.CAPACITY_MAH} mAh pack in about an hour); 600 is 15 %% a second "
+                        "at full throttle, for a bar someone can watch melt")
     return p
 
 

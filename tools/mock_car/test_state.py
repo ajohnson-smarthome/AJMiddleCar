@@ -14,11 +14,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from generated import (CALIBRATION, DOMAINS, GROUPS, PROTO, RT, STATUS_GROUPS,   # noqa: E402
                        TELEMETRY_GROUPS)
-from state import (BATTERY_ABSENT, BUS_DOWN, BUS_OK, CHIP_ID, OWNER_CALIBRATION, OWNER_CONSOLE,   # noqa: E402
-                   OWNER_IDLE, OWNER_RECOVERING, OWNER_REMOTE, OWNER_SAFE_STOP, OWNER_UPDATE,
-                   RADIO_EXPECTED, RADIO_MISMATCH, RADIO_OK, RADIO_UNAVAILABLE, VIDEO_IDLE,
-                   VIDEO_OFF, CarState, build_number, clamp_axis, image_refusal, number,
-                   parse_frame, parse_image_version, seq_is_newer, valid_seq, valid_sid)
+from state import (BATTERY_ABSENT, BATTERY_LOW, BATTERY_OK, BUS_DOWN, BUS_OK, CHIP_ID,   # noqa: E402
+                   OWNER_CALIBRATION, OWNER_CONSOLE, OWNER_IDLE, OWNER_RECOVERING, OWNER_REMOTE,
+                   OWNER_SAFE_STOP, OWNER_UPDATE, RADIO_EXPECTED, RADIO_MISMATCH, RADIO_OK,
+                   RADIO_UNAVAILABLE, VIDEO_IDLE, VIDEO_OFF, Battery, CarState, build_number,
+                   clamp_axis, image_refusal, number, parse_frame, parse_image_version,
+                   seq_is_newer, valid_seq, valid_sid)
 
 DEADLINE_S = RT["watchdog_ms"] / 1000.0
 K, T = RT["keys"], RT["types"]
@@ -32,6 +33,19 @@ def stream(car, t, y, start, count, hz=None):
         car.note_command(t, y, now)
         now += step
     return now - step        # the timestamp of the last frame
+
+
+def hold(car, t, start, seconds):
+    """Hold throttle `t` for `seconds` of model time on the car's own clock: a command at
+    the contract's rate and a tick with each, so the pack steps as it would under
+    `service_loop`. Returns the time the hold ended."""
+    step = 1.0 / RT["command_hz"]
+    now = start
+    while now < start + seconds:
+        car.note_command(t, 0.0, now)
+        car.tick(now)
+        now += step
+    return now
 
 
 class TestSequence(unittest.TestCase):
@@ -973,17 +987,121 @@ class TestDegradation(unittest.TestCase):
         for g in STATUS_GROUPS:
             self.assertEqual(list(groups[g]), [f["name"] for f in GROUPS[g]["fields"]], g)
 
-    def test_battery_is_absent_with_null_numbers_in_telemetry_and_status(self):
-        """`car/battery-monitor` → «Монитора нет — absent, числа null»: the group is on
-        the wire in both places, last, and reads the same in each. No pack model yet — the
-        monitor's absence is the one state the wire has for a car with nothing to report."""
+    def test_the_pack_is_last_in_both_places_and_reads_the_same_in_each(self):
+        """`car/status-and-version` → «Один смысл в двух местах»: the group is on the
+        wire in telemetry and in /status, last in both, the same numbers in each."""
         car = CarState(now=0.0)
+        self.assertEqual(list(car.telemetry(0))[-1], "battery")
+        self.assertEqual(list(car.status_groups(0, STATUS_GROUPS))[-1], "battery")
+        self.assertEqual(car.telemetry(0)["battery"], car.status_groups(0, STATUS_GROUPS)["battery"])
+
+    def test_the_default_pack_is_the_spec_s_numbers_at_rest(self):
+        """`shared/mock-and-conformance` → the pack model: 80 % unless `--battery-soc` says
+        otherwise, 300 mA at rest, 12.6 V full and 11.0 V empty at rest, 50 mV per ampere
+        of sag, power their product — the numbers the badge in the app is drawn from."""
+        battery = CarState(now=0.0).telemetry(0)["battery"]
+        self.assertEqual(battery["state"], BATTERY_OK)
+        self.assertEqual(battery["soc_pct"], 80)
+        self.assertEqual(battery["current_ma"], 300)
+        full = CarState(now=0.0, battery_soc=100).telemetry(0)["battery"]
+        self.assertAlmostEqual(full["voltage_mv"], 12600, delta=20)
+        empty = CarState(now=0.0, battery_soc=0).telemetry(0)["battery"]
+        self.assertAlmostEqual(empty["voltage_mv"], 11000, delta=20)
+        self.assertEqual(full["power_mw"], full["voltage_mv"] * full["current_ma"] // 1000)
+        for group in (battery, full, empty):
+            for name in ("voltage_mv", "current_ma", "power_mw", "soc_pct"):
+                self.assertIsInstance(group[name], int, name)
+
+    def test_the_pack_drains_under_throttle_and_goes_low(self):
+        """`shared/mock-and-conformance` → «Пак тает под газом»: `--battery-soc 25
+        --battery-drain-x 600`, throttle held at 1.0 — the current is about 8300 mA, the
+        percent falls by coulombs and within a minute of model time reaches 20, which is
+        `low`; with the throttle released the current is about 300 and the percent all
+        but stands still. Coulombs at the firmware's capacity: 8.3 A is 92 % an hour, so
+        x600 is 15 % a second — the multiplier is the rehearsal's knob, since nobody
+        watches a bar for the real hour, and at x1 (the default) an hour is what it takes."""
+        car = CarState(now=0.0, battery_soc=25, battery_drain_x=600)
+        car.adopt_session(0.0)
+        self.assertEqual(car.telemetry(0)["battery"]["soc_pct"], 25)
+        now = hold(car, 1.0, 0.0, 0.3)          # past one telemetry beat: one step under load
+        battery = car.telemetry(0)["battery"]
+        self.assertAlmostEqual(battery["current_ma"], 8300, delta=50)
+        self.assertLess(battery["soc_pct"], 25, "a step of full throttle at x600 shows")
+        # Sag under load: the rest voltage less 50 mV per ampere — 8.3 A costs 415 mV.
+        self.assertLess(battery["voltage_mv"], CarState(now=0.0, battery_soc=25).telemetry(0)
+                        ["battery"]["voltage_mv"] - 400)
+        pct_seen, went_low_at = [battery["soc_pct"]], None
+        while now < 60.0 and went_low_at is None:
+            now = hold(car, 1.0, now, 0.1)
+            battery = car.telemetry(0)["battery"]
+            pct_seen.append(battery["soc_pct"])
+            if battery["state"] == BATTERY_LOW:
+                went_low_at = now
+        self.assertIsNotNone(went_low_at, f"never went low within a minute: {pct_seen}")
+        self.assertLessEqual(battery["soc_pct"], Battery.LOW_PCT)
+        self.assertGreater(pct_seen[-2], Battery.LOW_PCT, "ok until the threshold, low from it")
+        self.assertEqual(pct_seen, sorted(pct_seen, reverse=True), "the percent only falls")
+        # Throttle released: the idle draw, and the percent all but stands still — at x600
+        # still 27 times slower than under full throttle.
+        under_load = (25 - battery["soc_pct"]) / went_low_at
+        before = car.battery.soc
+        now = hold(car, 0.0, now, 2.0)
+        battery = car.telemetry(0)["battery"]
+        self.assertAlmostEqual(battery["current_ma"], 300, delta=5)
+        idle = (before - car.battery.soc) / 2.0
+        self.assertLess(idle, under_load / 20)
+        self.assertEqual(battery["state"], BATTERY_LOW, "low is sticky: idling does not clear it")
+
+    def test_at_x1_the_pack_drains_at_the_car_s_pace(self):
+        """The default multiplier is life: a minute at full throttle — 8.3 A of 9 Ah — costs
+        about 1.5 %, an hour of it the pack; idle is a day's business. `--battery-drain-x`
+        exists because that is how it must read on the bench, not on a bar someone watches."""
+        car = CarState(now=0.0, battery_soc=80)
+        car.adopt_session(0.0)
+        hold(car, 1.0, 0.0, 60.0)
+        self.assertAlmostEqual(car.battery.soc, 80 - 8300 / 9000 / 60 * 100, delta=0.05)
+        self.assertEqual(car.telemetry(0)["battery"]["soc_pct"], 78)
+
+    def test_the_bus_down_draws_only_the_idle_current(self):
+        """With the PWM boards down nothing reaches the wheels, so the pack sees the car's
+        idle draw whatever the stream asks — the model follows the held command, and a
+        command the bus never carried is not held (`car/actuator-arbiter`)."""
+        car = CarState(now=0.0, bus_ok=False)
+        car.adopt_session(0.0)
+        hold(car, 1.0, 0.0, 2.0)
+        self.assertEqual(car.telemetry(0)["battery"]["current_ma"], 300)
+
+    def test_low_clears_only_three_above_the_threshold(self):
+        """`car/battery-monitor` → «Порог пройден вниз»: `low` at 20, still `low` at 21
+        and 22, `ok` again at 23 — the firmware's hysteresis (battery_pack.h), so the
+        badge does not flicker at the edge. The mock's pack only ever drains, so the way
+        back up is written straight into the model here."""
+        car = CarState(now=0.0, battery_soc=20)
+        self.assertEqual(car.telemetry(0)["battery"]["state"], BATTERY_LOW)
+        for pct, want in ((21, BATTERY_LOW), (22, BATTERY_LOW), (23, BATTERY_OK), (20, BATTERY_LOW)):
+            car.battery.soc = float(pct)
+            car.battery.step(0.0, 0.0)
+            self.assertEqual(car.telemetry(0)["battery"]["state"], want, pct)
+        self.assertEqual((Battery.LOW_PCT, Battery.LOW_CLEAR_PCT), (20, 23))
+
+    def test_without_a_monitor_every_number_is_null_and_nothing_else_changes(self):
+        """`shared/mock-and-conformance` → «Без монитора»: `--battery absent` is
+        `battery.state: absent` and `null` in every number of the group, in telemetry and
+        in /status alike; the rest of the car is as without the flag."""
+        car = CarState(now=0.0, battery_absent=True)
+        car.adopt_session(0.0)
+        hold(car, 1.0, 0.0, 1.0)
         absent = {"voltage_mv": None, "current_ma": None, "power_mw": None, "soc_pct": None,
                   "state": BATTERY_ABSENT}
         self.assertEqual(car.telemetry(0)["battery"], absent)
         self.assertEqual(car.status_groups(0, STATUS_GROUPS)["battery"], absent)
-        self.assertEqual(list(car.telemetry(0))[-1], "battery")
-        self.assertEqual(list(car.status_groups(0, STATUS_GROUPS))[-1], "battery")
+        healthy = CarState(now=0.0)
+        healthy.adopt_session(0.0)
+        hold(healthy, 1.0, 0.0, 1.0)
+        for g in STATUS_GROUPS:
+            if g != "battery":
+                self.assertEqual(car.status_groups(0, STATUS_GROUPS)[g],
+                                 healthy.status_groups(0, STATUS_GROUPS)[g], g)
 
     def test_bus_down_is_the_same_word_in_telemetry_and_status(self):
         car = CarState(now=0.0, bus_ok=False)

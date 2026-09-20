@@ -55,6 +55,12 @@ OWNER_VALUES = _OWNER_FIELD["values"]
 # same way. A rename in the schema moves these with it; a reorder breaks both.
 OWNER_IDLE, OWNER_RECOVERING, OWNER_REMOTE = (OWNER_VALUES[0], OWNER_VALUES[1],
                                               OWNER_VALUES[3])
+# The pack's words, the same way: `absent` is the last of the three, and the one
+# whose meaning the schema spells out — every number of the group null.
+_BATTERY_FIELD = next(f for f in GROUPS["battery"]["fields"] if f["name"] == "state")
+BATTERY_VALUES = _BATTERY_FIELD["values"]
+BATTERY_ABSENT = BATTERY_VALUES[2]
+BATTERY_NUMBERS = [f["name"] for f in GROUPS["battery"]["fields"] if f["type"] == "int"]
 
 # A literal worth naming once: the contract has no field-name constant for a
 # malformed-hello probe's own sid — it is just this tool's own probe value, used
@@ -120,6 +126,10 @@ def owner_of(f):
 
 def rx_hz_of(f):
     return (f.get("link") or {}).get("rx_hz")
+
+
+def battery_of(f):
+    return f.get("battery") or {}
 
 
 def timeouts_of(f):
@@ -391,6 +401,19 @@ class RTConformance:
                                f"telemetry.{g}.{gf['name']} is {v!r}, want {gf['type']}")
             self.check(owner_of(f) in OWNER_VALUES,
                        f"telemetry motors.owner {owner_of(f)!r} not in {OWNER_VALUES}")
+            # The pack (`car/battery-monitor`): the type walk above only says an int or a
+            # null is in each slot. What the badge draws from has meaning past that — the
+            # percent is a percent, and a monitor that is not there has no numbers at all.
+            battery = battery_of(f)
+            self.check(battery.get("state") in BATTERY_VALUES,
+                       f"telemetry battery.state {battery.get('state')!r} not in {BATTERY_VALUES}")
+            soc = battery.get("soc_pct")
+            self.check(soc is None or (is_count(soc) and 0 <= soc <= 100),
+                       f"telemetry battery.soc_pct is {soc!r}, want 0..100 or null")
+            if battery.get("state") == BATTERY_ABSENT:
+                nulls = {k: battery.get(k) for k in BATTERY_NUMBERS}
+                self.check(all(v is None for v in nulls.values()),
+                           f"telemetry battery is {BATTERY_ABSENT!r} but carries {nulls}, want every number null")
 
         print("watchdog (silence after zeros: link.timeouts +1, idle, the session lives on)")
         # The stream above just stopped, and every quiet stretch of this tool used
