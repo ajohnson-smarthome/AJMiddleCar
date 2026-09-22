@@ -6,16 +6,9 @@ import SwiftUI
 /// iOS-only. Vertical layout: a compact animation box on top, stats below.
 struct TrickSimView: View {
     let trick: Trick
-    let durs: [Int]
+    /// The editor's current settings, mode included — the same inputs playback reads.
+    let params: TrickParams
     let palette: Palette
-    var donutDiameterCm: Double? = nil
-    var donutCircles: Int? = nil
-    var spinTurns: Int? = nil
-    var spinDurMs: Int? = nil
-    var fig8Dia: Double? = nil
-    var fig8Eights: Int? = nil
-    var wiggleAmp: Double? = nil
-    var wiggleWags: Int? = nil
     @ObservedObject private var wheelStore = ConfigStore.shared.wheel
     @ObservedObject private var chassisStore = ConfigStore.shared.chassis
     private var wheel: Wheel? { wheelStore.value }
@@ -25,21 +18,10 @@ struct TrickSimView: View {
     // Car geometry — v1 constants (metres). TODO: move to settings next to the motor params.
     private static let carLenM = 0.25, carWidM = 0.15
 
+    /// What plays: the same assembly as `ControlIntent.build`, so manual mode's durations and
+    /// geometry mode's parameters both reach the picture. `vmaxMS` only matters to geometry.
     private var steps: [TrickStep] {
-        if trick.id == Tricks.donut.id, let dia = donutDiameterCm, let n = donutCircles, let v = vmaxMS {
-            return Tricks.donutTrick(diameterCm: dia, circles: n, vmaxMS: v, trackM: track).steps
-        }
-        if trick.id == Tricks.spin.id, let n = spinTurns, let ms = spinDurMs, let v = vmaxMS {
-            return Tricks.spinTrick(turns: n, durationMs: ms, vmaxMS: v, trackM: track).steps
-        }
-        if trick.id == Tricks.figure8.id, let dia = fig8Dia, let n = fig8Eights, let v = vmaxMS {
-            return Tricks.figure8Trick(diameterCm: dia, eights: n, vmaxMS: v, trackM: track).steps
-        }
-        if trick.id == Tricks.wiggle.id, let amp = wiggleAmp, let n = wiggleWags {
-            return Tricks.wiggleTrick(amplitude: amp, wags: n).steps
-        }
-        let d = durs.isEmpty ? Tricks.baseDurations(trick) : durs
-        return Tricks.withDurations(trick, d).steps
+        Tricks.assemble(trick, params, vmaxMS: vmaxMS ?? 0, trackM: track).steps
     }
     private var totalSec: Double { Double(steps.reduce(0) { $0 + $1.ms }) / 1000 }
 

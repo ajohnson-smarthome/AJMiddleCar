@@ -139,6 +139,9 @@
 "tricks.sec"     = "%.1f с";
 "tricks.total"   = "Всего: %.1f с";
 "tricks.cycles"  = "×%d";
+"tricks.mode"    = "Сборка";
+"tricks.mode.geometry" = "Геометрия";
+"tricks.mode.manual"   = "Вручную";
 "tricks.fwd"     = "Вперёд";
 "tricks.back"    = "Назад";
 "tricks.right"   = "вправо";

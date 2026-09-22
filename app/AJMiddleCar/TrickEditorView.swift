@@ -1,10 +1,12 @@
 import SwiftUI
 
-/// Edits one trick's per-action durations (slider 0.1–10 s each, per distinct movement).
+/// Edits one trick: its assembly mode, then either its two geometry parameters or — in manual
+/// mode — a duration per distinct movement (slider 0.1–10 s each). The preview follows the mode.
 struct TrickEditorView: View {
     let trick: Trick
     let palette: Palette
     @Environment(\.dismiss) private var dismiss
+    @State private var mode: TrickMode = .geometry
     @State private var durs: [Int] = []
     @State private var diameterCm = Tricks.donutDiaDefaultCm
     @State private var circles = Tricks.donutCirclesDefault
@@ -19,91 +21,45 @@ struct TrickEditorView: View {
     private var totalSec: Double {
         Double(zip(actions, durs).reduce(0) { $0 + $1.1 * $1.0.count }) / 1000
     }
+    /// The editor's live state as the assembly reads it — what the preview draws.
+    private var params: TrickParams {
+        TrickParams(mode: mode, durs: durs,
+                    donutDiaCm: diameterCm, donutCircles: circles,
+                    spinTurns: spinTurns, spinDurMs: spinDurMs,
+                    fig8DiaCm: fig8Dia, fig8Eights: fig8Eights,
+                    wiggleAmp: wiggleAmp, wiggleWags: wiggleWags)
+    }
 
     var body: some View {
         ZStack {
             p.bg.ignoresSafeArea()
             VStack(spacing: 0) {
                 header
-                if trick.id == Tricks.donut.id {
-                    // One shared scroll: animation + stats + diameter + circle count scroll together.
-                    ScrollView {
-                        VStack(spacing: 16) {
-                            TrickSimView(trick: Tricks.donut, durs: durs, palette: p,
-                                         donutDiameterCm: Double(diameterCm), donutCircles: circles)
-                            VStack(spacing: 0) {
-                                diameterRow.padding(.horizontal, 14)
-                                Rectangle().fill(p.metal.opacity(0.25)).frame(height: 1)
-                                circlesRow.padding(.horizontal, 14)
-                            }
-                            .background(p.panel)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(p.metal.opacity(0.4), lineWidth: 1))
-                            .padding(.horizontal, 16)
+                // One shared scroll: animation + stats + mode + the mode's regulators scroll together.
+                ScrollView {
+                    VStack(spacing: 16) {
+                        TrickSimView(trick: trick, params: params, palette: p)
+                        VStack(spacing: 0) {
+                            modeRow.padding(.horizontal, 14)
+                            separator
+                            if mode == .manual { manualRows } else { geometryRows }
                         }
-                        .padding(.bottom, 16)
-                    }
-                } else if trick.id == Tricks.spin.id {
-                    // One shared scroll: animation + stats + turns + duration scroll together.
-                    ScrollView {
-                        VStack(spacing: 16) {
-                            TrickSimView(trick: Tricks.spin, durs: durs, palette: p,
-                                         spinTurns: spinTurns, spinDurMs: spinDurMs)
-                            VStack(spacing: 0) {
-                                turnsRow.padding(.horizontal, 14)
-                                Rectangle().fill(p.metal.opacity(0.25)).frame(height: 1)
-                                durationRow.padding(.horizontal, 14)
-                            }
-                            .background(p.panel)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(p.metal.opacity(0.4), lineWidth: 1))
-                            .padding(.horizontal, 16)
+                        .background(p.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(p.metal.opacity(0.4), lineWidth: 1))
+                        .padding(.horizontal, 16)
+                        if mode == .manual {
+                            Text(L.trickTotal(totalSec))
+                                .font(.system(size: 12)).foregroundStyle(p.muted).monospacedDigit()
                         }
-                        .padding(.bottom, 16)
                     }
-                } else if trick.id == Tricks.figure8.id {
-                    // One shared scroll: animation + stats + loop diameter + eights count scroll together.
-                    ScrollView {
-                        VStack(spacing: 16) {
-                            TrickSimView(trick: Tricks.figure8, durs: durs, palette: p,
-                                         fig8Dia: Double(fig8Dia), fig8Eights: fig8Eights)
-                            VStack(spacing: 0) {
-                                fig8DiaRow.padding(.horizontal, 14)
-                                Rectangle().fill(p.metal.opacity(0.25)).frame(height: 1)
-                                fig8EightsRow.padding(.horizontal, 14)
-                            }
-                            .background(p.panel)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(p.metal.opacity(0.4), lineWidth: 1))
-                            .padding(.horizontal, 16)
-                        }
-                        .padding(.bottom, 16)
-                    }
-                } else if trick.id == Tricks.wiggle.id {
-                    // One shared scroll: animation + stats + amplitude + wag count scroll together.
-                    ScrollView {
-                        VStack(spacing: 16) {
-                            TrickSimView(trick: Tricks.wiggle, durs: durs, palette: p,
-                                         wiggleAmp: wiggleAmp, wiggleWags: wiggleWags)
-                            VStack(spacing: 0) {
-                                wiggleAmpRow.padding(.horizontal, 14)
-                                Rectangle().fill(p.metal.opacity(0.25)).frame(height: 1)
-                                wiggleWagsRow.padding(.horizontal, 14)
-                            }
-                            .background(p.panel)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(p.metal.opacity(0.4), lineWidth: 1))
-                            .padding(.horizontal, 16)
-                        }
-                        .padding(.bottom, 16)
-                    }
-                } else {
-                    controls
+                    .padding(.bottom, 16)
                 }
             }
         }
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
+            mode = TrickSettings.mode(for: trick)
             if durs.isEmpty { durs = TrickSettings.durations(for: trick) }
             diameterCm = TrickSettings.donutDiameterCm()
             circles = TrickSettings.donutCircles()
@@ -116,21 +72,57 @@ struct TrickEditorView: View {
         }
     }
 
-    private var controls: some View {
-        VStack(spacing: 0) {
-            List {
-                ForEach(actions.indices, id: \.self) { i in
-                    row(i)
-                        .listRowBackground(p.panel)
-                        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
-                }
+    private var separator: some View {
+        Rectangle().fill(p.metal.opacity(0.25)).frame(height: 1)
+    }
+
+    /// Geometry or manual — saved on the tap, read by the next run of the trick.
+    private var modeRow: some View {
+        HStack(spacing: 11) {
+            Text(L.trickMode).font(.system(size: 13)).foregroundStyle(p.text)
+                .frame(width: 150, alignment: .leading)
+            Spacer()
+            Picker("", selection: Binding(
+                get: { mode },
+                set: { mode = $0; TrickSettings.setMode(trick, $0) }
+            )) {
+                Text(L.trickModeGeometry).tag(TrickMode.geometry)
+                Text(L.trickModeManual).tag(TrickMode.manual)
             }
-            .scrollContentBackground(.hidden)
-            .tint(p.accent)
-            Text(L.trickTotal(totalSec))
-                .font(.system(size: 12)).foregroundStyle(p.muted).monospacedDigit()
-                .frame(maxWidth: .infinity)
-                .frame(height: 44)
+            .pickerStyle(.segmented).frame(width: 220)
+        }
+        .padding(.vertical, 8)
+    }
+
+    /// The trick's two geometry parameters.
+    @ViewBuilder private var geometryRows: some View {
+        switch trick.id {
+        case Tricks.donut.id:
+            diameterRow.padding(.horizontal, 14)
+            separator
+            circlesRow.padding(.horizontal, 14)
+        case Tricks.spin.id:
+            turnsRow.padding(.horizontal, 14)
+            separator
+            durationRow.padding(.horizontal, 14)
+        case Tricks.figure8.id:
+            fig8DiaRow.padding(.horizontal, 14)
+            separator
+            fig8EightsRow.padding(.horizontal, 14)
+        case Tricks.wiggle.id:
+            wiggleAmpRow.padding(.horizontal, 14)
+            separator
+            wiggleWagsRow.padding(.horizontal, 14)
+        default:
+            EmptyView()
+        }
+    }
+
+    /// Manual mode: one duration regulator per distinct movement of the base layout.
+    private var manualRows: some View {
+        ForEach(actions.indices, id: \.self) { i in
+            if i > 0 { separator }
+            row(i).padding(.horizontal, 14)
         }
     }
 

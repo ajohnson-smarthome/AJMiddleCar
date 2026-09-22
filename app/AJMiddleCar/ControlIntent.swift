@@ -103,27 +103,9 @@ final class ControlIntent: ObservableObject {
         d.map { Double($0.track_mm) / 1000 } ?? Tricks.donutTrackFallbackM
     }
 
-    /// Rebuild a trick from its stored settings. Every branch is pure arithmetic — the reason
-    /// this can run on the tap rather than after a fetch.
+    /// Rebuild a trick from its stored settings, in its stored mode. Pure arithmetic — the reason
+    /// this can run on the tap rather than after a fetch. The tricks list asks the same question.
     static func build(_ base: Trick, vmaxMS: Double, trackM: Double) -> Trick {
-        switch base.id {
-        case Tricks.spin.id:
-            return Tricks.spinTrick(turns: TrickSettings.spinTurns(),
-                                    durationMs: TrickSettings.spinDurMs(),
-                                    vmaxMS: vmaxMS, trackM: trackM)
-        case Tricks.donut.id:
-            return Tricks.donutTrick(diameterCm: Double(TrickSettings.donutDiameterCm()),
-                                     circles: TrickSettings.donutCircles(),
-                                     vmaxMS: vmaxMS, trackM: trackM)
-        case Tricks.figure8.id:
-            return Tricks.figure8Trick(diameterCm: Double(TrickSettings.fig8Dia()),
-                                       eights: TrickSettings.fig8Eights(),
-                                       vmaxMS: vmaxMS, trackM: trackM)
-        case Tricks.wiggle.id:
-            return Tricks.wiggleTrick(amplitude: TrickSettings.wiggleAmp(),
-                                      wags: TrickSettings.wiggleWags())
-        default:
-            return Tricks.withDurations(base, TrickSettings.durations(for: base))
-        }
+        Tricks.assemble(base, TrickSettings.params(for: base), vmaxMS: vmaxMS, trackM: trackM)
     }
 }

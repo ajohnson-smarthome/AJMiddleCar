@@ -1,9 +1,16 @@
 import SwiftUI
 
-/// Settings sub-screen: list of tricks; tapping one opens its per-action duration editor.
+/// Settings sub-screen: list of tricks, each with the duration it will play; tapping one opens
+/// its editor.
 struct TricksSettingsView: View {
     let palette: Palette
     @Environment(\.dismiss) private var dismiss
+    // The same cache playback reads its speed and track from — a change there changes the numbers.
+    @ObservedObject private var wheelStore = ConfigStore.shared.wheel
+    @ObservedObject private var chassisStore = ConfigStore.shared.chassis
+    /// Bumped on every appearance: settings live in UserDefaults, which SwiftUI does not observe,
+    /// so coming back from the editor must recompute the list's durations.
+    @State private var revision = 0
     private var p: Palette { palette }
 
     var body: some View {
@@ -32,15 +39,22 @@ struct TricksSettingsView: View {
                         .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                     }
                 }
+                .id(revision)
                 .scrollContentBackground(.hidden)
                 .tint(p.accent)
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        .onAppear { revision &+= 1 }
     }
 
+    /// What the trick will play: the same build, the same cached speed and track and the same
+    /// nominal fallbacks as `ControlIntent.startTrick` — one number here, in the editor and on
+    /// the drive screen's progress ring.
     private func totalSec(_ trick: Trick) -> Double {
-        Double(Tricks.withDurations(trick, TrickSettings.durations(for: trick)).totalMs) / 1000
+        let built = ControlIntent.build(trick, vmaxMS: ControlIntent.vmax(wheelStore.value),
+                                        trackM: ControlIntent.track(chassisStore.value))
+        return Double(built.totalMs) / 1000
     }
 
     private var header: some View {
