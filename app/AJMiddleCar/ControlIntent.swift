@@ -90,12 +90,16 @@ final class ControlIntent: ObservableObject {
     // MARK: - trick geometry, from the cache
 
     /// Linear speed (m/s) from the car's wheel and motor params, with the nominal fallback.
+    /// The trick preview reads this same function, so both fall back to the same number.
     static func vmax(_ w: Wheel?) -> Double {
-        guard let w, let rpm = MotorPresets.match(ppr: w.encoder_ppr,
-                                                   gearX100: Int((w.gear_ratio * 100).rounded()),
-                                                   quad: w.quadrature)?.rpm
-        else { return Tricks.donutNominalVmaxMS }
-        return Double.pi * (Double(w.diameter_mm) / 1000) * Double(rpm) / 60
+        Tricks.vmaxMS(diameterMm: w?.diameter_mm, rpm: ratedRPM(w))
+    }
+
+    /// The motor's rated RPM, if the wheel's params match a preset; nil means `vmax` is nominal.
+    static func ratedRPM(_ w: Wheel?) -> Int? {
+        guard let w else { return nil }
+        return MotorPresets.match(ppr: w.encoder_ppr, gearX100: Int((w.gear_ratio * 100).rounded()),
+                                  quad: w.quadrature)?.rpm
     }
 
     /// Track (m) from the car's dimensions, with the nominal fallback.

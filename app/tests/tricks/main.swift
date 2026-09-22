@@ -295,4 +295,31 @@ for tr in Tricks.all {
           "trick \(tr.id) manual with no durations → its base 5 s")
 }
 
+// MARK: nominal speed — one fallback for the preview and playback (AJM-61)
+
+// Unknown wheel or unmatched preset: both ControlIntent.vmax and the preview land here.
+check(Tricks.vmaxMS(diameterMm: nil, rpm: nil) == VN, "no /wheel → nominal speed")
+check(Tricks.vmaxMS(diameterMm: 65, rpm: nil) == VN, "wheel known, preset unmatched → nominal speed")
+check(Tricks.vmaxMS(diameterMm: nil, rpm: 1000) == VN, "rpm without a diameter → nominal speed")
+check(near(Tricks.vmaxMS(diameterMm: 65, rpm: 1000), VN, 0.001),
+      "the nominal is the stock motor on the default 65 mm wheel")
+check(near(Tricks.vmaxMS(diameterMm: 80, rpm: 500), Double.pi * 0.08 * 500 / 60, 1e-9),
+      "a matched preset gives π·D·rpm/60")
+
+// The preview's input on an unmatched preset is playback's: same steps, same totalMs, and a
+// trajectory with numbers rather than a blank.
+TrickSettings.setMode(Tricks.spin, .geometry)
+let unmatched = Tricks.vmaxMS(diameterMm: 65, rpm: nil)
+for tr in Tricks.all {
+    let preview = Tricks.assemble(tr, TrickSettings.params(for: tr), vmaxMS: unmatched, trackM: T)
+    let playback = played(tr)
+    check(preview.steps.map { [$0.t, $0.y, Double($0.ms)] } == playback.steps.map { [$0.t, $0.y, Double($0.ms)] }
+          && preview.totalMs == playback.totalMs,
+          "trick \(tr.id): preview and playback agree on an unmatched preset")
+    let r = TrickSim.simulate(steps: preview.steps, vmaxMS: unmatched, trackM: T,
+                              carLenM: carLen, carWidM: carWid)
+    check(r.pathLenM.isFinite && r.turnRad.isFinite && r.areaWM > 0 && r.areaHM > 0,
+          "trick \(tr.id): nominal preview has numbers")
+}
+
 if failures == 0 { print("test_tricks: OK") } else { exit(1) }
