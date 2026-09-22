@@ -1,0 +1,8 @@
+# Tasks
+
+Пункт — один воркер, один PR; id в конце строки — issue пункта (`Closes` в PR). AJM-169 заведена и служит и якорем change, и его единственной задачей — `tools/pm/tasks-to-linear.py` её пропустит. Проверка: хост-тесты, падающие до починки; поведение после — по дельте `specs/car/recovery/spec.md`; `openspec validate ajm-169-breadcrumbs-bus-down --strict`; `CONFORMANCE=required tools/test-all.sh`.
+
+## 1. Прошивка
+
+- [ ] 1.1 Крошка пишется только при живой шине, и потеря связи при мёртвой шине заканчивается остановкой: чистый предикат в `firmware/car/core/main/recovery.h` по образцу `recovery_evict`/`recovery_seg_ms` — «команда становится крошкой, только если актуатор её взял И запись дошла бы до колёс» и «возврат требует живой шины так же, как непустого пути»; вызовы — в `rt_link.c::on_command` (рядом с `car_drive`, комментарий там про гарантию гранта поправить: грант шину не проверяет) и в `recovery.c::recovery_on_link_lost` (при `!link_bus_ok()` — той же веткой, что при `!enabled`: `car_stop(LINK_SRC_RECOVER)` + `link_release_must(LINK_SRC_RECOVER)`); проверить `make -C firmware/car/core/test run`: в `test_recovery.c` — предикат на всех четырёх сочетаниях, в `test_rt_glue.c` — команда при `bus_ok = false` не оставляет крошки (история пуста), при `bus_ok = true` оставляет; `car.c` не трогать — через него ходят `recover`, `calib` и `console`, которым этот вопрос не задают; источники: `firmware/car/core/main/rt_link.c:155-165`, `recovery.c:164-176`, `car.c:67-81`, `link.c:73,202-232` (AJM-169)
+- [ ] 1.2 (стенд) После слияния: платы отключены, поток команд, тишина → `motors.owner` остаётся `idle`, назад машинка не едет, `link.timeouts` +1; затем платы подключены, та же легенда → `recovering` как прежде; результат — в `docs/bringup.md`
