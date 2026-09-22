@@ -154,6 +154,9 @@ enum L {
     static func trickSec(_ v: Double) -> String { s("tricks.sec", v) }
     static func trickTotal(_ v: Double) -> String { s("tricks.total", v) }
     static func trickCycles(_ n: Int) -> String { s("tricks.cycles", n) }
+    static var trickMode: String { s("tricks.mode") }
+    static var trickModeGeometry: String { s("tricks.mode.geometry") }
+    static var trickModeManual: String { s("tricks.mode.manual") }
     static var actFwd: String { s("tricks.fwd") }
     static var actBack: String { s("tricks.back") }
     static var actRight: String { s("tricks.right") }

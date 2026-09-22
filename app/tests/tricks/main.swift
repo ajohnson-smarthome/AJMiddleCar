@@ -217,4 +217,82 @@ for tr in degenerate {
           "simulation of trick \(tr.id) stays finite at zero speed")
 }
 
+// MARK: assembly mode — what the list shows is what plays (AJM-60)
+
+// An in-memory store: a suite on disk would leave a plist behind in ~/Library/Preferences.
+final class MemoryDefaults: UserDefaults {
+    var d: [String: Any] = [:]
+    override func object(forKey k: String) -> Any? { d[k] }
+    override func array(forKey k: String) -> [Any]? { d[k] as? [Any] }
+    override func string(forKey k: String) -> String? { d[k] as? String }
+    override func set(_ v: Any?, forKey k: String) { d[k] = v }
+    override func set(_ v: Int, forKey k: String) { d[k] = v }
+    override func set(_ v: Double, forKey k: String) { d[k] = v }
+    override func removeObject(forKey k: String) { d[k] = nil }
+}
+TrickSettings.store = MemoryDefaults(suiteName: nil)!
+
+let VN = Tricks.donutNominalVmaxMS
+func played(_ tr: Trick) -> Trick {   // ControlIntent.build's body, at the nominals of an empty cache
+    Tricks.assemble(tr, TrickSettings.params(for: tr), vmaxMS: VN, trackM: T)
+}
+
+for tr in Tricks.all {
+    check(TrickSettings.mode(for: tr) == .geometry, "trick \(tr.id) defaults to geometry")
+}
+// The bug: the list summed the base layout (5.0 s); the spin plays its 3 s duration.
+check(Tricks.withDurations(Tricks.spin, TrickSettings.durations(for: Tricks.spin)).totalMs == 5000,
+      "the old list number for the spin was 5.0 s")
+check(played(Tricks.spin).totalMs == Tricks.spinDurDefaultMs, "spin at defaults plays 3.0 s")
+check(played(Tricks.donut).totalMs == Tricks.donutTrick(diameterCm: 50, circles: 2, vmaxMS: VN, trackM: T).totalMs,
+      "donut at defaults plays its geometry")
+check(played(Tricks.donut).totalMs != 5000, "donut at defaults is not the base 5 s")
+
+// A geometry parameter moves the number.
+let donutBefore = played(Tricks.donut).totalMs
+TrickSettings.setDonutCircles(4)
+check(played(Tricks.donut).totalMs > donutBefore, "more donut circles → longer")
+TrickSettings.resetDonutCircles()
+
+// Manual: the spin's single action at 2 s plays 2 s; the mode survives a re-read.
+TrickSettings.setMode(Tricks.spin, .manual)
+TrickSettings.setDuration(Tricks.spin, action: 0, ms: 2000)
+check(TrickSettings.mode(for: Tricks.spin) == .manual, "manual mode is stored")
+check(played(Tricks.spin).totalMs == 2000, "manual spin at 2 s plays 2 s")
+check(played(Tricks.spin).steps.map { $0.y } == Tricks.spin.steps.map { $0.y },
+      "manual mode keeps the base layout's axes")
+check(played(Tricks.donut).totalMs == donutBefore, "one trick's mode leaves the others alone")
+
+// Switching the mode switches the assembly, with the durations kept for the next switch.
+TrickSettings.setMode(Tricks.spin, .geometry)
+check(played(Tricks.spin).totalMs == Tricks.spinDurDefaultMs, "back to geometry → 3 s again")
+check(TrickSettings.durations(for: Tricks.spin) == [2000], "manual durations survive the switch")
+TrickSettings.setMode(Tricks.spin, .manual)
+TrickSettings.reset(Tricks.spin, action: 0)
+check(played(Tricks.spin).totalMs == 5000, "reset returns the action's base duration")
+
+// clampDur holds 100…10000 ms on write and on read.
+TrickSettings.setDuration(Tricks.spin, action: 0, ms: 50)
+check(TrickSettings.durations(for: Tricks.spin) == [Tricks.durMin], "a write below range clamps to 100 ms")
+TrickSettings.store.set([60000], forKey: "trick.durs.\(Tricks.spin.id)")
+check(TrickSettings.durations(for: Tricks.spin) == [Tricks.durMax], "a stored 60 s reads as 10 s")
+check(played(Tricks.spin).totalMs == Tricks.durMax, "playback sees the clamped value too")
+TrickSettings.store.set("sideways", forKey: "trick.mode.\(Tricks.spin.id)")
+check(TrickSettings.mode(for: Tricks.spin) == .geometry, "an unknown stored mode reads as geometry")
+
+// Every trick, both modes, the preview's input included: axes inside [-1,1], nothing non-finite.
+var manualAll = TrickParams(); manualAll.mode = .manual
+for tr in Tricks.all {
+    for p in [TrickParams(), manualAll] {
+        for (v, trk) in [(VN, T), (0.0, T), (VN, 0.0)] {
+            let built = Tricks.assemble(tr, p, vmaxMS: v, trackM: trk)
+            check(built.id == tr.id && !built.steps.isEmpty, "trick \(tr.id) \(p.mode) assembles")
+            check(built.steps.allSatisfy { $0.t.isFinite && $0.y.isFinite && abs($0.t) <= 1 && abs($0.y) <= 1 && $0.ms >= 0 },
+                  "trick \(tr.id) \(p.mode) at v=\(v) track=\(trk): finite, axes in [-1,1]")
+        }
+    }
+    check(Tricks.assemble(tr, manualAll, vmaxMS: VN, trackM: T).totalMs == 5000,
+          "trick \(tr.id) manual with no durations → its base 5 s")
+}
+
 if failures == 0 { print("test_tricks: OK") } else { exit(1) }

@@ -12,8 +12,28 @@ struct Trick: Identifiable {
     var totalMs: Int { steps.reduce(0) { $0 + $1.ms } }
 }
 
+/// How a trick's steps are assembled: from its two geometry parameters (the default), or by hand —
+/// the base layout with a duration per distinct action. Two regulators never fight over one number:
+/// in geometry mode every step's duration is derived, so the per-action durations only apply here.
+enum TrickMode: String, CaseIterable { case geometry, manual }
+
+/// Everything a trick's assembly reads from its settings — one value, so playback, the preview and
+/// the list's duration all build from the same inputs (`Tricks.assemble`).
+struct TrickParams: Equatable {
+    var mode: TrickMode = .geometry
+    var durs: [Int] = []            // per distinct action, manual mode only; empty → base
+    var donutDiaCm = Tricks.donutDiaDefaultCm
+    var donutCircles = Tricks.donutCirclesDefault
+    var spinTurns = Tricks.spinTurnsDefault
+    var spinDurMs = Tricks.spinDurDefaultMs
+    var fig8DiaCm = Tricks.fig8DiaDefaultCm
+    var fig8Eights = Tricks.fig8EightsDefault
+    var wiggleAmp = Tricks.wiggleAmpDefault
+    var wiggleWags = Tricks.wiggleWagsDefault
+}
+
 /// Open-loop (no gyro) — angles/distances are approximate and surface/battery dependent.
-/// Every trick is 5 s at base; per-action durations are editable (see TrickEditorView).
+/// Every trick is 5 s at base; what plays is `assemble`d from its settings in either mode.
 enum Tricks {
     static let spin = Trick(id: 1, nameKey: "tricks.spin", icon: "arrow.clockwise",
                             steps: [TrickStep(t: 0, y: 1, ms: 5000)])
@@ -168,6 +188,31 @@ enum Tricks {
             return TrickStep(t: s.t, y: s.y, ms: clampDur(durs[i]))
         }
         return Trick(id: trick.id, nameKey: trick.nameKey, icon: trick.icon, steps: steps)
+    }
+
+    // MARK: assembly (pure, host-tested) — the one place a trick's mode decides its steps
+
+    /// The trick as it will play: manual mode → the base layout with its per-action durations;
+    /// geometry mode → built from the two parameters, the track and the speed. Pure arithmetic,
+    /// no I/O — the reason playback can run it on the tap.
+    static func assemble(_ base: Trick, _ p: TrickParams, vmaxMS: Double, trackM: Double) -> Trick {
+        if p.mode == .manual {
+            return withDurations(base, p.durs.isEmpty ? baseDurations(base) : p.durs)
+        }
+        switch base.id {
+        case spin.id:
+            return spinTrick(turns: p.spinTurns, durationMs: p.spinDurMs, vmaxMS: vmaxMS, trackM: trackM)
+        case donut.id:
+            return donutTrick(diameterCm: Double(p.donutDiaCm), circles: p.donutCircles,
+                              vmaxMS: vmaxMS, trackM: trackM)
+        case figure8.id:
+            return figure8Trick(diameterCm: Double(p.fig8DiaCm), eights: p.fig8Eights,
+                                vmaxMS: vmaxMS, trackM: trackM)
+        case wiggle.id:
+            return wiggleTrick(amplitude: p.wiggleAmp, wags: p.wiggleWags)
+        default:
+            return withDurations(base, p.durs.isEmpty ? baseDurations(base) : p.durs)
+        }
     }
 
     /// Movement signs for labeling: fwd ∈ {-1,0,1} (back/none/forward), turn ∈ {-1,0,1} (left/none/right).
