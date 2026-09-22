@@ -5,7 +5,7 @@ Everything on the wire reaches the mock through `generated.py`, so a schema chan
 the mock with the generator. A handful of the car's behaviour constants have no key in
 contract/car-api.json — the stationary threshold and the per-segment cap of the retreat,
 the identification pulse, the service tick, the sid length, the ring of dead sids, the OTA
-floor — and the mock carries copies; the reboot gap has to outlast a number the app keeps.
+floor, the video sender's ring and step — and the mock carries copies; the reboot gap has to outlast a number the app keeps.
 `test_state.py` and `test_rtlink.py` pin the copies, and nothing pinned their equality to
 the source: a change in the firmware left `tools/test-all.sh` green while the mock went on
 impersonating the previous car (AJM-121). This file reads each source with a regular
@@ -21,6 +21,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import rt_link                                                       # noqa: E402
+import video                                                         # noqa: E402
 from rt_link import Impairment, RTLink                                # noqa: E402
 from state import SID_MAX_CHARS, Battery, CarState                    # noqa: E402
 
@@ -103,6 +104,14 @@ class Mirrors(unittest.TestCase):
         copy = literal(HERE / "mock_car.py", r"^OTA_MIN_BYTES\s*=\s*(\d+)\b", int)
         src = literal(MAIN / "ota_api.c", r"content_len\s*<\s*(\d+)\b", int)
         self.mirror("OTA_MIN_BYTES", copy, src, "ota_api.c content_len <")
+
+    def test_video_sender(self):
+        """The mock's video sender is the car's: a ring of RING_SLOTS encoded frames, drained
+        one chunk every SEND_PERIOD_US — or the keyframe pacing leg judges the mock by a
+        step the car no longer keeps (AJM-168)."""
+        for name in ("RING_SLOTS", "SEND_PERIOD_US"):
+            src = define(name, MAIN / "video_link.c", int)
+            self.mirror(name, getattr(video, name), src, f"video_link.c {name}")
 
     def test_pack_constants(self):
         """The pack is not on the wire, so the contract has no key for it: the mock's model

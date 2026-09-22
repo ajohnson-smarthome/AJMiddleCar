@@ -14,7 +14,8 @@ a foreign sid and a `hello` on the video port (silence toward that socket, the s
 stays with the viewer); the `video.enabled` switch both ways; eviction by a second
 session (the stream ends, the new owner opens one of its own); `bye` (silence, and
 `/status.video` back at `idle`). The chunk pacing of the keyframes seen in the window is
-judged last — against the car; the mock bursts, and on loopback it is only reported.
+judged last — against the car and the mock alike: the mock trickles a frame out through
+the car's ring and step, so loopback is where a regression is caught first.
 
 A car whose `/status.video.state` is `off` (no sensor answered at boot) is asked to
 ignore a second of views and is otherwise left alone: the stream legs do not apply.
@@ -46,9 +47,10 @@ assert {STATE_OFF, STATE_IDLE, STATE_STREAMING} <= set(VIDEO_STATES), VIDEO_STAT
 
 # The car's sender lets one chunk go every SEND_PERIOD_US (firmware/car/core/main/video_link.c,
 # 3 ms, chosen on the bench of 2026-09-16 against what the dongle's USB drains). It has no
-# key in the contract — a mirror, by hand, like the mock's. The verdict is a corridor, not
-# the figure: half the step or less is a burst (loopback measures tens of microseconds),
-# twice the step or more would starve the ring behind a keyframe.
+# key in the contract — a mirror, by hand, like the mock's (tools/mock_car/video.py). The
+# verdict is a corridor, not the figure: half the step or less is a burst (a sender without
+# pacing measures tens of microseconds), twice the step or more would starve the ring
+# behind a keyframe.
 PACE_MS = 3.0
 
 # The car ends a stream "within a tick" of the switch, a bye or an eviction (CTL_TICK_MS,
@@ -153,14 +155,13 @@ class Session:
 
 
 class VideoConformance:
-    def __init__(self, host, rt_port, video_port, http_port, seconds, out, verbose, judge_pacing):
+    def __init__(self, host, rt_port, video_port, http_port, seconds, out, verbose):
         self.rt_addr = (host, rt_port)
         self.video_addr = (host, video_port)
         self.http = f"http://{host}:{http_port}"
         self.seconds = seconds
         self.out = out
         self.verbose = verbose
-        self.judge_pacing = judge_pacing
         self.failures = []
         self.pacing = []          # per multi-chunk keyframe seen in the window: mean ms between chunks
         self.intervals = []       # every gap between consecutive chunks of one keyframe, ms
@@ -479,20 +480,15 @@ class VideoConformance:
 
     def check_pacing(self):
         """The keyframes of the window, chunk by chunk: the median of their pacing is the
-        car's step, not a burst. Reported everywhere; judged only where the sender is the
-        car's — the mock sends each frame in one go, so loopback is not a verdict."""
+        car's step, not a burst — judged against any target, loopback included: the mock
+        sends through the car's ring at the car's step (AJM-168)."""
         if not self.pacing:
-            if self.judge_pacing:
-                self.check(False, "no multi-chunk keyframe in the window to pace")
+            self.check(False, "no multi-chunk keyframe in the window to pace")
             return
         median = statistics.median(self.pacing)
         q = statistics.quantiles(self.intervals, n=10) if len(self.intervals) >= 10 else None
         hist = (f"; chunk gaps p10/p50/p90 {q[0]:.2f}/{q[4]:.2f}/{q[8]:.2f} ms" if q else "")
         line = f"keyframe pacing: median {median:.2f} ms per chunk over {len(self.pacing)} keyframe(s){hist}"
-        if not self.judge_pacing:
-            print(f"  skipped: {line} — measured, not judged: the mock sends a frame in one burst, "
-                  f"the car one chunk every {PACE_MS:g} ms")
-            return
         print(line)
         self.check(PACE_MS / 2 <= median <= PACE_MS * 2,
                    f"keyframe chunks pace at {median:.2f} ms, not about {PACE_MS:g} — "
@@ -543,9 +539,8 @@ def main():
     a = p.parse_args()
     if a.http_port is None:
         a.http_port = 8080 if is_loopback(a.host) else 80
-    # Loopback is the mock, which bursts each frame: its chunk pacing is reported, not judged.
-    sys.exit(VideoConformance(a.host, a.rt_port, a.video_port, a.http_port, a.seconds, a.out, a.verbose,
-                              judge_pacing=not is_loopback(a.host)).run())
+    sys.exit(VideoConformance(a.host, a.rt_port, a.video_port, a.http_port, a.seconds, a.out,
+                              a.verbose).run())
 
 
 if __name__ == "__main__":
