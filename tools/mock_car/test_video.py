@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Splitting an Annex B file into the frames the mock sends, one datagram burst each."""
+"""Splitting an Annex B file into the frames the mock sends, and the trickle they leave in."""
 import os
+import pathlib
 import re
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from video import VideoLink, _nal_starts, access_units   # noqa: E402
+from video import RING_SLOTS, SEND_PERIOD_US, VideoLink, _nal_starts, access_units   # noqa: E402
+from video_wire import unpack_header   # noqa: E402
 import json
 from generated import PROTO, RT, VIDEO   # noqa: E402
 K, T = RT["keys"], RT["types"]
@@ -152,6 +154,16 @@ class _FakeTransport:
         pass
 
 
+class _Recorder:
+    """A transport that remembers when each datagram left, by the fake loop's clock."""
+
+    def __init__(self, loop):
+        self.loop, self.sent = loop, []
+
+    def sendto(self, data, addr):
+        self.sent.append((self.loop.now, unpack_header(data)))
+
+
 class _FakeLink:
     session = "sid"
 
@@ -160,6 +172,7 @@ class _FakeCar:
     video_state = "idle"
     video_fps = 0
     video_kbps = 0
+    video_dropped = 0
     config = {"video": {"bitrate_kbps": 2500, "enabled": True}}
 
 
@@ -279,6 +292,80 @@ class OwnerChange(unittest.TestCase):
         self.assertEqual(v.stream, (first + 1) & 0xFF, "a new stream number")
         self.assertEqual((v.frame, v.pos), (0, 0), "from the top of the clip: its IDR")
         self.assertEqual(car.video_state, "streaming")
+
+
+SAMPLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sample.h264")
+
+
+class Trickle(unittest.TestCase):
+    """video_link.c's sender: an encoded frame goes into a ring of RING_SLOTS and leaves one
+    chunk every SEND_PERIOD_US — a trickle, not a burst, so the conformance's pacing leg
+    judges the mock the way it judges the car (AJM-168). Time is the fake loop's: the
+    encoder's tick at VIDEO["fps"] and the sender's at the step, interleaved by their clocks."""
+
+    def _streaming(self, sample):
+        loop = _FakeLoop()
+        car = _FakeCar()
+        v = VideoLink(car, _FakeLink(), sample, loop=loop)
+        v.transport = _Recorder(loop)
+        v.datagram_received(_view(), ("127.0.0.1", 40000))
+        return car, v
+
+    def _run(self, v, seconds):
+        step, period = SEND_PERIOD_US / 1e6, 1.0 / VIDEO["fps"]
+        next_enc = next_send = 0.0
+        while min(next_enc, next_send) < seconds:
+            if next_enc <= next_send:
+                v.loop.now = next_enc
+                v.last_view = next_enc               # the viewer keeps its views coming
+                v.tick(next_enc)
+                next_enc += period
+            else:
+                v.loop.now = next_send
+                v.send_tick()
+                next_send += step
+
+    def test_a_frame_leaves_one_chunk_per_step(self):
+        car, v = self._streaming(pathlib.Path(SAMPLE).read_bytes())
+        self._run(v, len(v.units) / VIDEO["fps"] * 2)        # the clip twice round
+        frames = {}
+        for t, h in v.transport.sent:
+            frames.setdefault(h["frame"], []).append((t, h["chunk"], h["count"]))
+        multi = [f for f in frames.values() if f[0][2] > 1]
+        self.assertTrue(multi, "the sample has multi-chunk frames")
+        for f in multi:
+            self.assertEqual([c for _, c, _ in f], list(range(f[0][2])), "whole and in order")
+            for (a, _, _), (b, _, _) in zip(f, f[1:]):
+                self.assertAlmostEqual((b - a) * 1e6, SEND_PERIOD_US, places=3)
+
+    def test_the_stock_clip_drops_nothing(self):
+        car, v = self._streaming(pathlib.Path(SAMPLE).read_bytes())
+        self._run(v, len(v.units) / VIDEO["fps"] * 2)
+        self.assertEqual(car.video_dropped, 0, "six slots carry the clip at the contract's fps")
+        sent = sorted({h["frame"] for _, h in v.transport.sent})
+        self.assertEqual(sent, list(range(len(sent))), "no frame number skipped")
+
+    def test_a_full_ring_skips_the_frame_and_counts_it(self):
+        car, v = self._streaming(SC + SPS + SC + PPS + SC + IDR + SC + P)
+        for _ in range(RING_SLOTS):
+            self.assertFalse(v.tick(0.0))
+        pos, frame = v.pos, v.frame
+        v.want_key = True
+        self.assertFalse(v.tick(0.0), "a skipped frame does not end the stream")
+        self.assertEqual(car.video_dropped, 1)
+        self.assertEqual((v.pos, v.frame), (pos, frame), "skipped before the encoder: no gap")
+        self.assertTrue(v.want_key, "the keyframe asked for is still owed")
+        self.assertEqual(v.transport.sent, [], "the encoder's tick sends nothing itself")
+        v.send_tick()
+        self.assertFalse(v.tick(0.0), "a freed slot takes the next frame")
+        self.assertEqual(car.video_dropped, 1)
+
+    def test_a_stopped_stream_leaves_nothing_in_the_ring(self):
+        car, v = self._streaming(SC + SPS + SC + PPS + SC + IDR + SC + P)
+        v.tick(0.0)
+        v._stop("test stop")
+        v.send_tick()
+        self.assertEqual(v.transport.sent, [], "no chunk of the ended stream after its end")
 
 
 if __name__ == "__main__":

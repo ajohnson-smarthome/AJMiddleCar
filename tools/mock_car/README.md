@@ -126,7 +126,12 @@ The video port is a second UDP endpoint, `video.py`'s `VideoLink`, entirely sepa
 the real-time channel — it only *reads* `RTLink.session` to check that a `view` comes from
 the live session's owner. A `view` datagram (like the app sends, and `tools/conformance_video.py`
 too) starts the stream: `sample.h264` plays in a loop at `VIDEO["fps"]`, one access unit per
-datagram burst, chunked exactly as `video_wire.chunks` chunks it on the car. `stream` bumps
+frame, chunked exactly as `video_wire.chunks` chunks it on the car. It leaves the way the
+car's does, too (`video_link.c`): each frame goes into a ring of `RING_SLOTS` (6) and a
+sender lets one chunk go every `SEND_PERIOD_US` (3 ms), so a keyframe trickles out rather
+than bursting; a frame that finds the ring full is skipped before it is "encoded" — the clip
+and `frame` stay put, so the receiver sees no gap — and counted in `/status` `video.dropped`.
+Both constants are hand mirrors of the firmware, pinned by `test_mirrors.py`. `stream` bumps
 once per stream start; `frame` keeps counting across loops, so to the receiver a looped clip
 is one long stream. The subscription is soft — no `view` for `VIDEO["subscribe_timeout_ms"]`
 and the mock stops sending and resets `car.video_state/fps/kbps` to idle/0/0, same as the
@@ -150,9 +155,9 @@ loss, and checks the contract's invariants (every IDR carries SPS/PPS, a request
 arrives in under 1 s, under 5% of frames lost); after the window it walks the subscription
 rules — `/status.video` mid-stream, a foreign sid and a `hello` on the video port, the
 `video.enabled` switch, eviction by a second session, `bye` — each a short leg without
-driving. `tools/test-all.sh` runs it against a mock started with 0.3% loss. One thing it
-measures but does not judge on loopback is the chunk pacing of a keyframe: the car lets one
-chunk go every 3 ms, the mock sends a whole frame in one burst.
+driving. `tools/test-all.sh` runs it against a mock started with 0.3% loss. Last it judges
+the chunk pacing of the keyframes it saw — a median of about 3 ms, the car's step — against
+the mock exactly as against the car.
 
 `sample.h264` is checked into the repository (≤ 400 KB) so nothing needs `ffmpeg` to run the
 mock. It is `VIDEO["width"]` × `VIDEO["height"]` (1280 × 720) — the picture the car puts on

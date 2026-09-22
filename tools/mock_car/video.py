@@ -3,7 +3,11 @@
 `sample.h264` (Annex B, Baseline, VIDEO["width"] x VIDEO["height"] — the car's cropped
 16:9 picture, not its 4:3 sensor frame — IDR every 45 frames with SPS/PPS before each: the
 shape the car's encoder produces) plays in a loop at VIDEO["fps"], one access unit per
-frame, chunked with video_wire.chunks exactly as the car chunks. `frame` keeps counting
+frame, chunked with video_wire.chunks exactly as the car chunks. The frame does not leave in
+one burst: like video_link.c, the encoder's tick puts it into a ring of RING_SLOTS slots and
+a sender lets one chunk go every SEND_PERIOD_US, so a keyframe leaves as a trickle. A frame
+that finds the ring full is skipped before it is "encoded" — `pos` and `frame` stay put, the
+receiver sees no gap — and counted in `video.dropped`, the car's rule. `frame` keeps counting
 across loops and `stream` stays put: to the receiver a looped clip is one long stream.
 A `key:true` re-sends the most recent IDR access unit in place, without moving `pos` (R3):
 seeking forward to the clip's next IDR could take up to a whole loop. Losses, reordering
@@ -14,11 +18,18 @@ import asyncio
 import bisect
 import random
 
+import collections
+
 from generated import PROTO, RT, VIDEO
 from state import VIDEO_IDLE, VIDEO_OFF, VIDEO_STREAMING, parse_frame
 from video_wire import chunks
 
 K, T = RT["keys"], RT["types"]
+
+# Mirrors of video_link.c, which has no key for them in the contract — test_mirrors.py
+# compares them with the source.
+RING_SLOTS = 6            # frames encoded and waiting for the sender
+SEND_PERIOD_US = 3000     # one chunk leaves per period
 
 
 def _nal_starts(b):
@@ -86,6 +97,9 @@ class VideoLink(asyncio.DatagramProtocol):
         self.pos = 0
         self.want_key = False
         self._held = None                    # a datagram delayed by one slot (reordering)
+        # Encoded frames waiting for the sender, oldest first: each is a list of datagrams,
+        # the head one partly sent. Never longer than RING_SLOTS.
+        self._ring = collections.deque()
         self._sent_bytes = 0
         self._sent_frames = 0
         self._sec_at = self.loop.time()
@@ -134,7 +148,9 @@ class VideoLink(asyncio.DatagramProtocol):
         self.car.video_fps = self.car.video_kbps = 0
         # A datagram held for reordering must not survive into the next stream — flushed
         # by a future _emit, it would carry this stream's (now stale) `stream` number.
+        # Nor may the frames still in the ring: the car's stream_close empties it too.
         self._held = None
+        self._ring.clear()
 
     def _emit(self, dgram):
         """One datagram through the impairments and out."""
@@ -163,7 +179,7 @@ class VideoLink(asyncio.DatagramProtocol):
         return self._idr_indices[j] if j >= 0 else self._idr_indices[-1]
 
     def tick(self, now):
-        """One period of the sender. Returns True when there was nothing to send: no viewer,
+        """One period of the encoder: the next frame into the ring. Returns True when there was nothing to send: no viewer,
         or the stream just ended (session over, owner changed, viewer gone, switch off)."""
         if self.peer is None:
             return True
@@ -178,6 +194,12 @@ class VideoLink(asyncio.DatagramProtocol):
         if now - self.last_view > timeout_s():
             self._stop("viewer gone")
             return True
+        if len(self._ring) >= RING_SLOTS:
+            # The sender is behind: skipped before the "encoder" sees it, like the car —
+            # `pos`, `frame` and a pending `want_key` all stay for the next tick, so the
+            # receiver sees no gap and the clip's references stay whole.
+            self.car.video_dropped += 1
+            return False
         if self.want_key:
             # R3: repeat the last IDR encountered, in place — `pos` does not move, so the
             # clip resumes from exactly where it was on the next tick.
@@ -187,10 +209,8 @@ class VideoLink(asyncio.DatagramProtocol):
         else:
             au, key = self.units[self.pos]
             self.pos = (self.pos + 1) % len(self.units)
-        for d in chunks(au, self.stream, self.frame, key, int(now * 1000) & 0xFFFFFFFF):
-            self._emit(d)
+        self._ring.append(list(chunks(au, self.stream, self.frame, key, int(now * 1000) & 0xFFFFFFFF)))
         self.frame = (self.frame + 1) & 0xFFFF
-        self._sent_frames += 1
         if now - self._sec_at >= 1.0:
             self.car.video_fps = self._sent_frames
             self.car.video_kbps = int(self._sent_bytes * 8 / 1000 / (now - self._sec_at))
@@ -198,10 +218,30 @@ class VideoLink(asyncio.DatagramProtocol):
             self._sec_at = now
         return False
 
-    async def run(self):
-        period = 1.0 / VIDEO["fps"]
+    def send_tick(self):
+        """One period of the sender: the next chunk of the oldest frame in the ring. A frame
+        counts toward `fps` when its last chunk leaves — at the sender, as on the car."""
+        if not self._ring or self.peer is None:
+            return
+        frame = self._ring[0]
+        self._emit(frame.pop(0))
+        if not frame:
+            self._ring.popleft()
+            self._sent_frames += 1
+
+    async def _every(self, period, step):
+        """`step` on a fixed beat. A beat missed by more than a period is lost, not made up
+        in a burst — the car's pace timer notifies a task that takes the notification once."""
         next_at = self.loop.time()
         while True:
             next_at += period
-            await asyncio.sleep(max(0.0, next_at - self.loop.time()))
-            self.tick(self.loop.time())
+            now = self.loop.time()
+            if next_at < now:
+                next_at = now
+            await asyncio.sleep(next_at - now)
+            step()
+
+    async def run(self):
+        await asyncio.gather(
+            self._every(1.0 / VIDEO["fps"], lambda: self.tick(self.loop.time())),
+            self._every(SEND_PERIOD_US / 1e6, self.send_tick))
