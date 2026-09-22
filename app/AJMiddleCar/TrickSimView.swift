@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Top-down animated trajectory simulation for a trick. Loads wheel params (/wheel), derives the
-/// motor's rated RPM from MotorPresets, runs TrickSim, and draws the swept body + centre path +
+/// Top-down animated trajectory simulation for a trick. Loads wheel params (/wheel), takes the
+/// speed from the same function playback does (nominal until a motor preset matches), runs TrickSim, and draws the swept body + centre path +
 /// dimensioned bounding box + the moving car (app-style), with distance/revolutions/area stats.
 /// iOS-only. Vertical layout: a compact animation box on top, stats below.
 struct TrickSimView: View {
@@ -21,46 +21,32 @@ struct TrickSimView: View {
     /// What plays: the same assembly as `ControlIntent.build`, so manual mode's durations and
     /// geometry mode's parameters both reach the picture. `vmaxMS` only matters to geometry.
     private var steps: [TrickStep] {
-        Tricks.assemble(trick, params, vmaxMS: vmaxMS ?? 0, trackM: track).steps
+        Tricks.assemble(trick, params, vmaxMS: vmaxMS, trackM: track).steps
     }
     private var totalSec: Double { Double(steps.reduce(0) { $0 + $1.ms }) / 1000 }
 
-    private var rpm: Int? {
-        guard let w = wheel else { return nil }
-        return MotorPresets.match(ppr: w.encoder_ppr, gearX100: Int((w.gear_ratio * 100).rounded()),
-                                  quad: w.quadrature)?.rpm
-    }
-    private var vmaxMS: Double? {
-        guard let w = wheel, let rpm else { return nil }
-        return Double.pi * (Double(w.diameter_mm) / 1000) * Double(rpm) / 60
-    }
-    private var sim: TrickSim.Result? {
-        guard let v = vmaxMS else { return nil }
+    /// Playback's speed, fallback included: no /wheel yet or no preset matched → the nominal,
+    /// and the preview says so rather than going blank while playback drives on it.
+    private var vmaxMS: Double { ControlIntent.vmax(wheel) }
+    private var nominal: Bool { ControlIntent.ratedRPM(wheel) == nil }
+    private var sim: TrickSim.Result {
         // The wiggle is in-place; start it vertical (nose up) so the resting car reads naturally.
         let theta0 = trick.id == Tricks.wiggle.id ? Double.pi / 2 : 0
-        return TrickSim.simulate(steps: steps, vmaxMS: v, trackM: track,
+        return TrickSim.simulate(steps: steps, vmaxMS: vmaxMS, trackM: track,
                                  carLenM: Self.carLenM, carWidM: Self.carWidM, initialTheta: theta0)
     }
 
     var body: some View {
         VStack(spacing: 10) {
-            if let r = sim {
-                TimelineView(.animation) { tl in
-                    Canvas { ctx, size in
-                        draw(&ctx, size, r, time: tl.date.timeIntervalSinceReferenceDate)
-                    }
+            let r = sim
+            TimelineView(.animation) { tl in
+                Canvas { ctx, size in
+                    draw(&ctx, size, r, time: tl.date.timeIntervalSinceReferenceDate)
                 }
-                .frame(width: 330, height: 224)   // animation box (~+30%)
-                .frame(maxWidth: .infinity)        // centred
-                stats(r)
-            } else {
-                Spacer(minLength: 12)
-                Image(systemName: "gauge.with.dots.needle.bottom.50percent")
-                    .font(.system(size: 26)).foregroundStyle(p.muted)
-                Text(L.simPickMotor).font(.system(size: 13)).foregroundStyle(p.muted)
-                    .multilineTextAlignment(.center).padding(.horizontal, 24)
-                Spacer(minLength: 12)
             }
+            .frame(width: 330, height: 224)   // animation box (~+30%)
+            .frame(maxWidth: .infinity)        // centred
+            stats(r)
         }
         .padding(.horizontal, 12).padding(.top, 8)
         .task {
@@ -80,6 +66,11 @@ struct TrickSimView: View {
                                        Int((r.areaHM * 100).rounded()), L.cmUnit))
             }
             Text(L.simVerdict(totalSec, turns)).font(.system(size: 12)).foregroundStyle(p.muted)
+            if nominal {
+                Label(L.simNominal, systemImage: "gauge.with.dots.needle.bottom.50percent")
+                    .font(.system(size: 11)).foregroundStyle(p.muted)
+                    .multilineTextAlignment(.center)
+            }
         }
     }
     private func chip(_ key: String, _ value: String) -> some View {

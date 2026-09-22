@@ -75,6 +75,14 @@ enum Tricks {
     /// used when /wheel is unavailable, so a circle count still maps to *some* duration.
     static let donutNominalVmaxMS = 3.403
 
+    /// Linear speed (m/s) of a `diameterMm` wheel on a motor rated `rpm`. Either one unknown —
+    /// no /wheel yet, or no motor preset matched — gives the nominal: one fallback, read by
+    /// playback and by the preview alike, so the preview shows what will be streamed on any input.
+    static func vmaxMS(diameterMm: Int?, rpm: Int?) -> Double {
+        guard let d = diameterMm, let rpm else { return donutNominalVmaxMS }
+        return Double.pi * (Double(d) / 1000) * Double(rpm) / 60
+    }
+
     /// Streamed duration (ms) for `circles` full circles of a donut whose inner-wheel term is
     /// `y` (= (1−r)/2 from `donutSides`), at linear speed `vmaxMS`. Inverse of the simulation's
     /// heading sweep; 0 if speed/shape is degenerate.

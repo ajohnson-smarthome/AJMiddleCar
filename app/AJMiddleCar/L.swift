@@ -212,7 +212,7 @@ enum L {
     static var simTurns: String { s("sim.turns") }
     static var simArea: String { s("sim.area") }
     static func simVerdict(_ sec: Double, _ turns: Double) -> String { s("sim.verdict", sec, turns) }
-    static var simPickMotor: String { s("sim.pickMotor") }
+    static var simNominal: String { s("sim.nominal") }
     static var simDiameter: String { s("sim.diameter") }
     static var simCircles: String { s("sim.circles") }
     static var spinTurns: String { s("trick.spinTurns") }
