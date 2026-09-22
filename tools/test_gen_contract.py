@@ -616,6 +616,29 @@ class TestPythonEmitter(unittest.TestCase):
             self.assertEqual(m.validate_config({"wheel": {**w, "quadrature": v}})[1][:2],
                              ("wrong_type", "wheel.quadrature"), repr(v))
 
+    def test_finite_but_outside_int32_is_wrong_type_not_out_of_range(self):
+        # cfg_value.h cannot hold these as an int32_t and answers wrong_type before the
+        # field's range is consulted; Python's int is unbounded, so without an explicit
+        # bound they reached the range check and came back out_of_range (AJM-165).
+        m = self.m
+        w = m.to_wire("wheel", m.DOMAINS["wheel"]["defaults"])
+        cases = [
+            ({"ramp": {"rise_ms": 1e300}}, "ramp.rise_ms"),
+            ({"wheel": {**w, "gear_ratio": 1e300}}, "wheel.gear_ratio"),
+            ({"ramp": {"rise_ms": 2147483648.0}}, "ramp.rise_ms"),
+            ({"ramp": {"rise_ms": -2147483649.0}}, "ramp.rise_ms"),
+            ({"wheel": {**w, "quadrature": 1e300}}, "wheel.quadrature"),
+            # 21474836.48 x 100 is 2147483648: one past int32 once scaled.
+            ({"wheel": {**w, "gear_ratio": 21474836.48}}, "wheel.gear_ratio"),
+        ]
+        for body, where in cases:
+            self.assertEqual(m.validate_config(body)[1][:2], ("wrong_type", where), repr(body))
+        # The int32 edge itself is representable, so the field's own range answers.
+        self.assertEqual(m.validate_config({"ramp": {"rise_ms": 2147483647.0}})[1][:2],
+                         ("out_of_range", "ramp.rise_ms"))
+        self.assertEqual(m.validate_config({"ramp": {"rise_ms": -2147483648.0}})[1][:2],
+                         ("out_of_range", "ramp.rise_ms"))
+
     def test_integral_float_is_stored_and_printed_as_an_integer(self):
         # 1e2 is a JSON number the car reads as the integer 100 and prints back as `100`;
         # json.loads makes it the float 100.0, and the validator rightly accepts it — but

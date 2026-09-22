@@ -286,6 +286,9 @@ DOMAINS = {   'ramp': {   'nvs_key': 'ramp',
                                    'scale': 1}]}}
 
 
+INT32_MIN, INT32_MAX = -2**31, 2**31 - 1
+
+
 def lround(x):
     """C's lround: half away from zero, so 9.005 x 100 is 901 here and on the car."""
     return int(math.copysign(math.floor(abs(x) + 0.5), x))
@@ -356,7 +359,12 @@ def validate_config(body):
             # int(inf) and lround(nan) below would raise instead of refusing.
             if not math.isfinite(v):
                 return False, ("wrong_type", where, f"{where} must be a finite number")
+            # Past isfinite, cfg_value.h still has to hold the number as an int32_t:
+            # anything it cannot is wrong_type there, before the field's range is asked.
+            # Python's int is unbounded, so the bound has to be spelled out here.
             if f["type"] == "fixed":
+                if not (INT32_MIN <= v * f["scale"] <= INT32_MAX):
+                    return False, ("wrong_type", where, f"{where} does not fit a 32-bit integer")
                 scaled = lround(v * f["scale"])
                 if not (f["min"] <= scaled <= f["max"]):
                     lo, hi = f["min"] / f["scale"], f["max"] / f["scale"]
@@ -365,6 +373,8 @@ def validate_config(body):
             if v != int(v):
                 return False, ("wrong_type", where, f"{where} must be an integer")
             v = int(v)
+            if not (INT32_MIN <= v <= INT32_MAX):
+                return False, ("wrong_type", where, f"{where} does not fit a 32-bit integer")
             if f["type"] == "enum":
                 if v not in f["values"]:
                     return False, ("not_allowed", where, f"{where} must be one of {f['values']}")
