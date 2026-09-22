@@ -103,6 +103,11 @@ see the sensor, its filter and its field of view without an app or a wire in the
 - [ ] **Watchdog.** Drive, then drop WiFi mid-drive. The car must retrace and stop, and
       `wdt_trips` must increment. This has never been tested on the pico car either — it is the
       oldest untested behaviour in the family.
+- [ ] **Возврат при мёртвой шине** (`AJM-169`, код в main с 2026-09-23, на стенде не снят).
+      Платы PCA9685 отключены, поток `drive` с ненулевыми осями, затем тишина: `motors.owner`
+      обязан остаться `idle`, назад машинка ехать не должна, `link.timeouts` +1. Затем платы
+      подключены, та же легенда → `recovering` как прежде. Прошивка гейтит крошку и сам возврат
+      на `link_bus_ok()`; хост-тесты это держат, а железо — ещё нет.
 - [ ] **OTA.** Cut a release, let the app's launch gate force-update the board, confirm it boots
       and `fw` reports the new build.
 - [ ] **День-флаг без кабеля:** обе платы 404 → адаптер `.stage(.dongle,.updating)` → машинка
