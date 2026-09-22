@@ -195,6 +195,24 @@ class TestBodyLimits(Served):
             for raw in (b"[]", b"5", b'"wheels"', b""):
                 await self.expect_refused(path, raw, "bad_json")
 
+    async def test_a_foreign_key_is_named_before_a_missing_one(self):
+        """`calib_api.c` walks the body's keys before it looks for `wheels`, so a body with
+        a foreign key and no `wheels` names the foreign key; the mock answered
+        `missing_field` `wheels` to it, while `/calibration/spin` already had the car's
+        order (AJM-167)."""
+        await self.serve()
+        k = CALIBRATION["keys"]
+        wheels = self.bodies()[1][1][k["wheels"]]
+        for path, body, code, field in (
+                (ENDPOINTS["calibration"], {"foo": 1}, "unknown_field", "foo"),
+                (ENDPOINTS["calibration"], {}, "missing_field", k["wheels"]),
+                (ENDPOINTS["calibration"], {k["wheels"]: wheels, "foo": 1}, "unknown_field", "foo"),
+                (ENDPOINTS["spin"], {"foo": 1}, "unknown_field", "foo")):
+            resp = await self.client.post(path, json=body)
+            self.assertEqual(resp.status, 400, (path, body))
+            err = (await resp.json())["error"]
+            self.assertEqual((err["code"], err.get("field")), (code, field), (path, body))
+
 
 class TestDegradationFlags(Served):
     """Each degradation flag, as the app would meet it over REST (AJM-116). The state's own

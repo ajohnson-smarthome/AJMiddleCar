@@ -509,6 +509,10 @@ class Conformance:
                              {}, "missing_field", k["wheels"])
         self.expect_rejected("POST /calibration (a key beside wheels)", ENDPOINTS["calibration"],
                              {k["wheels"]: self._wheels(), "x": 1}, "unknown_field", "x")
+        # calib_api.c walks the keys before it looks for `wheels`: the foreign key is
+        # named, not the missing one (AJM-167).
+        self.expect_rejected("POST /calibration (a foreign key, no wheels)",
+                             ENDPOINTS["calibration"], {"x": 1}, "unknown_field", "x")
         # The shapes of one record, each named by its index: calib_api.c walks the
         # records in order and stops at the first fault, so the faulty one sits behind
         # good ones and `wheels[i]` must point at it, not at the array.
