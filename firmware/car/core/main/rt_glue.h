@@ -3,6 +3,7 @@
 
 #include "rt_link.h"
 #include "link.h"
+#include "recovery.h"
 
 /* The session lifecycle's side effects, in the order the cutover plan specifies, over
  * an effects table instead of the live modules. rt_link.c supplies the real table; the
@@ -19,6 +20,9 @@ typedef struct {
     void (*forget)(void *ctx);             /* recovery_forget() */
     void (*on_link_lost)(void *ctx);       /* recovery_on_link_lost() */
     link_src_t (*owner)(void *ctx);        /* link_owner() */
+    bool (*drive)(void *ctx, float t, float y);  /* car_drive(LINK_SRC_RT, t, y) */
+    bool (*bus_ok)(void *ctx);             /* link_bus_ok() */
+    void (*note)(void *ctx, float t, float y);   /* recovery_note_command(t, y) */
 } rt_effects_t;
 
 /* Adopt `sid`: the evicted session's sid (if any, and different) is recorded dead, a
@@ -62,6 +66,22 @@ static inline rt_bye_result_t rt_glue_bye(rt_session_t *s, rt_dead_sids_t *dead,
     rt_dead_note(dead, s->sid);
     rt_session_bye(s);
     return r;
+}
+
+/* One accepted command: it arms or refreshes the watchdog, is offered to the actuator,
+ * and becomes a breadcrumb only if recovery_is_breadcrumb says so. The grant is not
+ * enough on its own: car_drive asks the arbiter, never the bus, and with the PWM boards
+ * down the grant is issued and link.c swallows the write behind pca9685_ready() — a
+ * breadcrumb recorded then is a path the car never drove, and a later trip retraced it
+ * as `recovering` on wheels that do not turn (AJM-169). The bus is asked here, at the
+ * one caller, and not in car_drive: recover, calib and console go through that too. */
+static inline void rt_glue_command(rt_session_t *s, uint32_t seq, float t, float y,
+                                   uint32_t now, const rt_effects_t *fx) {
+    rt_session_command(s, seq, now);
+    bool granted = fx->drive(fx->ctx, t, y);
+    if (recovery_is_breadcrumb(granted, fx->bus_ok(fx->ctx))) {
+        fx->note(fx->ctx, t, y);
+    }
 }
 
 /* The silence check: on a trip, revoke the dead stream's grant explicitly (waiting for

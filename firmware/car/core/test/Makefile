@@ -100,7 +100,7 @@ test_ota_reply: test_ota_reply.c ../main/ota_reply.h ../main/cfg_table.inc
 
 # The lifecycle's side effects over a recording effects table — the impure orderings
 # rt_link.c executes, pinned the way test_state.py pins them on the mock.
-test_rt_glue: test_rt_glue.c ../main/rt_glue.h ../main/rt_link.h ../main/link.h
+test_rt_glue: test_rt_glue.c ../main/rt_glue.h ../main/rt_link.h ../main/link.h ../main/recovery.h
 	$(CC) $(CFLAGS) -o $@ test_rt_glue.c $(LDLIBS)
 
 run: all

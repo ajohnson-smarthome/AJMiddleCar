@@ -15,6 +15,8 @@ typedef struct {
     int        n;
     bool       stop_ok, release_ok;
     link_src_t owner;
+    bool       granted, bus_ok;   /* what car_drive / link_bus_ok() would say */
+    int        crumbs;            /* recovery_note_command calls: the path's length */
 } rec_t;
 
 static void note(rec_t *r, const char *what) {
@@ -27,15 +29,24 @@ static bool fx_rel_rt(void *c)    { note(c, "rel_rt");    return true; }
 static void fx_forget(void *c)    { note(c, "forget"); }
 static void fx_lost(void *c)      { note(c, "lost"); }
 static link_src_t fx_owner(void *c) { return ((rec_t *)c)->owner; }
+static bool fx_drive(void *c, float t, float y) {
+    (void)t; (void)y; note(c, "drive"); return ((rec_t *)c)->granted;
+}
+static bool fx_bus_ok(void *c)    { return ((rec_t *)c)->bus_ok; }
+static void fx_note(void *c, float t, float y) {
+    (void)t; (void)y; note(c, "note"); ((rec_t *)c)->crumbs++;
+}
 
 static rec_t R;
 static const rt_effects_t FX = { &R, fx_stop, fx_rel_safe, fx_rel_rt,
-                                 fx_forget, fx_lost, fx_owner };
+                                 fx_forget, fx_lost, fx_owner,
+                                 fx_drive, fx_bus_ok, fx_note };
 
 static void reset(link_src_t owner) {
     memset(&R, 0, sizeof(R));
     R.stop_ok = R.release_ok = true;
     R.owner = owner;
+    R.granted = R.bus_ok = true;
 }
 static void expect(int i, const char *what) {
     if (i >= R.n || strcmp(R.log[i], what) != 0) {
@@ -91,6 +102,31 @@ int main(void) {
     R.stop_ok = false;
     assert(rt_glue_bye(&s, &dead, &FX) == RT_BYE_STOP_REFUSED);
     expect(0, "stop"); expect(1, "forget"); expect(2, "rel_safe");
+
+    /* --- command: granted on a live bus → driven, then a breadcrumb ------------- */
+    memset(&s, 0, sizeof(s));
+    rt_session_adopt(&s, "77777777", 700);
+    reset(LINK_SRC_NONE);
+    rt_glue_command(&s, 1, 0.8f, 0.0f, 710, &FX);
+    expect(0, "drive"); expect(1, "note"); assert(R.n == 2 && R.crumbs == 1);
+    assert(s.armed && s.last_feed_ms == 710 && s.last_seq == 1);
+
+    /* --- command refused by the arbiter → no breadcrumb, watchdog still fed ------ */
+    reset(LINK_SRC_CALIB);
+    R.granted = false;
+    rt_glue_command(&s, 2, 0.8f, 0.0f, 720, &FX);
+    expect(0, "drive"); assert(R.n == 1 && R.crumbs == 0);
+    assert(s.last_feed_ms == 720 && s.last_seq == 2);
+
+    /* --- command into a dead bus (AJM-169): granted, driven as usual, but the write
+       never reached the wheels — a stream of them leaves the history empty, so a later
+       trip finds no path and stops instead of announcing `recovering`. */
+    reset(LINK_SRC_RT);
+    R.bus_ok = false;
+    for (uint32_t i = 0; i < 10; i++) rt_glue_command(&s, 3 + i, 0.8f, 0.2f, 730 + 100 * i, &FX);
+    assert(R.crumbs == 0);
+    for (int i = 0; i < R.n; i++) expect(i, "drive");
+    assert(s.armed && s.last_seq == 12);
 
     /* --- silence: revoke the dead grant, then recovery, then disarm-only trip ---- */
     memset(&s, 0, sizeof(s));

@@ -167,7 +167,10 @@ void recovery_on_link_lost(void) {
     enabled = s_enabled;
     taskEXIT_CRITICAL(&s_mux);
     TaskHandle_t task = s_task;   /* written once in recovery_init, before rt_link exists */
-    if (!enabled || task == NULL) {   // feature off → plain stop (old watchdog behavior)
+    /* Bus down → plain stop too, whatever the path holds: the boards may have dropped out
+       after real motion was recorded, and a retrace on dead wheels is `recovering` for a
+       car that is not moving (AJM-169). */
+    if (!recovery_may_retrace(enabled, link_bus_ok()) || task == NULL) {
         car_stop(LINK_SRC_RECOVER);
         link_release_must(LINK_SRC_RECOVER);
         return;
