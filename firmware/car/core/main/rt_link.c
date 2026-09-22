@@ -79,8 +79,12 @@ static bool fx_release_rt(void *c)   { (void)c; return link_release_must(LINK_SR
 static void fx_forget(void *c)       { (void)c; recovery_forget(); }
 static void fx_on_lost(void *c)      { (void)c; recovery_on_link_lost(); }
 static link_src_t fx_owner(void *c)  { (void)c; return link_owner(); }
+static bool fx_drive(void *c, float t, float y) { (void)c; return car_drive(LINK_SRC_RT, t, y); }
+static bool fx_bus_ok(void *c)       { (void)c; return link_bus_ok(); }
+static void fx_note(void *c, float t, float y)  { (void)c; recovery_note_command(t, y); }
 static const rt_effects_t FX = { NULL, fx_stop_safe, fx_release_safe, fx_release_rt,
-                                 fx_forget, fx_on_lost, fx_owner };
+                                 fx_forget, fx_on_lost, fx_owner,
+                                 fx_drive, fx_bus_ok, fx_note };
 
 uint32_t rt_link_frames(void)    { return s_frames; }
 uint32_t rt_link_wdt_trips(void) { return s_trips; }
@@ -157,12 +161,11 @@ static void on_bye(void) {
 static void on_command(const control_frame_t *f) {
     s_frames++;
     /* The first accepted command arms the watchdog; every one after it refreshes the
-       deadline. The breadcrumb IS gated on the grant: a refused command never moved the
-       car, so recording it would corrupt the path the retreat retraces. */
-    rt_session_command(&s_ses, f->seq, now_ms());
-    if (car_drive(LINK_SRC_RT, f->throttle, f->turn)) {
-        recovery_note_command(f->throttle, f->turn);
-    }
+       deadline. The breadcrumb is gated on the grant AND on the bus: a refused command
+       never moved the car, and neither did a granted one while the PWM boards were down
+       — the grant does not look at the bus (AJM-169). Either recorded would be a path
+       the retreat retraces without the car ever having driven it. */
+    rt_glue_command(&s_ses, f->seq, f->throttle, f->turn, now_ms(), &FX);
 }
 
 static void on_datagram(int sock, const char *buf, int n, const struct sockaddr_in *from) {

@@ -45,6 +45,22 @@ int main(void) {
     assert(recovery_seg_ms(250 + 7, 7) == 250);
     assert(recovery_seg_ms(10, 0xFFFFFF00u) == RECOVER_SEG_MAX_MS);  /* rollover-safe */
 
+    /* What counts as path (AJM-169): a command the actuator took AND whose write would
+       reach the wheels. The grant asks the arbiter only; with the PWM boards down the
+       write is swallowed in link.c, and a breadcrumb then is a path never driven. */
+    assert(recovery_is_breadcrumb(true, true) == true);
+    assert(recovery_is_breadcrumb(true, false) == false);   /* granted into a dead bus */
+    assert(recovery_is_breadcrumb(false, true) == false);   /* refused by the arbiter */
+    assert(recovery_is_breadcrumb(false, false) == false);
+
+    /* When a lost link may retrace at all: recovery on AND a live bus. The boards can drop
+       out mid-drive after real motion was recorded — retracing that on dead wheels is
+       `recovering` for a car that stands, so it is a plain stop, as with recovery off. */
+    assert(recovery_may_retrace(true, true) == true);
+    assert(recovery_may_retrace(true, false) == false);     /* boards dropped out */
+    assert(recovery_may_retrace(false, true) == false);     /* recovery off */
+    assert(recovery_may_retrace(false, false) == false);
+
     /* The window's bounds are the contract's: recovery.h spells them because it is pure
        and includes nothing, so this is what keeps the two from drifting apart. */
     const cfg_field_t *w = window_field();

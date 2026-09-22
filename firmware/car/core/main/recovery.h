@@ -26,11 +26,13 @@
 void recovery_init(void);
 
 // Record one control frame into the breadcrumb buffer (call from rt_link on each frame
-// the actuator actually took). Also bumps the liveness sequence.
+// recovery_is_breadcrumb admits: the actuator took it and the bus was up). Also bumps
+// the liveness sequence.
 void recovery_note_command(float t, float y);
 
 // Called by rt_link's control watchdog when the link goes stale, INSTEAD of car_stop(). Decides:
-// disabled / empty / stationary history → car_stop(); else → trigger the reverse replay.
+// disabled / bus down / empty / stationary history → car_stop(); else → trigger the
+// reverse replay.
 void recovery_on_link_lost(void);
 
 // Throw the breadcrumbs away: there is no path behind the car any more. Called by
@@ -76,6 +78,24 @@ static inline bool recovery_evict(uint32_t ts, uint32_t now, uint16_t window_ms)
 static inline uint32_t recovery_seg_ms(uint32_t newer_ts, uint32_t older_ts) {
     uint32_t d = newer_ts - older_ts;
     return d > RECOVER_SEG_MAX_MS ? RECOVER_SEG_MAX_MS : d;
+}
+
+// Pure (host-tested): does an accepted command become a breadcrumb? Only when the
+// actuator took it AND the write would reach the wheels. The grant alone answers the
+// arbiter's question, not the bus's: with the PWM boards down link.c swallows every
+// write behind pca9685_ready(), and a path recorded then is a path the car never drove
+// (AJM-169). Console commands never get here — they do not ride the real-time channel.
+static inline bool recovery_is_breadcrumb(bool granted, bool bus_ok) {
+    return granted && bus_ok;
+}
+
+// Pure (host-tested): may a lost link start a retrace at all? A retrace needs a live bus
+// just as it needs a path: the boards can drop out mid-drive, after real motion was
+// recorded, and retracing it on dead wheels would announce `recovering` for a car that
+// stands still. Otherwise the lost link is a plain stop, the same as recovery off; an
+// empty or motionless path is the retreat task's own verdict, further down.
+static inline bool recovery_may_retrace(bool enabled, bool bus_ok) {
+    return enabled && bus_ok;
 }
 
 #endif // RECOVERY_H
