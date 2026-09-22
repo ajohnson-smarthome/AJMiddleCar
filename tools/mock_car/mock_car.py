@@ -287,11 +287,12 @@ async def calib_save(request):
     body, refused = await read_object(request, BODY_MAX_CALIBRATION)
     if refused is not None:
         return refused
-    if k["wheels"] not in body:
-        return json_error(400, "missing_field", "required", k["wheels"])
+    # The firmware's order (calib_api.c): a foreign key is named before a missing one.
     for key in body:
         if key != k["wheels"]:
             return json_error(400, "unknown_field", "no such field", key)
+    if k["wheels"] not in body:
+        return json_error(400, "missing_field", "required", k["wheels"])
     ok, err = car.save_calibration(body[k["wheels"]])
     if not ok:
         return reply_refusal(err)
