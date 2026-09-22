@@ -3,7 +3,7 @@ import Foundation
 /// One step of a maneuver: hold (t, y) for `ms` milliseconds.
 struct TrickStep { let t: Double; let y: Double; let ms: Int }
 
-/// A named maneuver = a timeline of steps the app streams over the WS channel.
+/// A named maneuver = a timeline of steps the app streams as held commands over the UDP `rt` channel.
 struct Trick: Identifiable {
     let id: Int            // 1..N, unique
     let nameKey: String    // Localizable key (→ L.trickName)
