@@ -118,6 +118,21 @@ class TestReboot(Served):
         self.assertEqual(doc["fw"], OLD_FW)
         self.assertIs(doc["rolled_back"], True)
 
+    async def test_no_version_is_404_until_the_first_accepted_image_then_the_document(self):
+        """`--no-version` is the flag-day rehearsal: a car older than `/version` answers
+        404 there until the first accepted image, which knows the endpoint. The flag used
+        to live in the running application, and aiohttp freezes one once it starts — the
+        first flash under it would have been a 500 (AJM-155)."""
+        self.car.no_version = True
+        await self.serve()
+        resp = await self.client.get(ENDPOINTS["version"])
+        self.assertEqual(resp.status, 404)
+        await self.flash()
+        await asyncio.sleep(QUIET_S + 0.3)
+        doc = await self.version()
+        self.assertEqual(set(doc), {"device", "fw", "build", "proto", "rolled_back"})
+        self.assertEqual(doc["fw"], NEW_FW)
+
     async def test_a_request_queued_behind_the_flash_goes_down_with_the_reboot(self):
         """The car serves REST from one httpd task: a poll that arrives mid-flash waits
         behind the upload, and the reboot drops it unanswered. The reboot check sits
@@ -495,4 +510,6 @@ class TestRestSweepLegends(Served):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    # Every warning is an error: aiohttp announces what its next major release refuses
+    # (state written into a started application, string app keys) as a warning first.
+    unittest.main(verbosity=2, warnings="error")

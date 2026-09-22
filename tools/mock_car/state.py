@@ -380,6 +380,9 @@ class CarState:
         self.device = device
         self.fw = fw
         self.rollback = False    # the previous "OTA" was rolled back — /status mirrors it
+        # A board older than `/version` (`--no-version`): 404 there until the first
+        # accepted image, which knows the endpoint.
+        self.no_version = False
         self.nvs_wiped = nvs_wiped   # this boot's NVS migration erased every setting
         self.rssi = -58
         # What the radio answered at boot, read once (status_api.c): None is no answer.
