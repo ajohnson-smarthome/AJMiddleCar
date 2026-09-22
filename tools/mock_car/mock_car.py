@@ -158,7 +158,7 @@ async def one_at_a_time(request, handler):
     each other — including behind the whole of an OTA upload and flash. A mock
     that answers /status mid-flash teaches a client the car can do that; the car
     holds its one task from the first body byte to the reboot."""
-    async with request.app["lock"]:
+    async with request.app[LOCK]:
         return await handler(request)
 
 
@@ -177,7 +177,7 @@ async def rebooting(request, handler):
     mid-flash and waited behind the upload goes down with the reboot, as it does behind
     the car's single httpd task, rather than being answered in the gap between the two.
     """
-    if request.app["link"].rebooting(asyncio.get_running_loop().time()):
+    if request.app[LINK].rebooting(asyncio.get_running_loop().time()):
         # Close the connection now and let aiohttp find it closed when it goes to write
         # the reply: that is its "premature client disconnection" path, logged at debug
         # and nothing else. Raising here instead would be an "Error handling request"
@@ -188,11 +188,11 @@ async def rebooting(request, handler):
 
 
 async def cfg_get(request):
-    return reply(request.app["car"].config_wire())
+    return reply(request.app[CAR].config_wire())
 
 
 async def cfg_post(request):
-    car = request.app["car"]
+    car = request.app[CAR]
     body, refused = await read_object(request, BODY_MAX_CONFIG)
     if refused is not None:
         return refused
@@ -204,7 +204,7 @@ async def cfg_post(request):
 
 
 async def status(request):
-    car, link = request.app["car"], request.app["link"]
+    car, link = request.app[CAR], request.app[LINK]
     now = asyncio.get_running_loop().time()
     # All six of the schema's groups in its order — telemetry's four plus `radio` and
     # `storage`, the /status-only diagnostics, walked from the same schema by the state.
@@ -213,8 +213,8 @@ async def status(request):
 
 async def version(request):
     """GET /version — the frozen five-field document, raw (it spells its own proto)."""
-    car = request.app["car"]
-    if request.app["no_version"]:
+    car = request.app[CAR]
+    if car.no_version:
         # A board older than the endpoint: a 404 with any body, exactly like an unmatched
         # path — the app's `VersionReply.of` maps any 404 here to `.absent`, not a decode.
         return json_error(404, "not_found", "no such path")
@@ -228,13 +228,13 @@ async def version(request):
 
 
 async def calib_get(request):
-    car = request.app["car"]
+    car = request.app[CAR]
     k = CALIBRATION["keys"]
     return reply({k["calibrated"]: car.calibrated, k["wheels"]: car.calibration_table()})
 
 
 async def calib_spin(request):
-    car = request.app["car"]
+    car = request.app[CAR]
     k = CALIBRATION["keys"]
     body, refused = await read_object(request, BODY_MAX_SPIN)
     if refused is not None:
@@ -282,7 +282,7 @@ async def calib_spin(request):
 
 
 async def calib_save(request):
-    car = request.app["car"]
+    car = request.app[CAR]
     k = CALIBRATION["keys"]
     body, refused = await read_object(request, BODY_MAX_CALIBRATION)
     if refused is not None:
@@ -301,7 +301,7 @@ async def calib_save(request):
 
 
 async def ota(request):
-    car, link = request.app["car"], request.app["link"]
+    car, link = request.app[CAR], request.app[LINK]
     now = asyncio.get_running_loop().time()
     # The car stops the motors and takes the sticky grant before reading a single
     # body byte (car_stop(LINK_SRC_OTA) is ota_api.c's first statement), and
@@ -336,7 +336,7 @@ async def ota(request):
     print(f"ota: {len(data)} bytes — motors stopped, flashing")
     await asyncio.sleep(OTA_SECONDS)
     car.end_ota(version=parse_image_version(data))
-    if request.app["rollback_mode"]:
+    if request.app[ROLLBACK_MODE]:
         # Rehearsal: the flashed image "fails its first boot" — the car comes back on
         # the previous firmware with the rollback flag up, exactly what the app's
         # detector must learn to call a FAILURE (decision 5).
@@ -345,7 +345,7 @@ async def ota(request):
         print(f"ota: 'rolled back' — reporting {car.fw}, rolled_back:true")
     else:
         # The new image knows /version: from here the board answers it.
-        request.app["no_version"] = False
+        car.no_version = False
         print(f"ota: done, now running {car.fw} — 'rebooting'")
     link.simulate_reboot(asyncio.get_running_loop().time())
     return reply({ENVELOPE["ok"]: True})
@@ -353,22 +353,30 @@ async def ota(request):
 
 async def root(request):
     """The car serves a one-line identity here; there is no web UI."""
-    car = request.app["car"]
+    car = request.app[CAR]
     return web.Response(text=f"{car.device} {car.fw}\n")
 
 
-def build_app(car, link, rollback_mode=False, no_version=False):
+# What the handlers read from the application. Set once, before it starts: aiohttp freezes
+# an application once it runs, so anything that changes at runtime — `no_version` going
+# out with the first accepted image — lives on `CarState`, never here (AJM-155).
+CAR = web.AppKey("car", CarState)
+LINK = web.AppKey("link", RTLink)
+LOCK = web.AppKey("lock", asyncio.Lock)
+ROLLBACK_MODE = web.AppKey("rollback_mode", bool)
+
+
+def build_app(car, link, rollback_mode=False):
     # aiohttp's default client_max_size is 1 MB. A real image is already ~0.75 MB
     # (firmware/car/core/build/ajmiddlecar.bin) and growing, so the default would 413 a
     # legitimate upload — and, without the read() guard above, wedge the actuator
     # on the way. The P4 has 16 MB of flash; set the cap generously above that.
     app = web.Application(middlewares=[one_at_a_time, rebooting],
                           client_max_size=17 * 1024 * 1024)
-    app["car"] = car
-    app["link"] = link
-    app["lock"] = asyncio.Lock()
-    app["rollback_mode"] = rollback_mode
-    app["no_version"] = no_version
+    app[CAR] = car
+    app[LINK] = link
+    app[LOCK] = asyncio.Lock()
+    app[ROLLBACK_MODE] = rollback_mode
     app.add_routes([
         web.get(ENDPOINTS["root"], root),
         web.get(ENDPOINTS["status"], status),
@@ -391,6 +399,7 @@ def car_from_args(args, now):
                    write_fail=args.write_fail or (), battery_soc=args.battery_soc,
                    battery_absent=args.battery == BATTERY_ABSENT, battery_drain_x=args.battery_drain_x)
     car.rssi = args.rssi
+    car.no_version = args.no_version
     return car
 
 
@@ -427,7 +436,7 @@ async def serve(args):
     _, link = await loop.create_datagram_endpoint(
         lambda: RTLink(car, impair, args.verbose, reboot_s=args.reboot_s),
         local_addr=(args.host, args.rt_port))
-    runner = web.AppRunner(build_app(car, link, rollback_mode=args.rollback, no_version=args.no_version),
+    runner = web.AppRunner(build_app(car, link, rollback_mode=args.rollback),
                            access_log=None)
     await runner.setup()
     await web.TCPSite(runner, args.host, args.port).start()
